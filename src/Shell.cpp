@@ -16,7 +16,8 @@ Shell::Shell()
       m_subtitle("shell.subtitle"),
       m_insp_toggle("shell.inspector_toggle"),
       m_menu_button("shell.menu_button"),
-      m_panes("shell.panes", Gtk::Orientation::HORIZONTAL),
+      m_body("shell.body", Gtk::Orientation::HORIZONTAL),
+      m_nav_rev("shell.nav.reveal"),
       m_right("shell.right", Gtk::Orientation::HORIZONTAL),
       m_main_over("shell.main_over"),
       m_insp_rev("shell.inspector.reveal"),
@@ -39,13 +40,14 @@ void Shell::build_ui() {
     bind_views();      // bindings
 
     sync_inspector();  // the action exists now: toggle + View check follow the panel
+    sync_nav();
 
     rebuild_recents_menu();
 
     // s004: the document. Until a project is opened, the built-in sample
     // (loaded, not a step). The views see only its projection.
     core::load_sample(m_doc);
-    m_outline = core::project(m_doc, m_project_dir);
+    m_outline = project_now();
     m_nav.set_outline(&m_outline);
     update_title();
     m_nav.set_open(core::Segment::Pages, true);

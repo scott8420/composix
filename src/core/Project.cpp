@@ -103,7 +103,7 @@ std::string pts(double v) {
 
 }  // namespace
 
-Outline project(const Doc& d, const std::string& dir) {
+Outline project(const Doc& d, const std::string& dir, const std::vector<std::string>* overset) {
     Outline o;
     using G = Segment;
     using K = ThumbKind;
@@ -184,11 +184,13 @@ Outline project(const Doc& d, const std::string& dir) {
         for (const auto& [st, n] : styles) if (n > best) { best = n; top = st; }
         int frames = 0;
         for (const auto& fid : d.ids_of<Frame>()) frames += d.as<Frame>(fid)->story == sid;
-        o.add({sid, G::Stories, s.name, "", {K::Text, 6, 9, 0, false, sample},
-               {{"Words", with_commas(w)},
-                {"Paragraphs", std::to_string(s.paras.size())},
-                {"Frames", frames > 1 ? std::to_string(frames) + ", threaded" : std::to_string(frames)},
-                {"Style", style_name(d, top)}}});
+        const bool over = overset && std::find(overset->begin(), overset->end(), sid) != overset->end();
+        std::vector<Field> fields{{"Words", with_commas(w)},
+                                  {"Paragraphs", std::to_string(s.paras.size())},
+                                  {"Frames", frames > 1 ? std::to_string(frames) + ", threaded" : std::to_string(frames)},
+                                  {"Style", style_name(d, top)}};
+        if (overset) fields.push_back({"Overset", over ? "Yes" : (frames ? "No" : "Not placed")});
+        o.add({sid, G::Stories, s.name, over ? "Overset" : "", {K::Text, 6, 9, 0, over, sample}, fields});
     }
 
     // ── Styles ──────────────────────────────────────────────────────────────

@@ -41,9 +41,21 @@ target_include_directories(composix_core PUBLIC include)
 # of the pump, no consumer inherits the include (CANON: surprise-free build).
 target_include_directories(composix_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
+# ── composix_layout -- text flow (s007): Pango + cairo, NO gtk ─────────────────
+# Its own library so the flow is measured and selftested headless. The app and
+# the selftest both link it; core stays free of it.
+pkg_check_modules(PANGOCAIRO REQUIRED pangocairo)
+add_library(composix_layout STATIC
+    src/layout/Flow.cpp
+)
+target_include_directories(composix_layout PUBLIC include ${PANGOCAIRO_INCLUDE_DIRS})
+target_link_libraries(composix_layout PUBLIC composix_core ${PANGOCAIRO_LIBRARIES})
+target_link_directories(composix_layout PUBLIC ${PANGOCAIRO_LIBRARY_DIRS})
+target_compile_options(composix_layout PUBLIC ${PANGOCAIRO_CFLAGS_OTHER})
+
 # ── Headless selftest -- exercises the core with no display ────────────────────
 add_executable(composix_selftest src/selftest.cpp)
-target_link_libraries(composix_selftest PRIVATE composix_core)
+target_link_libraries(composix_selftest PRIVATE composix_core composix_layout)
 
 # ── App resources (gresource) -- the RESOURCE-PIPELINE paradigm ────────────────
 # glib-compile-resources embeds resources/composix.gresource.xml into a C source;
@@ -105,6 +117,6 @@ add_executable(composix
     src/Log.cpp
 )
 target_include_directories(composix PRIVATE include ${GTKMM_INCLUDE_DIRS})
-target_link_libraries(composix     PRIVATE ${GTKMM_LIBRARIES} composix_core spdlog::spdlog)
+target_link_libraries(composix     PRIVATE ${GTKMM_LIBRARIES} composix_core composix_layout spdlog::spdlog)
 target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})

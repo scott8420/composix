@@ -22,6 +22,7 @@ void Doc::put(const Id& id, const std::optional<Record>& v) {
     if (m_loading == 0 && m_door && !m_door()) ++m_strays;
     if (v) m_recs[id] = *v;
     else   m_recs.erase(id);
+    ++m_rev;
     // Keep fresh ids ahead of anything that comes back (undo of a delete).
     const auto dot = id.rfind('.');
     if (dot != std::string::npos) {
@@ -37,6 +38,7 @@ void Doc::put(const Id& id, const std::optional<Record>& v) {
 void Doc::reset() {
     m_recs.clear();
     m_next.clear();
+    ++m_rev;
     if (m_changed) m_changed();
 }
 

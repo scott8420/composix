@@ -163,6 +163,7 @@ flowboxchild:selected > .cx-tile-card {
 .cx-panel-handle          { min-width: 5px; background: transparent; }
 .cx-panel-handle.cx-right { border-right: 1px solid @cx_hair; }
 .cx-panel-handle.cx-left  { border-left: 1px solid @cx_hair; }
+.cx-panel-handle.cx-left:hover { background: alpha(@cx_accent, 0.35); }
 .cx-panel-handle.cx-shut  { border: none; }
 /* Shut, the tab waits unseen until the pointer finds the edge or the tab;
    open, it shows quietly; pointed at, it lights in the accent. */

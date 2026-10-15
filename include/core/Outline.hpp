@@ -90,7 +90,10 @@ class Doc;
 // The document, as the navigator / tiles / inspector see it. `project_dir`
 // resolves linked assets' relative paths ("" = unsaved: relative links can't
 // be found). Item ids ARE record ids, so a pick names records directly.
-Outline project(const Doc& d, const std::string& project_dir);
+// `overset` (s007): the stories whose text runs past their last frame --
+// measured by the layout library, which core cannot see; null = unknown.
+Outline project(const Doc& d, const std::string& project_dir,
+                const std::vector<std::string>* overset = nullptr);
 
 // s005: frames picked on the canvas, as items the inspector reads (fields:
 // Kind, On, X, Y, W, H, and Story + Thread or Asset). Not in the navigator.

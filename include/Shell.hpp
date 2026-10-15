@@ -36,7 +36,7 @@
 // Layout (s002, REQUIREMENTS §10)
 // -------------------------------
 //   header:  logo | navigator toggle ........ title ........ inspector toggle | menu
-//   body:    shell.panes  = [ nav | shell.right ]
+//   body:    shell.body   = [ shell.nav.reveal (nav) | shell.nav.handle | shell.right ]
 //            shell.right  = [ shell.main_over (shell.main + shell.inspector.tab)
 //                             | shell.inspector.handle | shell.inspector.reveal (inspector) ]
 //
@@ -90,6 +90,7 @@ private:
     // ── helpers ────────────────────────────────────────────────────────────
     std::vector<const core::Item*> resolve(const std::vector<std::string>& ids) const;  // category: helper
     void queue_refresh();                         // category: helper: one re-projection per idle, after the writes
+    core::Outline project_now() const;            // category: helper: the projection, with overset measured
     void refresh();                               // category: helper: re-project; every view repaints, keeping its place
     void show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper
     bool open_project(const std::string& dir);    // category: helper: load + reset the journal + views
@@ -103,6 +104,7 @@ private:
     void update_undo_ui();                        // category: helper: Undo / Redo labels + greying
     bool focus_is_text() const;                   // category: helper: the keyboard is in a text box
     void sync_inspector();                        // category: helper: toggle + tab follow the panel
+    void sync_nav();                              // category: helper: the toggle follows the navigator
     void tab_hover(bool in);                      // category: helper: the pull tab's shared hover
 
     // Header.
@@ -115,7 +117,11 @@ private:
     widgets::MenuButton   m_menu_button;
 
     // Body.
-    widgets::Paned  m_panes;   // nav | inner
+    // [nav (slides)][nav handle][right] -- s007 fix: was a Gtk::Paned, whose
+    // extended grab zone reached into the left ruler and stole guide drags.
+    widgets::Box      m_body;
+    widgets::Revealer m_nav_rev;
+    std::unique_ptr<views::PanelHandle> m_nav_handle;
     widgets::Box     m_right;      // [main + pull tab][handle][inspector] (s003)
     widgets::Overlay m_main_over;  // the main view, the pull tab floating on its right edge
     widgets::Revealer m_insp_rev;  // the inspector slides

@@ -1,0 +1,68 @@
+#pragma once
+// layout::Flow -- real text, flowed through threaded frames (s007).
+//
+// Its own library (composix_layout): Pango + cairo, NO gtk -- so the flow is
+// measured and tested headless, like the core, and the canvas only draws it.
+//
+// The rules:
+//   * Measured at 72 dpi with hinting OFF, so one point is one unit and line
+//     breaks do not change with zoom (the canvas scales the drawing, never the
+//     measurement).
+//   * A story's paragraphs flow through its frames in thread order (the head
+//     is the frame nobody points to; `next` from there).
+//   * Paragraph by paragraph: each is laid out at the width of the frame it is
+//     in; a paragraph that crosses into the next frame is re-broken at that
+//     frame's width from where it left off.
+//   * Each line advances by its style's leading; the baseline sits centred in
+//     the leading.
+//   * Text left over after the last frame is OVERSET.
+#include "core/Doc.hpp"
+
+#include <cairo.h>
+
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
+namespace composix::layout {
+
+struct Line {
+    int    para  = 0;    // paragraph index in the story
+    int    start = 0;    // byte range in that paragraph's text
+    int    end   = 0;
+    double y     = 0;    // top of the line box, frame coordinates (points)
+};
+
+struct FrameText {
+    std::string       frame;
+    std::vector<Line> lines;
+};
+
+struct StoryFlow {
+    std::vector<FrameText> frames;     // thread order
+    bool                   overset = false;
+    int                    lines   = 0;
+};
+
+// The story's frames in thread order.
+std::vector<std::string> thread_frames(const core::Doc& d, const std::string& story);
+
+StoryFlow flow_story(const core::Doc& d, const std::string& story);
+
+// Draw what `flow` put in `frame`, with the frame's top-left at (ox, oy) in the
+// cairo context's current user space (points). The caller sets the scale.
+void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                     const std::string& frame, double ox, double oy);
+
+// Flows, recomputed only when the document changes (Doc::revision()).
+class FlowCache {
+public:
+    const StoryFlow& get(const core::Doc& d, const std::string& story);
+
+private:
+    std::uint64_t                    m_rev = ~0ull;
+    std::map<std::string, StoryFlow> m_flows;
+};
+
+}  // namespace composix::layout

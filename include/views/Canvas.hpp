@@ -13,6 +13,7 @@
 // Outline's summaries -- and it writes ONLY through core::doc verbs.
 // Ideas from Curvz (viewport, handles, gesture shape), code rewritten: ARC s005.
 #include "core/Doc.hpp"
+#include "layout/Flow.hpp"
 #include "widgets/Widgets.hpp"
 
 #include <gdkmm/rgba.h>
@@ -126,6 +127,8 @@ private:
     std::string       m_hover_guide;
     bool              m_preview = false, m_preview_v = false;
     double            m_preview_at = 0;
+
+    layout::FlowCache m_flows;   // s007: text, recomputed when the document changes
 
     std::function<bool(const std::string&)> m_missing;
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view;

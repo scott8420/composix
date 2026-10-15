@@ -80,10 +80,7 @@ void Shell::bind_actions() {  // bindings: actions + recents group
 
     // ── pane toggles: stateful, so the header buttons show the state ────────
     add_action_bool("toggle-nav", [this] {
-        const bool show = !m_nav.get_visible();
-        m_nav.set_visible(show);
-        if (auto a = std::dynamic_pointer_cast<Gio::SimpleAction>(lookup_action("toggle-nav")))
-            a->change_state(show);
+        if (m_nav_handle) m_nav_handle->set_open(!m_nav_handle->open());   // sync_nav follows
     }, true);
     add_action_bool("toggle-inspector", [this] {
         if (m_insp_handle) m_insp_handle->set_open(!m_insp_handle->open());   // sync_inspector follows

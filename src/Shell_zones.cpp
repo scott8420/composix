@@ -113,15 +113,23 @@ void Shell::build_shell() {  // zone: header + panes
     m_right.append(m_insp_rev);
     m_insp_handle->set_open(true);
 
-    m_panes.set_start_child(m_nav);
-    m_panes.set_end_child(m_right);
-    m_panes.set_resize_start_child(false);
-    m_panes.set_resize_end_child(true);
-    m_panes.set_shrink_start_child(false);
-    m_panes.set_shrink_end_child(false);
-    m_panes.set_position(250);
-    m_panes.add_css_class("cx-panes");
-    set_child(m_panes);
+    // The navigator slides like the inspector, with the same kind of handle
+    // on its inner edge (drag to size / shut / pull out). Its grab area is
+    // exactly its own strip, so the left ruler beside it keeps its drags.
+    m_nav_rev.set_transition_type(Gtk::RevealerTransitionType::SLIDE_RIGHT);
+    m_nav_rev.set_transition_duration(200);
+    m_nav_rev.set_child(m_nav);
+    m_nav_rev.set_hexpand(false);
+    m_nav_handle = std::make_unique<views::PanelHandle>(
+        "shell.nav.handle", views::PanelHandle::Side::Left, m_nav_rev, 180, 420);
+    m_nav_handle->set_width(250);
+    m_nav_handle->changed = [this] { sync_nav(); };
+    m_nav_handle->set_open(true);
+    m_right.set_hexpand(true);
+    m_body.append(m_nav_rev);
+    m_body.append(*m_nav_handle);
+    m_body.append(m_right);
+    set_child(m_body);
 }
 
 void Shell::build_welcome() {  // zone: the main view when nothing is picked

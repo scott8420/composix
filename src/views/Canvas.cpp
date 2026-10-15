@@ -1,5 +1,6 @@
 #include "views/Canvas.hpp"
 #include "views/Ruler.hpp"
+#include "layout/Flow.hpp"
 #include "Log.hpp"
 
 #include <gdkmm/cursor.h>
@@ -343,30 +344,26 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
 
     switch (f.kind) {
     case core::FrameKind::Text: {
-        // s005 draws the frame and stand-in lines; real text flow through the
-        // thread is s006. The story's name says what will flow here.
-        const auto* st = m_doc.as<core::Story>(f.story);
-        double lead = 14;
-        if (st && !st->paras.empty())
-            if (const auto* sty = m_doc.as<core::Style>(st->paras.back().style)) lead = std::max(6.0, sty->leading);
-        const double inset = 4 * s, step = lead * s, bar = std::max(1.0, step * 0.42);
+        // s007: the story's text, flowed through the thread (layout::Flow),
+        // drawn at true size and scaled -- breaks never change with zoom.
+        const auto& flow = m_flows.get(m_doc, f.story);
+        cr->save();
         cr->rectangle(r.x, r.y, r.w, r.h);
         cr->clip();
-        cr->set_source_rgba(0.2, 0.2, 0.25, 0.16 * dim);
-        int n = 0;
-        if (step >= 2)
-            for (double y = r.y + inset + step * 0.6; y + bar < r.b() - inset; y += step, ++n) {
-                const double w = (n % 6 == 5) ? (r.w - 2 * inset) * 0.6 : r.w - 2 * inset;
-                cr->rectangle(r.x + inset, std::round(y), w, bar);
-            }
-        cr->fill();
-        cr->reset_clip();
-        cr->set_source_rgba(0.45, 0.55, 0.7, 0.7 * dim);
+        cr->translate(r.x, r.y);
+        cr->scale(s, s);
+        if (from_master) cr->push_group();
+        layout::draw_frame_text(cr->cobj(), m_doc, f.story, flow, id, 0, 0);
+        if (from_master) { cr->pop_group_to_source(); cr->paint_with_alpha(dim); }
+        cr->restore();
+        cr->set_source_rgba(0.45, 0.55, 0.7, 0.55 * dim);
         cr->set_line_width(1);
         cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
         cr->stroke();
         // Thread ports: in (top-left), out (bottom-right); filled = linked.
+        // The last frame of an overset story shows the red + instead.
         const auto [at, total] = core::thread_place(m_doc, id);
+        const bool over_here = flow.overset && total > 0 && at == total;
         const double ps = 7;
         const auto port = [&](double x, double y, bool linked) {
             cr->set_source_rgb(1, 1, 1);
@@ -382,14 +379,20 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
         };
         if (!from_master && r.w > 24 && r.h > 24) {
             port(std::round(r.x) + 3.5, std::round(r.y) + 3.5, at > 1);
-            port(std::round(r.r()) - ps - 3.5, std::round(r.b()) - ps - 3.5, total > 0 && at < total);
-        }
-        if (st && r.w > 60 && r.h > 20 && !from_master) {
-            auto lay = create_pango_layout(st->name + (total > 1 ? "  " + std::to_string(at) + "/" + std::to_string(total) : ""));
-            lay->set_font_description(Pango::FontDescription("Sans 8"));
-            cr->set_source_rgba(0.35, 0.45, 0.6, 0.9);
-            cr->move_to(r.x + 14, r.y + 2);
-            lay->show_in_cairo_context(cr);
+            const double px = std::round(r.r()) - ps - 3.5, py = std::round(r.b()) - ps - 3.5;
+            if (over_here) {
+                cr->set_source_rgb(0.85, 0.15, 0.15);
+                cr->rectangle(px - 1, py - 1, ps + 2, ps + 2);
+                cr->fill();
+                cr->set_source_rgb(1, 1, 1);
+                cr->set_line_width(1.5);
+                cr->move_to(px + ps / 2, py + 1); cr->line_to(px + ps / 2, py + ps - 1);
+                cr->move_to(px + 1, py + ps / 2); cr->line_to(px + ps - 1, py + ps / 2);
+                cr->stroke();
+                cr->set_line_width(1);
+            } else {
+                port(px, py, total > 0 && at < total);
+            }
         }
         break;
     }

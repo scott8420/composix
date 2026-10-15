@@ -15,7 +15,6 @@ Navigator::Navigator()
       m_scroll("nav.scroll"),
       m_list("nav.list") {
     add_css_class("cx-nav");
-    set_size_request(232, -1);
 
     auto heading = Gtk::make_managed<Gtk::Label>("NAVIGATOR");
     heading->set_name("nav.heading");

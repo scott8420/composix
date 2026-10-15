@@ -12,6 +12,7 @@
 //   cmake --build build --target composix_selftest && ./build/composix_selftest
 
 #include "core/Doc.hpp"
+#include "layout/Flow.hpp"
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
 #include "core/Shortcuts.hpp"
@@ -659,6 +660,93 @@ int main() {
         check("undo brings it back where it started", d.as<core::Guide>(g) && d.as<core::Guide>(g)->pos == 300);
         check("guides: through the door", d.strays() == 0);
         check("add_guide: not on the pasteboard", core::doc::add_guide(j, d, "", true, 5).empty());
+    }
+
+    // ── s007: text flow ──────────────────────────────────────────────────────
+    {
+        std::cout << "\n-- text flow --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::load_sample(d);
+        check("thread order", L::thread_frames(d, "story.1") ==
+                              std::vector<std::string>({"frame.1", "frame.2", "frame.3"}));
+        const auto f = L::flow_story(d, "story.1");
+        check("sample chapters: set, not overset", f.lines > 0 && !f.overset, std::to_string(f.lines));
+        bool steady = true;
+        for (const auto& ft : f.frames)
+            for (std::size_t i = 1; i < ft.lines.size(); ++i)
+                steady = steady && ft.lines[i].y > ft.lines[i - 1].y;
+        check("lines go down the frame", steady);
+
+        // Every byte of every paragraph is set exactly once, in order -- across
+        // frames of different widths too.
+        const auto covers = [&](const core::Doc& doc, const L::StoryFlow& fl, const std::string& story) {
+            const auto& paras = doc.as<core::Story>(story)->paras;
+            std::vector<int> at(paras.size(), 0);
+            for (const auto& ft : fl.frames)
+                for (const auto& ln : ft.lines) {
+                    if (ln.start != at[static_cast<std::size_t>(ln.para)]) return false;
+                    at[static_cast<std::size_t>(ln.para)] = ln.end;
+                }
+            for (std::size_t i = 0; i < paras.size(); ++i)
+                if (at[i] != static_cast<int>(paras[i].text.size())) return false;
+            return true;
+        };
+        check("every byte set once, in order", covers(d, f, "story.1"));
+
+        {   // A short first frame: the text continues in the next, re-broken at its width.
+            core::Doc e;
+            core::load_sample(e);
+            core::Doc::Loading load(e);
+            auto f1 = *e.as<core::Frame>("frame.1");
+            f1.h = 60;
+            e.put("frame.1", f1);
+            auto f2 = *e.as<core::Frame>("frame.2");
+            f2.w = 150;   // much narrower
+            e.put("frame.2", f2);
+            const auto g = L::flow_story(e, "story.1");
+            check("flows on into the next frame", !g.frames[1].lines.empty() && !g.overset);
+            // 60 pt holds the 28 pt heading line + two 14 pt body lines (56);
+            // a third body line would end at 70.
+            check("frame 1 holds exactly what fits (28 + 14 + 14)", g.frames[0].lines.size() == 3 &&
+                                                                    g.frames[0].lines[2].y == 42,
+                  std::to_string(g.frames[0].lines.size()));
+            check("still every byte once, across widths", covers(e, g, "story.1"));
+            check("narrower frame: more lines", g.lines > f.lines, std::to_string(g.lines) + " vs " + std::to_string(f.lines));
+        }
+        {   // Too little room anywhere: overset.
+            core::Doc e;
+            core::load_sample(e);
+            core::Doc::Loading load(e);
+            for (const char* id : {"frame.1", "frame.2", "frame.3"}) {
+                auto fr = *e.as<core::Frame>(id);
+                fr.h = 30;
+                e.put(id, fr);
+            }
+            check("overset when the thread runs out", L::flow_story(e, "story.1").overset);
+        }
+        {   // A looping thread does not hang.
+            core::Doc e;
+            core::load_sample(e);
+            core::Doc::Loading load(e);
+            auto f3 = *e.as<core::Frame>("frame.3");
+            f3.next = "frame.1";
+            e.put("frame.3", f3);
+            check("a looping thread stops", L::thread_frames(e, "story.1").size() <= 3);
+        }
+        check("the caption fits its frame", !L::flow_story(d, "story.2").overset);
+        check("an unknown story flows nothing", L::flow_story(d, "story.99").lines == 0);
+
+        L::FlowCache cache;
+        const int n1 = cache.get(d, "story.1").lines;
+        core::DocJournal j{d};
+        auto fr = *d.as<core::Frame>("frame.1");
+        core::doc::frames_set(j, d, "frame.1", {fr.x, fr.y, 120, fr.h});
+        check("cache: recomputed after a change", cache.get(d, "story.1").lines > n1);
+
+        std::vector<std::string> over{"story.2"};
+        const auto o = core::project(d, "", &over);
+        check("projection: overset badge + field", o.find("story.2")->badge == "Overset");
     }
 
     std::cout << "-----------------------------------------------\n";

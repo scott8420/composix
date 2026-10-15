@@ -215,8 +215,13 @@ public:
     // Start over (a new / opened document). Not a user step.
     void reset();
 
+    // Bumped by every put / reset (s007): caches keyed on it (text flow) know
+    // when to recompute.
+    std::uint64_t revision() const { return m_rev; }
+
 private:
     std::map<Id, Record>       m_recs;
+    std::uint64_t              m_rev = 0;
     std::map<std::string, int> m_next;   // fresh_id counters per prefix
     int                        m_strays = 0;
     int                        m_loading = 0;

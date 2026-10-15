@@ -1,5 +1,6 @@
 #include "Shell.hpp"
 #include "core/Recents.hpp"
+#include "layout/Flow.hpp"
 #include "Log.hpp"
 
 #include <gtkmm/alertdialog.h>
@@ -74,6 +75,15 @@ void Shell::rebuild_recents_menu() {  // helper: repaint the submenu
 // One re-projection per idle, AFTER the writes that caused it: a verb writes
 // several records, and rebuilding the views per write would tear down a row
 // or a dropdown mid-click (jot s045: "open UI after the rebuild you caused").
+// The projection, with each story's overset measured by the layout library
+// (core can't measure text; it is told).
+core::Outline Shell::project_now() const {  // helper
+    std::vector<std::string> over;
+    for (const auto& sid : m_doc.ids_of<core::Story>())
+        if (layout::flow_story(m_doc, sid).overset) over.push_back(sid);
+    return core::project(m_doc, m_project_dir, &over);
+}
+
 void Shell::queue_refresh() {  // helper
     if (m_refresh_queued) return;
     m_refresh_queued = true;
@@ -91,7 +101,7 @@ void Shell::refresh() {  // helper
     // catch up when it ends (signal_edited -> here again).
     if (m_journal.in_gesture()) { m_canvas_view.canvas().queue_draw(); return; }
     const auto keep = m_pick.segment ? m_tiles.selected() : std::vector<std::string>{};
-    m_outline = core::project(m_doc, m_project_dir);
+    m_outline = project_now();
     m_nav.refresh(&m_outline);
     std::vector<std::string> still;
     for (const auto& id : m_pick.items)
@@ -161,7 +171,7 @@ bool Shell::open_project(const std::string& dir) {  // helper
     note_recent(dir);
     m_pick = {};
     m_nav.set_outline(nullptr);
-    m_outline = core::project(m_doc, m_project_dir);
+    m_outline = project_now();
     m_nav.set_outline(&m_outline);
     m_nav.set_open(core::Segment::Pages, true);
     m_nav.select_section(core::Segment::Pages);
@@ -230,6 +240,12 @@ void Shell::update_undo_ui() {  // helper
         m_edit_menu->append(u.empty() ? "Undo" : "Undo " + u, "win.undo");
         m_edit_menu->append(r.empty() ? "Redo" : "Redo " + r, "win.redo");
     }
+}
+
+void Shell::sync_nav() {  // helper: the header toggle + View check follow the navigator
+    if (!m_nav_handle) return;
+    if (auto a = std::dynamic_pointer_cast<Gio::SimpleAction>(lookup_action("toggle-nav")))
+        a->change_state(m_nav_handle->open());
 }
 
 // The header toggle, the View menu's check and the pull tab all follow the

@@ -37,6 +37,7 @@ at the source, never faked.
 | **The document model** (s004): one store of records by id, verbs through the journal, sample book, document.json project folder, projection to the views | `core/Doc.*`, `core/Sample.cpp`, `core/DocJson.cpp`, `core/Project.cpp` | Composix |
 | **The page canvas** (s005): viewport (zoom about the pointer, fit, pan), pages at true size, Select tool (pick, marquee, move, 8-handle resize) -- every drag one journal gesture | `core/Geometry.hpp`, `views/Canvas.*` | Curvz (ideas) |
 | **Rulers, guides, snapping** (s006): rulers read the canvas viewport; guides are records pulled from the rulers; snap targets gathered at press | `views/Ruler.*`, `core::snap_targets / snap_any` | Curvz (ideas) |
+| **Text flow** (s007): stories flowed through threaded frames with Pango, measured at 72 dpi unhinted, overset detected -- a GTK-free library | `layout/Flow.*` (`composix_layout`) | Composix |
 | The tree, and drag-and-drop on it — **documented, not compiled** | `docs/tree-and-dnd.md` | Folio |
 
 Three sources, each earning a page only where it's the *cleanest* instance:
@@ -57,7 +58,7 @@ seam proven three ways + the mapping.
 ```
 
 Deps (Ubuntu/Debian): `libgtkmm-4.0-dev libspdlog-dev cmake g++`.
-Deps (Fedora): `gtkmm4.0-devel spdlog-devel cmake gcc-c++`. The resource
+Deps (Fedora): `gtkmm4.0-devel spdlog-devel cmake gcc-c++` (pangocairo comes with gtkmm). The resource
 bundle is compiled by `glib-compile-resources`, which ships with the GLib dev
 tools that `libgtkmm-4.0-dev` already pulls in.
 
