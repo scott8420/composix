@@ -2,6 +2,7 @@
 #include "widgets/Widgets.hpp"
 #include "core/Outline.hpp"
 #include "core/Doc.hpp"      // s004: the document + its journal
+#include "views/Canvas.hpp"
 #include "views/Inspector.hpp"
 #include "views/ItemView.hpp"
 #include "views/Navigator.hpp"
@@ -73,6 +74,7 @@ private:
     void on_tiles_selection(const std::vector<std::string>& ids);  // category: handler: -> inspector
     void on_tiles_open(const std::vector<std::string>& ids);       // category: handler: -> navigator selects them
     void on_inspector_edit(const std::string& key, const std::string& choice);  // category: handler: -> one verb
+    void on_canvas_selection();                  // category: handler: frames picked -> inspector
     void on_open();                              // category: handler: pick a project folder -> load it
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
@@ -149,6 +151,9 @@ private:
     std::string        m_project_dir;    // "" = the unsaved sample / never saved
     bool               m_dirty = false;
     bool               m_closing_ok = false;   // the user chose; let the close through
+
+    // s005: the page canvas -- after the document and journal it edits.
+    views::CanvasView  m_canvas_view{m_doc, m_journal};
     Glib::RefPtr<Gio::Menu>         m_edit_menu;
     Glib::RefPtr<Gio::SimpleAction> m_act_undo, m_act_redo;
 

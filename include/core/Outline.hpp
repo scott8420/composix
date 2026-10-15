@@ -92,6 +92,12 @@ class Doc;
 // be found). Item ids ARE record ids, so a pick names records directly.
 Outline project(const Doc& d, const std::string& project_dir);
 
+// s005: frames picked on the canvas, as items the inspector reads (fields:
+// Kind, On, X, Y, W, H, and Story + Thread or Asset). Not in the navigator.
+std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& frames);
+// "Text frame", "3 frames".
+std::string frames_title(const std::vector<Item>& items);
+
 // What the inspector shows for a multi-selection: the fields every item has,
 // in the first item's order; the value where all agree, kMixed where not.
 // A field stays editable only if every item offers the same edit and choices.

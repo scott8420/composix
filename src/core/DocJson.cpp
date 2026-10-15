@@ -64,6 +64,8 @@ json to(const Record& r) {
         } else if constexpr (std::is_same_v<T, Asset>) {
             j = {{"kind", "asset"}, {"name", v.name}, {"pos", v.pos}, {"path", v.path},
                  {"embedded", v.embedded}, {"color", v.color}, {"px_w", v.px_w}, {"px_h", v.px_h}};
+        } else if constexpr (std::is_same_v<T, Guide>) {
+            j = {{"kind", "guide"}, {"owner", v.owner}, {"vertical", v.vertical}, {"pos", v.pos}};
         } else if constexpr (std::is_same_v<T, GenList>) {
             j = {{"kind", "list"}, {"name", v.name}, {"type", en(v.kind)}, {"pos", v.pos},
                  {"from_styles", v.from_styles}, {"placed_on", v.placed_on},
@@ -167,6 +169,13 @@ std::optional<Record> from(const json& j) {
         v.color = val(j, "color", v.color);
         v.px_w = val(j, "px_w", 0);
         v.px_h = val(j, "px_h", 0);
+        return v;
+    }
+    if (k == "guide") {
+        Guide v;
+        v.owner = val<std::string>(j, "owner", "");
+        v.vertical = val(j, "vertical", true);
+        v.pos = val(j, "pos", 0.0);
         return v;
     }
     if (k == "list") {

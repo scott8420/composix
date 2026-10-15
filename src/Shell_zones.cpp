@@ -66,6 +66,7 @@ void Shell::build_shell() {  // zone: header + panes
     m_main.add(m_welcome, "welcome");
     m_main.add(m_tiles, "tiles");
     m_main.add(m_item, "item");
+    m_main.add(m_canvas_view, "canvas");   // s005: pages and masters open here
     m_main.set_visible_child("welcome");
 
     // ── the inspector: a sliding panel, its handle, and the pull tab ───────
@@ -162,6 +163,11 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto view = Gio::Menu::create();
     view->append("Navigator", "win.toggle-nav");
     view->append("Inspector", "win.toggle-inspector");
+    auto canvas = Gio::Menu::create();   // s006
+    canvas->append("Rulers", "win.toggle-rulers");
+    canvas->append("Guides", "win.toggle-guides");
+    canvas->append("Snap to Guides & Edges", "win.toggle-snap");
+    view->append_section("", canvas);
     menu->append_section(view);
 
     auto diag = Gio::Menu::create();

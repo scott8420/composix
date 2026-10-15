@@ -131,8 +131,21 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Click a recent", "Open that project"},
         {"Mouse", "", {}, "Ctrl+click  /  Shift+click", "Add to the selection (navigator, tiles)"},
         {"Mouse", "", {}, "Double-click a tile", "Open it (or the whole selection)"},
+        {"Mouse", "", {}, "Drag a frame / a handle", "Move / resize (Shift: one axis / keep shape; Alt: from the centre)"},
+        {"Mouse", "", {}, "Arrow keys", "Nudge the picked frames 1 pt (Shift: 10 pt)"},
+        {"Mouse", "", {}, "Esc", "Cancel a drag, then clear the picks"},
 
         // ── View (s002) ───────────────────────────────────────────────────────
+        {"View", "win.zoom-in",          {"<Ctrl>equal", "<Ctrl>plus"}, "", "Zoom in"},
+        {"View", "win.zoom-out",         {"<Ctrl>minus"}, "", "Zoom out"},
+        {"View", "win.zoom-fit",         {"<Ctrl>0"}, "", "Fit the pages"},
+        {"View", "win.zoom-100",         {"<Ctrl>1"}, "", "Actual size (100%)"},
+        {"View", "", {}, "Ctrl+scroll", "Zoom about the pointer"},
+        {"View", "", {}, "Space+drag  /  middle-drag", "Pan the canvas"},
+        {"View", "win.toggle-rulers",    {"<Ctrl>r"}, "", "Show / hide the rulers"},
+        {"View", "win.toggle-guides",    {"<Ctrl>apostrophe"}, "", "Show / hide the guides"},
+        {"View", "win.toggle-snap",      {"<Ctrl>semicolon"}, "", "Snap to guides & edges on / off"},
+        {"View", "", {}, "Drag out of a ruler", "Pull a guide onto a page (off the page removes it)"},
         {"View", "win.toggle-nav",       {"<Ctrl><Alt>1"}, "", "Show / hide the navigator"},
         {"View", "win.toggle-inspector", {"<Ctrl><Alt>2"}, "", "Show / hide the inspector"},
 

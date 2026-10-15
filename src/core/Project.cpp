@@ -286,4 +286,37 @@ Outline project(const Doc& d, const std::string& dir) {
     return o;
 }
 
+std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids) {
+    std::vector<Item> out;
+    const auto in = [](double pt) { return inches(pt) + " in"; };
+    for (const auto& id : ids) {
+        const auto* f = d.as<Frame>(id);
+        if (!f) continue;
+        const char* kind = f->kind == FrameKind::Text ? "Text" : f->kind == FrameKind::Image ? "Image" : "Shape";
+        std::string on = d.as<Page>(f->owner) ? "Page " + d.folio(f->owner) : master_label(d, f->owner);
+        std::vector<Field> fields{{"Kind", kind}, {"On", on},
+                                  {"X", in(f->x)}, {"Y", in(f->y)}, {"W", in(f->w)}, {"H", in(f->h)}};
+        std::string title = std::string(kind) + " frame";
+        if (f->kind == FrameKind::Text) {
+            const auto* st = d.as<Story>(f->story);
+            fields.push_back({"Story", st ? st->name : "\u2014"});
+            const auto [at, n] = thread_place(d, id);
+            fields.push_back({"Thread", n > 1 ? std::to_string(at) + " of " + std::to_string(n) : "Not threaded"});
+            if (st) title += " \u2014 " + st->name;
+        } else if (f->kind == FrameKind::Image) {
+            const auto* a = d.as<Asset>(f->asset);
+            fields.push_back({"Asset", a ? a->name : "\u2014"});
+            if (a) title += " \u2014 " + a->name;
+        }
+        out.push_back({id, Segment::Pages, title, "", {}, fields});
+    }
+    return out;
+}
+
+std::string frames_title(const std::vector<Item>& items) {
+    if (items.empty()) return "Nothing selected";
+    if (items.size() == 1) return items.front().title;
+    return std::to_string(items.size()) + " frames";
+}
+
 }  // namespace composix::core

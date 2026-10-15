@@ -75,6 +75,15 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                 if (f.choices[i].label == f.value || f.choices[i].label.find("(" + f.value + ")") != std::string::npos)
                     at = static_cast<guint>(i);
             }
+            // No choice matches (Mixed, or a size that isn't a preset): show
+            // the value itself as a first entry, so GTK doesn't print "(None)".
+            // Picking it does nothing; every real choice is one down.
+            guint offset = 0;
+            if (at == GTK_INVALID_LIST_POSITION) {
+                labels.insert(labels.begin(), f.value);
+                at = 0;
+                offset = 1;
+            }
             auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(labels));
             dd->set_name("inspector.edit." + f.edit);
             dd->add_css_class("cx-field-edit");
@@ -86,10 +95,11 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             }
             const std::string key = f.edit;
             const auto choices = f.choices;
-            dd->property_selected().signal_changed().connect([this, dd, key, choices] {
+            dd->property_selected().signal_changed().connect([this, dd, key, choices, offset] {
                 if (m_painting) return;
                 const guint i = dd->get_selected();
-                if (i < choices.size()) m_edit.emit(key, choices[i].id);
+                if (i < offset || i == GTK_INVALID_LIST_POSITION) return;
+                if (i - offset < choices.size()) m_edit.emit(key, choices[i - offset].id);
             });
             m_fields.attach(*dd, 1, row);
         } else {

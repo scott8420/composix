@@ -6,6 +6,7 @@
 #include <gtkmm/listboxrow.h>
 
 #include <algorithm>
+#include <glibmm/main.h>
 
 namespace composix::views {
 
@@ -46,6 +47,8 @@ void Navigator::set_outline(const core::Outline* o) {
     m_secs.clear();
     m_item_of.clear();
     m_sec_of.clear();
+    m_labels.clear();
+    m_counts.clear();
     m_outline = o;
 
     if (o) {
@@ -82,6 +85,7 @@ void Navigator::set_outline(const core::Outline* o) {
             box->append(*icon);
             box->append(*title);
             box->append(*count);
+            m_counts[row] = count;
             row->set_child(*box);
             m_list.append(*row);
 
@@ -99,12 +103,14 @@ void Navigator::set_outline(const core::Outline* o) {
                 il->set_hexpand(true);
                 il->set_ellipsize(Pango::EllipsizeMode::END);
                 ib->append(*il);
-                if (!it->badge.empty()) {
-                    auto b = Gtk::make_managed<Gtk::Label>(it->badge);
-                    b->add_css_class("cx-badge");
-                    if (it->thumb.flag) b->add_css_class("cx-warn");
-                    ib->append(*b);
-                }
+                // The badge always exists (hidden when empty) so a refresh
+                // can update it in place.
+                auto b = Gtk::make_managed<Gtk::Label>(it->badge);
+                b->add_css_class("cx-badge");
+                if (it->thumb.flag) b->add_css_class("cx-warn");
+                b->set_visible(!it->badge.empty());
+                ib->append(*b);
+                m_labels[ir] = {il, b};
                 ir->set_child(*ib);
                 ir->set_visible(false);
                 m_list.append(*ir);
@@ -117,7 +123,40 @@ void Navigator::set_outline(const core::Outline* o) {
     m_quiet = false;
 }
 
+// The document changed. Most changes keep the same items in the same order
+// (an edit, a move, a guide): update titles, badges and counts IN PLACE --
+// never touching the rows keeps GTK's cursor and selection exactly as they
+// were. Only when items come or go are the rows rebuilt, and then the picks
+// are put back twice: now, and once GTK has settled (removing the focused
+// row makes GtkListBox move its cursor later, which re-selects one row on its
+// own -- s006, found driving a guide drop).
 void Navigator::refresh(const core::Outline* o) {
+    bool same = o && m_outline && !m_secs.empty();
+    if (same)
+        for (const auto& r : m_secs) {
+            const auto items = o->in(r.segment);
+            if (items.size() != r.items.size()) { same = false; break; }
+            for (std::size_t i = 0; i < items.size() && same; ++i)
+                same = m_item_of[r.items[i]] == items[i]->id;
+            if (!same) break;
+        }
+    if (same) {
+        m_outline = o;
+        for (const auto& r : m_secs) {
+            const auto items = o->in(r.segment);
+            if (auto c = m_counts.find(r.row); c != m_counts.end()) c->second->set_text(std::to_string(items.size()));
+            for (std::size_t i = 0; i < items.size(); ++i) {
+                auto& [title, badge] = m_labels[r.items[i]];
+                if (title->get_text().raw() != items[i]->title) title->set_text(items[i]->title);
+                badge->set_text(items[i]->badge);
+                badge->set_visible(!items[i]->badge.empty());
+                if (items[i]->thumb.flag) badge->add_css_class("cx-warn");
+                else                      badge->remove_css_class("cx-warn");
+            }
+        }
+        return;
+    }
+
     std::vector<core::Segment> open, picked_segs;
     std::vector<std::string> picked;
     for (const auto& r : m_secs) {
@@ -127,20 +166,29 @@ void Navigator::refresh(const core::Outline* o) {
             if (ir->is_selected()) picked.push_back(m_item_of[ir]);
     }
     set_outline(o);
-    m_quiet = true;
-    for (auto& r : m_secs) {
-        if (std::find(open.begin(), open.end(), r.segment) != open.end()) {
-            r.open = true;
-            r.arrow->set_icon_name("pan-down-symbolic");
-            r.row->add_css_class("cx-open");
-            for (auto* ir : r.items) ir->set_visible(true);
+    const auto restore = [this, open, picked_segs, picked] {
+        m_quiet = true;
+        m_list.unselect_all();
+        for (auto& r : m_secs) {
+            if (std::find(open.begin(), open.end(), r.segment) != open.end() && !r.open) {
+                r.open = true;
+                r.arrow->set_icon_name("pan-down-symbolic");
+                r.row->add_css_class("cx-open");
+                for (auto* ir : r.items) ir->set_visible(true);
+            }
+            if (std::find(picked_segs.begin(), picked_segs.end(), r.segment) != picked_segs.end())
+                m_list.select_row(*r.row);
+            for (auto* ir : r.items)
+                if (std::find(picked.begin(), picked.end(), m_item_of[ir]) != picked.end()) m_list.select_row(*ir);
         }
-        if (std::find(picked_segs.begin(), picked_segs.end(), r.segment) != picked_segs.end())
-            m_list.select_row(*r.row);
-        for (auto* ir : r.items)
-            if (std::find(picked.begin(), picked.end(), m_item_of[ir]) != picked.end()) m_list.select_row(*ir);
-    }
-    m_quiet = false;
+        m_quiet = false;
+    };
+    restore();
+    m_settling = true;
+    Glib::signal_idle().connect_once([this, restore] {
+        restore();
+        m_settling = false;
+    });
 }
 
 bool Navigator::is_open(core::Segment s) const {
@@ -199,7 +247,7 @@ void Navigator::select_items(const std::vector<std::string>& ids) {
 }
 
 void Navigator::on_selection_changed() {
-    if (m_quiet) return;
+    if (m_quiet || m_settling) return;   // ours, or GTK settling after a rebuild
     Pick p;
     std::optional<core::Segment> first_seg;
     // Walk in list order, not selection order, so a pick reads top-to-bottom.

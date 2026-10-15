@@ -98,6 +98,7 @@ template std::vector<Doc::Id> Doc::ids_of<Style>() const;
 template std::vector<Doc::Id> Doc::ids_of<Swatch>() const;
 template std::vector<Doc::Id> Doc::ids_of<Asset>() const;
 template std::vector<Doc::Id> Doc::ids_of<GenList>() const;
+template std::vector<Doc::Id> Doc::ids_of<Guide>() const;
 template double Doc::pos_after<Page>(const Id&) const;
 template double Doc::pos_after<Master>(const Id&) const;
 template double Doc::pos_after<Style>(const Id&) const;
@@ -449,6 +450,78 @@ Doc::Id neighbour_page(const Doc& d, const std::vector<Doc::Id>& gone) {
     return {};
 }
 
+bool move_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, double dx, double dy,
+                 const std::string& merge_key) {
+    std::vector<Doc::Id> frames;
+    for (const auto& id : ids) if (d.as<Frame>(id)) frames.push_back(id);
+    if (frames.empty() || (dx == 0 && dy == 0)) return false;
+    return j.run("Move " + plural(frames.size(), "frame", "frames"), frames, [&] {
+        for (const auto& id : frames) {
+            Frame f = *d.as<Frame>(id);
+            f.x += dx;
+            f.y += dy;
+            d.put(id, f);
+        }
+    }, merge_key);
+}
+
+void frames_begin(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const std::string& label) {
+    std::vector<Doc::Id> frames;
+    for (const auto& id : ids) if (d.as<Frame>(id)) frames.push_back(id);
+    if (!frames.empty()) j.begin(label, frames);
+}
+
+void frames_set(DocJournal& j, Doc& d, const Doc::Id& id, const Rect& r) {
+    const auto* f0 = d.as<Frame>(id);
+    if (!f0) return;
+    Frame f = *f0;
+    if (f.x == r.x && f.y == r.y && f.w == r.w && f.h == r.h) return;
+    // Through the door even mid-drag: inside the open gesture this just writes.
+    j.run("Frame bounds", {id}, [&] {
+        f.x = r.x; f.y = r.y; f.w = r.w; f.h = r.h;
+        d.put(id, f);
+    });
+}
+
+bool frames_end(DocJournal& j) { return j.commit(); }
+
+Doc::Id add_guide(DocJournal& j, Doc& d, const Doc::Id& owner, bool vertical, double pos) {
+    if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
+    Doc::Id made;
+    j.run(vertical ? "Add vertical guide" : "Add horizontal guide", {}, [&] {
+        made = d.fresh_id("guide");
+        d.put(made, Guide{owner, vertical, pos});
+        return std::vector<Doc::Id>{made};
+    });
+    return made;
+}
+
+void guide_begin(DocJournal& j, Doc& d, const Doc::Id& id) {
+    if (d.as<Guide>(id)) j.begin("Move guide", {id});
+}
+
+void guide_set(DocJournal& j, Doc& d, const Doc::Id& id, double pos) {
+    const auto* g0 = d.as<Guide>(id);
+    if (!g0 || g0->pos == pos) return;
+    Guide g = *g0;
+    j.run("Move guide", {id}, [&] { g.pos = pos; d.put(id, g); });
+}
+
+// Dragged off its page: the guide goes, inside the open gesture -- the
+// gesture's one step records it as a removal ("Move guide" becomes one undo
+// that brings it back where it started).
+void guide_remove_in_gesture(DocJournal& j, Doc& d, const Doc::Id& id) {
+    if (!d.as<Guide>(id)) return;
+    j.relabel("Remove guide");
+    j.run("Remove guide", {id}, [&] { d.put(id, std::nullopt); });
+}
+
+bool remove_guide(DocJournal& j, Doc& d, const Doc::Id& id) {
+    if (!d.as<Guide>(id)) return false;
+    return j.run("Remove guide", {id}, [&] { d.put(id, std::nullopt); });
+}
+void frames_cancel(DocJournal& j) { j.cancel(); }
+
 const std::vector<Verb>& verbs() {
     // Each runs on the loaded sample. A verb the UI offers and this table
     // lacks is the gap the gate cannot see -- add it in the same change.
@@ -480,9 +553,187 @@ const std::vector<Verb>& verbs() {
              set_starts(j, d, d.ids_of<Section>(), Side::Left);
          }},
         {"remove_section", [](DocJournal& j, Doc& d) { remove_section(j, d, d.ids_of<Section>().back()); }},
+        {"move_frames", [](DocJournal& j, Doc& d) { move_frames(j, d, {"frame.1", "frame.4"}, 9, -3); }},
+        {"add_guide", [](DocJournal& j, Doc& d) { add_guide(j, d, "page.6", true, 100); }},
+        {"drag_guide", [](DocJournal& j, Doc& d) {
+             guide_begin(j, d, "guide.1");
+             guide_set(j, d, "guide.1", 60);
+             guide_set(j, d, "guide.1", 72);
+             frames_end(j);
+         }},
+        {"drag_guide_off", [](DocJournal& j, Doc& d) {   // dragged off its page: removed, one step
+             guide_begin(j, d, "guide.1");
+             guide_set(j, d, "guide.1", -40);
+             guide_remove_in_gesture(j, d, "guide.1");
+             frames_end(j);
+         }},
+        {"remove_guide", [](DocJournal& j, Doc& d) { remove_guide(j, d, "guide.2"); }},
+        {"drag_frames", [](DocJournal& j, Doc& d) {   // press .. drag .. release
+             frames_begin(j, d, {"frame.5", "frame.6"}, "Resize 2 frames");
+             frames_set(j, d, "frame.5", {20, 40, 900, 400});
+             frames_set(j, d, "frame.6", {20, 450, 400, 50});
+             frames_set(j, d, "frame.5", {24, 44, 880, 390});
+             frames_end(j);
+         }},
     };
     return table;
 }
 
 }  // namespace doc
+}  // namespace composix::core
+
+namespace composix::core {
+
+std::vector<Placed> layout_pages(const Doc& d, const std::vector<Doc::Id>& ids, double gap) {
+    std::vector<Placed> out;
+    double x = 0;
+    for (const auto& id : ids) {
+        double w = 0, h = 0;
+        bool master = false;
+        if (const auto* p = d.as<Page>(id))        { w = p->w; h = p->h; }
+        else if (const auto* m = d.as<Master>(id)) { w = m->w; h = m->h; master = true; }
+        else continue;
+        out.push_back({id, {x, 0, w, h}, master});
+        x += w + gap;
+    }
+    return out;
+}
+
+std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& id) {
+    std::vector<Doc::Id> chain;
+    Doc::Id m;
+    if (const auto* p = d.as<Page>(id)) m = p->master;
+    else if (const auto* ms = d.as<Master>(id)) m = ms->based_on;
+    while (!m.empty() && d.as<Master>(m) &&
+           std::find(chain.begin(), chain.end(), m) == chain.end()) {   // a cycle stops here
+        chain.insert(chain.begin(), m);
+        m = d.as<Master>(m)->based_on;
+    }
+    return chain;
+}
+
+Rect frame_in_layout(const Doc& d, const std::vector<Placed>& pl, const Doc::Id& id) {
+    const auto* f = d.as<Frame>(id);
+    if (!f) return {};
+    for (const auto& p : pl)
+        if (p.id == f->owner) return {p.r.x + f->x, p.r.y + f->y, f->w, f->h};
+    return {};
+}
+
+Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double y, double tol) {
+    // Every placed page's frames, even off the page: a frame may hang onto
+    // the pasteboard.
+    for (const auto& p : pl) {
+        const auto own = d.frames_on(p.id);
+        for (auto it = own.rbegin(); it != own.rend(); ++it) {   // topmost first
+            const Rect r = frame_in_layout(d, pl, *it);
+            if (Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) return *it;
+        }
+    }
+    return {};
+}
+
+std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r) {
+    std::vector<Doc::Id> out;
+    for (const auto& p : pl)
+        for (const auto& f : d.frames_on(p.id))
+            if (frame_in_layout(d, pl, f).intersects(r)) out.push_back(f);
+    return out;
+}
+
+std::pair<int, int> thread_place(const Doc& d, const Doc::Id& id) {
+    const auto* f = d.as<Frame>(id);
+    if (!f || f->kind != FrameKind::Text || f->story.empty()) return {0, 0};
+    // The head: the frame of this story nobody points to.
+    std::vector<Doc::Id> mine;
+    for (const auto& o : d.ids_of<Frame>())
+        if (d.as<Frame>(o)->story == f->story) mine.push_back(o);
+    Doc::Id head;
+    for (const auto& o : mine) {
+        bool pointed = false;
+        for (const auto& q : mine) pointed = pointed || d.as<Frame>(q)->next == o;
+        if (!pointed) { head = o; break; }
+    }
+    int at = 0, n = 0;
+    for (Doc::Id k = head; !k.empty() && n <= static_cast<int>(mine.size()); k = d.as<Frame>(k)->next) {
+        ++n;
+        if (k == id) at = n;
+        if (!d.as<Frame>(k)) break;
+    }
+    return {at, n};
+}
+
+}  // namespace composix::core
+
+namespace composix::core {
+
+std::vector<Doc::Id> guides_on(const Doc& d, const Doc::Id& owner) {
+    std::vector<Doc::Id> out;
+    for (const auto& id : d.ids_of<Guide>())
+        if (d.as<Guide>(id)->owner == owner) out.push_back(id);
+    return out;
+}
+
+Doc::Id hit_guide(const Doc& d, const std::vector<Placed>& pl, double x, double y, double tol) {
+    for (const auto& p : pl) {
+        if (!p.r.contains(x, y)) continue;
+        for (const auto& g : guides_on(d, p.id)) {
+            const auto& gd = *d.as<Guide>(g);
+            const double at = gd.vertical ? p.r.x + gd.pos : p.r.y + gd.pos;
+            if (std::abs((gd.vertical ? x : y) - at) <= tol) return g;
+        }
+    }
+    return {};
+}
+
+Doc::Id page_at(const std::vector<Placed>& pl, double x, double y) {
+    for (const auto& p : pl)
+        if (p.r.contains(x, y)) return p.id;
+    return {};
+}
+
+SnapTargets snap_targets(const Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& exclude) {
+    SnapTargets t;
+    const auto skip = [&](const Doc::Id& id) { return std::find(exclude.begin(), exclude.end(), id) != exclude.end(); };
+    for (const auto& p : pl) {
+        t.xs.insert(t.xs.end(), {p.r.x, p.r.cx(), p.r.r()});
+        t.ys.insert(t.ys.end(), {p.r.y, p.r.cy(), p.r.b()});
+        const std::vector<double>* folds = nullptr;
+        if (const auto* pg = d.as<Page>(p.id)) folds = &pg->folds;
+        else if (const auto* m = d.as<Master>(p.id)) folds = &m->folds;
+        if (folds) for (double f : *folds) t.xs.push_back(p.r.x + f);
+        auto owners = p.master ? std::vector<Doc::Id>{} : master_chain(d, p.id);
+        owners.push_back(p.id);
+        for (const auto& o : owners) {
+            for (const auto& g : guides_on(d, o)) {
+                const auto& gd = *d.as<Guide>(g);
+                (gd.vertical ? t.xs : t.ys).push_back((gd.vertical ? p.r.x : p.r.y) + gd.pos);
+            }
+            for (const auto& f : d.frames_on(o)) {
+                if (skip(f)) continue;
+                const auto& fr = *d.as<Frame>(f);
+                const Rect r{p.r.x + fr.x, p.r.y + fr.y, fr.w, fr.h};
+                t.xs.insert(t.xs.end(), {r.x, r.cx(), r.r()});
+                t.ys.insert(t.ys.end(), {r.y, r.cy(), r.b()});
+            }
+        }
+    }
+    return t;
+}
+
+SnapHit snap_any(const std::vector<double>& vs, const std::vector<double>& targets, double tol) {
+    SnapHit best;
+    double gap = tol;
+    for (double v : vs)
+        for (double t : targets) {
+            const double dd = t - v;
+            if (std::abs(dd) <= gap) {
+                gap = std::abs(dd);
+                best.delta = dd;
+                best.line = t;
+            }
+        }
+    return best;
+}
+
 }  // namespace composix::core

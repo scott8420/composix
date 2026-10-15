@@ -153,6 +153,9 @@ flowboxchild:selected > .cx-tile-card {
 .cx-field-label { color: @cx_dim; }
 .cx-field-value { }
 
+/* rulers (s006): quiet, on the sidebar tone */
+.cx-ruler { background: @cx_sidebar; }
+
 /* the opened item: a deeper pasteboard */
 .cx-pasteboard { background: mix(@cx_pasteboard, @theme_fg_color, 0.03); }
 

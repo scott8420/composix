@@ -35,6 +35,8 @@ at the source, never faked.
 | **Undo: every user choice a step, one door + a gate** -- a journal of before/after pictures by id, gestures as one step, merging, selection, Ctrl+Z from anywhere but a text box | `core/Undo.hpp`, `core/Stones.*`, the Undo page, `docs/undo.md` | Curvz / jot (s046) |
 | **Segmented navigator -> tiles -> inspector** (s002): sections disclose to items; a section shows as tiles with metadata, items open; multi-select with shared fields | `core/Outline.*`, `views/*`, `resources/composix.css`, `docs/look.md` | Composix |
 | **The document model** (s004): one store of records by id, verbs through the journal, sample book, document.json project folder, projection to the views | `core/Doc.*`, `core/Sample.cpp`, `core/DocJson.cpp`, `core/Project.cpp` | Composix |
+| **The page canvas** (s005): viewport (zoom about the pointer, fit, pan), pages at true size, Select tool (pick, marquee, move, 8-handle resize) -- every drag one journal gesture | `core/Geometry.hpp`, `views/Canvas.*` | Curvz (ideas) |
+| **Rulers, guides, snapping** (s006): rulers read the canvas viewport; guides are records pulled from the rulers; snap targets gathered at press | `views/Ruler.*`, `core::snap_targets / snap_any` | Curvz (ideas) |
 | The tree, and drag-and-drop on it — **documented, not compiled** | `docs/tree-and-dnd.md` | Folio |
 
 Three sources, each earning a page only where it's the *cleanest* instance:

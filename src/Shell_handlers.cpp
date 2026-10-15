@@ -11,6 +11,7 @@
 #include <giomm/asyncresult.h>
 #include <giomm/file.h>
 
+#include <algorithm>
 #include <filesystem>
 
 // Shell_handlers.cpp -- HANDLERS. Slot bodies: what a user action actually does.
@@ -179,15 +180,43 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         lg->info("edit {} = {} on {} item(s): {}", key, choice, m_inspected.size(), did ? "step" : "no change");
 }
 
+// Frames picked on the canvas: the inspector shows them (shared fields across
+// several); nothing picked: back to the opened pages.
+void Shell::on_canvas_selection() {  // handler
+    const auto& sel = m_canvas_view.canvas().selection();
+    if (sel.empty()) {
+        m_inspected = m_pick.items;
+        m_inspector.show_items(resolve(m_pick.items));
+        return;
+    }
+    m_inspected = sel;
+    const auto items = core::frame_items(m_doc, sel);
+    std::vector<const core::Item*> ptrs;
+    for (const auto& it : items) ptrs.push_back(&it);
+    m_inspector.show(core::frames_title(items),
+                     items.size() == 1 ? m_doc.as<core::Frame>(sel.front())->owner.rfind("master", 0) == 0
+                                             ? "On a master" : "Frame"
+                                       : "Shared fields \u2014 Mixed where they differ",
+                     core::shared_fields(ptrs));
+}
+
+// After undo / redo, frames the step touched come back selected on the canvas.
+static bool all_frames(const core::Doc& d, const std::vector<std::string>& ids) {
+    return !ids.empty() && std::all_of(ids.begin(), ids.end(),
+                                       [&](const std::string& id) { return d.as<core::Frame>(id) != nullptr; });
+}
+
 void Shell::on_undo() {  // handler: take the last step back
     const auto r = m_journal.undo();
     if (!r.done) return;
+    if (all_frames(m_doc, r.selection)) m_canvas_view.canvas().set_selection(r.selection);
     if (auto lg = log::get(log::Area::Shell)) lg->info("undo: {}", r.label);
 }
 
 void Shell::on_redo() {  // handler: put the undone step back
     const auto r = m_journal.redo();
     if (!r.done) return;
+    if (all_frames(m_doc, r.selection)) m_canvas_view.canvas().set_selection(r.selection);
     if (auto lg = log::get(log::Area::Shell)) lg->info("redo: {}", r.label);
 }
 

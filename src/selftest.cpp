@@ -20,6 +20,8 @@
 #include "core/TextMap.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <set>
@@ -493,6 +495,170 @@ int main() {
         core::DocJournal j{d};
         core::doc::set_master(j, d, {"page.6"}, "master.3");
         check("project: follows the model", field(core::project(d, "").find("page.6"), "Master") == "C-Chapter");
+    }
+
+    // ── s005: the canvas's arithmetic, layout, picking, frame verbs ──────────
+    {
+        std::cout << "\n-- geometry: viewport, handles, resize --\n";
+        using core::Rect;
+        core::Viewport v;
+        v.set_widget(1000, 800);
+        v.set_content({0, 0, 432, 648});
+        v.fit();
+        const Rect s = v.to_screen(v.content());
+        check("fit: centred", std::abs(s.cx() - 500) < 0.01 && std::abs(s.cy() - 400) < 0.01);
+        check("fit: 90% of the tighter axis", std::abs(s.h - 720) < 0.01, std::to_string(s.h));
+        double sx, sy, dx, dy;
+        v.to_screen(100, 200, sx, sy);
+        v.to_doc(sx, sy, dx, dy);
+        check("to_screen / to_doc invert", std::abs(dx - 100) < 1e-9 && std::abs(dy - 200) < 1e-9);
+        v.to_doc(300, 250, dx, dy);
+        v.zoom_toward(300, 250, 2.0);
+        double ex, ey;
+        v.to_doc(300, 250, ex, ey);
+        check("zoom_toward: the point under the cursor stays put", std::abs(ex - dx) < 1e-9 && std::abs(ey - dy) < 1e-9);
+        v.set_percent(100);
+        check("100% = 96/72 px per pt", std::abs(v.scale() - 96.0 / 72.0) < 1e-12 && std::abs(v.percent() - 100) < 1e-9);
+        v.pan_by(-100000, -100000);
+        const Rect s2 = v.to_screen(v.content());
+        check("clamp: content never leaves the screen", s2.r() >= 47.9 && s2.b() >= 47.9);
+        v.zoom_toward(500, 400, 1e9);
+        check("zoom is bounded", v.scale() == core::Viewport::kMax);
+
+        const Rect r{100, 100, 200, 100};
+        check("handles: corners win over edges",
+              core::handle_hit(r, 103, 98) == core::Handle::NW && core::handle_hit(r, 200, 100) == core::Handle::N);
+        check("handles: miss", core::handle_hit(r, 150, 150) == core::Handle::None);
+        check("resize SE grows", core::resize_rect(r, core::Handle::SE, 10, 20, false, false) == Rect{100, 100, 210, 120});
+        check("resize NW anchors the SE corner",
+              core::resize_rect(r, core::Handle::NW, 10, 10, false, false) == Rect{110, 110, 190, 90});
+        check("resize N leaves width", core::resize_rect(r, core::Handle::N, 50, -10, false, false) == Rect{100, 90, 200, 110});
+        const Rect sh = core::resize_rect(r, core::Handle::SE, 100, 0, true, false);
+        check("resize Shift keeps proportions", std::abs(sh.w / sh.h - 2.0) < 1e-9 && sh.x == 100 && sh.y == 100);
+        const Rect al = core::resize_rect(r, core::Handle::E, 10, 0, false, true);
+        check("resize Alt is about the centre", al == Rect{90, 100, 220, 100});
+        check("resize never below the minimum",
+              core::resize_rect(r, core::Handle::E, -500, 0, false, false).w == 1);
+        check("map_rect keeps a member's place in the box",
+              core::map_rect({150, 125, 50, 25}, r, {0, 0, 400, 200}) == Rect{100, 50, 100, 50});
+    }
+    {
+        std::cout << "\n-- layout + picking --\n";
+        core::Doc d;
+        core::load_sample(d);
+        const auto pl = core::layout_pages(d, {"page.5", "page.11", "page.6"});
+        check("layout: left to right, gap between",
+              pl.size() == 3 && pl[1].r.x == 432 + 36 && pl[2].r.x == pl[1].r.r() + 36 && pl[0].r.y == 0);
+        check("layout: a master is flagged", core::layout_pages(d, {"master.3"}).front().master);
+        check("master chain: based-on first",
+              core::master_chain(d, "page.5") == std::vector<std::string>({"master.2", "master.3"}));
+        const auto fr = core::frame_in_layout(d, pl, "frame.5");
+        check("frame in layout: owner's offset applied", fr.x == pl[1].r.x + 18 && fr.y == 36);
+        check("hit: a frame", core::hit_frame(d, pl, fr.cx(), fr.cy(), 2) == "frame.5");
+        check("hit: nothing on bare paper", core::hit_frame(d, pl, pl[2].r.x + 5, pl[2].r.y + 5, 2).empty());
+        {   // overlapping frames: the higher z wins
+            core::Doc e;
+            core::load_sample(e);
+            core::Doc::Loading load(e);
+            e.put("frame.90", core::Frame{"page.5", core::FrameKind::Shape, 54, 54, 100, 100, 0, 9});
+            const auto pe = core::layout_pages(e, {"page.5"});
+            check("hit: topmost z first", core::hit_frame(e, pe, 60, 60, 1) == "frame.90");
+        }
+        const auto box = core::frames_in(d, pl, {0, 0, 432, 200});
+        check("marquee: touching selects",
+              std::find(box.begin(), box.end(), "frame.1") != box.end() &&
+              std::find(box.begin(), box.end(), "frame.4") != box.end());
+        check("thread: middle of three", core::thread_place(d, "frame.2") == std::make_pair(2, 3));
+        check("thread: not text", core::thread_place(d, "frame.4") == std::make_pair(0, 0));
+
+        const auto items = core::frame_items(d, {"frame.2", "frame.3"});
+        const auto shared = core::shared_fields({&items[0], &items[1]});
+        const auto val = [&](const std::string& l) {
+            for (const auto& f : shared) if (f.label == l) return f.value;
+            return std::string("<absent>");
+        };
+        check("frame items: shared story, mixed place",
+              val("Story") == "Chapters" && val("Thread") == core::kMixed && val("W") == "4.5 in");
+        check("frame items: titles", core::frames_title(items) == "2 frames" &&
+                                     items[0].title == "Text frame — Chapters");
+    }
+    {
+        std::cout << "\n-- frame verbs --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto f0 = *d.as<core::Frame>("frame.5");
+
+        core::doc::frames_begin(j, d, {"frame.5"}, "Move frame");
+        for (int i = 1; i <= 5; ++i) core::doc::frames_set(j, d, "frame.5", {f0.x + i, f0.y, f0.w, f0.h});
+        core::doc::frames_cancel(j);
+        check("drag + Escape: back where it was, no step",
+              *d.as<core::Frame>("frame.5") == f0 && j.size() == 0);
+
+        core::doc::frames_begin(j, d, {"frame.5"}, "Move frame");
+        check("a press without a move is no step", !core::doc::frames_end(j) && j.size() == 0);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        (void)t0;
+        core::doc::move_frames(j, d, {"frame.5"}, 1, 0, "nudge");
+        core::doc::move_frames(j, d, {"frame.5"}, 1, 0, "nudge");
+        core::doc::move_frames(j, d, {"frame.5"}, 0, 1, "nudge");
+        check("nudges merge into one step", j.size() == 1 &&
+                                            d.as<core::Frame>("frame.5")->x == f0.x + 2 &&
+                                            d.as<core::Frame>("frame.5")->y == f0.y + 1);
+        j.undo();
+        check("one undo takes all the nudges back", *d.as<core::Frame>("frame.5") == f0);
+        check("move: nothing to move is no step", !core::doc::move_frames(j, d, {"page.1"}, 5, 5));
+        check("frames: through the door", d.strays() == 0);
+    }
+
+    // ── s006: guides + snapping ──────────────────────────────────────────────
+    {
+        std::cout << "\n-- guides + snapping --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto pl = core::layout_pages(d, {"page.6", "page.7"});
+        const auto t = core::snap_targets(d, pl, {"frame.2"});
+        const auto has = [](const std::vector<double>& v, double x) {
+            return std::any_of(v.begin(), v.end(), [&](double y) { return std::abs(y - x) < 1e-9; });
+        };
+        check("targets: page edges + centre", has(t.xs, 0) && has(t.xs, 216) && has(t.xs, 432));
+        check("targets: the master's margin guides show on the page", has(t.xs, 54) && has(t.ys, 594));
+        check("targets: the second page's guides are offset", has(t.xs, pl[1].r.x + 54));
+        {   // a frame's edges are targets -- unless it is the one being dragged
+            core::Doc e;
+            core::load_sample(e);
+            core::Doc::Loading load(e);
+            e.put("frame.91", core::Frame{"page.6", core::FrameKind::Shape, 111, 222, 33, 44, 0, 5});
+            check("targets: other frames' edges", has(core::snap_targets(e, pl, {}).xs, 111));
+            check("targets: not the dragged frame's", !has(core::snap_targets(e, pl, {"frame.91"}).xs, 111));
+        }
+        const auto h = core::snap_any({50, 150}, t.xs, 5);
+        check("snap: nearest within tolerance", h.hit() && h.line == 54 && std::abs(h.delta - 4) < 1e-9);
+        check("snap: nothing near is no snap", !core::snap_any({30}, {0, 54}, 5).hit());
+        check("snap: the closer of two wins", core::snap_any({52, 100}, {54, 101}, 5).line == 101);
+
+        check("page_at: over a page / the pasteboard",
+              core::page_at(pl, 10, 10) == "page.6" && core::page_at(pl, 440, 10).empty());
+        const auto g = core::doc::add_guide(j, d, "page.6", false, 300);
+        const auto pl2 = core::layout_pages(d, {"page.6"});
+        check("add_guide: one step, on its page", !g.empty() && j.size() == 1 && core::guides_on(d, "page.6").size() == 1);
+        check("hit_guide: the page's own guide", core::hit_guide(d, pl2, 100, 302, 3) == g);
+        check("hit_guide: a master's guide isn't picked on the page", core::hit_guide(d, pl2, 54, 100, 3).empty());
+        core::doc::guide_begin(j, d, g);
+        core::doc::guide_set(j, d, g, 320);
+        core::doc::guide_set(j, d, g, -50);
+        core::doc::guide_remove_in_gesture(j, d, g);
+        core::doc::frames_end(j);
+        check("drag a guide off its page: gone, one step", !d.as<core::Guide>(g) && j.size() == 2);
+        check("...and the step says so", j.undo_label() == "Remove guide");
+        j.undo();
+        check("undo brings it back where it started", d.as<core::Guide>(g) && d.as<core::Guide>(g)->pos == 300);
+        check("guides: through the door", d.strays() == 0);
+        check("add_guide: not on the pasteboard", core::doc::add_guide(j, d, "", true, 5).empty());
     }
 
     std::cout << "-----------------------------------------------\n";

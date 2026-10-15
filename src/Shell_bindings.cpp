@@ -7,6 +7,7 @@
 #include <glibmm/variant.h>
 
 #include <filesystem>
+#include <functional>
 
 // Shell_bindings.cpp -- BINDINGS. What's wired to what: the win.* actions, the
 // parameterised recents action group, and (where a keystroke must survive focus)
@@ -17,6 +18,23 @@ namespace composix {
 void Shell::bind_actions() {  // bindings: actions + recents group
     // Plain win.* actions -> handler bodies (Shell_handlers.cpp).
     add_action("open",          sigc::mem_fun(*this, &Shell::on_open));
+    add_action("zoom-in",       [this] { m_canvas_view.canvas().zoom_step(+1); });
+    add_action("zoom-out",      [this] { m_canvas_view.canvas().zoom_step(-1); });
+    add_action("zoom-fit",      [this] { m_canvas_view.canvas().zoom_fit(); });
+    add_action("zoom-100",      [this] { m_canvas_view.canvas().zoom_to(100); });
+    // s006: what the canvas shows / does -- stateful, so the menu shows a check.
+    const auto toggle = [this](const char* name, std::function<void(bool)> apply) {
+        add_action_bool(name, [this, name, apply] {
+            auto a = std::dynamic_pointer_cast<Gio::SimpleAction>(lookup_action(name));
+            bool on = false;
+            a->get_state(on);
+            a->change_state(!on);
+            apply(!on);
+        }, true);
+    };
+    toggle("toggle-rulers", [this](bool on) { m_canvas_view.set_rulers(on); });
+    toggle("toggle-guides", [this](bool on) { m_canvas_view.canvas().set_show_guides(on); });
+    toggle("toggle-snap",   [this](bool on) { m_canvas_view.canvas().set_snap(on); });
     add_action("save",          sigc::mem_fun(*this, &Shell::on_save));
     add_action("save-as",       sigc::mem_fun(*this, &Shell::on_save_as));
     add_action("dump-registry", sigc::mem_fun(*this, &Shell::on_dump_registry));
@@ -111,6 +129,16 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_tiles.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_tiles_selection));
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
     m_inspector.signal_edit().connect(sigc::mem_fun(*this, &Shell::on_inspector_edit));
+
+    // s005: the canvas. Its picks drive the inspector; a finished drag or a
+    // nudge refreshes the other views (mid-drag only the canvas repaints).
+    auto& cv = m_canvas_view.canvas();
+    cv.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));
+    cv.signal_edited().connect([this] { queue_refresh(); });
+    cv.set_missing([this](const std::string& asset) {
+        const auto* it = m_outline.find(asset);
+        return it && it->badge == "Missing";
+    });
 }
 
 }  // namespace composix

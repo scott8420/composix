@@ -11,6 +11,7 @@
 #include <glibmm/miscutils.h>
 #include <glibmm/variant.h>
 
+#include <algorithm>
 #include <filesystem>
 
 // Shell_helpers.cpp -- HELPERS. Reusable orchestration called from zones,
@@ -86,6 +87,9 @@ void Shell::queue_refresh() {  // helper
 // disclosed and selected, the tiles keep their selection, an opened item stays
 // open (unless it is gone), the inspector re-reads the same ids.
 void Shell::refresh() {  // helper
+    // Mid-drag the canvas paints the gesture itself; the rest of the views
+    // catch up when it ends (signal_edited -> here again).
+    if (m_journal.in_gesture()) { m_canvas_view.canvas().queue_draw(); return; }
     const auto keep = m_pick.segment ? m_tiles.selected() : std::vector<std::string>{};
     m_outline = core::project(m_doc, m_project_dir);
     m_nav.refresh(&m_outline);
@@ -111,6 +115,21 @@ void Shell::show_pick(const views::Pick& p, const std::vector<std::string>& keep
     m_segment.reset();
     if (!p.items.empty()) {
         const auto items = resolve(p.items);
+        // Pages and masters open on the canvas; anything else in the preview.
+        const bool pages = std::all_of(p.items.begin(), p.items.end(), [this](const std::string& id) {
+            return m_doc.as<core::Page>(id) || m_doc.as<core::Master>(id);
+        });
+        if (pages) {
+            auto& cv = m_canvas_view.canvas();
+            cv.show_pages(p.items);
+            cv.model_changed();
+            m_canvas_view.set_title(core::selection_title(items), items.size());
+            m_main.set_visible_child("canvas");
+            if (!cv.selection().empty()) { on_canvas_selection(); return; }
+            m_inspected = p.items;
+            m_inspector.show_items(items);
+            return;
+        }
         m_inspected = p.items;
         m_item.show_items(items);
         m_main.set_visible_child("item");

@@ -104,6 +104,12 @@ void load_sample(Doc& d) {
     d.put("frame.9", Frame{pg[15], FrameKind::Image, 2.75 * in, 7.5 * in, 0.5 * in, 0.5 * in, 0, 2, "", "", "asset.3"});
     d.put("frame.10", Frame{pg[15], FrameKind::Text, m, m, tw, 5 * in, 0, 1, "story.4", "", ""});
 
+    // ── guides on the body master: the margins (s006) ──────────────────────
+    d.put("guide.1", Guide{"master.2", true, m});
+    d.put("guide.2", Guide{"master.2", true, s.trim_w - m});
+    d.put("guide.3", Guide{"master.2", false, m});
+    d.put("guide.4", Guide{"master.2", false, s.trim_h - m});
+
     // ── generated lists ─────────────────────────────────────────────────────
     // The contents list was built before Chapter Two existed: stale.
     d.put("list.1", GenList{"Table of Contents", ListKind::Contents, 1, {"style.2"}, pg[2], 1});

@@ -154,6 +154,9 @@ public:
         for (const auto& id : ids) m_open.entries.push_back({id, m_store.get(id), std::nullopt});
     }
     bool in_gesture() const { return m_gesture; }
+    // What the open gesture turned out to be (a guide dragged off its page is
+    // a removal, not a move -- s006). No-op outside a gesture.
+    void relabel(const std::string& label) { if (m_gesture) m_open.label = label; }
     // Release: keep the step if anything changed.
     bool commit(Clock::time_point now = Clock::now()) {
         if (!m_gesture) return false;

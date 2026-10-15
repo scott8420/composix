@@ -27,11 +27,14 @@
 // Units: POINTS (1/72 in) everywhere in the model. Inches are a display unit.
 // A record's PLACE (pos, owner) is in its value, so undoing a delete puts it
 // back exactly where it was, under the same id.
+#include "core/Geometry.hpp"
 #include "core/Undo.hpp"
 
 #include <array>
 #include <cstdint>
+#include <cmath>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -151,7 +154,17 @@ struct GenList {
     bool operator==(const GenList&) const = default;
 };
 
-using Record = std::variant<Settings, Section, Page, Master, Frame, Story, Style, Swatch, Asset, GenList>;
+// A ruler guide (s006): on a page or master, at `pos` points from its left
+// (vertical) or top (horizontal) edge, spanning it. A master's guides show on
+// every page that uses it.
+struct Guide {
+    std::string owner;
+    bool        vertical = true;
+    double      pos = 0;
+    bool operator==(const Guide&) const = default;
+};
+
+using Record = std::variant<Settings, Section, Page, Master, Frame, Story, Style, Swatch, Asset, GenList, Guide>;
 
 class Doc {
 public:
@@ -246,6 +259,29 @@ bool remove_section(DocJournal& j, Doc& d, const Doc::Id& section);
 // The neighbour that takes the selection when `pages` go (next, else previous).
 Doc::Id neighbour_page(const Doc& d, const std::vector<Doc::Id>& pages);
 
+// ── frames (s005: the canvas) ───────────────────────────────────────────────
+// Move by (dx, dy) points -- the arrow keys. With a merge key, presses inside
+// the journal's window fold into ONE step.
+bool move_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, double dx, double dy,
+                 const std::string& merge_key = {});
+// A drag is ONE step: begin at press (the frames it may touch), set as the
+// pointer moves (each write inside the open gesture), end at release. Cancel
+// (Escape) puts everything back and keeps nothing.
+void frames_begin(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, const std::string& label);
+void frames_set(DocJournal& j, Doc& d, const Doc::Id& frame, const Rect& r);   // r in the owner's coords
+bool frames_end(DocJournal& j);
+void frames_cancel(DocJournal& j);
+
+// ── guides (s006) ───────────────────────────────────────────────────────────
+// Pulled out of a ruler onto a page: one step. Dragged: one gesture (the same
+// begin / set / end shape as frames); dragged off its page: removed, in the
+// same step.
+Doc::Id add_guide(DocJournal& j, Doc& d, const Doc::Id& owner, bool vertical, double pos);
+void    guide_begin(DocJournal& j, Doc& d, const Doc::Id& guide);
+void    guide_set(DocJournal& j, Doc& d, const Doc::Id& guide, double pos);
+void    guide_remove_in_gesture(DocJournal& j, Doc& d, const Doc::Id& guide);
+bool    remove_guide(DocJournal& j, Doc& d, const Doc::Id& guide);
+
 // The verb table the selftest walks: every verb, runnable on the sample.
 struct Verb {
     std::string name;
@@ -254,6 +290,54 @@ struct Verb {
 const std::vector<Verb>& verbs();
 
 }  // namespace doc
+
+// ── the canvas's view of the document (s005) ───────────────────────────────
+// Opened pages (or masters) laid out left to right at true size, tops aligned,
+// `gap` points apart. Doc space = this layout; a frame's own x / y are in its
+// owner's coordinates.
+struct Placed {
+    Doc::Id id;
+    Rect    r;
+    bool    master = false;
+};
+std::vector<Placed> layout_pages(const Doc& d, const std::vector<Doc::Id>& ids, double gap = 36);
+inline Rect frame_rect(const Frame& f) { return {f.x, f.y, f.w, f.h}; }
+// The masters a page shows, most basic first (a master's based-on chain).
+std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& page_or_master);
+// A frame's rect in layout (doc) space; empty if its owner isn't placed.
+Rect frame_in_layout(const Doc& d, const std::vector<Placed>& pl, const Doc::Id& frame);
+// The topmost of a placed page's OWN frames under (x, y), within `tol`
+// points; "" if none. Master items are not picked on a page (as InDesign).
+Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double y, double tol);
+// Every own frame touched by `r` (touching selects -- Curvz's marquee rule).
+std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r);
+// Guides on a page or master (its own; master_chain gives the inherited).
+std::vector<Doc::Id> guides_on(const Doc& d, const Doc::Id& owner);
+// The guide of a placed page / master (its OWN, not a master's) within `tol`
+// points of (x, y); "" if none.
+Doc::Id hit_guide(const Doc& d, const std::vector<Placed>& pl, double x, double y, double tol);
+// Which placed page / master contains (x, y); "" over the pasteboard.
+Doc::Id page_at(const std::vector<Placed>& pl, double x, double y);
+
+// ── snapping (s006) ─────────────────────────────────────────────────────────
+// Candidate lines (layout coords), gathered ONCE at press (Curvz's
+// gather-at-drag-start): page edges + centres, folds, guides (own and
+// master's), and the edges + centres of every frame not being dragged.
+struct SnapTargets {
+    std::vector<double> xs, ys;
+};
+SnapTargets snap_targets(const Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& exclude);
+// The nearest target to any of `vs` within `tol`: the correction to add, and
+// the line it snapped to. {0, nan} when nothing is close enough.
+struct SnapHit {
+    double delta = 0;
+    double line  = std::numeric_limits<double>::quiet_NaN();
+    bool   hit() const { return !std::isnan(line); }
+};
+SnapHit snap_any(const std::vector<double>& vs, const std::vector<double>& targets, double tol);
+
+// A thread's position: (1-based index, length); (0, 0) for non-text frames.
+std::pair<int, int> thread_place(const Doc& d, const Doc::Id& frame);
 
 // The built-in sample (a small illustrated book) -- what the app opens to
 // before a project is opened, and the selftest's fixture. Loaded, not undoable.
