@@ -27,16 +27,27 @@
 namespace plate {
 
 struct Color {
-    enum class Space { Gray, RGB, CMYK };
+    enum class Space { Gray, RGB, CMYK, Spot };
     Space  space = Space::Gray;
-    double v[4] = {0, 0, 0, 0};   // 0..1 each; Gray uses v[0] (0 = black)
+    double v[4] = {0, 0, 0, 0};   // 0..1 each; Gray uses v[0] (0 = black); Spot: v[0] = the tint
+    // s016: a spot colour -- its ink's name and its CMYK look (for proofs and
+    // for devices without that ink). Written as a Separation colour space.
+    std::string name;
+    double      alt[4] = {0, 0, 0, 0};
     static Color gray(double g) { Color c; c.space = Space::Gray; c.v[0] = g; return c; }
     static Color rgb(double r, double g, double b) { Color c; c.space = Space::RGB; c.v[0] = r; c.v[1] = g; c.v[2] = b; return c; }
     static Color cmyk(double cc, double m, double y, double k) {
         Color c; c.space = Space::CMYK; c.v[0] = cc; c.v[1] = m; c.v[2] = y; c.v[3] = k; return c;
     }
+    static Color spot(const std::string& ink, double tint, double c, double m, double y, double k) {
+        Color s; s.space = Space::Spot; s.name = ink; s.v[0] = tint;
+        s.alt[0] = c; s.alt[1] = m; s.alt[2] = y; s.alt[3] = k; return s;
+    }
     bool operator==(const Color&) const = default;
 };
+
+// s016: how colour is made ready for the press.
+enum class Intent { Perceptual, RelativeColorimetric, Saturation, AbsoluteColorimetric };
 
 struct Rect { double x = 0, y = 0, w = 0, h = 0; };
 
@@ -95,6 +106,7 @@ private:
     std::string m_label;
     std::vector<FontId>  m_fonts_used;
     std::vector<ImageId> m_images_used;
+    std::vector<int>     m_spots_used;   // s016: indexes into the document's spot list
 };
 
 class Document {
@@ -109,6 +121,20 @@ public:
     void set_author(const std::string& a) { m_author = a; }
     // Content streams uncompressed -- for reading the PDF by eye (debugging).
     void set_compress(bool on) { m_compress = on; }
+
+    // ── colour management (s016, LittleCMS) ─────────────────────────────────
+    // The press's profile (a CMYK output ICC). With it, RGB can be CONVERTED
+    // to the press's CMYK (images and colours, from sRGB), or KEPT as RGB and
+    // tagged sRGB (ICCBased) so a RIP converts it. Set before adding images.
+    bool set_output_profile(const std::string& icc_path, std::string* err = nullptr);
+    bool set_output_profile_bytes(const std::string& icc, std::string* err = nullptr);
+    bool has_output_profile() const;
+    std::string output_profile_name() const;   // its description ("GRACoL2013_CRPC6")
+    void set_convert_rgb(bool on) { m_convert = on; }
+    bool convert_rgb() const { return m_convert && has_output_profile(); }
+    void set_intent(Intent i);
+    // A colour as it will be written (RGB converted when converting).
+    Color prepare(const Color& c) const;
 
     // The same face (by HarfBuzz identity) is the same font. Plate keeps a
     // reference; glyphs are collected as pages use them and the face is
@@ -133,7 +159,20 @@ private:
     std::vector<std::unique_ptr<Image>> m_images;
     std::string m_title, m_creator = "Plate", m_author;
     bool m_compress = true;
+
+    // s016
+    struct Cms;
+    std::unique_ptr<Cms> m_cms;
+    bool m_convert = false;
+    struct Spot { std::string name; double alt[4]; };
+    std::vector<Spot> m_spots;
+    int spot_index(const Color& c);
 };
+
+// s016: the CMYK output (press) profiles in these folders (searched one level
+// of subfolders deep), by their description -- for an app's profile picker.
+struct ProfileInfo { std::string path, name; };
+std::vector<ProfileInfo> find_cmyk_profiles(const std::vector<std::string>& dirs);
 
 // Parse a JPEG's size and component count from its header (false: not one).
 bool jpeg_info(const std::string& bytes, int* w, int* h, int* components);

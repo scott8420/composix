@@ -755,6 +755,9 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
         f.kind = kind;
         f.x = r.x; f.y = r.y; f.w = r.w; f.h = r.h;
         if (kind == FrameKind::Text) { f.columns = std::max(1, columns); f.gutter = gutter; }
+        if (kind == FrameKind::Shape)   // s016: a new shape is outlined in black, so it prints
+            for (const auto& sw : d.ids_of<Swatch>())
+                if (d.as<Swatch>(sw)->name == "Black") { f.stroke = sw; break; }
         double z = 0;   // on top of the owner's frames
         for (const auto& o : d.frames_on(owner)) z = std::max(z, d.as<Frame>(o)->z);
         f.z = z + 1;

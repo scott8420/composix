@@ -108,7 +108,12 @@ void load_sample(Doc& d) {
     d.put("frame.4", Frame{pg[4], FrameKind::Image, m, m, tw, 1.5 * in, 0, 2, "", "", "asset.2"});
     // The foldout: the map across the panels, its caption under it.
     d.put("frame.5", Frame{pg[10], FrameKind::Image, 0.25 * in, 0.5 * in, fold3.w - 0.5 * in, 6.5 * in, 0, 1, "", "", "asset.1"});
-    d.put("frame.6", Frame{pg[10], FrameKind::Text, 0.25 * in, 7.25 * in, 6 * in, 0.75 * in, 0, 2, "story.2", "", ""});
+    {   // The caption, ruled off in Guild Rust (a spot colour: its own plate).
+        Frame cap{pg[10], FrameKind::Text, 0.25 * in, 7.25 * in, 6 * in, 0.75 * in, 0, 2, "story.2", "", ""};
+        cap.stroke = "swatch.3";
+        cap.stroke_w = 0.5;
+        d.put("frame.6", cap);
+    }
     // Dedication, ornaments, sources.
     d.put("frame.7", Frame{pg[1], FrameKind::Text, m, 3 * in, tw, 1 * in, 0, 1, "story.3", "", ""});
     d.put("frame.8", Frame{pg[1], FrameKind::Image, 2.75 * in, 4.25 * in, 0.5 * in, 0.5 * in, 0, 2, "", "", "asset.3"});

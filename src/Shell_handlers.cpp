@@ -9,6 +9,9 @@
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
+#include <gtkmm/dropdown.h>
+#include <gtkmm/stringlist.h>
+#include "plate/plate.hpp"
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/label.h>
 #include <gtkmm/window.h>
@@ -18,6 +21,7 @@
 #include <giomm/file.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <tuple>
@@ -176,6 +180,17 @@ void Shell::on_tiles_move(const std::vector<std::string>& ids, const std::string
     }
 }
 
+// s016: where CMYK output profiles live (Fedora / Debian system folders, the
+// user's own).
+std::vector<std::string> Shell::profile_dirs() const {  // helper
+    std::vector<std::string> dirs{"/usr/share/color/icc", "/usr/local/share/color/icc"};
+    if (const char* home = std::getenv("HOME")) {
+        dirs.push_back(std::string(home) + "/.local/share/icc");
+        dirs.push_back(std::string(home) + "/.color/icc");
+    }
+    return dirs;
+}
+
 // ── PDF (s013) ─────────────────────────────────────────────────────────────
 // A small sheet: Bleed, Crop marks, then Export... names the file.
 void Shell::on_export_pdf() {  // handler
@@ -211,6 +226,41 @@ void Shell::on_export_pdf() {  // handler
         box->append(*screen);
         box->append(*bleed);
         box->append(*marks);
+        // s016: the press's profile (CMYK output profiles found on this
+        // computer), and whether RGB is converted to it.
+        auto prow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+        auto plab = Gtk::make_managed<Gtk::Label>("Output profile");
+        plab->add_css_class("cx-field-label");
+        std::vector<Glib::ustring> names{"None (device CMYK)"};
+        m_profiles.clear();
+        for (const auto& p : plate::find_cmyk_profiles(profile_dirs())) {
+            m_profiles.push_back(p.path);
+            names.push_back(p.name);
+        }
+        auto prof = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(names));
+        prof->set_name("export.profile");
+        prof->set_hexpand(true);
+        {   // a long list: type to find one
+            GtkExpression* ex = gtk_property_expression_new(GTK_TYPE_STRING_OBJECT, nullptr, "string");
+            gtk_drop_down_set_expression(prof->gobj(), ex);
+            gtk_expression_unref(ex);
+            gtk_drop_down_set_enable_search(prof->gobj(), TRUE);
+        }
+        prow->append(*plab);
+        prow->append(*prof);
+        box->append(*prow);
+        auto conv = Gtk::make_managed<Gtk::CheckButton>("Convert RGB images and colours to CMYK");
+        conv->set_name("export.convert");
+        conv->set_sensitive(false);   // until a profile is picked
+        box->append(*conv);
+        // Only the print writer manages colour.
+        const auto sync = [print, prof, conv] {
+            const bool on = print->get_active();
+            prof->set_sensitive(on);
+            conv->set_sensitive(on && prof->get_selected() > 0);
+        };
+        print->signal_toggled().connect(sync);
+        prof->property_selected().signal_changed().connect(sync);
         auto note = Gtk::make_managed<Gtk::Label>("Every page at its own size, fonts embedded,\nimages at full resolution.");
         note->set_name("export.note");
         note->add_css_class("cx-export-note");
@@ -236,10 +286,13 @@ void Shell::on_export_pdf() {  // handler
         }, false);
         w.add_controller(keys);
         w.set_default_widget(*go);
-        go->signal_clicked().connect([this, bleed, marks, print] {
+        go->signal_clicked().connect([this, bleed, marks, print, prof, conv] {
             m_pdf_bleed = bleed->get_active();
             m_pdf_marks = marks->get_active();
             m_pdf_print = print->get_active();
+            const auto i = prof->get_selected();
+            m_pdf_profile = (i > 0 && i - 1 < m_profiles.size()) ? m_profiles[i - 1] : std::string{};
+            m_pdf_convert = conv->get_active();
             m_export->set_visible(false);
             auto dialog = Gtk::FileDialog::create();
             dialog->set_title("Export PDF");
@@ -267,6 +320,17 @@ void Shell::on_export_pdf() {  // handler
             static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_print);
         } else if (c->get_name() == "export.screen") {
             static_cast<Gtk::CheckButton*>(c)->set_active(!m_pdf_print);
+        } else if (c->get_name() == "export.convert") {
+            static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_convert);
+        } else if (auto* row = dynamic_cast<Gtk::Box*>(c)) {   // the profile row: re-pick the session's profile
+            for (auto* k = row->get_first_child(); k; k = k->get_next_sibling())
+                if (k->get_name() == "export.profile") {
+                    auto* dd = static_cast<Gtk::DropDown*>(k);
+                    guint at = 0;
+                    for (std::size_t n = 0; n < m_profiles.size(); ++n)
+                        if (m_profiles[n] == m_pdf_profile) at = static_cast<guint>(n + 1);
+                    dd->set_selected(at);
+                }
         }
     }
     m_export->set_transient_for(*this);
@@ -444,6 +508,13 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             });
         } else if (key == "page") {   // s014: Add page after / Delete / Start section
             did = page_action(choice, m_inspected);
+        } else if (key == "fill" || key == "stroke" || key == "stroke_w") {   // s016: frame fill / stroke
+            static const std::map<std::string, std::string> labels{{"fill", "Fill"}, {"stroke", "Stroke"}, {"stroke_w", "Stroke weight"}};
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Frame& f) {
+                if (key == "fill") f.fill = choice;
+                else if (key == "stroke") f.stroke = choice;
+                else f.stroke_w = std::stod(choice);
+            });
         } else if (key == "columns" || key == "gutter" || key == "widths" || key == "balance") {   // s012
             static const std::map<std::string, std::string> labels{
                 {"columns", "Columns"}, {"gutter", "Gutter"}, {"widths", "Column widths"}, {"balance", "Balance columns"}};

@@ -20,8 +20,8 @@ struct Document::Font {
 };
 
 struct Document::Image {
-    int w = 0, h = 0, comps = 3;
-    std::string rgb, alpha, jpeg;
+    int w = 0, h = 0, comps = 3;   // 3 = RGB pixels, 4 = CMYK (converted)
+    std::string pix, alpha, jpeg;
 };
 
 // ── the page: a content stream in top-left coordinates ──────────────────────
@@ -40,6 +40,7 @@ void Page::clip_rect(const Rect& r) {
 namespace {
 std::string color_op(const Color& c, bool stroke) {
     switch (c.space) {
+    case Color::Space::Spot: return {};   // a page op: Page::colour
     case Color::Space::Gray: return num(c.v[0]) + (stroke ? " G\n" : " g\n");
     case Color::Space::RGB:  return num(c.v[0]) + " " + num(c.v[1]) + " " + num(c.v[2]) + (stroke ? " RG\n" : " rg\n");
     case Color::Space::CMYK:
@@ -49,8 +50,30 @@ std::string color_op(const Color& c, bool stroke) {
 }
 }  // namespace
 
-void Page::set_fill(const Color& c) { m_ops += color_op(c, false); }
-void Page::set_stroke(const Color& c) { m_ops += color_op(c, true); }
+// Spot colours need the page's colour space resources; process colours don't.
+static std::string spot_op(int idx, double tint, bool stroke) {
+    return "/CS" + std::to_string(idx) + (stroke ? " CS " : " cs ") + num(tint) + (stroke ? " SCN\n" : " scn\n");
+}
+void Page::set_fill(const Color& c0) {
+    const Color c = m_doc.prepare(c0);
+    if (c.space == Color::Space::Spot) {
+        const int i = m_doc.spot_index(c);
+        if (std::find(m_spots_used.begin(), m_spots_used.end(), i) == m_spots_used.end()) m_spots_used.push_back(i);
+        m_ops += spot_op(i, c.v[0], false);
+        return;
+    }
+    m_ops += color_op(c, false);
+}
+void Page::set_stroke(const Color& c0) {
+    const Color c = m_doc.prepare(c0);
+    if (c.space == Color::Space::Spot) {
+        const int i = m_doc.spot_index(c);
+        if (std::find(m_spots_used.begin(), m_spots_used.end(), i) == m_spots_used.end()) m_spots_used.push_back(i);
+        m_ops += spot_op(i, c.v[0], true);
+        return;
+    }
+    m_ops += color_op(c, true);
+}
 void Page::set_line_width(double w) { m_ops += num(w) + " w\n"; }
 void Page::move_to(double x, double y) { m_ops += num(x) + " " + num(y) + " m\n"; }
 void Page::line_to(double x, double y) { m_ops += num(x) + " " + num(y) + " l\n"; }
@@ -125,7 +148,14 @@ ImageId Document::add_image_rgb(int w, int h, const std::uint8_t* rgb, const std
     auto im = std::make_unique<Image>();
     im->w = w;
     im->h = h;
-    im->rgb.assign(reinterpret_cast<const char*>(rgb), static_cast<std::size_t>(w) * h * 3);
+    const std::size_t n = static_cast<std::size_t>(w) * h;
+    if (convert_rgb()) {   // s016: to the press's CMYK, now
+        im->comps = 4;
+        im->pix.resize(n * 4);
+        cmsDoTransform(m_cms->img, rgb, im->pix.data(), static_cast<cmsUInt32Number>(n));
+    } else {
+        im->pix.assign(reinterpret_cast<const char*>(rgb), n * 3);
+    }
     if (alpha) {
         bool opaque = true;
         for (std::size_t i = 0; i < static_cast<std::size_t>(w) * h && opaque; ++i) opaque = alpha[i] == 255;
@@ -276,6 +306,17 @@ bool Document::save(const std::string& path, std::string* err) {
                             std::to_string(tou) + " 0 R >>");
     }
 
+    // s016: sRGB (for tagged RGB images) and the spot colours' Separations.
+    int srgb_obj = 0;
+    if (m_cms) srgb_obj = o.stream("/N 3 /Alternate /DeviceRGB", m_cms->srgb_bytes);
+    std::vector<int> spot_obj(m_spots.size(), 0);
+    for (std::size_t i = 0; i < m_spots.size(); ++i) {
+        const auto& sp = m_spots[i];
+        const int fn = o.add("<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [" + num(sp.alt[0]) + " " +
+                             num(sp.alt[1]) + " " + num(sp.alt[2]) + " " + num(sp.alt[3]) + "] /N 1 >>");
+        spot_obj[i] = o.add("[/Separation " + detail::pdf_name(sp.name) + " /DeviceCMYK " + std::to_string(fn) + " 0 R]");
+    }
+
     // Images.
     std::vector<int> image_obj(m_images.size(), 0);
     for (std::size_t i = 0; i < m_images.size(); ++i) {
@@ -283,7 +324,8 @@ bool Document::save(const std::string& path, std::string* err) {
         const std::string size = "/Type /XObject /Subtype /Image /Width " + std::to_string(im.w) + " /Height " +
                                  std::to_string(im.h) + " /BitsPerComponent 8 /Interpolate true";
         if (!im.jpeg.empty()) {
-            const char* cs = im.comps == 1 ? "/DeviceGray" : im.comps == 4 ? "/DeviceCMYK" : "/DeviceRGB";
+            std::string cs = im.comps == 1 ? "/DeviceGray" : im.comps == 4 ? "/DeviceCMYK" : "/DeviceRGB";
+            if (im.comps == 3 && srgb_obj) cs = "[/ICCBased " + std::to_string(srgb_obj) + " 0 R]";
             // Adobe's CMYK JPEGs are stored inverted.
             const std::string decode = im.comps == 4 ? " /Decode [1 0 1 0 1 0 1 0]" : "";
             image_obj[i] = o.stream(size + " /ColorSpace " + cs + decode + " /Filter /DCTDecode", im.jpeg, false);
@@ -294,7 +336,9 @@ bool Document::save(const std::string& path, std::string* err) {
             smask = " /SMask " + std::to_string(o.stream("/Type /XObject /Subtype /Image /Width " + std::to_string(im.w) +
                                                          " /Height " + std::to_string(im.h) +
                                                          " /BitsPerComponent 8 /ColorSpace /DeviceGray", im.alpha)) + " 0 R";
-        image_obj[i] = o.stream(size + " /ColorSpace /DeviceRGB" + smask, im.rgb);
+        std::string cs = im.comps == 4 ? "/DeviceCMYK" : "/DeviceRGB";
+        if (im.comps == 3 && srgb_obj) cs = "[/ICCBased " + std::to_string(srgb_obj) + " 0 R]";   // tagged: the RIP converts
+        image_obj[i] = o.stream(size + " /ColorSpace " + cs + smask, im.pix);
     }
 
     // Pages.
@@ -310,6 +354,11 @@ bool Document::save(const std::string& path, std::string* err) {
         if (!pg.m_images_used.empty()) {
             res += " /XObject <<";
             for (int im : pg.m_images_used) res += " /Im" + std::to_string(im) + " " + std::to_string(image_obj[static_cast<std::size_t>(im)]) + " 0 R";
+            res += " >>";
+        }
+        if (!pg.m_spots_used.empty()) {
+            res += " /ColorSpace <<";
+            for (int sp : pg.m_spots_used) res += " /CS" + std::to_string(sp) + " " + std::to_string(spot_obj[static_cast<std::size_t>(sp)]) + " 0 R";
             res += " >>";
         }
         res += " >>";

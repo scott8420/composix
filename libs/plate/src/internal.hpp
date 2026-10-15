@@ -6,7 +6,24 @@
 #include <string>
 #include <vector>
 
+#include <lcms2.h>
+
+namespace plate {
+// s016: LittleCMS state -- the press's profile and the transforms to it.
+struct Document::Cms {
+    cmsHPROFILE   out = nullptr, srgb = nullptr;
+    cmsHTRANSFORM img = nullptr, col = nullptr;   // RGB 8-bit -> CMYK 8-bit; RGB double -> CMYK double
+    std::string   out_bytes, srgb_bytes, name;
+    Intent        intent = Intent::RelativeColorimetric;
+    ~Cms();
+    bool rebuild(std::string* err);
+};
+}  // namespace plate
+
 namespace plate::detail {
+
+// A PDF name, with # escapes for anything outside the regular characters.
+std::string pdf_name(const std::string& s);
 
 // Numbers as PDF writes them: up to 4 decimals, no trailing zeros, no "-0".
 std::string num(double v);

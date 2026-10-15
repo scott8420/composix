@@ -6,6 +6,7 @@
 #include <pango/pangocairo.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -91,6 +92,57 @@ int main(int argc, char** argv) {
     int w = 0, h = 0, c = 0;
     const std::string jpg("\xFF\xD8\xFF\xC0\x00\x11\x08\x00\x20\x00\x40\x03", 12);
     check("jpeg_info reads a frame header", plate::jpeg_info(jpg + std::string(8, '\0'), &w, &h, &c) && w == 64 && h == 32 && c == 3);
+    // ── s016: colour management (needs a CMYK output profile: PLATE_ICC) ─────
+    const char* icc = std::getenv("PLATE_ICC");
+    if (!icc) {
+        std::printf("  (skip colour tests: set PLATE_ICC to a CMYK output profile)\n");
+    } else {
+        const std::uint8_t rgb[] = {255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255};
+        const auto read = [](const std::string& p) {
+            std::ifstream f(p, std::ios::binary);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            return ss.str();
+        };
+        {   // convert: RGB becomes the press's CMYK
+            plate::Document cd;
+            cd.set_compress(false);
+            check("profile: a CMYK output profile loads", cd.set_output_profile(icc, &err));
+            check("profile: an RGB profile is refused", !cd.set_output_profile("/usr/share/color/icc/sRGB.icc", &err) || !cd.has_output_profile());
+            cd.set_convert_rgb(true);
+            const auto c = cd.prepare(plate::Color::rgb(1, 0, 0));
+            check("convert: RGB red -> CMYK, mostly M + Y", c.space == plate::Color::Space::CMYK && c.v[1] > 0.7 && c.v[2] > 0.7 && c.v[0] < 0.2);
+            auto& pg = cd.add_page(200, 200);
+            pg.set_fill(plate::Color::rgb(1, 0, 0));
+            pg.rect({10, 10, 50, 50});
+            pg.fill();
+            pg.set_fill(plate::Color::spot("PANTONE 7593 C", 1.0, 0, 0.7, 0.9, 0.2));
+            pg.rect({70, 10, 50, 50});
+            pg.fill();
+            pg.set_fill(plate::Color::spot("PANTONE 7593 C", 0.4, 0, 0.7, 0.9, 0.2));
+            pg.rect({130, 10, 50, 50});
+            pg.fill();
+            pg.image(cd.add_image_rgb(2, 2, rgb), {10, 80, 100, 100});
+            check("convert: save", cd.save(out + ".cmyk.pdf", &err));
+            const auto pdf = read(out + ".cmyk.pdf");
+            const auto has = [&](const char* x) { return pdf.find(x) != std::string::npos; };
+            check("convert: no RGB left in the content", !has(" rg\n") && has(" k\n"));
+            check("convert: the image is DeviceCMYK", has("/ColorSpace /DeviceCMYK"));
+            check("spot: a Separation with its CMYK alternate", has("[/Separation /PANTONE#207593#20C /DeviceCMYK") &&
+                                                                  has("/C1 [0 0.7 0.9 0.2]"));
+            check("spot: used by tint (one colour space, two tints)", has("/CS0 cs 1 scn") && has("/CS0 cs 0.4 scn"));
+        }
+        {   // keep: RGB stays RGB, tagged sRGB
+            plate::Document kd;
+            kd.set_compress(false);
+            kd.set_output_profile(icc, &err);
+            auto& pg = kd.add_page(100, 100);
+            pg.image(kd.add_image_rgb(2, 2, rgb), {0, 0, 100, 100});
+            check("keep: save", kd.save(out + ".keep.pdf", &err));
+            const auto pdf = read(out + ".keep.pdf");
+            check("keep: the image ICCBased (sRGB)", pdf.find("/ColorSpace [/ICCBased") != std::string::npos);
+        }
+    }
     g_object_unref(ctx);
     std::printf("%d pass / %d fail\n", pass, fail);
     return fail ? 1 : 0;

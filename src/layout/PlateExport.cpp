@@ -19,31 +19,38 @@ namespace {
 
 constexpr double kMarkGap = 3, kMarkLen = 15, kSlug = kMarkGap + kMarkLen + 3;
 
-// A swatch as ink. Process colours stay in their own space; a spot colour
-// goes as its CMYK alternate until separations (s016).
+// A swatch as ink. Process colours stay in their own space; a spot colour is
+// a Separation (s016) -- its own plate.
 plate::Color ink_of(const core::Doc& d, const std::string& swatch) {
     const auto* s = d.as<core::Swatch>(swatch);
     if (!s) return plate::Color::cmyk(0, 0, 0, 1);   // black text is 100 K, not four-colour
     switch (s->model) {
     case core::ColorModel::RGB:  return plate::Color::rgb(s->v[0] / 255, s->v[1] / 255, s->v[2] / 255);
     case core::ColorModel::Gray: return plate::Color::gray(1 - s->v[0] / 100);
-    case core::ColorModel::CMYK:
-    case core::ColorModel::Spot: return plate::Color::cmyk(s->v[0] / 100, s->v[1] / 100, s->v[2] / 100, s->v[3] / 100);
+    case core::ColorModel::CMYK: return plate::Color::cmyk(s->v[0] / 100, s->v[1] / 100, s->v[2] / 100, s->v[3] / 100);
+    case core::ColorModel::Spot:   // s016: its own plate, named for its ink; its CMYK for proofs
+        return plate::Color::spot(s->spot.empty() ? s->name : s->spot, 1.0, s->v[0] / 100, s->v[1] / 100,
+                                  s->v[2] / 100, s->v[3] / 100);
     }
     return plate::Color::cmyk(0, 0, 0, 1);
 }
 
 // An image for Plate: a JPEG's own bytes when the source kept them, else
 // the surface's pixels (un-premultiplied) with their alpha.
-plate::ImageId add_image(plate::Document& doc, cairo_surface_t* pic) {
+plate::ImageId add_image(plate::Document& doc, cairo_surface_t* pic, bool* rgb_kept) {
     unsigned char* jpeg = nullptr;
     unsigned long jlen = 0;
     cairo_surface_get_mime_data(pic, CAIRO_MIME_TYPE_JPEG, const_cast<const unsigned char**>(&jpeg), &jlen);
     if (jpeg && jlen) {
         const std::string bytes(reinterpret_cast<const char*>(jpeg), jlen);
         int w = 0, h = 0, c = 0;
-        if (plate::jpeg_info(bytes, &w, &h, &c)) return doc.add_image_jpeg(bytes, w, h, c);
+        // Converting to CMYK, an RGB JPEG goes through its pixels instead.
+        if (plate::jpeg_info(bytes, &w, &h, &c) && !(c == 3 && doc.convert_rgb())) {
+            if (c == 3) *rgb_kept = true;
+            return doc.add_image_jpeg(bytes, w, h, c);
+        }
     }
+    if (!doc.convert_rgb()) *rgb_kept = true;
     cairo_surface_flush(pic);
     const int w = cairo_image_surface_get_width(pic), h = cairo_image_surface_get_height(pic);
     const int stride = cairo_image_surface_get_stride(pic);
@@ -74,6 +81,7 @@ struct Ctx {
     FlowCache           flows;
     std::map<std::string, plate::ImageId> placed;   // asset -> image (one embedding per file)
     std::set<std::string> missing;
+    std::set<std::string> rgb_images;   // placed and left RGB
 };
 
 void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string& fid) {
@@ -111,7 +119,11 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
     }
     pw = cairo_image_surface_get_width(pic);
     ph = cairo_image_surface_get_height(pic);
-    if (id < 0) id = c.placed[f.asset] = add_image(c.doc, pic);
+    if (id < 0) {
+        bool rgb = false;
+        id = c.placed[f.asset] = add_image(c.doc, pic, &rgb);
+        if (rgb) c.rgb_images.insert(a->name);
+    }
     cairo_surface_destroy(pic);
     const double iw = a->px_w > 0 ? a->px_w : pw, ih = a->px_h > 0 ? a->px_h : ph;
     const core::Rect r = core::fit_rect({f.x, f.y, f.w, f.h}, iw, ih, f.fit);
@@ -124,8 +136,19 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
 void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner) {
     for (const auto& fid : c.d.frames_on(owner)) {
         const auto& f = *c.d.as<core::Frame>(fid);
+        if (c.d.as<core::Swatch>(f.fill)) {   // s016: the frame's background
+            pg.set_fill(ink_of(c.d, f.fill));
+            pg.rect({f.x, f.y, f.w, f.h});
+            pg.fill();
+        }
         if (f.kind == core::FrameKind::Text && !f.story.empty()) draw_text(c, pg, f, fid);
         else if (f.kind == core::FrameKind::Image) draw_image(c, pg, f);
+        if (c.d.as<core::Swatch>(f.stroke) && f.stroke_w > 0) {
+            pg.set_stroke(ink_of(c.d, f.stroke));
+            pg.set_line_width(f.stroke_w);
+            pg.rect({f.x, f.y, f.w, f.h});
+            pg.stroke();
+        }
     }
 }
 
@@ -157,6 +180,13 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
     doc.set_title(opt.title.empty() ? d.settings().title : opt.title);
     doc.set_creator("Composix");
     doc.set_compress(opt.compress);
+    // s016: the press's profile; RGB converted to its CMYK, or kept (tagged sRGB).
+    if (!opt.profile.empty()) {
+        std::string perr;
+        if (!doc.set_output_profile(opt.profile, &perr)) { if (err) *err = "Output profile: " + perr; return false; }
+        doc.set_intent(opt.perceptual ? plate::Intent::Perceptual : plate::Intent::RelativeColorimetric);
+        doc.set_convert_rgb(opt.convert);
+    }
     Ctx c{d, doc, images, {}, {}, {}};
     for (const auto& pid : pages) {
         const auto& p = *d.as<core::Page>(pid);
@@ -176,6 +206,15 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
     }
     if (!doc.save(path, err)) return false;
     preflight(d, std::vector<std::string>(c.missing.begin(), c.missing.end()), static_cast<int>(pages.size()), report);
+    if (report && !c.rgb_images.empty()) {
+        std::string names;
+        for (const auto& n : c.rgb_images) names += (names.empty() ? "" : ", ") + n;
+        report->warnings.push_back(std::string(doc.has_output_profile() ? "RGB images (tagged sRGB, not converted): "
+                                                                        : "RGB images (no output profile): ") + names);
+    }
+    if (report && doc.has_output_profile())
+        report->warnings.insert(report->warnings.begin(), "Output profile: " + doc.output_profile_name() +
+                                                              (doc.convert_rgb() ? " (RGB converted)" : ""));
     return true;
 }
 

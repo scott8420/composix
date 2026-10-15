@@ -365,6 +365,19 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         box.cols = {"X", "Y", "W", "H"};
         fields.push_back(box);
         std::string title = std::string(kind) + " frame";
+        // s016: fill and stroke, from the swatches.
+        {
+            std::vector<Choice> sw{{"", "None"}};
+            for (const auto& id : d.ids_of<Swatch>()) sw.push_back({id, d.as<Swatch>(id)->name});
+            const auto name = [&](const std::string& id) { const auto* x = d.as<Swatch>(id); return x ? x->name : std::string("None"); };
+            fields.push_back({"Fill", name(f->fill), "fill", sw});
+            fields.push_back({"Stroke", name(f->stroke), "stroke", sw});
+            if (!f->stroke.empty()) {
+                std::vector<Choice> wc;
+                for (double w : {0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0}) wc.push_back({pts(w), pts(w) + " pt"});
+                fields.push_back({"Weight", pts(f->stroke_w) + " pt", "stroke_w", wc});
+            }
+        }
         if (f->kind == FrameKind::Text) {
             const auto* st = d.as<Story>(f->story);
             fields.push_back({"Story", st ? st->name : "\u2014"});

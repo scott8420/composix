@@ -392,6 +392,29 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
     const Rect r = m_vp.to_screen(Rect{ox + f.x, oy + f.y, f.w, f.h});
     const double s = m_vp.scale();
     const double dim = from_master ? 0.45 : 1.0;
+    // s016: the frame's fill, behind its content (and its stroke, after).
+    if (const auto* fs = m_doc.as<core::Swatch>(f.fill)) {
+        cr->save();
+        cr->set_source_rgba(((fs->preview >> 16) & 0xff) / 255.0, ((fs->preview >> 8) & 0xff) / 255.0,
+                            (fs->preview & 0xff) / 255.0, dim);
+        cr->rectangle(r.x, r.y, r.w, r.h);
+        cr->fill();
+        cr->restore();
+    }
+    struct StrokeLater {
+        const Cairo::RefPtr<Cairo::Context>& cr; const core::Doc& d; const core::Frame& f; Rect r; double s, dim;
+        ~StrokeLater() {
+            const auto* ss = d.as<core::Swatch>(f.stroke);
+            if (!ss || f.stroke_w <= 0) return;
+            cr->save();
+            cr->set_source_rgba(((ss->preview >> 16) & 0xff) / 255.0, ((ss->preview >> 8) & 0xff) / 255.0,
+                                (ss->preview & 0xff) / 255.0, dim);
+            cr->set_line_width(std::max(0.5, f.stroke_w * s));
+            cr->rectangle(r.x, r.y, r.w, r.h);   // centred on the frame's edge, as it prints
+            cr->stroke();
+            cr->restore();
+        }
+    } stroke_later{cr, m_doc, f, r, s, dim};
     cr->save();
 
     switch (f.kind) {
@@ -526,6 +549,7 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
         break;
     }
     case core::FrameKind::Shape:
+        if (!f.fill.empty() || !f.stroke.empty()) break;   // s016: it has its own look
         cr->set_source_rgba(0.5, 0.5, 0.55, 0.12 * dim);
         cr->rectangle(r.x, r.y, r.w, r.h);
         cr->fill_preserve();

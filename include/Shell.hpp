@@ -175,6 +175,10 @@ private:
     std::unique_ptr<Gtk::Window>     m_export;
     bool                             m_pdf_bleed = true, m_pdf_marks = false;
     bool                             m_pdf_print = true;   // s015: Plate (print) or cairo (screen)
+    std::string                      m_pdf_profile;        // s016: the press's ICC ("" = none)
+    bool                             m_pdf_convert = false;
+    std::vector<std::string>         m_profiles;           // the sheet's list, as paths
+    std::vector<std::string> profile_dirs() const;          // category: helper: where ICC profiles live
     void export_pdf_to(const std::string& path);  // category: helper: write + report
 
     std::unique_ptr<AboutWindow>     m_about;

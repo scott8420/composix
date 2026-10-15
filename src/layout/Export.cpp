@@ -44,8 +44,15 @@ void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const Ima
 
 void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, FlowCache& flows,
                  const ImageSource& images, std::set<std::string>& missing) {
+    const auto paint = [&](const std::string& sw) {
+        const auto* s = d.as<core::Swatch>(sw);
+        if (!s) return false;
+        cairo_set_source_rgb(cr, ((s->preview >> 16) & 0xff) / 255.0, ((s->preview >> 8) & 0xff) / 255.0, (s->preview & 0xff) / 255.0);
+        return true;
+    };
     for (const auto& fid : d.frames_on(owner)) {
         const auto& f = *d.as<core::Frame>(fid);
+        if (paint(f.fill)) { cairo_rectangle(cr, f.x, f.y, f.w, f.h); cairo_fill(cr); }   // s016
         switch (f.kind) {
         case core::FrameKind::Text:
             if (f.story.empty()) break;
@@ -57,8 +64,13 @@ void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
         case core::FrameKind::Image:
             draw_image(cr, d, f, images, missing);
             break;
-        case core::FrameKind::Shape:   // no fill / stroke in the model yet: nothing prints
+        case core::FrameKind::Shape:   // its fill / stroke are all it has
             break;
+        }
+        if (f.stroke_w > 0 && paint(f.stroke)) {
+            cairo_set_line_width(cr, f.stroke_w);
+            cairo_rectangle(cr, f.x, f.y, f.w, f.h);
+            cairo_stroke(cr);
         }
     }
 }

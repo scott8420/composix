@@ -26,6 +26,12 @@ struct PdfOptions {
     bool        marks = false;   // crop marks outside the bleed
     std::string title;           // the PDF's title ("" = the document's)
     bool        compress = true; // print writer: false leaves content streams readable (tests, debugging)
+    // s016, print writer: the press's CMYK profile ("" = none: device CMYK,
+    // RGB untouched); convert RGB images / colours to it; perceptual intent
+    // (else relative colorimetric with black point compensation).
+    std::string profile;
+    bool        convert = false;
+    bool        perceptual = false;
 };
 
 struct PdfReport {

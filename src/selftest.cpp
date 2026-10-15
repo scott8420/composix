@@ -926,7 +926,9 @@ int main() {
         check("print: fonts embedded, subset, with ToUnicode",
               (has("/FontFile2") || has("/FontFile3")) && has("/ToUnicode") && has("+DejaVu"));
         check("print: body text in 100 K", has("0 0 0 1 k\n"));
-        check("print: the heading in Guild Rust's CMYK", has("0 0.7 0.9 0.2 k\n"));
+        // s016: Guild Rust is a spot colour -- its own plate, PMS 7593 C.
+        check("print: the heading on its spot plate", has("[/Separation /PMS#207593#20C /DeviceCMYK") && has("cs 1 scn"));
+        check("print: the caption's rule on the same plate (stroke)", has("CS 1 SCN"));
         check("print: crop marks in registration", has("1 1 1 1 K\n"));
         check("print: folio page labels", has("/P (iv)"));
         check("print: one embedding per image file",
@@ -935,6 +937,30 @@ int main() {
         bool miss = false;
         for (const auto& w : rep.warnings) miss = miss || w == "Missing image: harbor.psd";
         check("print: the missing image reported", miss);
+        // s016: with a press profile (GRACoL, when installed): RGB converted.
+        const char* gracol = "/usr/share/color/icc/GRACoL2013_CRPC6.icc";
+        if (fs::exists(gracol)) {
+            L::PdfOptions co = opt;
+            co.profile = gracol;
+            co.convert = true;
+            L::PdfReport crep;
+            check("cmyk: export with a press profile", L::export_print_pdf(d, out, co, src, &crep, &err), err);
+            std::string cp;
+            { std::ifstream f(out, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); cp = ss.str(); }
+            check("cmyk: images converted (DeviceCMYK), no RGB left", cp.find("/ColorSpace /DeviceCMYK") != std::string::npos &&
+                                                                        cp.find(" rg\n") == std::string::npos);
+            check("cmyk: the report names the profile", !crep.warnings.empty() &&
+                                                        crep.warnings.front().rfind("Output profile: ", 0) == 0);
+            co.convert = false;
+            check("keep: RGB tagged sRGB", L::export_print_pdf(d, out, co, src, &crep, &err));
+            { std::ifstream f(out, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); cp = ss.str(); }
+            check("keep: ICCBased images", cp.find("[/ICCBased") != std::string::npos);
+            co.profile = "/usr/share/color/icc/sRGB.icc";
+            check("profile: an RGB profile refused, said why", !L::export_print_pdf(d, out, co, src, &crep, &err) &&
+                                                               err.find("CMYK") != std::string::npos, err);
+        } else {
+            std::cout << "  (skip cmyk: no GRACoL profile installed)\n";
+        }
         const auto o = core::project(d, "");
         bool col = false;
         for (const auto& f : o.find("style.2")->fields) col = col || (f.edit == "color" && f.value == "Guild Rust");

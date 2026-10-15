@@ -112,6 +112,8 @@ struct Frame {
     double      gutter  = 12;            // text: points between them
     bool        balance = false;         // text: even out the columns where the story ends
     std::vector<double> widths;          // text: each column's relative weight (empty = equal)
+    std::string fill, stroke;            // s016: swatch ids ("" = none) -- a frame's background / outline
+    double      stroke_w = 1;            // points
     bool operator==(const Frame&) const = default;
 };
 

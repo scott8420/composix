@@ -340,6 +340,8 @@ void Shell::export_pdf_to(const std::string& path) {  // helper
     layout::PdfOptions opt;
     opt.bleed = m_pdf_bleed;
     opt.marks = m_pdf_marks;
+    opt.profile = m_pdf_profile;
+    opt.convert = m_pdf_convert;
     const std::string dir = m_project_dir;
     const layout::ImageSource images = [dir](const core::Asset& a, double w, double h) {
         return views::images::print_surface(core::resolve_asset(a, dir), w, h);

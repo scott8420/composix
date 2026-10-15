@@ -7,11 +7,11 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(PLATE_HB REQUIRED harfbuzz harfbuzz-subset)
+pkg_check_modules(PLATE_HB REQUIRED harfbuzz harfbuzz-subset lcms2)
 find_package(ZLIB REQUIRED)
 
-# plate -- the writer: HarfBuzz (faces + subsetter) and zlib, nothing else.
-add_library(plate STATIC src/util.cpp src/document.cpp)
+# plate -- the writer: HarfBuzz (faces + subsetter), LittleCMS (s016), zlib.
+add_library(plate STATIC src/util.cpp src/document.cpp src/color.cpp)
 target_include_directories(plate PUBLIC include ${PLATE_HB_INCLUDE_DIRS})
 target_link_libraries(plate PUBLIC ${PLATE_HB_LIBRARIES} ZLIB::ZLIB)
 target_link_directories(plate PUBLIC ${PLATE_HB_LIBRARY_DIRS})
