@@ -180,6 +180,11 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
     doc.set_title(opt.title.empty() ? d.settings().title : opt.title);
     doc.set_creator("Composix");
     doc.set_compress(opt.compress);
+    // s017: set before anything is drawn (the writer converts as it goes).
+    if (opt.standard != plate_standard::None) {
+        if (opt.profile.empty()) { if (err) *err = "PDF/X needs an output profile."; return false; }
+        doc.set_standard(opt.standard == plate_standard::X1a ? plate::Standard::X1a_2003 : plate::Standard::X4);
+    }
     // s016: the press's profile; RGB converted to its CMYK, or kept (tagged sRGB).
     if (!opt.profile.empty()) {
         std::string perr;
@@ -215,6 +220,11 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
     if (report && doc.has_output_profile())
         report->warnings.insert(report->warnings.begin(), "Output profile: " + doc.output_profile_name() +
                                                               (doc.convert_rgb() ? " (RGB converted)" : ""));
+    if (report && doc.standard() != plate::Standard::None)
+        report->warnings.insert(report->warnings.begin(), std::string("Standard: ") +
+                                                              plate::Document::standard_name(doc.standard()) +
+                                                              (doc.flattened() ? " (" + std::to_string(doc.flattened()) +
+                                                                                     " image(s) flattened on white)" : ""));
     return true;
 }
 

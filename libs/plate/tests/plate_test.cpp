@@ -142,6 +142,67 @@ int main(int argc, char** argv) {
             const auto pdf = read(out + ".keep.pdf");
             check("keep: the image ICCBased (sRGB)", pdf.find("/ColorSpace [/ICCBased") != std::string::npos);
         }
+        // ── s017: PDF/X ──────────────────────────────────────────────────────
+        const std::uint8_t a4[] = {255, 128, 0, 255};
+        for (auto st : {plate::Standard::X1a_2003, plate::Standard::X4}) {
+            const bool x1 = st == plate::Standard::X1a_2003;
+            const std::string tag = x1 ? "x1a: " : "x4: ";
+            plate::Document xd;
+            xd.set_compress(false);
+            xd.set_standard(st);
+            xd.set_title("Guild & <Map>");
+            xd.set_date(1792094400);
+            auto& pg = xd.add_page(100, 100);
+            // no profile, no trim: refused, with reasons
+            const auto probs = xd.preflight();
+            check((tag + "preflight names the missing profile and trim").c_str(), probs.size() >= 2);
+            check((tag + "save refuses").c_str(), !xd.save(out + ".x.pdf", &err) && err.find("TrimBox") != std::string::npos);
+            xd.set_output_profile(icc, &err);
+            pg.set_trim_box({0, 0, 100, 100});
+            pg.set_fill(plate::Color::cmyk(0, 0, 0, 1));
+            pg.rect({10, 10, 20, 20});
+            pg.fill();
+            pg.image(xd.add_image_rgb(2, 2, rgb, a4), {0, 50, 50, 50});
+            check((tag + "save").c_str(), xd.save(out + (x1 ? ".x1a.pdf" : ".x4.pdf"), &err));
+            const auto pdf = read(out + (x1 ? ".x1a.pdf" : ".x4.pdf"));
+            const auto has = [&](const char* x) { return pdf.find(x) != std::string::npos; };
+            check((tag + "version").c_str(), pdf.rfind(x1 ? "%PDF-1.4" : "%PDF-1.6", 0) == 0);
+            check((tag + "output intent with the profile").c_str(), has("/S /GTS_PDFX") && has("/DestOutputProfile"));
+            check((tag + "version keys").c_str(), x1 ? has("/GTS_PDFXConformance (PDF/X-1a:2003)") : has("/GTS_PDFXVersion (PDF/X-4)"));
+            check((tag + "trapped, dates, ID").c_str(), has("/Trapped /False") && has("/CreationDate (D:") && has("/ID [<"));
+            check((tag + "XMP metadata").c_str(), has("/Subtype /XML") && has("Guild &amp; &lt;Map&gt;"));
+            if (x1) check("x1a: image flattened to CMYK, no SMask", !has("/SMask") && has("/ColorSpace /DeviceCMYK"));
+            else check("x4: image keeps its alpha, ICC-tagged", has("/SMask") && has("/ICCBased"));
+        }
+        // X-1a with an OpenType CFF font: the bare CFF program (CIDFontType0C).
+        const char* otf = "/usr/share/texmf/fonts/opentype/public/lm/lmroman10-italic.otf";
+        if (std::ifstream(otf).good()) {
+            plate::Document fd;
+            fd.set_compress(false);
+            fd.set_standard(plate::Standard::X1a_2003);
+            fd.set_output_profile(icc, &err);
+            hb_blob_t* blob = hb_blob_create_from_file(otf);
+            hb_face_t* face = hb_face_create(blob, 0);
+            auto& pg = fd.add_page(100, 100);
+            pg.set_trim_box({0, 0, 100, 100});
+            pg.glyphs(fd.add_font(face), 12, 10, 50, {{36, 7, 0, 0, "A"}, {37, 7, 0, 0, "B"}});
+            check("x1a: CFF font saves", fd.save(out + ".x1acff.pdf", &err));
+            const auto pdf = read(out + ".x1acff.pdf");
+            check("x1a: CFF as CIDFontType0C in PDF 1.4", pdf.rfind("%PDF-1.4", 0) == 0 &&
+                                                           pdf.find("/Subtype /CIDFontType0C") != std::string::npos &&
+                                                           pdf.find("/Subtype /OpenType") == std::string::npos);
+            hb_face_destroy(face);
+            hb_blob_destroy(blob);
+        }
+        {   // an RGB colour drawn with no profile to convert it is named
+            plate::Document rd;
+            rd.set_standard(plate::Standard::X4);
+            auto& pg = rd.add_page(10, 10);
+            pg.set_fill(plate::Color::rgb(1, 0, 0));
+            bool named = false;
+            for (const auto& p : rd.preflight()) named |= p.find("RGB colour") != std::string::npos;
+            check("x4: unprofiled RGB drawing is named", named);
+        }
     }
     g_object_unref(ctx);
     std::printf("%d pass / %d fail\n", pass, fail);

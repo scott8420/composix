@@ -253,14 +253,33 @@ void Shell::on_export_pdf() {  // handler
         conv->set_name("export.convert");
         conv->set_sensitive(false);   // until a profile is picked
         box->append(*conv);
+        // s017: PDF/X conformance. Needs the press's profile (the output
+        // intent); X-1a converts all RGB, so the convert box is forced on.
+        auto srow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+        srow->set_name("export.standard.row");
+        auto slab = Gtk::make_managed<Gtk::Label>("Standard");
+        slab->add_css_class("cx-field-label");
+        auto stdd = Gtk::make_managed<Gtk::DropDown>(
+            Gtk::StringList::create({"None", "PDF/X-1a:2003 \u2014 CMYK + spot only", "PDF/X-4 \u2014 ICC RGB allowed"}));
+        stdd->set_name("export.standard");
+        stdd->set_hexpand(true);
+        stdd->set_tooltip_text("PDF/X needs an output profile");
+        srow->append(*slab);
+        srow->append(*stdd);
+        box->append(*srow);
         // Only the print writer manages colour.
-        const auto sync = [print, prof, conv] {
-            const bool on = print->get_active();
+        const auto sync = [print, prof, conv, stdd] {
+            const bool on = print->get_active(), pro = on && prof->get_selected() > 0;
             prof->set_sensitive(on);
-            conv->set_sensitive(on && prof->get_selected() > 0);
+            stdd->set_sensitive(pro);
+            if (!pro && stdd->get_selected() != 0) stdd->set_selected(0);
+            const bool x1a = pro && stdd->get_selected() == 1;
+            if (x1a) conv->set_active(true);
+            conv->set_sensitive(pro && !x1a);
         };
         print->signal_toggled().connect(sync);
         prof->property_selected().signal_changed().connect(sync);
+        stdd->property_selected().signal_changed().connect(sync);
         auto note = Gtk::make_managed<Gtk::Label>("Every page at its own size, fonts embedded,\nimages at full resolution.");
         note->set_name("export.note");
         note->add_css_class("cx-export-note");
@@ -286,13 +305,14 @@ void Shell::on_export_pdf() {  // handler
         }, false);
         w.add_controller(keys);
         w.set_default_widget(*go);
-        go->signal_clicked().connect([this, bleed, marks, print, prof, conv] {
+        go->signal_clicked().connect([this, bleed, marks, print, prof, conv, stdd] {
             m_pdf_bleed = bleed->get_active();
             m_pdf_marks = marks->get_active();
             m_pdf_print = print->get_active();
             const auto i = prof->get_selected();
             m_pdf_profile = (i > 0 && i - 1 < m_profiles.size()) ? m_profiles[i - 1] : std::string{};
             m_pdf_convert = conv->get_active();
+            m_pdf_standard = (m_pdf_print && !m_pdf_profile.empty()) ? static_cast<int>(stdd->get_selected()) : 0;
             m_export->set_visible(false);
             auto dialog = Gtk::FileDialog::create();
             dialog->set_title("Export PDF");
@@ -330,6 +350,8 @@ void Shell::on_export_pdf() {  // handler
                     for (std::size_t n = 0; n < m_profiles.size(); ++n)
                         if (m_profiles[n] == m_pdf_profile) at = static_cast<guint>(n + 1);
                     dd->set_selected(at);
+                } else if (k->get_name() == "export.standard") {
+                    static_cast<Gtk::DropDown*>(k)->set_selected(static_cast<guint>(m_pdf_standard));
                 }
         }
     }

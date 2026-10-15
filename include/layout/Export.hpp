@@ -21,6 +21,8 @@
 
 namespace composix::layout {
 
+enum class plate_standard { None, X1a, X4 };
+
 struct PdfOptions {
     bool        bleed = true;    // extend the media by the document's bleed
     bool        marks = false;   // crop marks outside the bleed
@@ -32,6 +34,9 @@ struct PdfOptions {
     std::string profile;
     bool        convert = false;
     bool        perceptual = false;
+    // s017: PDF/X conformance (needs a profile). X-1a converts everything to
+    // CMYK and flattens transparency; X-4 keeps RGB images ICC-tagged.
+    plate_standard standard = plate_standard::None;
 };
 
 struct PdfReport {

@@ -15,7 +15,12 @@ other apps can use it.
   images and colours, from sRGB; relative colorimetric + black point
   compensation, or perceptual) or **kept** and tagged sRGB (ICCBased) for
   the RIP. `find_cmyk_profiles(dirs)` lists the press profiles on a system.
-  PDF/X output intents follow (Composix s017).
+  PDF/X-1a:2003 and PDF/X-4: `doc.set_standard(plate::Standard::X4)`
+  before drawing, with an output profile and a TrimBox on every page.
+  Plate writes the output intent, version keys, XMP and ID, converts as
+  the standard requires (X-1a: all RGB to CMYK, alpha flattened, CFF as
+  CIDFontType0C in PDF 1.4), and `save()` refuses what still breaks it
+  (`preflight()` lists why).
 - **Images**: 8-bit RGB with an optional alpha (soft mask), or a JPEG's own
   bytes (DCTDecode, untouched).
 - **Pages**: any size each, Media / Bleed / Trim boxes, page labels.

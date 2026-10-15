@@ -49,6 +49,14 @@ struct Color {
 // s016: how colour is made ready for the press.
 enum class Intent { Perceptual, RelativeColorimetric, Saturation, AbsoluteColorimetric };
 
+// s017: the PDF/X standard a document is written to.
+//   X1a_2003 -- CMYK and spot only (RGB is converted), no transparency
+//               (alpha flattened against white), PDF 1.4.
+//   X4       -- RGB allowed when ICC-tagged, transparency allowed, PDF 1.6.
+// Both: an output profile (embedded as the output intent), a TrimBox on
+// every page, fonts embedded, Trapped stated, XMP metadata, a document ID.
+enum class Standard { None, X1a_2003, X4 };
+
 struct Rect { double x = 0, y = 0, w = 0, h = 0; };
 
 // One positioned glyph. `advance`: the pen's move after it (points);
@@ -131,10 +139,22 @@ public:
     bool has_output_profile() const;
     std::string output_profile_name() const;   // its description ("GRACoL2013_CRPC6")
     void set_convert_rgb(bool on) { m_convert = on; }
-    bool convert_rgb() const { return m_convert && has_output_profile(); }
+    // X-1a converts whether asked or not: it allows no RGB.
+    bool convert_rgb() const { return (m_convert || m_standard == Standard::X1a_2003) && has_output_profile(); }
     void set_intent(Intent i);
     // A colour as it will be written (RGB converted when converting).
     Color prepare(const Color& c) const;
+
+    // ── PDF/X (s017) ────────────────────────────────────────────────────────
+    // Set BEFORE adding images (X-1a flattens their alpha and converts RGB).
+    void set_standard(Standard s) { m_standard = s; }
+    Standard standard() const { return m_standard; }
+    static const char* standard_name(Standard s);   // "PDF/X-1a:2003", "PDF/X-4"
+    void set_date(long long unix_seconds) { m_date = unix_seconds; }   // default: now
+    // What would make the file fail its standard (empty = conforms). save()
+    // refuses a non-conforming file and returns these as its error.
+    std::vector<std::string> preflight() const;
+    int flattened() const { return m_flattened; }   // X-1a: images whose alpha went to white
 
     // The same face (by HarfBuzz identity) is the same font. Plate keeps a
     // reference; glyphs are collected as pages use them and the face is
@@ -167,6 +187,12 @@ private:
     struct Spot { std::string name; double alt[4]; };
     std::vector<Spot> m_spots;
     int spot_index(const Color& c);
+
+    // s017
+    Standard  m_standard = Standard::None;
+    long long m_date = 0;
+    int       m_flattened = 0;    // images whose alpha X-1a flattened
+    bool      m_rgb_written = false;   // an RGB colour reached a content stream
 };
 
 // s016: the CMYK output (press) profiles in these folders (searched one level

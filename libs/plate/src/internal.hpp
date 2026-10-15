@@ -24,6 +24,12 @@ namespace plate::detail {
 
 // A PDF name, with # escapes for anything outside the regular characters.
 std::string pdf_name(const std::string& s);
+// s017: dates (local time with its offset), a document ID (32 hex), XMP.
+std::string pdf_date(long long t);   // D:20261015184600-05'00'
+std::string xmp_date(long long t);   // 2026-10-15T18:46:00-05:00
+std::string doc_id(const std::string& seed);
+std::string xmp(Standard s, const std::string& title, const std::string& creator, const std::string& date,
+                const std::string& id);
 
 // Numbers as PDF writes them: up to 4 decimals, no trailing zeros, no "-0".
 std::string num(double v);
@@ -39,7 +45,8 @@ public:
     int  add(std::string body) { const int id = reserve(); set(id, std::move(body)); return id; }
     // A stream object: `dict` holds the extra entries (no << >>); Flate when asked.
     int  stream(const std::string& dict, const std::string& data, bool compress = true);
-    std::string write(int root, int info, const std::string& version) const;
+    // `trailer`: extra trailer entries (s017: the document /ID).
+    std::string write(int root, int info, const std::string& version, const std::string& trailer = {}) const;
 private:
     std::vector<std::string> m_body;
 };

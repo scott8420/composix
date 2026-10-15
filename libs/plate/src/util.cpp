@@ -3,7 +3,9 @@
 #include <zlib.h>
 
 #include <cmath>
+#include <cctype>
 #include <cstdio>
+#include <ctime>
 
 namespace plate::detail {
 
@@ -85,7 +87,7 @@ int Objects::stream(const std::string& dict, const std::string& data, bool compr
     return add("<< " + d + " /Length " + std::to_string(body.size()) + " >>\nstream\n" + body + "\nendstream");
 }
 
-std::string Objects::write(int root, int info, const std::string& version) const {
+std::string Objects::write(int root, int info, const std::string& version, const std::string& trailer) const {
     std::string out = "%PDF-" + version + "\n%\xE2\xE3\xCF\xD3\n";
     std::vector<std::size_t> offs;
     for (std::size_t i = 0; i < m_body.size(); ++i) {
@@ -100,8 +102,90 @@ std::string Objects::write(int root, int info, const std::string& version) const
         out += buf;
     }
     out += "trailer\n<< /Size " + std::to_string(m_body.size() + 1) + " /Root " + std::to_string(root) +
-           " 0 R /Info " + std::to_string(info) + " 0 R >>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+           " 0 R /Info " + std::to_string(info) + " 0 R" + (trailer.empty() ? "" : " " + trailer) + " >>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
     return out;
+}
+
+namespace {
+std::tm local(long long t, long* off) {
+    const std::time_t tt = static_cast<std::time_t>(t);
+    std::tm tm{};
+    localtime_r(&tt, &tm);
+    *off = tm.tm_gmtoff;
+    return tm;
+}
+std::string xml_escape(const std::string& s) {
+    std::string o;
+    for (char c : s) {
+        if (c == '&') o += "&amp;";
+        else if (c == '<') o += "&lt;";
+        else if (c == '>') o += "&gt;";
+        else o += c;
+    }
+    return o;
+}
+}  // namespace
+
+std::string pdf_date(long long t) {
+    long off = 0;
+    const std::tm tm = local(t, &off);
+    char buf[64];
+    const long a = off < 0 ? -off : off;
+    std::snprintf(buf, sizeof buf, "D:%04d%02d%02d%02d%02d%02d%c%02ld'%02ld'", tm.tm_year + 1900, tm.tm_mon + 1,
+                  tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, off < 0 ? '-' : '+', a / 3600, (a % 3600) / 60);
+    return buf;
+}
+
+std::string xmp_date(long long t) {
+    long off = 0;
+    const std::tm tm = local(t, &off);
+    char buf[64];
+    const long a = off < 0 ? -off : off;
+    std::snprintf(buf, sizeof buf, "%04d-%02d-%02dT%02d:%02d:%02d%c%02ld:%02ld", tm.tm_year + 1900, tm.tm_mon + 1,
+                  tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, off < 0 ? '-' : '+', a / 3600, (a % 3600) / 60);
+    return buf;
+}
+
+// Two FNV-1a 64-bit hashes of the seed (different offsets): 128 bits, hex.
+std::string doc_id(const std::string& seed) {
+    std::uint64_t a = 1469598103934665603ULL, b = 0x84222325cbf29ce4ULL;
+    for (unsigned char c : seed) {
+        a = (a ^ c) * 1099511628211ULL;
+        b = (b ^ c) * 1099511628211ULL;
+        b ^= b >> 29;
+    }
+    char buf[40];
+    std::snprintf(buf, sizeof buf, "%016llX%016llX", static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
+    return buf;
+}
+
+std::string xmp(Standard s, const std::string& title, const std::string& creator, const std::string& date,
+                const std::string& id) {
+    std::string uuid = id.substr(0, 8) + "-" + id.substr(8, 4) + "-" + id.substr(12, 4) + "-" + id.substr(16, 4) + "-" + id.substr(20, 12);
+    for (auto& c : uuid) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    std::string x =
+        "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+        "<rdf:Description rdf:about=\"\"\n"
+        " xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n"
+        " xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n"
+        " xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\"\n"
+        " xmlns:xmpMM=\"http://ns.adobe.com/xap/1.0/mm/\"\n"
+        " xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\"\n"
+        " xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\">\n"
+        "<dc:format>application/pdf</dc:format>\n"
+        "<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">" + xml_escape(title) + "</rdf:li></rdf:Alt></dc:title>\n"
+        "<xmp:CreateDate>" + date + "</xmp:CreateDate>\n<xmp:ModifyDate>" + date + "</xmp:ModifyDate>\n"
+        "<xmp:MetadataDate>" + date + "</xmp:MetadataDate>\n<xmp:CreatorTool>" + xml_escape(creator) + "</xmp:CreatorTool>\n"
+        "<pdf:Producer>Plate</pdf:Producer>\n<pdf:Trapped>False</pdf:Trapped>\n"
+        "<xmpMM:DocumentID>uuid:" + uuid + "</xmpMM:DocumentID>\n<xmpMM:InstanceID>uuid:" + uuid + "</xmpMM:InstanceID>\n"
+        "<xmpMM:VersionID>1</xmpMM:VersionID>\n<xmpMM:RenditionClass>default</xmpMM:RenditionClass>\n";
+    if (s == Standard::X4) x += "<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>\n";
+    if (s == Standard::X1a_2003) x += "<pdfx:GTS_PDFXVersion>PDF/X-1:2003</pdfx:GTS_PDFXVersion>\n"
+                                      "<pdfx:GTS_PDFXConformance>PDF/X-1a:2003</pdfx:GTS_PDFXConformance>\n";
+    x += "</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>\n";
+    x += std::string(2000, ' ') + "\n<?xpacket end=\"w\"?>";   // room to edit in place
+    return x;
 }
 
 }  // namespace plate::detail

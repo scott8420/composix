@@ -342,6 +342,8 @@ void Shell::export_pdf_to(const std::string& path) {  // helper
     opt.marks = m_pdf_marks;
     opt.profile = m_pdf_profile;
     opt.convert = m_pdf_convert;
+    opt.standard = m_pdf_standard == 1 ? layout::plate_standard::X1a
+                 : m_pdf_standard == 2 ? layout::plate_standard::X4 : layout::plate_standard::None;
     const std::string dir = m_project_dir;
     const layout::ImageSource images = [dir](const core::Asset& a, double w, double h) {
         return views::images::print_surface(core::resolve_asset(a, dir), w, h);

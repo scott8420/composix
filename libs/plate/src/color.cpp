@@ -73,7 +73,10 @@ void Document::set_intent(Intent i) {
 }
 
 Color Document::prepare(const Color& c) const {
-    if (c.space != Color::Space::RGB || !convert_rgb()) return c;
+    // PDF/X: an RGB colour never reaches the page (X-4 allows only ICC-tagged
+    // RGB, which a bare colour isn't) -- with a profile, it is converted.
+    const bool convert = convert_rgb() || (m_standard != Standard::None && m_cms);
+    if (c.space != Color::Space::RGB || !convert) return c;
     double rgb[3] = {c.v[0], c.v[1], c.v[2]}, cmyk[4] = {0, 0, 0, 0};
     cmsDoTransform(m_cms->col, rgb, cmyk, 1);
     return Color::cmyk(cmyk[0] / 100, cmyk[1] / 100, cmyk[2] / 100, cmyk[3] / 100);   // lcms: 0..100

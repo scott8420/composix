@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <ctime>
 #include <map>
 
 namespace plate {
@@ -62,6 +63,7 @@ void Page::set_fill(const Color& c0) {
         m_ops += spot_op(i, c.v[0], false);
         return;
     }
+    if (c.space == Color::Space::RGB) m_doc.m_rgb_written = true;
     m_ops += color_op(c, false);
 }
 void Page::set_stroke(const Color& c0) {
@@ -72,6 +74,7 @@ void Page::set_stroke(const Color& c0) {
         m_ops += spot_op(i, c.v[0], true);
         return;
     }
+    if (c.space == Color::Space::RGB) m_doc.m_rgb_written = true;
     m_ops += color_op(c, true);
 }
 void Page::set_line_width(double w) { m_ops += num(w) + " w\n"; }
@@ -149,6 +152,20 @@ ImageId Document::add_image_rgb(int w, int h, const std::uint8_t* rgb, const std
     im->w = w;
     im->h = h;
     const std::size_t n = static_cast<std::size_t>(w) * h;
+    // s017: PDF/X-1a allows no transparency -- the alpha is flattened against
+    // white (paper) here, and the image goes in opaque.
+    std::string flat;
+    if (alpha && m_standard == Standard::X1a_2003) {
+        flat.assign(reinterpret_cast<const char*>(rgb), n * 3);
+        for (std::size_t i = 0; i < n; ++i)
+            for (int k = 0; k < 3; ++k) {
+                const unsigned v = static_cast<unsigned char>(flat[i * 3 + k]), a = alpha[i];
+                flat[i * 3 + k] = static_cast<char>((v * a + 255 * (255 - a)) / 255);
+            }
+        rgb = reinterpret_cast<const std::uint8_t*>(flat.data());
+        alpha = nullptr;
+        ++m_flattened;
+    }
     if (convert_rgb()) {   // s016: to the press's CMYK, now
         im->comps = 4;
         im->pix.resize(n * 4);
@@ -228,6 +245,16 @@ std::string to_unicode_cmap(const std::map<std::uint32_t, std::string>& used) {
 
 bool Document::save(const std::string& path, std::string* err) {
     if (m_pages.empty()) { if (err) *err = "no pages"; return false; }
+    if (m_standard != Standard::None) {
+        const auto problems = preflight();
+        if (!problems.empty()) {
+            if (err) {
+                *err = std::string(standard_name(m_standard)) + ":";
+                for (const auto& p : problems) *err += "\n\u2022 " + p;
+            }
+            return false;
+        }
+    }
     detail::Objects o;
     const int catalog = o.reserve(), pages = o.reserve(), info = o.reserve();
     bool cff = false;
@@ -288,8 +315,23 @@ bool Document::save(const std::string& path, std::string* err) {
         hb_font_destroy(hf);
 
         const std::string name = tag_for(i + 1) + "+" + ps_name(f.face);
-        const int file = is_cff ? o.stream("/Subtype /OpenType", fontdata)
-                                : o.stream("/Length1 " + std::to_string(fontdata.size()), fontdata);
+        // CFF: PDF 1.6 takes the whole OpenType file; PDF/X-1a (PDF 1.4) only
+        // the bare CFF program (CIDFontType0C), cut from the subset.
+        int file = 0;
+        if (is_cff && m_standard == Standard::X1a_2003) {
+            hb_face_t* sf = hb_face_create(hb_blob_create(fontdata.data(), static_cast<unsigned>(fontdata.size()),
+                                                          HB_MEMORY_MODE_DUPLICATE, nullptr, nullptr), 0);
+            hb_blob_t* cffb = hb_face_reference_table(sf, HB_TAG('C', 'F', 'F', ' '));
+            unsigned cl = 0;
+            const char* cd = hb_blob_get_data(cffb, &cl);
+            file = o.stream("/Subtype /CIDFontType0C", std::string(cd ? cd : "", cl));
+            hb_blob_destroy(cffb);
+            hb_face_destroy(sf);
+        } else if (is_cff) {
+            file = o.stream("/Subtype /OpenType", fontdata);
+        } else {
+            file = o.stream("/Length1 " + std::to_string(fontdata.size()), fontdata);
+        }
         const int desc_obj = o.add("<< /Type /FontDescriptor /FontName /" + name + " /Flags " +
                                    std::string(italic != 0 ? "68" : "4") + " /FontBBox " + bbox + " /ItalicAngle " +
                                    num(italic) + " /Ascent " + k(asc) + " /Descent " + k(desc) + " /CapHeight " +
@@ -372,21 +414,71 @@ bool Document::save(const std::string& path, std::string* err) {
         if (!pg.m_label.empty()) labels += std::to_string(i) + " << /P " + detail::text_string(pg.m_label) + " >> ";
     }
     o.set(pages, "<< /Type /Pages /Kids [" + kids + "] /Count " + std::to_string(m_pages.size()) + " >>");
+
+    // s017: dates, the document ID, and -- for PDF/X -- the output intent,
+    // the version keys and XMP metadata.
+    const long long when = m_date ? m_date : static_cast<long long>(std::time(nullptr));
+    const std::string pdf_date = detail::pdf_date(when), xmp_date = detail::xmp_date(when);
+    const std::string id = detail::doc_id(m_title + "|" + std::to_string(when) + "|" + std::to_string(m_pages.size()));
+    std::string extra;
+    if (m_standard != Standard::None) {
+        const int icc = o.stream("/N 4", m_cms->out_bytes);
+        const std::string cond = detail::text_string(m_cms->name);
+        const int intent = o.add("<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier " + cond +
+                                 " /OutputCondition " + cond + " /Info " + cond +
+                                 " /RegistryName (http://www.color.org) /DestOutputProfile " + std::to_string(icc) + " 0 R >>");
+        const int xmp = o.stream("/Type /Metadata /Subtype /XML",
+                                 detail::xmp(m_standard, m_title, m_creator, xmp_date, id), false);
+        extra = " /OutputIntents [" + std::to_string(intent) + " 0 R] /Metadata " + std::to_string(xmp) + " 0 R";
+    }
     o.set(catalog, "<< /Type /Catalog /Pages " + std::to_string(pages) + " 0 R" +
-                       (labels.empty() ? "" : " /PageLabels << /Nums [" + labels + "] >>") + " >>");
-    std::string inf = "<< /Producer (Plate)";
+                       (labels.empty() ? "" : " /PageLabels << /Nums [" + labels + "] >>") + extra + " >>");
+    std::string inf = "<< /Producer (Plate) /CreationDate (" + pdf_date + ") /ModDate (" + pdf_date + ")";
     if (!m_title.empty()) inf += " /Title " + detail::text_string(m_title);
     if (!m_author.empty()) inf += " /Author " + detail::text_string(m_author);
     if (!m_creator.empty()) inf += " /Creator " + detail::text_string(m_creator);
+    if (m_standard == Standard::X1a_2003) inf += " /GTS_PDFXVersion (PDF/X-1:2003) /GTS_PDFXConformance (PDF/X-1a:2003) /Trapped /False";
+    if (m_standard == Standard::X4) inf += " /GTS_PDFXVersion (PDF/X-4) /Trapped /False";
     o.set(info, inf + " >>");
 
-    // OpenType (CFF) font files need PDF 1.6; otherwise 1.4 reads everywhere.
-    const std::string bytes = o.write(catalog, info, cff ? "1.6" : "1.4");
+    // The version: X-1a is PDF 1.4; X-4 (and OpenType CFF fonts) PDF 1.6.
+    std::string version = cff ? "1.6" : "1.4";
+    if (m_standard == Standard::X1a_2003) version = "1.4";
+    if (m_standard == Standard::X4) version = "1.6";
+    const std::string bytes = o.write(catalog, info, version, "/ID [<" + id + "> <" + id + ">]");
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) { if (err) *err = "can't write " + path; return false; }
     out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     if (!out) { if (err) *err = "write failed: " + path; return false; }
     return true;
+}
+
+const char* Document::standard_name(Standard s) {
+    switch (s) {
+    case Standard::X1a_2003: return "PDF/X-1a:2003";
+    case Standard::X4:       return "PDF/X-4";
+    case Standard::None:     break;
+    }
+    return "PDF";
+}
+
+std::vector<std::string> Document::preflight() const {
+    std::vector<std::string> p;
+    if (m_standard == Standard::None) return p;
+    if (!m_cms) p.push_back("needs an output profile (the press's CMYK ICC)");
+    for (std::size_t i = 0; i < m_pages.size(); ++i)
+        if (!m_pages[i]->m_has_trim) p.push_back("page " + std::to_string(i + 1) + " has no TrimBox");
+    if (m_rgb_written) p.push_back("an RGB colour was drawn (set the standard before drawing)");
+    if (m_standard == Standard::X1a_2003) {
+        int rgb = 0, alpha = 0;
+        for (const auto& im : m_images) {
+            rgb += im->comps == 3;
+            alpha += !im->alpha.empty();
+        }
+        if (rgb) p.push_back(std::to_string(rgb) + " RGB image(s) -- X-1a allows CMYK and gray only");
+        if (alpha) p.push_back(std::to_string(alpha) + " image(s) with transparency -- X-1a allows none");
+    }
+    return p;
 }
 
 bool jpeg_info(const std::string& b, int* w, int* h, int* comps) {

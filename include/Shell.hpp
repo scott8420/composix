@@ -177,6 +177,7 @@ private:
     bool                             m_pdf_print = true;   // s015: Plate (print) or cairo (screen)
     std::string                      m_pdf_profile;        // s016: the press's ICC ("" = none)
     bool                             m_pdf_convert = false;
+    int                              m_pdf_standard = 0;   // s017: 0 none, 1 PDF/X-1a, 2 PDF/X-4
     std::vector<std::string>         m_profiles;           // the sheet's list, as paths
     std::vector<std::string> profile_dirs() const;          // category: helper: where ICC profiles live
     void export_pdf_to(const std::string& path);  // category: helper: write + report

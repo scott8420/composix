@@ -958,6 +958,29 @@ int main() {
             co.profile = "/usr/share/color/icc/sRGB.icc";
             check("profile: an RGB profile refused, said why", !L::export_print_pdf(d, out, co, src, &crep, &err) &&
                                                                err.find("CMYK") != std::string::npos, err);
+            // s017: PDF/X. X-1a converts and flattens, X-4 keeps ICC RGB.
+            co.profile = gracol;
+            co.convert = false;
+            co.compress = false;
+            co.standard = L::plate_standard::X1a;
+            L::PdfReport xrep;
+            check("pdfx: X-1a exports (convert forced)", L::export_print_pdf(d, out, co, src, &xrep, &err), err);
+            { std::ifstream f(out, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); cp = ss.str(); }
+            check("pdfx: X-1a is PDF 1.4, intent, keys, no RGB, no SMask",
+                  cp.rfind("%PDF-1.4", 0) == 0 && cp.find("/GTS_PDFX ") != std::string::npos &&
+                      cp.find("(PDF/X-1a:2003)") != std::string::npos && cp.find(" rg\n") == std::string::npos &&
+                      cp.find("/SMask") == std::string::npos && cp.find("/ICCBased") == std::string::npos);
+            check("pdfx: the report names the standard", !xrep.warnings.empty() &&
+                                                         xrep.warnings.front().rfind("Standard: PDF/X-1a:2003", 0) == 0);
+            co.standard = L::plate_standard::X4;
+            check("pdfx: X-4 exports", L::export_print_pdf(d, out, co, src, &xrep, &err), err);
+            { std::ifstream f(out, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); cp = ss.str(); }
+            check("pdfx: X-4 is PDF 1.6 with XMP, ICC RGB images",
+                  cp.rfind("%PDF-1.6", 0) == 0 && cp.find("<pdfxid:GTS_PDFXVersion>PDF/X-4") != std::string::npos &&
+                      cp.find("[/ICCBased") != std::string::npos);
+            co.profile.clear();
+            check("pdfx: no profile refused, said why", !L::export_print_pdf(d, out, co, src, &xrep, &err) &&
+                                                       err.find("profile") != std::string::npos, err);
         } else {
             std::cout << "  (skip cmyk: no GRACoL profile installed)\n";
         }
