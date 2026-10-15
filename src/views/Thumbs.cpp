@@ -1,4 +1,5 @@
 #include "views/Thumbs.hpp"
+#include "views/Images.hpp"
 
 #include <gdkmm/rgba.h>
 #include <pangomm/layout.h>
@@ -175,10 +176,21 @@ void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W
         break;
     }
 
-    case K::Image: {   // a tinted plate with a mountain-and-sun glyph
+    case K::Image: {   // the picture itself (s009); else a tinted plate with a mountain-and-sun glyph
+        int iw = 0, ih = 0;
+        const auto pic = t.file.empty() ? Cairo::RefPtr<Cairo::ImageSurface>{} : images::get(t.file, t.stamp, &iw, &ih);
         double w, h;
-        fit(W, H, t.w_in / t.h_in, large ? 24 : 10, w, h);
+        fit(W, H, pic && ih > 0 ? static_cast<double>(iw) / ih : t.w_in / t.h_in, large ? 24 : 10, w, h);
         const double x = std::round((W - w) / 2), y = std::round((H - h) / 2);
+        if (pic) {
+            shadow(cr, x, y, w, h);
+            cr->save();
+            rounded(cr, x, y, w, h, 3);
+            cr->clip();
+            images::paint(cr, pic, x, y, w, h);
+            cr->restore();
+            break;
+        }
         shadow(cr, x, y, w, h);
         auto g = Cairo::LinearGradient::create(x, y, x, y + h);
         g->add_color_stop_rgb(0, std::min(1.0, c.r + 0.25), std::min(1.0, c.g + 0.25), std::min(1.0, c.b + 0.25));

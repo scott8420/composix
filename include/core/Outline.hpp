@@ -46,6 +46,8 @@ struct Thumb {
     int           panels = 1;        // pages: foldout panels
     bool          bold   = false;    // style specimens
     bool          italic = false;
+    std::string   file;              // images (s009): the file to draw, "" = a stand-in
+    std::int64_t  stamp  = 0;        // its time, so a changed file redraws
 };
 
 // A field the inspector may EDIT carries a key (what the UI asks the shell to
@@ -62,6 +64,12 @@ struct Field {
     std::string         value;
     std::string         edit;       // "" = read-only
     std::vector<Choice> choices;
+    bool                buttons = false;   // s009: the choices are ACTIONS, one button each
+    // s009 (Scott): a COMPACT row -- column headers over their values ("X Y W
+    // H" over four numbers). `value` holds the values tab-separated; a
+    // multi-selection says Mixed per column, not for the whole row.
+    std::vector<std::string> cols;
+    bool operator==(const Field&) const = default;
 };
 
 struct Item {
@@ -97,7 +105,8 @@ Outline project(const Doc& d, const std::string& project_dir,
 
 // s005: frames picked on the canvas, as items the inspector reads (fields:
 // Kind, On, X, Y, W, H, and Story + Thread or Asset). Not in the navigator.
-std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& frames);
+std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& frames,
+                              const std::string& project_dir = {});
 // "Text frame", "3 frames".
 std::string frames_title(const std::vector<Item>& items);
 

@@ -4,6 +4,8 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <chrono>
+#include <filesystem>
 #include <set>
 
 namespace composix::core {
@@ -234,6 +236,78 @@ std::string master_label(const Doc& d, const Doc::Id& master) {
 // ─────────────────────────────────────────────────────────────────────────────
 // The verbs
 // ─────────────────────────────────────────────────────────────────────────────
+// ── images (s009) ───────────────────────────────────────────────────────────
+std::string resolve_asset(const Asset& a, const std::string& dir) {
+    namespace fs = std::filesystem;
+    if (a.path.empty()) return {};
+    const fs::path p(a.path);
+    if (p.is_absolute()) return p.string();
+    if (dir.empty()) return {};
+    return (fs::path(dir) / p).string();
+}
+
+std::int64_t file_stamp(const std::string& path) {
+    namespace fs = std::filesystem;
+    if (path.empty()) return 0;
+    std::error_code ec;
+    const auto t = fs::last_write_time(path, ec);
+    if (ec) return 0;
+    const auto n = std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
+    return n == 0 ? 1 : static_cast<std::int64_t>(n);
+}
+
+LinkStatus link_status(const Asset& a, const std::string& dir) {
+    const std::string at = resolve_asset(a, dir);
+    const std::int64_t now = file_stamp(at);
+    if (a.embedded) {
+        // Unsaved, an embedded file has no folder to be in yet: say embedded.
+        if (dir.empty() && !std::filesystem::path(a.path).is_absolute()) return LinkStatus::Embedded;
+        return now ? LinkStatus::Embedded : LinkStatus::EmbeddedMissing;
+    }
+    if (!now) return LinkStatus::Missing;
+    if (a.stamp && now != a.stamp) return LinkStatus::Modified;
+    return LinkStatus::OK;
+}
+
+std::string link_status_text(LinkStatus s) {
+    switch (s) {
+    case LinkStatus::OK:              return "OK";
+    case LinkStatus::Modified:        return "Modified";
+    case LinkStatus::Missing:         return "Missing";
+    case LinkStatus::Embedded:        return "Embedded";
+    case LinkStatus::EmbeddedMissing: return "Missing from project";
+    }
+    return {};
+}
+
+Rect fit_rect(const Rect& fr, double iw, double ih, ImageFit fit) {
+    if (iw <= 0 || ih <= 0 || fr.w <= 0 || fr.h <= 0) return fr;
+    const double sx = fr.w / iw, sy = fr.h / ih;
+    const double s = fit == ImageFit::Fill ? std::max(sx, sy) : std::min(sx, sy);
+    const double w = iw * s, h = ih * s;
+    return {fr.x + (fr.w - w) / 2, fr.y + (fr.h - h) / 2, w, h};
+}
+
+double effective_ppi(const Frame& f, const Asset& a) {
+    if (a.px_w <= 0 || a.px_h <= 0) return 0;
+    const Rect r = fit_rect({0, 0, f.w, f.h}, a.px_w, a.px_h, f.fit);
+    if (r.w <= 0) return 0;
+    return a.px_w / (r.w / kPt);
+}
+
+Size2 natural_size(const ImageFile& f, double max_w, double max_h) {
+    double w = 0, h = 0;
+    if (f.px_w > 0 && f.px_h > 0) {
+        const double per = f.vector ? 1.0 : kPt / 300.0;   // a vector's size is in points
+        w = f.px_w * per;
+        h = f.px_h * per;
+    } else {
+        w = h = 2 * kPt;
+    }
+    const double s = std::min({1.0, max_w > 0 ? max_w / w : 1.0, max_h > 0 ? max_h / h : 1.0});
+    return {w * s, h * s};
+}
+
 namespace doc {
 
 namespace {
@@ -527,16 +601,34 @@ Doc::Id prev_of(const Doc& d, const Doc::Id& id) {
 }
 }  // namespace
 
+namespace {
+// Is `rec` (a story or an asset) shown by any frame other than `but`?
+bool used_by_other(const Doc& d, const Doc::Id& rec, const std::vector<Doc::Id>& but) {
+    for (const auto& o : d.ids_of<Frame>()) {
+        if (std::find(but.begin(), but.end(), o) != but.end()) continue;
+        const auto* f = d.as<Frame>(o);
+        if (f->story == rec || f->asset == rec) return true;
+    }
+    return false;
+}
+}  // namespace
+
 bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     std::vector<Doc::Id> frames;
     for (const auto& id : ids) if (d.as<Frame>(id)) frames.push_back(id);
     if (frames.empty()) return false;
-    // In the step: the frames, and every frame that points at one of them
-    // (its `next` is re-spliced).
+    const auto add = [](std::vector<Doc::Id>& v, const Doc::Id& id) {
+        if (!id.empty() && std::find(v.begin(), v.end(), id) == v.end()) v.push_back(id);
+    };
+    // In the step: the frames, every frame that points at one of them (its
+    // `next` is re-spliced), and the stories / images left with no frame.
     std::vector<Doc::Id> touched = frames;
+    std::vector<Doc::Id> orphans;
     for (const auto& id : frames) {
-        const auto p = prev_of(d, id);
-        if (!p.empty() && std::find(touched.begin(), touched.end(), p) == touched.end()) touched.push_back(p);
+        add(touched, prev_of(d, id));
+        const auto* f = d.as<Frame>(id);
+        for (const auto& rec : {f->story, f->asset})
+            if (!rec.empty() && !used_by_other(d, rec, frames)) { add(touched, rec); add(orphans, rec); }
     }
     return j.run("Delete " + plural(frames.size(), "frame", "frames"), touched, [&] {
         for (const auto& id : frames) {
@@ -550,6 +642,165 @@ bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
                 d.put(before, b);
             }
             d.put(id, std::nullopt);
+        }
+        for (const auto& o : orphans) d.put(o, std::nullopt);
+    });
+}
+
+// ── images (s009) ───────────────────────────────────────────────────────────
+namespace {
+// The linked asset for this file (the same path is one asset), or a new id.
+Doc::Id asset_for(Doc& d, const ImageFile& f, bool& fresh) {
+    for (const auto& a : d.ids_of<Asset>()) {
+        const auto* r = d.as<Asset>(a);
+        if (!r->embedded && r->path == f.path) { fresh = false; return a; }
+    }
+    fresh = true;
+    return d.fresh_id("asset");
+}
+Asset asset_from(const ImageFile& f, double pos) {
+    Asset a;
+    a.name = f.name;
+    a.pos = pos;
+    a.path = f.path;
+    a.color = f.color;
+    a.px_w = f.vector ? 0 : f.px_w;
+    a.px_h = f.vector ? 0 : f.px_h;
+    a.stamp = f.stamp;
+    return a;
+}
+Doc::Id existing_asset(const Doc& d, const ImageFile& f) {
+    for (const auto& a : d.ids_of<Asset>()) {
+        const auto* r = d.as<Asset>(a);
+        if (!r->embedded && r->path == f.path) return a;
+    }
+    return {};
+}
+}  // namespace
+
+bool place_image(DocJournal& j, Doc& d, const Doc::Id& frame, const ImageFile& file) {
+    const auto* f = d.as<Frame>(frame);
+    if (!f || f->kind != FrameKind::Image || file.path.empty()) return false;
+    std::vector<Doc::Id> touched{frame};
+    const Doc::Id old = f->asset;
+    const Doc::Id same = existing_asset(d, file);
+    if (!old.empty() && old == same) return false;   // already showing it
+    if (!same.empty()) touched.push_back(same);
+    const bool drop_old = !old.empty() && !used_by_other(d, old, {frame});
+    if (drop_old) touched.push_back(old);
+    return j.run("Place " + file.name, touched, [&]() -> std::vector<Doc::Id> {
+        std::vector<Doc::Id> made;
+        bool fresh = false;
+        const Doc::Id a = asset_for(d, file, fresh);
+        if (fresh) {
+            d.put(a, asset_from(file, d.pos_after<Asset>({})));
+            made.push_back(a);
+        }
+        Frame nf = *d.as<Frame>(frame);
+        nf.asset = a;
+        d.put(frame, nf);
+        if (drop_old) d.put(old, std::nullopt);
+        return made;
+    });
+}
+
+Doc::Id place_image_new(DocJournal& j, Doc& d, const Doc::Id& owner, const Rect& r, const ImageFile& file) {
+    if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
+    if (r.w < 1 || r.h < 1 || file.path.empty()) return {};
+    std::vector<Doc::Id> touched;
+    if (const auto same = existing_asset(d, file); !same.empty()) touched.push_back(same);
+    Doc::Id made_frame;
+    j.run("Place " + file.name, touched, [&]() -> std::vector<Doc::Id> {
+        std::vector<Doc::Id> made;
+        bool fresh = false;
+        const Doc::Id a = asset_for(d, file, fresh);
+        if (fresh) {
+            d.put(a, asset_from(file, d.pos_after<Asset>({})));
+            made.push_back(a);
+        }
+        Frame f;
+        f.owner = owner;
+        f.kind = FrameKind::Image;
+        f.x = r.x; f.y = r.y; f.w = r.w; f.h = r.h;
+        double z = 0;
+        for (const auto& o : d.frames_on(owner)) z = std::max(z, d.as<Frame>(o)->z);
+        f.z = z + 1;
+        f.asset = a;
+        made_frame = d.fresh_id("frame");
+        d.put(made_frame, f);
+        made.push_back(made_frame);
+        return made;
+    });
+    return made_frame;
+}
+
+bool relink_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id, ImageFile>>& files) {
+    std::vector<Doc::Id> ids;
+    bool update = true;
+    for (const auto& [id, f] : files) {
+        const auto* a = d.as<Asset>(id);
+        if (!a || f.path.empty() || std::find(ids.begin(), ids.end(), id) != ids.end()) continue;
+        ids.push_back(id);
+        if (a->embedded || a->path != f.path) update = false;
+    }
+    if (ids.empty()) return false;
+    const std::string what = ids.size() == 1 ? d.as<Asset>(ids[0])->name : plural(ids.size(), "image", "images");
+    return j.run((update ? "Update " : "Relink ") + what, ids, [&] {
+        for (const auto& [id, f] : files) {
+            const auto* a = d.as<Asset>(id);
+            if (!a || f.path.empty()) continue;
+            d.put(id, asset_from(f, a->pos));
+        }
+    });
+}
+
+bool embed_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id, std::string>>& rels) {
+    std::vector<Doc::Id> ids;
+    for (const auto& [id, rel] : rels)
+        if (const auto* a = d.as<Asset>(id); a && !a->embedded && !rel.empty()) ids.push_back(id);
+    if (ids.empty()) return false;
+    const std::string what = ids.size() == 1 ? d.as<Asset>(ids[0])->name : plural(ids.size(), "image", "images");
+    return j.run("Embed " + what, ids, [&] {
+        for (const auto& [id, rel] : rels) {
+            const auto* a = d.as<Asset>(id);
+            if (!a || a->embedded || rel.empty()) continue;
+            Asset na = *a;
+            na.source = na.path;
+            na.path = rel;
+            na.embedded = true;
+            d.put(id, na);
+        }
+    });
+}
+
+bool unembed_assets(DocJournal& j, Doc& d, const std::vector<Doc::Id>& assets) {
+    std::vector<Doc::Id> ids;
+    for (const auto& id : assets)
+        if (const auto* a = d.as<Asset>(id); a && a->embedded && !a->source.empty()) ids.push_back(id);
+    if (ids.empty()) return false;
+    const std::string what = ids.size() == 1 ? d.as<Asset>(ids[0])->name : plural(ids.size(), "image", "images");
+    return j.run("Unembed " + what, ids, [&] {
+        for (const auto& id : ids) {
+            Asset na = *d.as<Asset>(id);
+            na.path = na.source;
+            na.source.clear();
+            na.embedded = false;
+            na.stamp = file_stamp(na.path);
+            d.put(id, na);
+        }
+    });
+}
+
+bool set_fit(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, ImageFit fit) {
+    std::vector<Doc::Id> frames;
+    for (const auto& id : ids)
+        if (const auto* f = d.as<Frame>(id); f && f->kind == FrameKind::Image && f->fit != fit) frames.push_back(id);
+    if (frames.empty()) return false;
+    return j.run(fit == ImageFit::Fill ? "Fill frame" : "Fit in frame", frames, [&] {
+        for (const auto& id : frames) {
+            Frame f = *d.as<Frame>(id);
+            f.fit = fit;
+            d.put(id, f);
         }
     });
 }
@@ -704,6 +955,25 @@ const std::vector<Verb>& verbs() {
              frames_end(j);
          }},
         {"remove_guide", [](DocJournal& j, Doc& d) { remove_guide(j, d, "guide.2"); }},
+        // s009: images. The files are made up -- the core never opens them.
+        {"place_image", [](DocJournal& j, Doc& d) {   // replaces harbor.psd, which goes
+             place_image(j, d, "frame.4", {"/pics/cove.png", "cove.png", 2400, 1600, false, "RGB", 7});
+         }},
+        {"place_image_new", [](DocJournal& j, Doc& d) {
+             place_image_new(j, d, "page.8", {54, 54, 288, 192}, {"/pics/cove.png", "cove.png", 2400, 1600, false, "RGB", 7});
+         }},
+        {"place_same_file", [](DocJournal& j, Doc& d) {   // into a frame showing a shared asset
+             place_image(j, d, "frame.8", {"/pics/cove.png", "cove.png", 2400, 1600, false, "RGB", 7});
+         }},
+        {"relink_asset", [](DocJournal& j, Doc& d) {
+             relink_assets(j, d, {{"asset.2", {"/pics/harbor.png", "harbor.png", 3000, 2000, false, "RGB", 9}}});
+         }},
+        {"embed_assets", [](DocJournal& j, Doc& d) { embed_assets(j, d, {{"asset.2", "assets/harbor.psd"}}); }},
+        {"unembed_assets", [](DocJournal& j, Doc& d) { unembed_assets(j, d, {"asset.1", "asset.3"}); }},
+        {"set_fit", [](DocJournal& j, Doc& d) { set_fit(j, d, {"frame.4", "frame.5", "frame.1"}, ImageFit::Fit); }},
+        {"delete_last_frames", [](DocJournal& j, Doc& d) {   // the story and the image go too
+             delete_frames(j, d, {"frame.4", "frame.6"});
+         }},
         {"drag_frames", [](DocJournal& j, Doc& d) {   // press .. drag .. release
              frames_begin(j, d, {"frame.5", "frame.6"}, "Resize 2 frames");
              frames_set(j, d, "frame.5", {20, 40, 900, 400});

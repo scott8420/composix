@@ -121,6 +121,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"General", "win.open",          {"<Ctrl>o"}, "", "Open a project"},
         {"General", "win.save",          {"<Ctrl>s"}, "", "Save"},
         {"General", "win.save-as",       {"<Ctrl><Shift>s"}, "", "Save as a new project folder"},
+        {"General", "win.place",         {"<Ctrl><Shift>p"}, "", "Place an image (into the picked image frame, or click / drag on a page)"},
         {"General", "win.shortcuts",     {"<Ctrl>question", "<Ctrl>slash"}, "",
          "Keyboard shortcuts (this window)"},
         {"General", "win.about",         {"F1"}, "", "About Composix"},
@@ -137,7 +138,8 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Delete", "Delete the picked frames (a thread heals around them)"},
         {"Mouse", "", {}, "Click an out-port, then a frame", "Thread the text on into that frame"},
         {"Mouse", "", {}, "Alt+click an out-port", "Break the thread after that frame"},
-        {"Mouse", "", {}, "Esc", "Cancel a drag, then clear the picks"},
+        {"Mouse", "", {}, "Drop an image file on a page", "Place it there (on an image frame: into it)"},
+        {"Mouse", "", {}, "Esc", "Cancel a drag, put down a loaded image, then clear the picks"},
 
         // ── View (s002) ───────────────────────────────────────────────────────
         {"View", "win.zoom-in",          {"<Ctrl>equal", "<Ctrl>plus"}, "", "Zoom in"},

@@ -1,6 +1,9 @@
 #include "views/Inspector.hpp"
 
+#include <gtkmm/box.h>
+#include <gtkmm/button.h>
 #include <gtkmm/dropdown.h>
+#include <gtkmm/grid.h>
 #include <gtkmm/label.h>
 #include <gtkmm/stringlist.h>
 #include <gtkmm/separator.h>
@@ -49,6 +52,11 @@ Inspector::Inspector()
 
 void Inspector::fill(const std::string& title, const std::string& sub,
                      const std::vector<core::Field>& fields) {
+    if (m_has_shown && title == m_shown_title && sub == m_shown_sub && fields == m_shown) return;
+    m_has_shown = true;
+    m_shown_title = title;
+    m_shown_sub = sub;
+    m_shown = fields;
     while (auto* c = m_fields.get_first_child()) m_fields.remove(*c);
     m_title.set_text(title);
     m_sub.set_text(sub);
@@ -59,6 +67,51 @@ void Inspector::fill(const std::string& title, const std::string& sub,
     m_painting = true;
     int row = 0;
     for (const auto& f : fields) {
+        if (f.buttons) {   // s009: actions -- a row of buttons under the fields
+            auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            box->set_name("inspector.actions." + f.edit);
+            box->add_css_class("cx-insp-actions");
+            for (const auto& c : f.choices) {
+                auto b = Gtk::make_managed<Gtk::Button>(c.label);
+                b->set_name("inspector.act." + f.edit + "." + c.id);
+                b->add_css_class("cx-insp-action");
+                const std::string key = f.edit, id = c.id;
+                b->signal_clicked().connect([this, key, id] { m_edit.emit(key, id); });
+                box->append(*b);
+            }
+            m_fields.attach(*box, 0, row, 2, 1);
+            ++row;
+            continue;
+        }
+        if (!f.cols.empty()) {   // a compact row: headers over values, under the label
+            auto l = Gtk::make_managed<Gtk::Label>(f.label);
+            l->add_css_class("cx-field-label");
+            l->set_xalign(1.0f);
+            l->set_valign(Gtk::Align::END);
+            m_fields.attach(*l, 0, row);
+            auto g = Gtk::make_managed<Gtk::Grid>();
+            g->set_name("inspector.cols");
+            g->add_css_class("cx-insp-cols");
+            g->set_column_homogeneous(true);
+            g->set_hexpand(true);
+            std::vector<std::string> vals(1);
+            for (char c : f.value) { if (c == '\t') vals.emplace_back(); else vals.back() += c; }
+            for (std::size_t k = 0; k < f.cols.size(); ++k) {
+                auto h = Gtk::make_managed<Gtk::Label>(f.cols[k]);
+                h->add_css_class("cx-col-head");
+                h->set_xalign(0.0f);
+                g->attach(*h, static_cast<int>(k), 0);
+                auto v = Gtk::make_managed<Gtk::Label>(k < vals.size() ? vals[k] : "");
+                v->add_css_class("cx-field-value");
+                if (k < vals.size() && vals[k] == core::kMixed) v->add_css_class("cx-mixed");
+                v->set_xalign(0.0f);
+                v->set_can_focus(false);
+                g->attach(*v, static_cast<int>(k), 1);
+            }
+            m_fields.attach(*g, 1, row);
+            ++row;
+            continue;
+        }
         auto l = Gtk::make_managed<Gtk::Label>(f.label);
         l->add_css_class("cx-field-label");
         l->set_xalign(1.0f);
@@ -133,6 +186,7 @@ void Inspector::show_section(const core::Outline& o, core::Segment s) {
 }
 
 void Inspector::clear() {
+    m_has_shown = false;
     while (auto* c = m_fields.get_first_child()) m_fields.remove(*c);
     m_title.set_visible(false);
     m_sub.set_visible(false);

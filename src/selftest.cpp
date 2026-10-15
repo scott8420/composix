@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <string>
@@ -579,7 +580,13 @@ int main() {
             return std::string("<absent>");
         };
         check("frame items: shared story, mixed place",
-              val("Story") == "Chapters" && val("Thread") == core::kMixed && val("W") == "4.5 in");
+              val("Story") == "Chapters" && val("Thread") == core::kMixed &&
+              val("Bounds (in)") == "0.75\t0.75\t4.5\t7.5", val("Bounds (in)"));
+        const auto mixed = core::frame_items(d, {"frame.1", "frame.2"});
+        const auto sm = core::shared_fields({&mixed[0], &mixed[1]});
+        std::string b;
+        for (const auto& f : sm) if (f.label == "Bounds (in)") b = f.value;
+        check("frame items: bounds Mixed per column", b == "0.75\tMixed\t4.5\tMixed", b);
         check("frame items: titles", core::frames_title(items) == "2 frames" &&
                                      items[0].title == "Text frame — Chapters");
     }
@@ -799,6 +806,154 @@ int main() {
         core::doc::thread_frames(j, d, "frame.1", "frame.2");
         check("re-thread an emptied frame", d.as<core::Frame>("frame.2")->story == "story.1");
         check("frame tools: through the door", d.strays() == 0);
+    }
+
+    // ── s009: images ─────────────────────────────────────────────────────────
+    {
+        std::cout << "\n-- images --\n";
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto near = [](double a, double b) { return std::abs(a - b) < 0.01; };
+
+        const core::Rect fr{0, 0, 288, 144};   // 4 x 2 in
+        const auto fill = core::fit_rect(fr, 1200, 1200, core::ImageFit::Fill);
+        const auto fit  = core::fit_rect(fr, 1200, 1200, core::ImageFit::Fit);
+        check("fit_rect: fill covers, centred", near(fill.w, 288) && near(fill.h, 288) && near(fill.y, -72));
+        check("fit_rect: fit shows it whole", near(fit.w, 144) && near(fit.h, 144) && near(fit.x, 72));
+        core::Asset a1;
+        a1.px_w = 1200; a1.px_h = 1200;
+        core::Frame f1;
+        f1.w = 288; f1.h = 144;
+        check("ppi: fill = pixels over the drawn width", near(core::effective_ppi(f1, a1), 300));
+        f1.fit = core::ImageFit::Fit;
+        check("ppi: fit draws it smaller, sharper", near(core::effective_ppi(f1, a1), 600));
+        a1.px_w = 0;
+        check("ppi: a vector has none", core::effective_ppi(f1, a1) == 0);
+        const core::ImageFile big{"/x/big.png", "big.png", 3000, 2000, false, "RGB", 1};
+        const auto [nw, nh] = core::natural_size(big, 0, 0);
+        check("natural size: 300 ppi", near(nw, 720) && near(nh, 480));
+        const auto [sw, sh] = core::natural_size(big, 360, 0);
+        check("natural size: shrunk to fit, aspect kept", near(sw, 360) && near(sh, 240));
+
+        const core::ImageFile cove{"/pics/cove.png", "cove.png", 2400, 1600, false, "RGB", 7};
+        const auto before = d.ids_of<core::Asset>().size();
+        check("place into a frame", core::doc::place_image(j, d, "frame.4", cove));
+        const auto now = d.as<core::Frame>("frame.4")->asset;
+        check("...a new linked asset", d.as<core::Asset>(now) && d.as<core::Asset>(now)->path == cove.path &&
+                                       !d.as<core::Asset>(now)->embedded);
+        check("...the old image, shown nowhere else, goes", !d.as<core::Asset>("asset.2") &&
+                                                            d.ids_of<core::Asset>().size() == before);
+        check("...one step", j.size() == 1);
+        check("placing the same file again: no step", !core::doc::place_image(j, d, "frame.4", cove));
+        j.undo();
+        check("undo: the old image back", d.as<core::Frame>("frame.4")->asset == "asset.2" &&
+                                          d.as<core::Asset>("asset.2") && !d.as<core::Asset>(now));
+        j.redo();
+        const auto nf = core::doc::place_image_new(j, d, "page.8", {54, 54, 288, 192}, cove);
+        check("place new: a frame showing the SAME asset", d.as<core::Frame>(nf) &&
+                                                           d.as<core::Frame>(nf)->asset == now &&
+                                                           d.ids_of<core::Asset>().size() == before);
+        check("place new: refused off a page", core::doc::place_image_new(j, d, "", {0, 0, 9, 9}, cove).empty());
+        check("place: refused into a text frame", !core::doc::place_image(j, d, "frame.1", cove));
+
+        core::doc::delete_frames(j, d, {"frame.8"});
+        check("delete one of two placements: the image stays", d.as<core::Asset>("asset.3"));
+        core::doc::delete_frames(j, d, {"frame.9"});
+        check("delete the last placement: the image goes", !d.as<core::Asset>("asset.3"));
+        core::doc::delete_frames(j, d, {"frame.6"});
+        check("delete a story's last frame: the story goes", !d.as<core::Story>("story.2"));
+        j.undo();
+        check("undo: the story back with its frame", d.as<core::Story>("story.2") && d.as<core::Frame>("frame.6"));
+        j.undo();
+        j.undo();
+        check("undo: the image back with its frames", d.as<core::Asset>("asset.3") && d.as<core::Frame>("frame.9"));
+        core::doc::delete_frames(j, d, {"frame.2"});
+        check("delete mid-thread: the story stays", d.as<core::Story>("story.1"));
+        j.undo();
+
+        core::doc::relink_assets(j, d, {{"asset.1", {"/pics/map.png", "map.png", 5000, 2500, false, "RGB", 3}}});
+        const auto* r1 = d.as<core::Asset>("asset.1");
+        check("relink: the file, its pixels, linked now", r1->path == "/pics/map.png" && r1->px_w == 5000 &&
+                                                          !r1->embedded && r1->name == "map.png");
+        check("relink: labelled", j.undo_label().find("Relink") != std::string::npos, j.undo_label());
+        j.undo();
+        check("embed: refused when already embedded", !core::doc::embed_assets(j, d, {{"asset.1", "assets/x"}}));
+        core::doc::unembed_assets(j, d, {"asset.1", "asset.3"});
+        check("unembed: linked to where it came from", d.as<core::Asset>("asset.1")->path == "Maps/guild-map.tif" &&
+                                                        !d.as<core::Asset>("asset.1")->embedded);
+        check("unembed: no source, left embedded", d.as<core::Asset>("asset.3")->embedded);
+        core::doc::embed_assets(j, d, {{"asset.1", "assets/guild-map.tif"}});
+        check("embed: reads from the project, remembers the source",
+              d.as<core::Asset>("asset.1")->path == "assets/guild-map.tif" &&
+              d.as<core::Asset>("asset.1")->source == "Maps/guild-map.tif");
+        check("set fit", core::doc::set_fit(j, d, {"frame.5", "frame.1"}, core::ImageFit::Fit) &&
+                         d.as<core::Frame>("frame.5")->fit == core::ImageFit::Fit);
+        check("images: through the door", d.strays() == 0);
+
+        // Link status against real files.
+        const fs::path base = fs::temp_directory_path() / "composix_selftest_images";
+        std::error_code ec;
+        fs::remove_all(base, ec);
+        fs::create_directories(base / "proj" / "assets", ec);
+        { std::ofstream(base / "pic.png") << "x"; }
+        { std::ofstream(base / "proj" / "assets" / "emb.png") << "x"; }
+        core::Asset la;
+        la.path = (base / "pic.png").string();
+        la.stamp = core::file_stamp(la.path);
+        check("status: OK", core::link_status(la, "") == core::LinkStatus::OK);
+        la.stamp += 5;
+        check("status: Modified when the file's time moved", core::link_status(la, "") == core::LinkStatus::Modified);
+        la.path = (base / "gone.png").string();
+        check("status: Missing", core::link_status(la, "") == core::LinkStatus::Missing);
+        core::Asset ea;
+        ea.embedded = true;
+        ea.path = "assets/emb.png";
+        check("status: embedded, in the project", core::link_status(ea, (base / "proj").string()) == core::LinkStatus::Embedded);
+        ea.path = "assets/none.png";
+        check("status: embedded, missing from the project",
+              core::link_status(ea, (base / "proj").string()) == core::LinkStatus::EmbeddedMissing);
+
+        // JSON keeps the new fields; Save As brings the embedded files.
+        core::Doc e;
+        e.put("asset.1", core::Asset{"emb.png", 1, "assets/emb.png", true, "RGB", 10, 10, "/orig/emb.png", 42});
+        e.put("page.1", core::Page{});
+        core::Frame ff;
+        ff.owner = "page.1"; ff.kind = core::FrameKind::Image; ff.w = ff.h = 72; ff.asset = "asset.1";
+        ff.fit = core::ImageFit::Fit;
+        e.put("frame.1", ff);
+        core::Doc back;
+        check("json: round trip", core::from_json(back, core::to_json(e)) &&
+                                  *back.as<core::Asset>("asset.1") == *e.as<core::Asset>("asset.1") &&
+                                  back.as<core::Frame>("frame.1")->fit == core::ImageFit::Fit);
+        std::string err;
+        check("save as: ok", core::save_project(e, (base / "copy").string(), &err, (base / "proj").string()), err);
+        check("save as: the embedded file came along", fs::exists(base / "copy" / "assets" / "emb.png"));
+
+        // The projection.
+        core::Doc pd;
+        core::load_sample(pd);
+        auto o = core::project(pd, "");
+        const auto* harbor = o.find("asset.2");
+        check("links: a missing link says so", harbor && harbor->badge == "Missing");
+        bool acts = false;
+        for (const auto& fl : harbor->fields) if (fl.buttons && fl.edit == "asset") acts = true;
+        check("links: actions as buttons", acts);
+        core::DocJournal pj{pd};
+        pd.set_door([&pj] { return pj.open(); });
+        core::doc::place_image(pj, pd, "frame.5", {"/pics/tiny.png", "tiny.png", 300, 100, false, "RGB", 1});
+        o = core::project(pd, "");
+        const auto* tiny = o.find(pd.as<core::Frame>("frame.5")->asset);
+        std::string ppi;
+        if (tiny) for (const auto& fl : tiny->fields) if (fl.label == "Effective ppi") ppi = fl.value;
+        check("links: low res when stretched", ppi.find("(low)") != std::string::npos, ppi);
+        const auto fi = core::frame_items(pd, {"frame.5"});
+        bool fit_edit = false;
+        for (const auto& fl : fi.front().fields) if (fl.edit == "fit") fit_edit = true;
+        check("frame inspector: Fit is editable", fit_edit);
+        fs::remove_all(base, ec);
     }
 
     std::cout << "-----------------------------------------------\n";

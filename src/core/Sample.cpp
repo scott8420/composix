@@ -83,7 +83,7 @@ void load_sample(Doc& d) {
     d.put("swatch.4", Swatch{"Sky", 4, ColorModel::RGB, {111, 168, 220, 0}, "", 0x6fa8dc});
 
     // ── assets ──────────────────────────────────────────────────────────────
-    d.put("asset.1", Asset{"guild-map.tif", 1, "assets/guild-map.tif", true, "CMYK", 7300, 3700});
+    d.put("asset.1", Asset{"guild-map.tif", 1, "assets/guild-map.tif", true, "CMYK", 7300, 3700, "Maps/guild-map.tif"});
     d.put("asset.2", Asset{"harbor.psd", 2, "Pictures/harbor.psd", false, "RGB", 3600, 2700});
     d.put("asset.3", Asset{"fleuron.svg", 3, "assets/fleuron.svg", true, "Gray", 0, 0});
 

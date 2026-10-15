@@ -52,6 +52,7 @@ enum class StyleKind { Paragraph, Character };
 enum class Align     { Left, Center, Right, Justify };
 enum class ColorModel{ CMYK, RGB, Gray, Spot };
 enum class ListKind  { Contents, Bibliography, Index };
+enum class ImageFit  { Fill, Fit };   // s009: cover the frame (cropped) / show it whole
 
 struct Settings {
     std::string title  = "Untitled";
@@ -98,6 +99,7 @@ struct Frame {
     std::string story;                   // text
     std::string next;                    // text: the next frame in the thread
     std::string asset;                   // image
+    ImageFit    fit = ImageFit::Fill;    // image: how the picture sits in the frame (s009)
     bool operator==(const Frame&) const = default;
 };
 
@@ -141,6 +143,8 @@ struct Asset {
     bool        embedded = false;
     std::string color = "RGB";           // "CMYK" / "RGB" / "Gray"
     int         px_w = 0, px_h = 0;      // pixels; 0 = vector
+    std::string source;                  // embedded (s009): the file it was copied from
+    std::int64_t stamp = 0;              // linked (s009): the file's time when placed / updated; 0 = unknown
     bool operator==(const Asset&) const = default;
 };
 
@@ -239,6 +243,35 @@ std::string numbering_text(Numbering n);
 std::string side_text(Side s);
 std::string master_label(const Doc& d, const Doc::Id& master);  // "B-Body", "None"
 
+// ── images (s009) ───────────────────────────────────────────────────────────
+// A file as the UI found it on disk. The core never decodes: the app probes
+// the file (views/Images) and hands the verbs what it learned.
+struct ImageFile {
+    std::string  path;                   // absolute
+    std::string  name;                   // its file name
+    int          px_w = 0, px_h = 0;     // pixels (a vector's own size, in points)
+    bool         vector = false;
+    std::string  color = "RGB";
+    std::int64_t stamp = 0;
+};
+// Where an asset's file is: an absolute path, or "" when it can't be known (a
+// relative path in an unsaved project).
+std::string  resolve_asset(const Asset& a, const std::string& project_dir);
+std::int64_t file_stamp(const std::string& path);    // 0 = no such file
+enum class LinkStatus { OK, Modified, Missing, Embedded, EmbeddedMissing };
+LinkStatus   link_status(const Asset& a, const std::string& project_dir);
+std::string  link_status_text(LinkStatus s);
+// The picture's rect inside a frame (both in the same coordinates): Fill
+// covers the frame (cropped by it), Fit shows it whole. iw / ih: its aspect.
+Rect   fit_rect(const Rect& frame, double iw, double ih, ImageFit fit);
+// Pixels per inch as placed (lower = softer); 0 for a vector or unknown.
+double effective_ppi(const Frame& f, const Asset& a);
+inline constexpr double kLowPpi = 150;   // under this, "Low res"
+// The size a placed file takes when no frame was drawn for it: 300 ppi (a
+// vector at its own size), shrunk to fit max_w x max_h.
+struct Size2 { double w = 0, h = 0; };   // a plain aggregate: std::pair trips GCC's -Wpsabi note
+Size2 natural_size(const ImageFile& f, double max_w, double max_h);
+
 // ── the verbs: every user choice on the document ───────────────────────────
 // Each goes through the journal; the UI calls these and nothing else writes.
 namespace doc {
@@ -282,8 +315,9 @@ void frames_cancel(DocJournal& j);
 // gets a story of its own (one empty paragraph in the first paragraph style).
 Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r);
 // Delete frames. A text frame leaving a thread is spliced out (the frame
-// before it points past it) so the story reflows through what is left; the
-// story itself stays (unplaced if no frame is left). One step.
+// before it points past it) so the story reflows through what is left. A
+// story whose LAST frame goes goes with it, and so does an image whose last
+// placement goes (s009, as InDesign). One step.
 bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
 // Thread `from` -> `to` (`to` goes into the thread right after `from`). `to`
 // must be a text frame that is not already threaded; its own text is appended
@@ -292,6 +326,22 @@ bool thread_frames(DocJournal& j, Doc& d, const Doc::Id& from, const Doc::Id& to
 // Cut the thread after `from`: the text stays in the frames up to `from`; the
 // frames after it are left empty (no story). One step.
 bool unthread_after(DocJournal& j, Doc& d, const Doc::Id& from);
+
+// ── images (s009) ──────────────────────────────────────────────────────────
+// Put a file into an image frame. The same linked file is one asset however
+// often it is placed; the frame's old asset goes if nothing else shows it.
+bool    place_image(DocJournal& j, Doc& d, const Doc::Id& frame, const ImageFile& f);
+// A new image frame holding the file, at `r` on a page / master. One step.
+Doc::Id place_image_new(DocJournal& j, Doc& d, const Doc::Id& owner, const Rect& r, const ImageFile& f);
+// Point assets at files (a missing link found, or Update: the same path
+// re-read). An embedded asset becomes linked. One step for all of them.
+bool    relink_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id, ImageFile>>& files);
+// Embed: the app has copied each file to <project>/<rel>; the asset now reads
+// from there and remembers where it came from. Unembed: linked to that again
+// (an embedded asset with no known source can't be). One step each call.
+bool    embed_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id, std::string>>& rels);
+bool    unembed_assets(DocJournal& j, Doc& d, const std::vector<Doc::Id>& assets);
+bool    set_fit(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ImageFit fit);
 
 // ── guides (s006) ───────────────────────────────────────────────────────────
 // Pulled out of a ruler onto a page: one step. Dragged: one gesture (the same
@@ -365,7 +415,10 @@ std::pair<int, int> thread_place(const Doc& d, const Doc::Id& frame);
 void load_sample(Doc& d);
 
 // ── the project folder: <name>/document.json + assets/ ─────────────────────
-bool        save_project(const Doc& d, const std::string& dir, std::string* err = nullptr);
+// `from_dir`: the folder it was saved in before (Save As): its embedded files
+// are copied across so the new folder is whole.
+bool        save_project(const Doc& d, const std::string& dir, std::string* err = nullptr,
+                         const std::string& from_dir = {});
 bool        load_project(Doc& d, const std::string& dir, std::string* err = nullptr);
 std::string to_json(const Doc& d);                       // the document.json text
 bool        from_json(Doc& d, const std::string& text, std::string* err = nullptr);

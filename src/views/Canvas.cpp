@@ -1,10 +1,12 @@
 #include "views/Canvas.hpp"
+#include "views/Images.hpp"
 #include "views/Ruler.hpp"
 #include "layout/Flow.hpp"
 #include "Log.hpp"
 
 #include <gdkmm/cursor.h>
 #include <glibmm/main.h>
+#include <gtkmm/droptarget.h>
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/eventcontrollermotion.h>
 #include <gtkmm/eventcontrollerscroll.h>
@@ -91,6 +93,11 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
     motion->signal_motion().connect(sigc::mem_fun(*this, &Canvas::on_motion));
     motion->signal_leave().connect([this] { m_in = false; m_sig_view.emit(); });
     add_controller(motion);
+
+    // s009: image files dropped from the desktop.
+    auto drop = Gtk::DropTarget::create(GDK_TYPE_FILE_LIST, Gdk::DragAction::COPY);
+    drop->signal_drop().connect(sigc::mem_fun(*this, &Canvas::on_drop), false);
+    add_controller(drop);
 
     auto keys = Gtk::EventControllerKey::create();
     keys->signal_key_pressed().connect(
@@ -407,11 +414,33 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
             cr->stroke();
             break;
         }
-        const bool missing = m_missing && m_missing(f.asset);
+        const auto* asset = m_doc.as<core::Asset>(f.asset);
+        const auto status = asset ? core::link_status(*asset, m_dir) : core::LinkStatus::Missing;
+        const bool missing = status == core::LinkStatus::Missing || status == core::LinkStatus::EmbeddedMissing;
+        // s009: the real picture, cropped by its frame.
+        if (asset && !missing) {
+            const std::string file = core::resolve_asset(*asset, m_dir);
+            int iw = 0, ih = 0;
+            if (auto pic = images::get(file, core::file_stamp(file), &iw, &ih)) {
+                cr->save();
+                cr->rectangle(r.x, r.y, r.w, r.h);
+                cr->clip();
+                const Rect ir = core::fit_rect(r, iw, ih, f.fit);
+                images::paint(cr, pic, ir.x, ir.y, ir.w, ir.h, dim);
+                cr->restore();
+                if (status == core::LinkStatus::Modified) {   // a quiet corner flag
+                    cr->set_source_rgba(0.85, 0.51, 0.17, 0.95);
+                    cr->move_to(r.r(), r.y); cr->line_to(r.r() - 12, r.y); cr->line_to(r.r(), r.y + 12);
+                    cr->close_path();
+                    cr->fill();
+                }
+                break;
+            }
+        }
         rgb(cr, tint_for(f.asset), 0.55 * dim);
         cr->rectangle(r.x, r.y, r.w, r.h);
         cr->fill();
-        // A mountain-and-sun stand-in until images are decoded.
+        // The stand-in: a file it can't read here (or the unsaved sample's).
         cr->set_source_rgba(1, 1, 1, 0.5 * dim);
         cr->move_to(r.x + r.w * 0.1, r.y + r.h * 0.85);
         cr->line_to(r.x + r.w * 0.38, r.y + r.h * 0.45);
@@ -533,6 +562,20 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
             cr->stroke();
         }
     }
+    // Loaded (s009): the file's name beside the pointer.
+    if (m_loaded && m_in) {
+        auto lay = create_pango_layout(m_loaded->name);
+        lay->set_font_description(Pango::FontDescription("Sans 9"));
+        int lw, lh;
+        lay->get_pixel_size(lw, lh);
+        const double x = std::round(m_mx + 16), y = std::round(m_my + 14);
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.92);
+        cr->rectangle(x - 5, y - 2, lw + 10, lh + 4);
+        cr->fill();
+        cr->set_source_rgb(1, 1, 1);
+        cr->move_to(x, y);
+        lay->show_in_cairo_context(cr);
+    }
     if (m_drag == Drag::Marquee) {
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.12);
         cr->rectangle(m_marquee.x, m_marquee.y, m_marquee.w, m_marquee.h);
@@ -589,8 +632,8 @@ void Canvas::on_drag_begin(double x, double y) {
         queue_draw();
         return;
     }
-    // A drawing tool: drag out a frame on a page.
-    if (m_tool != Tool::Select) {
+    // A drawing tool -- or a loaded image (s009) -- drag out a frame on a page.
+    if (m_tool != Tool::Select || m_loaded) {
         m_draw_page = core::page_at(m_placed, px0, py0);
         m_drag = m_draw_page.empty() ? Drag::None : Drag::Draw;
         m_dx0 = px0;
@@ -790,6 +833,14 @@ void Canvas::on_drag_update(double ox, double oy) {
 void Canvas::on_drag_end(double, double) {
     const Drag was = m_drag;
     m_drag = Drag::None;
+    if (was == Drag::Draw && m_loaded) {   // s009: a click places, a drag draws its frame
+        const bool drawn = m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4;
+        place_loaded(m_dx0, m_dy0, drawn ? &m_draw : nullptr);
+        m_draw = {};
+        m_snap_x = m_snap_y = NAN;
+        queue_draw();
+        return;
+    }
     if (was == Drag::Draw) {
         // Big enough to mean it (4 px on screen): a frame on the page it was
         // started on, in that page's coordinates.
@@ -853,6 +904,7 @@ bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
     if (kv == GDK_KEY_Escape) {
         if (!m_thread_from.empty()) { m_thread_from.clear(); update_cursor(); queue_draw(); return true; }
         if (m_drag != Drag::None) { cancel_drag(); return true; }
+        if (m_loaded) { m_loaded.reset(); update_cursor(); queue_draw(); return true; }
         if (!m_sel.empty()) { pick({}); return true; }
         return false;
     }
@@ -909,6 +961,7 @@ void Canvas::on_motion(double x, double y) {
     m_my = y;
     m_in = true;
     m_sig_view.emit();
+    if (m_loaded) queue_draw();   // the file's name rides with the pointer
     if (m_drag != Drag::None) return;
     double dx, dy;
     m_vp.to_doc(x, y, dx, dy);
@@ -922,6 +975,7 @@ void Canvas::on_motion(double x, double y) {
 void Canvas::set_tool(Tool t) {
     m_tool = t;
     m_thread_from.clear();
+    m_loaded.reset();
     update_cursor();
 }
 
@@ -934,9 +988,77 @@ void Canvas::delete_selection() {
     }
 }
 
+// ── s009: placing images ────────────────────────────────────────────────────
+void Canvas::load_image(const core::ImageFile& f) {
+    m_loaded = f;
+    m_thread_from.clear();
+    grab_focus();
+    update_cursor();
+    queue_draw();
+}
+
+// Put the loaded file down at (lx, ly) (layout): into the image frame there,
+// or a new frame -- the one drawn, else the file's own size, kept on the page.
+void Canvas::place_loaded(double lx, double ly, const Rect* drawn) {
+    if (!m_loaded) return;
+    const core::ImageFile file = *m_loaded;
+    std::string made;
+    if (!drawn) {
+        const auto hit = core::hit_frame(m_doc, m_placed, lx, ly, 3 / m_vp.scale());
+        if (const auto* f = m_doc.as<core::Frame>(hit); f && f->kind == core::FrameKind::Image) {
+            core::doc::place_image(m_journal, m_doc, hit, file);
+            made = hit;
+        }
+    }
+    if (made.empty()) {
+        const auto page = core::page_at(m_placed, lx, ly);
+        for (const auto& p : m_placed) {
+            if (p.id != page) continue;
+            Rect r;
+            if (drawn) {
+                r = {drawn->x - p.r.x, drawn->y - p.r.y, drawn->w, drawn->h};
+            } else {
+                const auto [w, h] = core::natural_size(file, p.r.w, p.r.h);
+                r = {std::clamp(lx - p.r.x, 0.0, std::max(0.0, p.r.w - w)),
+                     std::clamp(ly - p.r.y, 0.0, std::max(0.0, p.r.h - h)), w, h};
+            }
+            made = core::doc::place_image_new(m_journal, m_doc, p.id, r, file);
+        }
+    }
+    if (made.empty()) return;   // the pasteboard: still loaded, try again
+    m_loaded.reset();
+    relayout();
+    pick({made});
+    m_sig_edited.emit();
+    update_cursor();
+}
+
+// Files dropped from the desktop: the first readable image places where it
+// lands (the rest are ignored for now -- one at a time, as Place).
+bool Canvas::on_drop(const Glib::ValueBase& v, double x, double y) {
+    if (!G_VALUE_HOLDS(v.gobj(), GDK_TYPE_FILE_LIST)) return false;
+    auto* list = static_cast<GdkFileList*>(g_value_get_boxed(v.gobj()));
+    if (!list) return false;
+    GSList* files = gdk_file_list_get_files(list);
+    std::optional<core::ImageFile> found;
+    for (GSList* l = files; l && !found; l = l->next) {
+        char* path = g_file_get_path(G_FILE(l->data));
+        if (path) found = images::probe(path);
+        g_free(path);
+    }
+    g_slist_free(files);
+    if (!found) return false;
+    double lx, ly;
+    m_vp.to_doc(x, y, lx, ly);
+    m_loaded = found;
+    place_loaded(lx, ly, nullptr);
+    if (m_loaded) { m_loaded.reset(); update_cursor(); return false; }   // dropped on the pasteboard
+    return true;
+}
+
 void Canvas::update_cursor() {
     if (m_space) { set_cursor(Gdk::Cursor::create(m_drag == Drag::Pan ? "grabbing" : "grab")); return; }
-    if (!m_thread_from.empty()) { set_cursor(Gdk::Cursor::create("copy")); return; }   // loaded with a thread
+    if (!m_thread_from.empty() || m_loaded) { set_cursor(Gdk::Cursor::create("copy")); return; }   // loaded
     if (!out_port_hit(m_mx, m_my).empty()) { set_cursor(Gdk::Cursor::create("pointer")); return; }
     if (m_tool != Tool::Select) { set_cursor(Gdk::Cursor::create("crosshair")); return; }
     if (!m_sel.empty()) {

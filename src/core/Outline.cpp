@@ -53,7 +53,25 @@ std::vector<Field> shared_fields(const std::vector<const Item*>& sel) {
         }
         if (!everywhere) continue;
         Field g{f.label, same ? f.value : std::string(kMixed), {}, {}};
-        if (editable) { g.edit = f.edit; g.choices = f.choices; }
+        if (!f.cols.empty()) {   // per column: the value where all agree, Mixed where not
+            const auto split = [](const std::string& v) {
+                std::vector<std::string> out(1);
+                for (char c : v) { if (c == '\t') out.emplace_back(); else out.back() += c; }
+                return out;
+            };
+            auto parts = split(f.value);
+            for (std::size_t i = 1; i < sel.size(); ++i)
+                for (const auto& h : sel[i]->fields)
+                    if (h.label == f.label) {
+                        const auto other = split(h.value);
+                        for (std::size_t k = 0; k < parts.size(); ++k)
+                            if (k >= other.size() || other[k] != parts[k]) parts[k] = kMixed;
+                    }
+            g.value.clear();
+            for (std::size_t k = 0; k < parts.size(); ++k) g.value += (k ? "\t" : "") + parts[k];
+            g.cols = f.cols;
+        }
+        if (editable) { g.edit = f.edit; g.choices = f.choices; g.buttons = f.buttons; }
         out.push_back(std::move(g));
     }
     return out;

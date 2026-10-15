@@ -163,6 +163,10 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     file->append("Save As\u2026", "win.save-as");
     menu->append_section(file);
 
+    auto place = Gio::Menu::create();   // s009
+    place->append("Place Image\u2026", "win.place");
+    menu->append_section(place);
+
     m_edit_menu = Gio::Menu::create();
     m_edit_menu->append("Undo", "win.undo");
     m_edit_menu->append("Redo", "win.redo");

@@ -13,6 +13,7 @@
 #include <giomm/menu.h>
 #include <giomm/simpleaction.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -78,6 +79,8 @@ private:
     void on_open();                              // category: handler: pick a project folder -> load it
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
+    void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
+    void on_asset_action(const std::string& act);   // category: handler: relink / update / embed / unembed (inspector)
     bool on_close_request() override;            // category: handler: unsaved changes? ask first
     void on_recent_open(const std::string& p);   // category: handler: open a recent project (parameterised)
     void on_recent_clear();                      // category: handler: empty the recents list
@@ -106,6 +109,8 @@ private:
     void sync_inspector();                        // category: helper: toggle + tab follow the panel
     void sync_nav();                              // category: helper: the toggle follows the navigator
     void tab_hover(bool in);                      // category: helper: the pull tab's shared hover
+    void pick_image(std::function<void(const core::ImageFile&)> then);  // category: helper: file dialog + probe
+    std::string embed_copy(const core::Asset& a, std::string* err);     // category: helper: copy into <project>/assets
 
     // Header.
     widgets::Button       m_logo_button;

@@ -41,6 +41,11 @@ private:
     widgets::Grid           m_fields;
     widgets::Label          m_empty;
     bool                    m_painting = false;   // filling the fields is not a user choice
+    // What is shown: a refresh that changes nothing rebuilds nothing (s009 --
+    // a rebuild destroys an OPEN dropdown, so its popup closed as it opened).
+    std::string             m_shown_title, m_shown_sub;
+    std::vector<core::Field> m_shown;
+    bool                    m_has_shown = false;
     sigc::signal<void(const std::string&, const std::string&)> m_edit;
 };
 

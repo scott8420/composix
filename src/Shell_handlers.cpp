@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <filesystem>
 
+#include "views/Images.hpp"
+
 // Shell_handlers.cpp -- HANDLERS. Slot bodies: what a user action actually does.
 // Each is small and single-concern; orchestration it shares lives in helpers.
 
@@ -59,6 +61,63 @@ void Shell::on_save_as() {  // handler: name a new project folder -> save
             if (auto lg = log::get(log::Area::Io)) lg->info("save-as: dismissed ({})", e.what());
         }
     });
+}
+
+// ── images (s009) ──────────────────────────────────────────────────────────
+// Place: one image frame picked -> into it; else the canvas is loaded with the
+// file (click on a page / drag a frame / click an image frame; Esc puts it down).
+void Shell::on_place() {  // handler
+    pick_image([this](const core::ImageFile& f) {
+        auto& cv = m_canvas_view.canvas();
+        const auto& sel = cv.selection();
+        if (sel.size() == 1) {
+            if (const auto* fr = m_doc.as<core::Frame>(sel.front()); fr && fr->kind == core::FrameKind::Image) {
+                core::doc::place_image(m_journal, m_doc, sel.front(), f);
+                return;
+            }
+        }
+        if (m_main.get_visible_child_name() != "canvas") {
+            alert("Open a page to place on", "Pick a page in the navigator, then Place again — or drop the file on it.");
+            return;
+        }
+        cv.load_image(f);
+    });
+}
+
+void Shell::on_asset_action(const std::string& act) {  // handler
+    std::vector<std::string> assets;
+    for (const auto& id : m_inspected) if (m_doc.as<core::Asset>(id)) assets.push_back(id);
+    if (assets.empty()) return;
+    if (act == "relink") {
+        if (assets.size() > 1) {
+            alert("Relink one at a time", "Pick a single image to point it at another file.");
+            return;
+        }
+        const auto id = assets.front();
+        pick_image([this, id](const core::ImageFile& f) { core::doc::relink_assets(m_journal, m_doc, {{id, f}}); });
+    } else if (act == "update") {   // the same files, read again
+        std::vector<std::pair<core::Doc::Id, core::ImageFile>> files;
+        for (const auto& id : assets)
+            if (auto f = views::images::probe(core::resolve_asset(*m_doc.as<core::Asset>(id), m_project_dir)))
+                files.push_back({id, *f});
+        core::doc::relink_assets(m_journal, m_doc, files);
+    } else if (act == "embed") {
+        if (m_project_dir.empty()) {
+            alert("Save the project first", "An embedded image is copied into the project’s folder, "
+                                            "and this document doesn’t have one yet.");
+            return;
+        }
+        std::vector<std::pair<core::Doc::Id, std::string>> rels;
+        for (const auto& id : assets) {
+            std::string err;
+            const auto rel = embed_copy(*m_doc.as<core::Asset>(id), &err);
+            if (rel.empty()) { alert("Can’t embed " + m_doc.as<core::Asset>(id)->name, err); return; }
+            rels.push_back({id, rel});
+        }
+        core::doc::embed_assets(m_journal, m_doc, rels);
+    } else if (act == "unembed") {
+        core::doc::unembed_assets(m_journal, m_doc, assets);
+    }
 }
 
 // Closing with unsaved changes asks first. "Save" on a never-saved document
@@ -172,6 +231,24 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "starts") {
             did = core::doc::set_starts(m_journal, m_doc, m_inspected,
                                         static_cast<core::Side>(std::stoi(choice)));
+        } else if (key == "fit") {   // s009
+            did = core::doc::set_fit(m_journal, m_doc, m_inspected, static_cast<core::ImageFit>(std::stoi(choice)));
+        } else if (key == "frame_image") {
+            if (choice == "update") {   // the frames' files, read again
+                std::vector<std::pair<core::Doc::Id, core::ImageFile>> files;
+                for (const auto& id : m_inspected)
+                    if (const auto* f = m_doc.as<core::Frame>(id))
+                        if (const auto* a = m_doc.as<core::Asset>(f->asset))
+                            if (auto img = views::images::probe(core::resolve_asset(*a, m_project_dir)))
+                                files.push_back({f->asset, *img});
+                did = core::doc::relink_assets(m_journal, m_doc, files);
+            } else {
+                on_place();
+                return;
+            }
+        } else if (key == "asset") {
+            on_asset_action(choice);
+            return;
         }
     } catch (const std::exception& e) {
         if (auto lg = log::get(log::Area::Shell)) lg->warn("edit {}={}: {}", key, choice, e.what());
@@ -190,7 +267,7 @@ void Shell::on_canvas_selection() {  // handler
         return;
     }
     m_inspected = sel;
-    const auto items = core::frame_items(m_doc, sel);
+    const auto items = core::frame_items(m_doc, sel, m_project_dir);
     std::vector<const core::Item*> ptrs;
     for (const auto& it : items) ptrs.push_back(&it);
     m_inspector.show(core::frames_title(items),

@@ -37,6 +37,7 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     toggle("toggle-snap",   [this](bool on) { m_canvas_view.canvas().set_snap(on); });
     add_action("save",          sigc::mem_fun(*this, &Shell::on_save));
     add_action("save-as",       sigc::mem_fun(*this, &Shell::on_save_as));
+    add_action("place",         sigc::mem_fun(*this, &Shell::on_place));   // s009
     add_action("dump-registry", sigc::mem_fun(*this, &Shell::on_dump_registry));
     add_action("about",         sigc::mem_fun(*this, &Shell::on_about));
     add_action("shortcuts",     sigc::mem_fun(*this, &Shell::on_shortcuts));
@@ -132,9 +133,13 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     auto& cv = m_canvas_view.canvas();
     cv.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));
     cv.signal_edited().connect([this] { queue_refresh(); });
-    cv.set_missing([this](const std::string& asset) {
-        const auto* it = m_outline.find(asset);
-        return it && it->badge == "Missing";
+    // s009: files change behind our back (an image edited in another app):
+    // coming back to the window re-reads link status and redraws the pictures.
+    property_is_active().signal_changed().connect([this] {
+        if (!is_active()) return;
+        if (auto lg = log::get(log::Area::Shell)) lg->info("window active again: re-checking linked files");
+        queue_refresh();
+        m_canvas_view.canvas().queue_draw();
     });
 }
 

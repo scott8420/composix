@@ -215,43 +215,51 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         std::size_t i = 0;
         for (const auto& aid : d.ids_of<Asset>()) {
             const auto& a = *d.as<Asset>(aid);
-            // Where it's placed, and how sharp it lands there (pixels over the
-            // widest placement's width in inches).
+            // Where it's placed, and how sharp it lands there: the SOFTEST
+            // placement's effective ppi (s009: per frame, by its fit).
             std::vector<Doc::Id> on;
-            double widest = 0;
+            double ppi_low = 0;
             for (const auto& fid : d.ids_of<Frame>()) {
                 const auto& f = *d.as<Frame>(fid);
                 if (f.asset != aid) continue;
                 if (d.as<Page>(f.owner) && std::find(on.begin(), on.end(), f.owner) == on.end())
                     on.push_back(f.owner);
-                widest = std::max(widest, f.w);
+                const double p = effective_ppi(f, a);
+                if (p > 0 && (ppi_low == 0 || p < ppi_low)) ppi_low = p;
             }
             std::sort(on.begin(), on.end(),
                       [&](const Doc::Id& x, const Doc::Id& y) { return d.page_index(x) < d.page_index(y); });
             std::string ppi = "—";
             if (a.px_w == 0) ppi = "Vector";
-            else if (widest > 0) ppi = std::to_string(static_cast<int>(std::lround(a.px_w / (widest / kPt))));
+            else if (ppi_low > 0) ppi = std::to_string(static_cast<int>(std::lround(ppi_low)));
+            const bool low = ppi_low > 0 && ppi_low < kLowPpi;
 
-            // Status: a linked file is looked for where it says; relative paths
-            // need a saved project to be relative TO.
-            bool found = false;
-            const fs::path p(a.path);
-            std::error_code ec;
-            if (p.is_absolute()) found = fs::exists(p, ec);
-            else if (!dir.empty()) found = fs::exists(fs::path(dir) / p, ec);
-            std::string status;
-            if (a.embedded) status = (dir.empty() || found) ? "Embedded" : "Missing from project";
-            else            status = found ? "OK" : "Missing";
-            const bool bad = status.rfind("Missing", 0) == 0;
+            const LinkStatus st = link_status(a, dir);
+            const bool bad = st == LinkStatus::Missing || st == LinkStatus::EmbeddedMissing;
+            std::string badge = bad ? "Missing" : st == LinkStatus::Modified ? "Modified" : low ? "Low res" : "";
+
+            // What can be done to it (buttons in the inspector).
+            std::vector<Choice> acts{{"relink", "Relink…"}};
+            if (st == LinkStatus::Modified) acts.push_back({"update", "Update"});
+            if (!a.embedded && !bad) acts.push_back({"embed", "Embed"});
+            if (a.embedded && !a.source.empty()) acts.push_back({"unembed", "Unembed"});
 
             const double aw = a.px_w ? a.px_w : 1, ah = a.px_h ? a.px_h : 1;
-            o.add({aid, G::Assets, a.name, bad ? "Missing" : "", {K::Image, aw, ah, tint(i++), bad},
-                   {{"Link", a.embedded ? "Embedded" : "Linked"},
-                    {"Status", status},
-                    {"Color", a.color},
-                    {"Pixels", a.px_w ? std::to_string(a.px_w) + " × " + std::to_string(a.px_h) : "Vector"},
-                    {"Effective ppi", ppi},
-                    {"Placed", folios(d, on)}}});
+            Thumb th{K::Image, aw, ah, tint(i++), bad};
+            if (!bad) { th.file = resolve_asset(a, dir); th.stamp = file_stamp(th.file); }
+            std::vector<Field> fields{
+                {"Link", a.embedded ? "Embedded" : "Linked"},
+                {"Status", link_status_text(st)},
+                {"File", a.path},
+                {"Color", a.color},
+                {"Pixels", a.px_w ? std::to_string(a.px_w) + " × " + std::to_string(a.px_h) : "Vector"},
+                {"Effective ppi", ppi + (low ? "  (low)" : "")},
+                {"Placed", folios(d, on)}};
+            if (a.embedded && !a.source.empty()) fields.insert(fields.begin() + 3, Field{"From", a.source});
+            Field act{"", "", "asset", acts};
+            act.buttons = true;
+            fields.push_back(act);
+            o.add({aid, G::Assets, a.name, badge, th, fields});
         }
     }
 
@@ -288,16 +296,18 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
     return o;
 }
 
-std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids) {
+std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids, const std::string& dir) {
     std::vector<Item> out;
-    const auto in = [](double pt) { return inches(pt) + " in"; };
     for (const auto& id : ids) {
         const auto* f = d.as<Frame>(id);
         if (!f) continue;
         const char* kind = f->kind == FrameKind::Text ? "Text" : f->kind == FrameKind::Image ? "Image" : "Shape";
         std::string on = d.as<Page>(f->owner) ? "Page " + d.folio(f->owner) : master_label(d, f->owner);
-        std::vector<Field> fields{{"Kind", kind}, {"On", on},
-                                  {"X", in(f->x)}, {"Y", in(f->y)}, {"W", in(f->w)}, {"H", in(f->h)}};
+        std::vector<Field> fields{{"Kind", kind}, {"On", on}};
+        // One compact row (Scott): X Y W H over their values, inches.
+        Field box{"Bounds (in)", inches(f->x) + "\t" + inches(f->y) + "\t" + inches(f->w) + "\t" + inches(f->h)};
+        box.cols = {"X", "Y", "W", "H"};
+        fields.push_back(box);
         std::string title = std::string(kind) + " frame";
         if (f->kind == FrameKind::Text) {
             const auto* st = d.as<Story>(f->story);
@@ -307,8 +317,20 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids)
             if (st) title += " \u2014 " + st->name;
         } else if (f->kind == FrameKind::Image) {
             const auto* a = d.as<Asset>(f->asset);
-            fields.push_back({"Asset", a ? a->name : "\u2014"});
-            if (a) title += " \u2014 " + a->name;
+            fields.push_back({"Image", a ? a->name : "Empty"});
+            if (a) {
+                title += " \u2014 " + a->name;
+                static const std::vector<Choice> fits{{"0", "Fill frame"}, {"1", "Fit in frame"}};
+                fields.push_back({"Fit", fits[static_cast<int>(f->fit)].label, "fit", fits});
+                const double p = effective_ppi(*f, *a);
+                fields.push_back({"Effective ppi", a->px_w == 0 ? "Vector"
+                                  : std::to_string(static_cast<int>(std::lround(p))) + (p < kLowPpi ? "  (low)" : "")});
+                fields.push_back({"Status", link_status_text(link_status(*a, dir))});
+            }
+            Field act{"", "", "frame_image", {{"place", a ? "Replace\u2026" : "Place\u2026"}}};
+            if (a && link_status(*a, dir) == LinkStatus::Modified) act.choices.push_back({"update", "Update"});
+            act.buttons = true;
+            fields.push_back(act);
         }
         out.push_back({id, Segment::Pages, title, "", {}, fields});
     }

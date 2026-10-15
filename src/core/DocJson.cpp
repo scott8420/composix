@@ -49,7 +49,7 @@ json to(const Record& r) {
         } else if constexpr (std::is_same_v<T, Frame>) {
             j = {{"kind", "frame"}, {"owner", v.owner}, {"type", en(v.kind)}, {"x", v.x}, {"y", v.y},
                  {"w", v.w}, {"h", v.h}, {"rot", v.rot}, {"z", v.z}, {"story", v.story},
-                 {"next", v.next}, {"asset", v.asset}};
+                 {"next", v.next}, {"asset", v.asset}, {"fit", en(v.fit)}};
         } else if constexpr (std::is_same_v<T, Story>) {
             json paras = json::array();
             for (const auto& p : v.paras) paras.push_back({{"style", p.style}, {"text", p.text}});
@@ -63,7 +63,8 @@ json to(const Record& r) {
                  {"v", v.v}, {"spot", v.spot}, {"preview", v.preview}};
         } else if constexpr (std::is_same_v<T, Asset>) {
             j = {{"kind", "asset"}, {"name", v.name}, {"pos", v.pos}, {"path", v.path},
-                 {"embedded", v.embedded}, {"color", v.color}, {"px_w", v.px_w}, {"px_h", v.px_h}};
+                 {"embedded", v.embedded}, {"color", v.color}, {"px_w", v.px_w}, {"px_h", v.px_h},
+                 {"source", v.source}, {"stamp", v.stamp}};
         } else if constexpr (std::is_same_v<T, Guide>) {
             j = {{"kind", "guide"}, {"owner", v.owner}, {"vertical", v.vertical}, {"pos", v.pos}};
         } else if constexpr (std::is_same_v<T, GenList>) {
@@ -127,6 +128,7 @@ std::optional<Record> from(const json& j) {
         v.story = val<std::string>(j, "story", "");
         v.next = val<std::string>(j, "next", "");
         v.asset = val<std::string>(j, "asset", "");
+        v.fit = de(j, "fit", ImageFit::Fill);
         return v;
     }
     if (k == "story") {
@@ -169,6 +171,8 @@ std::optional<Record> from(const json& j) {
         v.color = val(j, "color", v.color);
         v.px_w = val(j, "px_w", 0);
         v.px_h = val(j, "px_h", 0);
+        v.source = val<std::string>(j, "source", "");
+        v.stamp = val(j, "stamp", std::int64_t{0});
         return v;
     }
     if (k == "guide") {
@@ -235,10 +239,22 @@ bool from_json(Doc& d, const std::string& text, std::string* err) {
     return true;
 }
 
-bool save_project(const Doc& d, const std::string& dir, std::string* err) {
+bool save_project(const Doc& d, const std::string& dir, std::string* err, const std::string& from_dir) {
     std::error_code ec;
     fs::create_directories(fs::path(dir) / "assets", ec);
     if (ec) { if (err) *err = ec.message(); return false; }
+    // Save As: the embedded files come along (s009).
+    if (!from_dir.empty() && fs::path(from_dir) != fs::path(dir)) {
+        for (const auto& aid : d.ids_of<Asset>()) {
+            const auto* a = d.as<Asset>(aid);
+            if (!a->embedded || fs::path(a->path).is_absolute()) continue;
+            const fs::path src = fs::path(from_dir) / a->path, dst = fs::path(dir) / a->path;
+            if (!fs::exists(src, ec) || fs::exists(dst, ec)) continue;
+            fs::create_directories(dst.parent_path(), ec);
+            fs::copy_file(src, dst, ec);
+            if (ec) { if (err) *err = "copying " + a->name + ": " + ec.message(); return false; }
+        }
+    }
     // Write beside, then rename: a crash mid-save never leaves half a document.
     const fs::path out = fs::path(dir) / "document.json";
     const fs::path tmp = fs::path(dir) / "document.json.tmp";

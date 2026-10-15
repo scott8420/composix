@@ -111,6 +111,8 @@ add_executable(composix
     src/views/Canvas.cpp
     # s006: rulers.
     src/views/Ruler.cpp
+    # s009: probing + decoding image files.
+    src/views/Images.cpp
     src/AboutWindow.cpp
     src/ShortcutsDialog.cpp
     src/Registry.cpp

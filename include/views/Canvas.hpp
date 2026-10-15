@@ -24,6 +24,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,8 +61,13 @@ public:
     void delete_selection();
     void set_show_guides(bool on) { m_show_guides = on; queue_draw(); }
 
-    // Which assets are missing (the Outline knows; the canvas draws the cross).
-    void set_missing(std::function<bool(const std::string& asset)> f) { m_missing = std::move(f); }
+    // s009: images. The project folder resolves relative / embedded files.
+    void set_project_dir(const std::string& dir) { m_dir = dir; queue_draw(); }
+    // "Loaded" with a file (Place): a click on a page places it at its own
+    // size, a drag draws its frame, a click on an image frame fills that.
+    // Esc puts it down. A file dropped from the desktop places the same way.
+    void load_image(const core::ImageFile& f);
+    bool loaded() const { return m_loaded.has_value(); }
 
     sigc::signal<void()>& signal_selection() { return m_sig_sel; }    // the picks changed (by the user)
     sigc::signal<void()>& signal_zoom()      { return m_sig_zoom; }
@@ -96,6 +102,8 @@ private:
     void pick(const std::vector<std::string>& ids, bool notify = true);
     void cancel_drag();
     void update_cursor();
+    void place_loaded(double lx, double ly, const core::Rect* drawn);   // s009: layout coords
+    bool on_drop(const Glib::ValueBase& v, double x, double y);
 
     core::Doc&        m_doc;
     core::DocJournal& m_journal;
@@ -146,7 +154,9 @@ private:
     core::Rect  m_draw;                      // the frame being drawn (layout)
     std::string m_thread_from;               // "loaded": the next click threads into a frame
 
-    std::function<bool(const std::string&)> m_missing;
+    // s009
+    std::string                    m_dir;      // the project folder ("" = unsaved)
+    std::optional<core::ImageFile> m_loaded;   // Place: the file waiting for a click
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool;
 };
 

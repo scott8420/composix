@@ -1,9 +1,13 @@
 #include "Shell.hpp"
+#include "views/Images.hpp"
 #include "core/Recents.hpp"
 #include "layout/Flow.hpp"
 #include "Log.hpp"
 
 #include <gtkmm/alertdialog.h>
+#include <gtkmm/filedialog.h>
+#include <gtkmm/filefilter.h>
+#include <giomm/liststore.h>
 #include <gtkmm/label.h>
 #include <gtkmm/editable.h>
 #include <gtkmm/textview.h>
@@ -166,6 +170,7 @@ bool Shell::open_project(const std::string& dir) {  // helper
         for (const auto& [id, r] : fresh.records()) m_doc.put(id, r);
     }
     m_project_dir = dir;
+    m_canvas_view.canvas().set_project_dir(dir);
     m_journal.clear();       // no step carries over from another document
     set_dirty(false);
     note_recent(dir);
@@ -182,12 +187,14 @@ bool Shell::open_project(const std::string& dir) {  // helper
 
 bool Shell::save_to(const std::string& dir) {  // helper
     std::string err;
-    if (!core::save_project(m_doc, dir, &err)) {
+    // From the old folder: Save As carries the embedded files across (s009).
+    if (!core::save_project(m_doc, dir, &err, m_project_dir)) {
         alert("Can\u2019t save the project", err);
         if (auto lg = log::get(log::Area::Io)) lg->warn("save '{}': {}", dir, err);
         return false;
     }
     m_project_dir = dir;
+    m_canvas_view.canvas().set_project_dir(dir);
     set_dirty(false);
     note_recent(dir);
     queue_refresh();   // linked-asset paths may resolve now that there is a folder
@@ -268,6 +275,58 @@ bool Shell::focus_is_text() const {  // helper
     for (const Gtk::Widget* w = get_focus(); w; w = w->get_parent())
         if (dynamic_cast<const Gtk::TextView*>(w) || dynamic_cast<const Gtk::Editable*>(w)) return true;
     return false;
+}
+
+}  // namespace composix
+
+namespace composix {
+
+// ── images (s009) ──────────────────────────────────────────────────────────
+void Shell::pick_image(std::function<void(const core::ImageFile&)> then) {  // helper
+    auto dialog = Gtk::FileDialog::create();
+    dialog->set_title("Place an image");
+    auto filter = Gtk::FileFilter::create();
+    filter->set_name("Images");
+    for (const auto& p : views::images::patterns()) filter->add_pattern(p);
+    auto filters = Gio::ListStore<Gtk::FileFilter>::create();
+    filters->append(filter);
+    dialog->set_filters(filters);
+    dialog->set_default_filter(filter);
+    dialog->open(*this, [this, dialog, then](const Glib::RefPtr<Gio::AsyncResult>& result) {
+        try {
+            auto file = dialog->open_finish(result);
+            if (!file || file->get_path().empty()) return;
+            const auto f = views::images::probe(file->get_path());
+            if (!f) {
+                alert("Can’t read that image", "“" + file->get_basename() + "” isn’t a picture "
+                      "Composix can open (PNG, JPEG, TIFF, GIF, BMP, WebP, SVG).");
+                return;
+            }
+            if (auto lg = log::get(log::Area::Io))
+                lg->info("place: '{}' {}x{}{}", f->path, f->px_w, f->px_h, f->vector ? " (vector)" : "");
+            then(*f);
+        } catch (const Glib::Error& e) {
+            if (auto lg = log::get(log::Area::Io)) lg->info("place: dismissed ({})", e.what());
+        }
+    });
+}
+
+// Copy an asset's file into <project>/assets/ under a name not taken there;
+// the project-relative path, or "" (and why).
+std::string Shell::embed_copy(const core::Asset& a, std::string* err) {  // helper
+    namespace fs = std::filesystem;
+    const std::string src = core::resolve_asset(a, m_project_dir);
+    std::error_code ec;
+    if (src.empty() || !fs::exists(src, ec)) { if (err) *err = "Its file is missing — relink it first."; return {}; }
+    const fs::path dir = fs::path(m_project_dir) / "assets";
+    fs::create_directories(dir, ec);
+    const fs::path name = fs::path(src).filename();
+    fs::path dst = dir / name;
+    for (int n = 2; fs::exists(dst, ec); ++n)
+        dst = dir / (name.stem().string() + "-" + std::to_string(n) + name.extension().string());
+    fs::copy_file(src, dst, ec);
+    if (ec) { if (err) *err = ec.message(); return {}; }
+    return (fs::path("assets") / dst.filename()).string();
 }
 
 }  // namespace composix
