@@ -34,9 +34,9 @@ Navigator::Navigator()
     append(m_scroll);
 }
 
-Navigator::SecRow* Navigator::sec(core::Section s) {
+Navigator::SecRow* Navigator::sec(core::Segment s) {
     for (auto& r : m_secs)
-        if (r.section == s) return &r;
+        if (r.segment == s) return &r;
     return nullptr;
 }
 
@@ -49,23 +49,23 @@ void Navigator::set_outline(const core::Outline* o) {
     m_outline = o;
 
     if (o) {
-        for (const auto& si : core::sections()) {
+        for (const auto& si : core::segments()) {
             const auto items = o->in(si.id);
 
             // ── the section row ──────────────────────────────────────────
             auto row = Gtk::make_managed<Gtk::ListBoxRow>();
-            row->set_name("nav.section." + si.key);
+            row->set_name("nav.segment." + si.key);
             row->add_css_class("cx-section-row");
             auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
 
             auto arrow = Gtk::make_managed<Gtk::Button>();
-            arrow->set_name("nav.section." + si.key + ".arrow");
+            arrow->set_name("nav.segment." + si.key + ".arrow");
             arrow->set_icon_name("pan-end-symbolic");
             arrow->set_has_frame(false);
             arrow->set_focus_on_click(false);
             arrow->add_css_class("cx-disclose");
             arrow->set_tooltip_text("Show / hide the items");
-            const core::Section s = si.id;
+            const core::Segment s = si.id;
             arrow->signal_clicked().connect([this, s] { set_open(s, !is_open(s)); });
 
             auto icon = Gtk::make_managed<Gtk::Image>();
@@ -117,13 +117,39 @@ void Navigator::set_outline(const core::Outline* o) {
     m_quiet = false;
 }
 
-bool Navigator::is_open(core::Section s) const {
+void Navigator::refresh(const core::Outline* o) {
+    std::vector<core::Segment> open, picked_segs;
+    std::vector<std::string> picked;
+    for (const auto& r : m_secs) {
+        if (r.open) open.push_back(r.segment);
+        if (r.row->is_selected()) picked_segs.push_back(r.segment);
+        for (auto* ir : r.items)
+            if (ir->is_selected()) picked.push_back(m_item_of[ir]);
+    }
+    set_outline(o);
+    m_quiet = true;
+    for (auto& r : m_secs) {
+        if (std::find(open.begin(), open.end(), r.segment) != open.end()) {
+            r.open = true;
+            r.arrow->set_icon_name("pan-down-symbolic");
+            r.row->add_css_class("cx-open");
+            for (auto* ir : r.items) ir->set_visible(true);
+        }
+        if (std::find(picked_segs.begin(), picked_segs.end(), r.segment) != picked_segs.end())
+            m_list.select_row(*r.row);
+        for (auto* ir : r.items)
+            if (std::find(picked.begin(), picked.end(), m_item_of[ir]) != picked.end()) m_list.select_row(*ir);
+    }
+    m_quiet = false;
+}
+
+bool Navigator::is_open(core::Segment s) const {
     for (const auto& r : m_secs)
-        if (r.section == s) return r.open;
+        if (r.segment == s) return r.open;
     return false;
 }
 
-void Navigator::set_open(core::Section s, bool open) {
+void Navigator::set_open(core::Segment s, bool open) {
     auto* r = sec(s);
     if (!r || r->open == open) return;
     r->open = open;
@@ -140,7 +166,7 @@ void Navigator::set_open(core::Section s, bool open) {
     if (dropped) on_selection_changed();   // a folded-away item is no longer picked
 }
 
-void Navigator::select_section(core::Section s) {
+void Navigator::select_section(core::Segment s) {
     auto* r = sec(s);
     if (!r) return;
     m_quiet = true;
@@ -175,17 +201,17 @@ void Navigator::select_items(const std::vector<std::string>& ids) {
 void Navigator::on_selection_changed() {
     if (m_quiet) return;
     Pick p;
-    std::optional<core::Section> first_sec;
+    std::optional<core::Segment> first_seg;
     // Walk in list order, not selection order, so a pick reads top-to-bottom.
     for (auto* c = m_list.get_first_child(); c; c = c->get_next_sibling()) {
         auto* row = dynamic_cast<Gtk::ListBoxRow*>(c);
         if (!row || !row->is_selected()) continue;
         if (auto it = m_item_of.find(row); it != m_item_of.end()) p.items.push_back(it->second);
-        else if (auto s = m_sec_of.find(row); s != m_sec_of.end() && !first_sec) first_sec = s->second;
+        else if (auto s = m_sec_of.find(row); s != m_sec_of.end() && !first_seg) first_seg = s->second;
     }
-    if (p.items.empty()) p.section = first_sec;
+    if (p.items.empty()) p.segment = first_seg;
     if (auto lg = log::get(log::Area::View))
-        lg->info("nav pick: {} {}", p.section ? core::section_info(*p.section).key : "-",
+        lg->info("nav pick: {} {}", p.segment ? core::segment_info(*p.segment).key : "-",
                  p.items.size());
     m_pick.emit(p);
 }

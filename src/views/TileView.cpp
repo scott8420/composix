@@ -63,13 +63,13 @@ TileView::TileView()
     append(m_scroll);
 }
 
-void TileView::show_section(const core::Outline& o, core::Section s) {
+void TileView::show_section(const core::Outline& o, core::Segment s, const std::vector<std::string>& keep) {
     m_quiet = true;
     while (auto* c = m_grid.get_first_child()) m_grid.remove(*c);
     m_id_of.clear();
 
     const auto items = o.in(s);
-    m_title.set_text(core::section_info(s).title);
+    m_title.set_text(core::segment_info(s).title);
     m_count.set_text(std::to_string(items.size()));
 
     for (const auto* it : items) {
@@ -138,10 +138,11 @@ void TileView::show_section(const core::Outline& o, core::Section s) {
         child->set_child(*card);
         m_grid.append(*child);
         m_id_of[child] = it->id;
+        if (std::find(keep.begin(), keep.end(), it->id) != keep.end()) m_grid.select_child(*child);
     }
     m_quiet = false;
     if (auto lg = log::get(log::Area::View))
-        lg->info("tiles: {} ({})", core::section_info(s).key, items.size());
+        lg->info("tiles: {} ({})", core::segment_info(s).key, items.size());
 }
 
 std::vector<std::string> TileView::selected() const {

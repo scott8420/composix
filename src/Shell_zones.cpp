@@ -37,9 +37,8 @@ void Shell::build_shell() {  // zone: header + panes
     header->pack_start(m_nav_toggle);
 
     // A two-line title, the document's name over its kind (web / Mac roots).
-    m_title.set_text("Untitled Book");
+    m_title.set_text("Composix");
     m_title.add_css_class("cx-doc-title");
-    m_subtitle.set_text("6 × 9 in · 12 pages · sample document");
     m_subtitle.add_css_class("cx-doc-subtitle");
     m_title_box.set_valign(Gtk::Align::CENTER);
     m_title_box.append(m_title);
@@ -148,9 +147,11 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto menu = Gio::Menu::create();
 
     auto file = Gio::Menu::create();
-    file->append("Remember a folder…", "win.pick-folder");
+    file->append("Open Project…", "win.open");
     m_recents_menu = Gio::Menu::create();
-    file->append_submenu("Open recent", m_recents_menu);
+    file->append_submenu("Open Recent", m_recents_menu);
+    file->append("Save", "win.save");
+    file->append("Save As\u2026", "win.save-as");
     menu->append_section(file);
 
     m_edit_menu = Gio::Menu::create();

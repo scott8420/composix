@@ -30,6 +30,11 @@ add_library(composix_core STATIC
     src/core/Stones.cpp
     # s002: the projection the navigator / tiles / inspector read.
     src/core/Outline.cpp
+    # s004: the document model, its verbs, the sample, JSON, the projection.
+    src/core/Doc.cpp
+    src/core/Sample.cpp
+    src/core/DocJson.cpp
+    src/core/Project.cpp
 )
 target_include_directories(composix_core PUBLIC include)
 # Vendored nlohmann/json (header-only, MIT), PRIVATE -- an implementation detail

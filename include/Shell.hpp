@@ -1,7 +1,7 @@
 #pragma once
 #include "widgets/Widgets.hpp"
 #include "core/Outline.hpp"
-#include "core/Stones.hpp"   // the journal's store until the page model replaces it (s003)
+#include "core/Doc.hpp"      // s004: the document + its journal
 #include "views/Inspector.hpp"
 #include "views/ItemView.hpp"
 #include "views/Navigator.hpp"
@@ -72,8 +72,12 @@ private:
     void on_nav_pick(const views::Pick& p);      // category: handler: section -> tiles, items -> open
     void on_tiles_selection(const std::vector<std::string>& ids);  // category: handler: -> inspector
     void on_tiles_open(const std::vector<std::string>& ids);       // category: handler: -> navigator selects them
-    void on_pick_folder();                       // category: handler: folder chooser -> remember it
-    void on_recent_open(const std::string& p);   // category: handler: open a recent (parameterised)
+    void on_inspector_edit(const std::string& key, const std::string& choice);  // category: handler: -> one verb
+    void on_open();                              // category: handler: pick a project folder -> load it
+    void on_save();                              // category: handler: save (Save As the first time)
+    void on_save_as();                           // category: handler: name a new project folder -> save
+    bool on_close_request() override;            // category: handler: unsaved changes? ask first
+    void on_recent_open(const std::string& p);   // category: handler: open a recent project (parameterised)
     void on_recent_clear();                      // category: handler: empty the recents list
     void on_dump_registry();                     // category: handler: print the live widget tree
     void on_about();                             // category: handler: the About window
@@ -83,6 +87,14 @@ private:
 
     // ── helpers ────────────────────────────────────────────────────────────
     std::vector<const core::Item*> resolve(const std::vector<std::string>& ids) const;  // category: helper
+    void queue_refresh();                         // category: helper: one re-projection per idle, after the writes
+    void refresh();                               // category: helper: re-project; every view repaints, keeping its place
+    void show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper
+    bool open_project(const std::string& dir);    // category: helper: load + reset the journal + views
+    bool save_to(const std::string& dir);         // category: helper: write + remember + clean
+    void set_dirty(bool d);                       // category: helper
+    void update_title();                          // category: helper: the header's two lines
+    void alert(const std::string& msg, const std::string& detail);  // category: helper
     void note_recent(const std::string& path);   // category: helper: push onto the list + persist
     void rebuild_recents_menu();                  // category: helper: repaint the submenu
     std::string recents_file() const;             // category: helper: the XDG path (UI-side resolution)
@@ -116,9 +128,12 @@ private:
     views::ItemView  m_item;
     views::Inspector m_inspector;
 
-    // What the views read (s002: the fixture; s003: projected from the model).
+    // What the views read: projected from the document (s004).
     core::Outline   m_outline;
-    std::optional<core::Section> m_section;   // the category on the tile view
+    std::optional<core::Segment> m_segment;   // the category on the tile view
+    views::Pick              m_pick;          // what the navigator picked
+    std::vector<std::string> m_inspected;     // the ids the inspector shows (an edit's target)
+    bool                     m_refresh_queued = false;
 
     // Recents state (core data; UI holds it + resolves the path -- the seam).
     std::vector<std::string>        m_recents;
@@ -126,10 +141,14 @@ private:
     Glib::RefPtr<Gio::Menu>         m_recents_menu;
     Glib::RefPtr<Gio::SimpleAction> m_recents_clear;
 
-    // Undo. The journal and its door stay wired from day one; s002 writes
-    // nothing, so it is empty. s003 swaps core::Stones for the page model.
-    core::Stones       m_stones;
-    core::StoneJournal m_journal{m_stones};
+    // The document and its journal (s004). Every write goes through
+    // m_journal (core::doc verbs); the door is checked in Doc::put.
+    // Declaration order matters: the store before the journal that holds it.
+    core::Doc          m_doc;
+    core::DocJournal   m_journal{m_doc};
+    std::string        m_project_dir;    // "" = the unsaved sample / never saved
+    bool               m_dirty = false;
+    bool               m_closing_ok = false;   // the user chose; let the close through
     Glib::RefPtr<Gio::Menu>         m_edit_menu;
     Glib::RefPtr<Gio::SimpleAction> m_act_undo, m_act_redo;
 

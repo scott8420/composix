@@ -2,6 +2,7 @@
 #include "core/Recents.hpp"
 #include "Log.hpp"
 
+#include <gtkmm/alertdialog.h>
 #include <gtkmm/label.h>
 #include <gtkmm/editable.h>
 #include <gtkmm/textview.h>
@@ -63,6 +64,132 @@ void Shell::rebuild_recents_menu() {  // helper: repaint the submenu
     clear_section->append("Clear recent", "recents.clear");
     m_recents_menu->append_section("", clear_section);
     if (m_recents_clear) m_recents_clear->set_enabled(!m_recents.empty());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// s004 -- the document <-> the views.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// One re-projection per idle, AFTER the writes that caused it: a verb writes
+// several records, and rebuilding the views per write would tear down a row
+// or a dropdown mid-click (jot s045: "open UI after the rebuild you caused").
+void Shell::queue_refresh() {  // helper
+    if (m_refresh_queued) return;
+    m_refresh_queued = true;
+    Glib::signal_idle().connect_once([this] {
+        m_refresh_queued = false;
+        refresh();
+    });
+}
+
+// Re-project and repaint every view where it was: the navigator keeps what is
+// disclosed and selected, the tiles keep their selection, an opened item stays
+// open (unless it is gone), the inspector re-reads the same ids.
+void Shell::refresh() {  // helper
+    const auto keep = m_pick.segment ? m_tiles.selected() : std::vector<std::string>{};
+    m_outline = core::project(m_doc, m_project_dir);
+    m_nav.refresh(&m_outline);
+    std::vector<std::string> still;
+    for (const auto& id : m_pick.items)
+        if (m_outline.find(id)) still.push_back(id);
+    m_pick.items = still;
+    show_pick(m_pick, keep);
+    update_title();
+}
+
+void Shell::show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles) {  // helper
+    if (p.segment) {
+        m_segment = p.segment;
+        m_tiles.show_section(m_outline, *p.segment, keep_tiles);
+        m_main.set_visible_child("tiles");
+        const auto kept = m_tiles.selected();
+        m_inspected = kept;
+        if (kept.empty()) m_inspector.show_section(m_outline, *p.segment);
+        else              m_inspector.show_items(resolve(kept));
+        return;
+    }
+    m_segment.reset();
+    if (!p.items.empty()) {
+        const auto items = resolve(p.items);
+        m_inspected = p.items;
+        m_item.show_items(items);
+        m_main.set_visible_child("item");
+        m_inspector.show_items(items);
+        return;
+    }
+    m_inspected.clear();
+    m_main.set_visible_child("welcome");
+    m_inspector.clear();
+}
+
+bool Shell::open_project(const std::string& dir) {  // helper
+    core::Doc fresh;
+    std::string err;
+    if (!core::load_project(fresh, dir, &err)) {
+        alert("Can\u2019t open that project", err);
+        if (auto lg = log::get(log::Area::Io)) lg->warn("open '{}': {}", dir, err);
+        return false;
+    }
+    // Swap the records in under a load: not a user choice, not undoable.
+    {
+        m_doc.reset();
+        core::Doc::Loading load(m_doc);
+        for (const auto& [id, r] : fresh.records()) m_doc.put(id, r);
+    }
+    m_project_dir = dir;
+    m_journal.clear();       // no step carries over from another document
+    set_dirty(false);
+    note_recent(dir);
+    m_pick = {};
+    m_nav.set_outline(nullptr);
+    m_outline = core::project(m_doc, m_project_dir);
+    m_nav.set_outline(&m_outline);
+    m_nav.set_open(core::Segment::Pages, true);
+    m_nav.select_section(core::Segment::Pages);
+    update_title();
+    if (auto lg = log::get(log::Area::Io)) lg->info("opened '{}' ({} records)", dir, m_doc.size());
+    return true;
+}
+
+bool Shell::save_to(const std::string& dir) {  // helper
+    std::string err;
+    if (!core::save_project(m_doc, dir, &err)) {
+        alert("Can\u2019t save the project", err);
+        if (auto lg = log::get(log::Area::Io)) lg->warn("save '{}': {}", dir, err);
+        return false;
+    }
+    m_project_dir = dir;
+    set_dirty(false);
+    note_recent(dir);
+    queue_refresh();   // linked-asset paths may resolve now that there is a folder
+    if (auto lg = log::get(log::Area::Io)) lg->info("saved '{}'", dir);
+    return true;
+}
+
+void Shell::set_dirty(bool d) {  // helper
+    if (m_dirty == d) return;
+    m_dirty = d;
+    update_title();
+}
+
+// Title: the document's name (a dot while unsaved). Subtitle: its trim and
+// length, and where it lives.
+void Shell::update_title() {  // helper
+    const auto& s = m_doc.settings();
+    m_title.set_text(s.title + (m_dirty ? "  \u2022" : ""));
+    const auto n = m_doc.pages().size();
+    std::string where = m_project_dir.empty() ? "sample \u2014 not saved" : m_project_dir;
+    const std::string home = Glib::get_home_dir();
+    if (!home.empty() && where.rfind(home, 0) == 0) where = "~" + where.substr(home.size());
+    m_subtitle.set_text(core::size_text(s.trim_w, s.trim_h, 0) + " \u00b7 " + std::to_string(n) +
+                        (n == 1 ? " page" : " pages") + " \u00b7 " + where);
+    set_title(s.title + (m_dirty ? " \u2022" : "") + " \u2014 Composix");
+}
+
+void Shell::alert(const std::string& msg, const std::string& detail) {  // helper
+    auto dialog = Gtk::AlertDialog::create(msg);
+    dialog->set_detail(detail);
+    dialog->show(*this);
 }
 
 std::vector<const core::Item*> Shell::resolve(const std::vector<std::string>& ids) const {  // helper

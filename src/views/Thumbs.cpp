@@ -92,7 +92,7 @@ void page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Thumb& t, double 
     const double x = std::round((W - w) / 2), y = std::round((H - h) / 2);
     paper(cr, x, y, w, h);
 
-    const int panels = t.flag ? 3 : 1;
+    const int panels = std::max(1, t.panels);
     const double pw = w / panels;
     const double m = pw * 0.12;
     for (int p = 0; p < panels; ++p) {
@@ -226,7 +226,11 @@ void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W
     case K::Style: {   // a specimen
         cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.9);
         auto lay = wd.create_pango_layout(t.sample.empty() ? "Aa" : t.sample);
-        lay->set_font_description(Pango::FontDescription(large ? "Serif 96" : "Serif 44"));
+        std::string font = "Serif";
+        if (t.bold) font += " Bold";
+        if (t.italic) font += " Italic";
+        font += large ? " 96" : " 44";
+        lay->set_font_description(Pango::FontDescription(font));
         int lw, lh;
         lay->get_pixel_size(lw, lh);
         cr->move_to((W - lw) / 2.0, (H - lh) / 2.0);

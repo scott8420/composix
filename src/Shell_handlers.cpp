@@ -5,6 +5,8 @@
 #include "Registry.hpp"
 #include "core/Recents.hpp"
 
+#include <gtkmm/alertdialog.h>
+#include <glibmm/main.h>
 #include <gtkmm/filedialog.h>
 #include <giomm/asyncresult.h>
 #include <giomm/file.h>
@@ -16,37 +18,88 @@
 
 namespace composix {
 
-void Shell::on_pick_folder() {  // handler: folder chooser -> remember it
+// ── the project folder (s004) ──────────────────────────────────────────────
+void Shell::on_open() {  // handler: pick a project folder -> load it
     auto dialog = Gtk::FileDialog::create();
-    dialog->set_title("Pick a folder to remember");
-    dialog->select_folder(*this,
-        [this, dialog](const Glib::RefPtr<Gio::AsyncResult>& result) {
-            try {
-                auto dir = dialog->select_folder_finish(result);
-                if (!dir) return;
-                const std::string folder = dir->get_path();
-                if (!folder.empty()) note_recent(folder);
-            } catch (const Glib::Error& e) {
-                if (auto lg = log::get(log::Area::Shell))
-                    lg->info("pick-folder: dialog dismissed ({})", e.what());
-            }
-        });
+    dialog->set_title("Open a Composix project folder");
+    dialog->select_folder(*this, [this, dialog](const Glib::RefPtr<Gio::AsyncResult>& result) {
+        try {
+            auto dir = dialog->select_folder_finish(result);
+            if (dir && !dir->get_path().empty()) open_project(dir->get_path());
+        } catch (const Glib::Error& e) {
+            if (auto lg = log::get(log::Area::Io)) lg->info("open: dismissed ({})", e.what());
+        }
+    });
 }
 
-void Shell::on_recent_open(const std::string& path) {  // handler: open a recent
+void Shell::on_save() {  // handler: save (Save As the first time)
+    if (m_project_dir.empty()) { on_save_as(); return; }
+    save_to(m_project_dir);
+}
+
+// A project is a FOLDER: the name typed here becomes the folder, holding
+// document.json and assets/ (REQUIREMENTS §8).
+void Shell::on_save_as() {  // handler: name a new project folder -> save
+    auto dialog = Gtk::FileDialog::create();
+    dialog->set_title("Save the project as a folder");
+    dialog->set_initial_name(m_doc.settings().title);
+    dialog->save(*this, [this, dialog](const Glib::RefPtr<Gio::AsyncResult>& result) {
+        try {
+            auto f = dialog->save_finish(result);
+            if (!f || f->get_path().empty()) return;
+            const std::string dir = f->get_path();
+            std::error_code ec;
+            if (std::filesystem::exists(dir, ec) && !std::filesystem::is_directory(dir, ec)) {
+                alert("Can't save there", "\u201c" + dir + "\u201d is a file, and a Composix project is a folder.");
+                return;
+            }
+            save_to(dir);
+        } catch (const Glib::Error& e) {
+            if (auto lg = log::get(log::Area::Io)) lg->info("save-as: dismissed ({})", e.what());
+        }
+    });
+}
+
+// Closing with unsaved changes asks first. "Save" on a never-saved document
+// opens Save As and keeps the window; close again once it is saved.
+bool Shell::on_close_request() {  // handler
+    if (!m_dirty || m_closing_ok) return Gtk::ApplicationWindow::on_close_request();
+    auto dialog = Gtk::AlertDialog::create("Save changes to \u201c" + m_doc.settings().title + "\u201d?");
+    dialog->set_detail("Your changes will be lost if you don\u2019t save them.");
+    dialog->set_buttons({"Cancel", "Don\u2019t Save", "Save"});
+    dialog->set_cancel_button(0);
+    dialog->set_default_button(2);
+    dialog->choose(*this, [this, dialog](const Glib::RefPtr<Gio::AsyncResult>& result) {
+        int choice = 0;
+        try { choice = dialog->choose_finish(result); } catch (const Glib::Error&) { return; }
+        // Close on IDLE, not here: inside this callback the dialog's window
+        // is still transient for us, and closing now finalizes it against a
+        // dead parent (GLib CRITICAL in gtk_window_set_transient_for -- s004).
+        const auto close_later = [this] {
+            m_closing_ok = true;
+            Glib::signal_idle().connect_once([this] { close(); });
+        };
+        if (choice == 1) close_later();
+        else if (choice == 2) {
+            if (m_project_dir.empty()) { on_save_as(); return; }
+            if (save_to(m_project_dir)) close_later();
+        }
+    });
+    return true;   // handled: stay open until the user chooses
+}
+
+void Shell::on_recent_open(const std::string& path) {  // handler: open a recent project
     if (path.empty()) return;
-    // A real app would load the project here. The seed just proves the routing:
-    // a vanished folder self-prunes; a live one is promoted back to the front.
+    // A vanished folder self-prunes; a live one opens (and moves to the front).
     if (!std::filesystem::exists(path)) {
         core::recents_remove(m_recents, path);
         core::save_recents(m_recents_file, m_recents);
         rebuild_recents_menu();
-        if (auto lg = log::get(log::Area::Recents))
-            lg->warn("open '{}': gone -- pruned", path);
+        if (auto lg = log::get(log::Area::Recents)) lg->warn("open '{}': gone -- pruned", path);
+        alert("That project is gone", "\u201c" + path + "\u201d no longer exists; it was removed from Open Recent.");
         return;
     }
-    if (auto lg = log::get(log::Area::Recents)) lg->info("open '{}'", path);
-    note_recent(path);   // move-to-front
+    open_project(path);
 }
 
 void Shell::on_recent_clear() {  // handler: empty the recents list
@@ -80,33 +133,16 @@ void Shell::on_about() {  // handler: open the About window (dialog-lifetime exe
 // s002 -- the navigator / tiles / inspector routing.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// A SECTION shows its whole category as tiles; ITEMS open. The inspector
+// A SEGMENT shows its whole category as tiles; ITEMS open. The inspector
 // follows whichever: the category's summary, or the items' shared fields.
 void Shell::on_nav_pick(const views::Pick& p) {  // handler
-    if (p.section) {
-        if (m_section != p.section) {
-            m_tiles.show_section(m_outline, *p.section);
-            m_section = p.section;
-        }
-        m_main.set_visible_child("tiles");
-        m_inspector.show_section(m_outline, *p.section);
-        return;
-    }
-    if (!p.items.empty()) {
-        const auto items = resolve(p.items);
-        m_item.show_items(items);
-        m_main.set_visible_child("item");
-        m_inspector.show_items(items);
-        m_section.reset();   // the tile view rebuilds on the next section pick
-        return;
-    }
-    m_main.set_visible_child("welcome");
-    m_inspector.clear();
-    m_section.reset();
+    m_pick = p;
+    show_pick(p, {});
 }
 
 void Shell::on_tiles_selection(const std::vector<std::string>& ids) {  // handler
-    if (ids.empty() && m_section) m_inspector.show_section(m_outline, *m_section);
+    m_inspected = ids;
+    if (ids.empty() && m_segment) m_inspector.show_section(m_outline, *m_segment);
     else                          m_inspector.show_items(resolve(ids));
 }
 
@@ -114,6 +150,33 @@ void Shell::on_tiles_selection(const std::vector<std::string>& ids) {  // handle
 // route to "open": the navigator's pick (the tile view never opens on its own).
 void Shell::on_tiles_open(const std::vector<std::string>& ids) {  // handler
     m_nav.select_items(ids);
+}
+
+// An inspector edit is ONE verb across everything the inspector shows -- one
+// journal step, one Ctrl+Z (REQUIREMENTS §10). The views repaint from the
+// document's change (queue_refresh), not from here.
+void Shell::on_inspector_edit(const std::string& key, const std::string& choice) {  // handler
+    if (m_inspected.empty()) return;
+    bool did = false;
+    try {
+        if (key == "master") {
+            did = core::doc::set_master(m_journal, m_doc, m_inspected, choice);
+        } else if (key == "size") {
+            const auto presets = core::doc::size_presets(m_doc.settings());
+            const auto i = static_cast<std::size_t>(std::stoi(choice));
+            if (i < presets.size()) did = core::doc::set_page_size(m_journal, m_doc, m_inspected, presets[i]);
+        } else if (key == "numbering") {
+            did = core::doc::set_numbering(m_journal, m_doc, m_inspected,
+                                           static_cast<core::Numbering>(std::stoi(choice)));
+        } else if (key == "starts") {
+            did = core::doc::set_starts(m_journal, m_doc, m_inspected,
+                                        static_cast<core::Side>(std::stoi(choice)));
+        }
+    } catch (const std::exception& e) {
+        if (auto lg = log::get(log::Area::Shell)) lg->warn("edit {}={}: {}", key, choice, e.what());
+    }
+    if (auto lg = log::get(log::Area::Shell))
+        lg->info("edit {} = {} on {} item(s): {}", key, choice, m_inspected.size(), did ? "step" : "no change");
 }
 
 void Shell::on_undo() {  // handler: take the last step back

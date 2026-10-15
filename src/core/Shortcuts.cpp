@@ -118,7 +118,9 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Edit", "", {}, "Ctrl+Shift+Z  /  Ctrl+Y", "Redo"},
 
         // ── General ───────────────────────────────────────────────────────────
-        {"General", "win.pick-folder",   {"<Ctrl>o"}, "", "Pick a folder"},
+        {"General", "win.open",          {"<Ctrl>o"}, "", "Open a project"},
+        {"General", "win.save",          {"<Ctrl>s"}, "", "Save"},
+        {"General", "win.save-as",       {"<Ctrl><Shift>s"}, "", "Save as a new project folder"},
         {"General", "win.shortcuts",     {"<Ctrl>question", "<Ctrl>slash"}, "",
          "Keyboard shortcuts (this window)"},
         {"General", "win.about",         {"F1"}, "", "About Composix"},
@@ -126,7 +128,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
 
         // ── Mouse ─────────────────────────────────────────────────────────────
         // Doc-only: a gesture is not a GAction, but the reader still needs it.
-        {"Mouse", "", {}, "Click a recent", "Open that folder"},
+        {"Mouse", "", {}, "Click a recent", "Open that project"},
         {"Mouse", "", {}, "Ctrl+click  /  Shift+click", "Add to the selection (navigator, tiles)"},
         {"Mouse", "", {}, "Double-click a tile", "Open it (or the whole selection)"},
 

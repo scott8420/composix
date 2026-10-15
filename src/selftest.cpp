@@ -11,6 +11,7 @@
 //
 //   cmake --build build --target composix_selftest && ./build/composix_selftest
 
+#include "core/Doc.hpp"
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
 #include "core/Shortcuts.hpp"
@@ -269,62 +270,229 @@ int main() {
         }
     }
 
-    // ── s002: the outline the navigator + tiles read ──────────────────────────
+    // ── s002 / s004: segments, the document model, the projection ────────────
     {
-        std::cout << "\n-- outline (navigator / tiles / inspector) --\n";
+        std::cout << "\n-- segments --\n";
         std::set<int> seen;
         std::set<std::string> keys;
-        for (const auto& s : core::sections()) {
+        for (const auto& s : core::segments()) {
             seen.insert(static_cast<int>(s.id));
             keys.insert(s.key);
         }
-        check("outline: every section listed once", seen.size() == core::sections().size() &&
+        check("segments: every segment listed once", seen.size() == core::segments().size() &&
                                                      seen.size() == 8 && keys.size() == 8);
+    }
+    {
+        std::cout << "\n-- document: places, folios, sections --\n";
+        core::Doc d;
+        core::load_sample(d);
+        const auto p = d.pages();
+        check("sample: 16 pages, 3 sections", p.size() == 16 && d.ids_of<core::Section>().size() == 3);
+        check("folio: front matter is roman", d.folio(p[0]) == "i" && d.folio(p[3]) == "iv");
+        check("folio: body restarts at 1", d.folio(p[4]) == "1" && d.folio(p[13]) == "10");
+        check("folio: back matter starts at 11", d.folio(p[14]) == "11" && d.folio(p[15]) == "12");
+        check("side: first page right, then alternating",
+              d.side_of(p[0]) == core::Side::Right && d.side_of(p[1]) == core::Side::Left);
+        check("section_of: by start page", d.section_of(p[3]) == "section.1" && d.section_of(p[4]) == "section.2");
+        check("format: roman upper / letters",
+              core::format_folio(14, core::Numbering::RomanUpper) == "XIV" &&
+              core::format_folio(27, core::Numbering::AlphaLower) == "aa");
+        check("inches: trims zeros", core::inches(432) == "6" && core::inches(423) == "5.875");
+        check("sample: loading is not a stray", d.strays() == 0);
+    }
+    {
+        std::cout << "\n-- document verbs: the gate --\n";
+        // Every verb on the sample: through the door (no strays), ONE step,
+        // undo restores the document exactly, redo reproduces it exactly.
+        for (const auto& v : core::doc::verbs()) {
+            core::Doc d;
+            core::DocJournal j{d};
+            d.set_door([&j] { return j.open(); });
+            core::load_sample(d);
+            const std::string before = core::to_json(d);
+            v.run(j, d);
+            const std::string after = core::to_json(d);
+            check("verb " + v.name + ": changes the document", after != before);
+            check("verb " + v.name + ": one step", j.size() == 1, std::to_string(j.size()));
+            check("verb " + v.name + ": through the door", d.strays() == 0, std::to_string(d.strays()));
+            j.undo();
+            check("verb " + v.name + ": undo restores exactly", core::to_json(d) == before);
+            j.redo();
+            check("verb " + v.name + ": redo reproduces exactly", core::to_json(d) == after);
+        }
+        {   // A write that skips the door is caught.
+            core::Doc d;
+            core::DocJournal j{d};
+            d.set_door([&j] { return j.open(); });
+            core::load_sample(d);
+            auto pg = *d.as<core::Page>("page.2");
+            pg.master = "";
+            d.put("page.2", pg);
+            check("gate: a write outside the door is a stray", d.strays() == 1);
+        }
+    }
+    {
+        std::cout << "\n-- document verbs: behaviour --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto p = d.pages();
 
-        const auto o = core::fixture_outline();
+        const auto made = core::doc::add_pages(j, d, p[5], 2, "master.2");
+        auto q = d.pages();
+        check("add: two pages after the anchor", made.size() == 2 && q[6] == made[0] && q[7] == made[1]);
+        check("add: fresh ids", made[0] != made[1] && !d.as<core::Page>("page.17") == false);
+
+        core::doc::remove_pages(j, d, {p[4]});   // the body's first page: the section moves on
+        check("remove: section start moves to the next page",
+              d.as<core::Section>("section.2")->start_page == p[5]);
+        check("remove: its frames go with it", !d.as<core::Frame>("frame.1") && !d.as<core::Frame>("frame.4"));
+        j.undo();
+        check("remove + undo: page back in place", d.pages()[4] == p[4] &&
+                                                    d.as<core::Section>("section.2")->start_page == p[4]);
+        check("remove + undo: frames back", d.as<core::Frame>("frame.1") != nullptr);
+
+        check("remove: never the last page", [&] {
+            core::Doc e;
+            core::DocJournal je{e};
+            core::load_sample(e);
+            return !core::doc::remove_pages(je, e, e.pages());
+        }());
+
+        core::doc::remove_pages(j, d, {p[14], p[15]});   // the back matter's whole run
+        check("remove: a section whose run is gone goes too", !d.as<core::Section>("section.3"));
+        j.undo();
+
+        core::doc::move_pages(j, d, {p[1], p[2]}, p[6]);
+        q = d.pages();
+        const auto at = [&](const std::string& id) { return std::find(q.begin(), q.end(), id) - q.begin(); };
+        check("move: pages land after the anchor, in order",
+              at(p[6]) + 1 == at(p[1]) && at(p[1]) + 1 == at(p[2]));
+        core::doc::move_pages(j, d, {p[9]}, "");
+        check("move: to the front", d.pages().front() == p[9]);
+        check("move: onto itself refused", !core::doc::move_pages(j, d, {p[3]}, p[3]));
+
+        const auto n0 = j.size();
+        core::doc::set_master(j, d, {p[8], p[9], p[10]}, "master.3");
+        check("set_master: one step for three pages", j.size() == n0 + 1);
+        check("set_master: applied", d.as<core::Page>(p[9])->master == "master.3");
+        check("set_master: unknown master refused", !core::doc::set_master(j, d, {p[8]}, "master.99"));
+        check("set_master: same again is no step", !core::doc::set_master(j, d, {p[8]}, "master.3"));
+
+        const auto fold = core::doc::size_presets(d.settings())[2];
+        core::doc::set_page_size(j, d, {p[12]}, fold);
+        check("size: 3-panel foldout = two folds, two tucks",
+              d.as<core::Page>(p[12])->folds.size() == 2 &&
+              core::inches(d.as<core::Page>(p[12])->w) == "17.75");
+
+        const auto sec = core::doc::add_section(j, d, p[12], "Appendix", core::Numbering::AlphaUpper, 1);
+        check("add_section: starts a new run", !sec.empty() && d.folio(p[12]) == "A");
+        check("add_section: one per start page",
+              core::doc::add_section(j, d, p[12], "Again", core::Numbering::Arabic, 1).empty());
+        core::doc::set_numbering(j, d, {sec}, core::Numbering::RomanUpper);
+        check("set_numbering: folios follow", d.folio(p[12]) == "I");
+        core::doc::remove_section(j, d, sec);
+        check("remove_section: pages rejoin the run before", d.section_of(p[12]) == "section.2");
+        check("everything went through the door", d.strays() == 0, std::to_string(d.strays()));
+
+        check("neighbour: next survivor, else previous",
+              core::doc::neighbour_page(d, {d.pages()[2]}) == d.pages()[3] &&
+              core::doc::neighbour_page(d, {d.pages().back()}) == d.pages()[d.pages().size() - 2]);
+    }
+    {
+        std::cout << "\n-- document.json + the project folder --\n";
+        core::Doc d;
+        core::load_sample(d);
+        const std::string text = core::to_json(d);
+        core::Doc e;
+        std::string err;
+        check("json: parses back", core::from_json(e, text, &err), err);
+        check("json: round-trips exactly", core::to_json(e) == text);
+        check("json: same records", e.records() == d.records());
+
+        const auto dir = (std::filesystem::temp_directory_path() / "composix_selftest_project").string();
+        std::filesystem::remove_all(dir);
+        check("project: saves", core::save_project(d, dir, &err), err);
+        check("project: has document.json + assets/",
+              std::filesystem::exists(std::filesystem::path(dir) / "document.json") &&
+              std::filesystem::is_directory(std::filesystem::path(dir) / "assets"));
+        core::Doc f;
+        check("project: loads", core::load_project(f, dir, &err), err);
+        check("project: what was saved is what loads", f.records() == d.records());
+        std::filesystem::remove_all(dir);
+
+        core::Doc g;
+        check("json: garbage refused", !core::from_json(g, "{nope", &err));
+        check("json: newer format refused", !core::from_json(g, R"({"composix": 99, "records": []})", &err));
+        check("json: unknown kind skipped",
+              core::from_json(g, R"({"composix":1,"records":[{"id":"x.1","kind":"hologram"},
+                                    {"id":"page.1","kind":"page","pos":1}]})", &err) &&
+              g.size() == 1 && g.as<core::Page>("page.1"));
+    }
+    {
+        std::cout << "\n-- projection (what the views read) --\n";
+        core::Doc d;
+        core::load_sample(d);
+        const auto o = core::project(d, "");
+        bool all_full = true;
+        for (const auto& s : core::segments()) all_full = all_full && !o.in(s.id).empty();
+        check("project: every segment has items", all_full);
         std::set<std::string> ids;
         for (const auto& it : o.items()) ids.insert(it.id);
-        check("outline: item ids unique", ids.size() == o.size(), std::to_string(o.size()));
+        check("project: item ids unique, = record ids", ids.size() == o.size() && o.find("page.11"));
 
-        bool all_full = true;
-        for (const auto& s : core::sections()) all_full = all_full && !o.in(s.id).empty();
-        check("outline: fixture fills every section", all_full);
-
-        bool has_fields = true;
-        for (const auto& it : o.items()) has_fields = has_fields && !it.fields.empty();
-        check("outline: every item carries metadata", has_fields);
-
-        const auto* p7 = o.find("page.7");
-        check("outline: the foldout is wide and flagged",
-              p7 && p7->thumb.flag && p7->thumb.w_in > p7->thumb.h_in && p7->badge == "Foldout");
-        check("outline: find misses cleanly", o.find("nope") == nullptr);
-
-        // Multi-selection: shared fields.
-        const auto field = [](const std::vector<core::Field>& fs, const std::string& l) {
-            for (const auto& f : fs) if (f.label == l) return f.value;
+        const auto field = [](const core::Item* it, const std::string& l) {
+            for (const auto& f : it->fields) if (f.label == l) return f.value;
             return std::string("<absent>");
         };
-        const auto two = core::shared_fields({o.find("page.2"), o.find("page.4")});
-        check("shared: agreeing field keeps its value", field(two, "Master") == "B-Body");
-        check("shared: differing field reads Mixed", field(two, "Folio") == core::kMixed);
-        check("shared: same-side pages agree on Side", field(two, "Side") == "Left");
-        check("shared: keeps the first item's order",
-              !two.empty() && two.front().label == "Folio");
+        const auto* fo = o.find("page.11");
+        check("project: the foldout page", fo->badge == "Foldout" && fo->thumb.panels == 3 &&
+                                           fo->title == "Page 7" && field(fo, "Size") == "17.75 × 9 in (3-panel)");
+        check("project: front matter page", field(o.find("page.3"), "Folio") == "iii" &&
+                                            field(o.find("page.3"), "Section") == "Front matter");
+        check("project: section page range", field(o.find("section.1"), "Pages") == "i–iv" &&
+                                             field(o.find("section.2"), "Pages") == "1–10");
+        check("project: master used-by is counted", field(o.find("master.2"), "Used by") == "8 pages");
+        check("project: story words + threading",
+              field(o.find("story.1"), "Frames") == "3, threaded" && field(o.find("story.3"), "Words") == "7");
+        check("project: missing link flagged", o.find("asset.2")->badge == "Missing" &&
+                                               field(o.find("asset.2"), "Status") == "Missing");
+        check("project: effective ppi from the placed width",
+              field(o.find("asset.1"), "Effective ppi") == "423");
+        check("project: vector asset", field(o.find("asset.3"), "Effective ppi") == "Vector" &&
+                                       field(o.find("asset.3"), "Placed") == "Pages ii, 12");
+        check("project: stale contents list", o.find("list.1")->badge == "Stale" &&
+                                              field(o.find("list.1"), "Entries") == "2");
+        check("project: current bibliography", field(o.find("list.2"), "Built") == "Current");
+        check("project: style specimen weight", o.find("style.2")->thumb.bold && o.find("style.3")->thumb.italic);
 
-        const auto cross = core::shared_fields({o.find("page.2"), o.find("master.B")});
-        check("shared: across sections only common labels survive",
-              cross.size() == 1 && cross.front().label == "Size" &&
-              cross.front().value == "6 × 9 in");
+        // Multi-selection: shared fields, Mixed, editability.
+        const auto two = core::shared_fields({o.find("page.6"), o.find("page.8")});
+        auto get = [&](const std::vector<core::Field>& fs, const std::string& l) -> const core::Field* {
+            for (const auto& f : fs) if (f.label == l) return &f;
+            return nullptr;
+        };
+        check("shared: agreeing field keeps its value", get(two, "Master") && get(two, "Master")->value == "B-Body");
+        check("shared: differing field reads Mixed", get(two, "Folio")->value == core::kMixed);
+        check("shared: editable stays editable", get(two, "Master")->edit == "master" &&
+                                                 !get(two, "Master")->choices.empty());
+        check("shared: read-only stays read-only", get(two, "Folio")->edit.empty());
+        const auto cross = core::shared_fields({o.find("page.6"), o.find("master.2")});
+        check("shared: across segments only common labels survive",
+              cross.size() == 1 && cross.front().label == "Size" && cross.front().edit.empty());
         check("shared: empty selection -> nothing", core::shared_fields({}).empty());
-        check("shared: one item -> all its fields",
-              core::shared_fields({p7}).size() == p7->fields.size());
 
-        check("title: one item", core::selection_title({p7}) == "Page 7");
+        check("title: one item", core::selection_title({fo}) == "Page 7");
         check("title: several of a kind",
-              core::selection_title({o.find("page.2"), o.find("page.4"), p7}) == "3 pages");
-        check("title: mixed kinds",
-              core::selection_title({o.find("page.2"), o.find("color.sky")}) == "2 items");
+              core::selection_title({o.find("page.6"), o.find("page.8"), fo}) == "3 pages");
+        check("title: mixed kinds", core::selection_title({o.find("page.6"), o.find("swatch.4")}) == "2 items");
         check("title: none", core::selection_title({}) == "Nothing selected");
+
+        // A verb shows up in the projection (the views' only view of the model).
+        core::DocJournal j{d};
+        core::doc::set_master(j, d, {"page.6"}, "master.3");
+        check("project: follows the model", field(core::project(d, "").find("page.6"), "Master") == "C-Chapter");
     }
 
     std::cout << "-----------------------------------------------\n";

@@ -16,7 +16,9 @@ namespace composix {
 
 void Shell::bind_actions() {  // bindings: actions + recents group
     // Plain win.* actions -> handler bodies (Shell_handlers.cpp).
-    add_action("pick-folder",   sigc::mem_fun(*this, &Shell::on_pick_folder));
+    add_action("open",          sigc::mem_fun(*this, &Shell::on_open));
+    add_action("save",          sigc::mem_fun(*this, &Shell::on_save));
+    add_action("save-as",       sigc::mem_fun(*this, &Shell::on_save_as));
     add_action("dump-registry", sigc::mem_fun(*this, &Shell::on_dump_registry));
     add_action("about",         sigc::mem_fun(*this, &Shell::on_about));
     add_action("shortcuts",     sigc::mem_fun(*this, &Shell::on_shortcuts));
@@ -49,8 +51,14 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     // write); s002 writes nothing, so the journal is empty until s003.
     m_act_undo = add_action("undo", sigc::mem_fun(*this, &Shell::on_undo));
     m_act_redo = add_action("redo", sigc::mem_fun(*this, &Shell::on_redo));
-    m_stones.set_door([this] { return m_journal.open(); });
-    m_journal.set_on_change([this] { update_undo_ui(); });
+    // The model <-> journal <-> UI wiring (as Cairn's stone): the document asks
+    // the journal whether the door is open; the journal reads the selection
+    // (what the inspector shows) and tells the UI when Undo / Redo change;
+    // every change to the document re-projects, once, after the writes.
+    m_doc.set_door([this] { return m_journal.open(); });
+    m_doc.set_on_change([this] { queue_refresh(); });
+    m_journal.set_selection_source([this] { return m_inspected; });
+    m_journal.set_on_change([this] { update_undo_ui(); set_dirty(true); });
 
     // ── pane toggles: stateful, so the header buttons show the state ────────
     add_action_bool("toggle-nav", [this] {
@@ -102,6 +110,7 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_nav.signal_pick().connect(sigc::mem_fun(*this, &Shell::on_nav_pick));
     m_tiles.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_tiles_selection));
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
+    m_inspector.signal_edit().connect(sigc::mem_fun(*this, &Shell::on_inspector_edit));
 }
 
 }  // namespace composix

@@ -34,6 +34,7 @@ at the source, never faked.
 | Following the desktop's light/dark preference | `Appearance.*`, `docs/following-the-desktop-appearance.md` | Plunk / Slate |
 | **Undo: every user choice a step, one door + a gate** -- a journal of before/after pictures by id, gestures as one step, merging, selection, Ctrl+Z from anywhere but a text box | `core/Undo.hpp`, `core/Stones.*`, the Undo page, `docs/undo.md` | Curvz / jot (s046) |
 | **Segmented navigator -> tiles -> inspector** (s002): sections disclose to items; a section shows as tiles with metadata, items open; multi-select with shared fields | `core/Outline.*`, `views/*`, `resources/composix.css`, `docs/look.md` | Composix |
+| **The document model** (s004): one store of records by id, verbs through the journal, sample book, document.json project folder, projection to the views | `core/Doc.*`, `core/Sample.cpp`, `core/DocJson.cpp`, `core/Project.cpp` | Composix |
 | The tree, and drag-and-drop on it — **documented, not compiled** | `docs/tree-and-dnd.md` | Folio |
 
 Three sources, each earning a page only where it's the *cleanest* instance:

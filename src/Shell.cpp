@@ -31,22 +31,28 @@ Shell::~Shell() = default;
 // construct the shell -> bind actions -> bind the views -> load -> paint.
 void Shell::build_ui() {
     build_shell();     // zone
+    // The recents path BEFORE bind_actions, which loads the list from it.
+    // (Cairn set it after, so the list loaded from "" and came up empty on
+    // every launch -- found in s004.)
+    m_recents_file = recents_file();
     bind_actions();    // bindings
     bind_views();      // bindings
 
     sync_inspector();  // the action exists now: toggle + View check follow the panel
 
-    m_recents_file = recents_file();
     rebuild_recents_menu();
 
-    // s002: the fixture, through the real seam (core::Outline).
-    m_outline = core::fixture_outline();
+    // s004: the document. Until a project is opened, the built-in sample
+    // (loaded, not a step). The views see only its projection.
+    core::load_sample(m_doc);
+    m_outline = core::project(m_doc, m_project_dir);
     m_nav.set_outline(&m_outline);
-    m_nav.set_open(core::Section::Pages, true);
-    m_nav.select_section(core::Section::Pages);   // land on the page tiles
+    update_title();
+    m_nav.set_open(core::Segment::Pages, true);
+    m_nav.select_section(core::Segment::Pages);   // land on the page tiles
 
     if (auto lg = log::get(log::Area::Shell))
-        lg->info("ready -- {} outline item(s)", m_outline.size());
+        lg->info("ready -- {} record(s), {} outline item(s)", m_doc.size(), m_outline.size());
 }
 
 }  // namespace composix

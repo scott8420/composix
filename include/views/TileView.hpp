@@ -24,7 +24,8 @@ class TileView : public widgets::Box {
 public:
     TileView();
 
-    void show_section(const core::Outline& o, core::Section s);
+    // `keep`: tiles to leave selected (a refresh after an edit), silently.
+    void show_section(const core::Outline& o, core::Segment s, const std::vector<std::string>& keep = {});
     std::vector<std::string> selected() const;   // grid order
 
     sigc::signal<void(const std::vector<std::string>&)>& signal_selection() { return m_sel; }

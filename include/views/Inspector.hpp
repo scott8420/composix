@@ -3,11 +3,15 @@
 // metadata. Multi-selection shows the fields the selection shares
 // (core::shared_fields), "Mixed" where they differ.
 //
-// Read-only in s002: nothing here writes the model yet. When fields become
-// editable, each edit is ONE journal step across the whole selection
-// (REQUIREMENTS §10; RULES: undo from the first write).
+// s004: a field that carries an `edit` key shows as a dropdown of its
+// choices. Picking one emits signal_edit(key, choice id); the shell turns that
+// into ONE verb -- one journal step -- across the whole selection
+// (REQUIREMENTS §10; RULES: undo from the first write). A Mixed field shows
+// no choice until one is picked.
 #include "core/Outline.hpp"
 #include "widgets/Widgets.hpp"
+
+#include <sigc++/signal.h>
 
 #include <string>
 #include <vector>
@@ -19,8 +23,10 @@ public:
     Inspector();
 
     void show_items(const std::vector<const core::Item*>& sel);
-    void show_section(const core::Outline& o, core::Section s);   // no tile selected
+    void show_section(const core::Outline& o, core::Segment s);   // no tile selected
     void clear();
+
+    sigc::signal<void(const std::string& key, const std::string& choice)>& signal_edit() { return m_edit; }
 
 private:
     void fill(const std::string& title, const std::string& sub, const std::vector<core::Field>& fields);
@@ -30,6 +36,8 @@ private:
     widgets::ScrolledWindow m_scroll;
     widgets::Grid           m_fields;
     widgets::Label          m_empty;
+    bool                    m_painting = false;   // filling the fields is not a user choice
+    sigc::signal<void(const std::string&, const std::string&)> m_edit;
 };
 
 }  // namespace composix::views
