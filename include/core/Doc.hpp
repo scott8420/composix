@@ -277,6 +277,22 @@ void frames_set(DocJournal& j, Doc& d, const Doc::Id& frame, const Rect& r);   /
 bool frames_end(DocJournal& j);
 void frames_cancel(DocJournal& j);
 
+// ── frame tools (s008) ──────────────────────────────────────────────────────
+// Draw a frame on a page / master (rect in its coordinates). A new TEXT frame
+// gets a story of its own (one empty paragraph in the first paragraph style).
+Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r);
+// Delete frames. A text frame leaving a thread is spliced out (the frame
+// before it points past it) so the story reflows through what is left; the
+// story itself stays (unplaced if no frame is left). One step.
+bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
+// Thread `from` -> `to` (`to` goes into the thread right after `from`). `to`
+// must be a text frame that is not already threaded; its own text is appended
+// to `from`'s story and its old story goes if nothing else uses it. One step.
+bool thread_frames(DocJournal& j, Doc& d, const Doc::Id& from, const Doc::Id& to);
+// Cut the thread after `from`: the text stays in the frames up to `from`; the
+// frames after it are left empty (no story). One step.
+bool unthread_after(DocJournal& j, Doc& d, const Doc::Id& from);
+
 // ── guides (s006) ───────────────────────────────────────────────────────────
 // Pulled out of a ruler onto a page: one step. Dragged: one gesture (the same
 // begin / set / end shape as frames); dragged off its page: removed, in the

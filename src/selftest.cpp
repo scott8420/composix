@@ -749,6 +749,58 @@ int main() {
         check("projection: overset badge + field", o.find("story.2")->badge == "Overset");
     }
 
+    // ── s008: frame tools ────────────────────────────────────────────────────
+    {
+        std::cout << "\n-- frame tools --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+
+        const auto t = core::doc::add_frame(j, d, "page.8", core::FrameKind::Text, {54, 54, 200, 100});
+        const auto* tf = d.as<core::Frame>(t);
+        check("text frame: its own story, one empty paragraph",
+              tf && !tf->story.empty() && d.as<core::Story>(tf->story)->paras.size() == 1);
+        check("text frame: one step (frame + story)", j.size() == 1);
+        j.undo();
+        check("undo: frame and story both gone", !d.as<core::Frame>(t) && !d.as<core::Story>(tf ? "story.5" : "x"));
+        j.redo();
+        check("new frame on top", d.as<core::Frame>(t)->z >= 1);
+        check("no frame on the pasteboard", core::doc::add_frame(j, d, "", core::FrameKind::Shape, {0, 0, 9, 9}).empty());
+        check("no zero-size frame", core::doc::add_frame(j, d, "page.8", core::FrameKind::Shape, {0, 0, 0, 9}).empty());
+
+        core::doc::delete_frames(j, d, {"frame.2"});
+        check("delete mid-thread: spliced out", d.as<core::Frame>("frame.1")->next == "frame.3");
+        check("...the text still flows", L::thread_frames(d, "story.1") ==
+                                         std::vector<std::string>({"frame.1", "frame.3"}));
+        j.undo();
+        check("undo: back in the thread", d.as<core::Frame>("frame.1")->next == "frame.2" &&
+                                          d.as<core::Frame>("frame.2"));
+
+        core::doc::thread_frames(j, d, "frame.3", "frame.7");   // dedication joins the chapters
+        check("thread: appended to the end", d.as<core::Frame>("frame.3")->next == "frame.7" &&
+                                             d.as<core::Frame>("frame.7")->story == "story.1");
+        check("thread: the old story's text moved", d.as<core::Story>("story.1")->paras.back().text ==
+                                                    "For everyone who ever finished a manuscript.");
+        check("thread: the emptied story goes", !d.as<core::Story>("story.3"));
+        check("thread: refused into a threaded frame", !core::doc::thread_frames(j, d, "frame.10", "frame.2"));
+        check("thread: refused to itself / non-text",
+              !core::doc::thread_frames(j, d, "frame.3", "frame.3") && !core::doc::thread_frames(j, d, "frame.3", "frame.4"));
+        j.undo();
+        check("undo thread: both stories as they were", d.as<core::Story>("story.3") &&
+                                                        d.as<core::Frame>("frame.7")->story == "story.3");
+
+        core::doc::unthread_after(j, d, "frame.1");
+        check("unthread: the tail is empty", d.as<core::Frame>("frame.1")->next.empty() &&
+                                             d.as<core::Frame>("frame.2")->story.empty() &&
+                                             d.as<core::Frame>("frame.3")->story.empty());
+        check("unthread: the head keeps the story", L::thread_frames(d, "story.1") == std::vector<std::string>({"frame.1"}));
+        core::doc::thread_frames(j, d, "frame.1", "frame.2");
+        check("re-thread an emptied frame", d.as<core::Frame>("frame.2")->story == "story.1");
+        check("frame tools: through the door", d.strays() == 0);
+    }
+
     std::cout << "-----------------------------------------------\n";
 
     // -- Recents: list ops + JSON round-trip with prune -----------------------

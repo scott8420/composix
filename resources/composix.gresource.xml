@@ -13,6 +13,9 @@
 <gresources>
   <gresource prefix="/io/github/scott8420/Composix/icons/scalable/apps">
     <file preprocess="xml-stripblanks" alias="composix-logo-symbolic.svg">icons/scalable/apps/composix-logo-symbolic.svg</file>
+    <!-- s008: tool icons Adwaita lacks (a pointer, a shape), same symbolic style -->
+    <file preprocess="xml-stripblanks" alias="composix-tool-select-symbolic.svg">icons/scalable/apps/composix-tool-select-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="composix-tool-shape-symbolic.svg">icons/scalable/apps/composix-tool-shape-symbolic.svg</file>
   </gresource>
   <!-- s002: the app stylesheet, loaded by App::on_activate at APPLICATION
        priority (docs/look.md). -->

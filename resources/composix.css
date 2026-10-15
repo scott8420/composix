@@ -14,6 +14,10 @@
 
 /* ── tokens ─────────────────────────────────────────────────────────────── */
 @define-color cx_accent      @theme_selected_bg_color;
+/* The accent as INK (icons, checked tools, selections): mixed toward the
+   theme's own foreground, so it comes out paler on dark and deeper on light
+   from one rule (Scott: the dark theme's accent sank into the dark panels). */
+@define-color cx_ink         mix(@theme_selected_bg_color, @theme_fg_color, 0.35);
 @define-color cx_fg          @theme_fg_color;
 @define-color cx_card        @theme_base_color;
 @define-color cx_sidebar     mix(@theme_bg_color, @theme_base_color, 0.35);
@@ -32,7 +36,7 @@ headerbar.cx-header {
 }
 .cx-doc-title    { font-weight: 700; }
 .cx-doc-subtitle { font-size: 0.78em; color: @cx_dim; }
-.cx-logo         { color: @cx_accent; }
+.cx-logo         { color: @cx_ink; }
 
 button.cx-chrome-button,
 menubutton.cx-chrome-button > button {
@@ -45,7 +49,7 @@ menubutton.cx-chrome-button > button {
 }
 button.cx-chrome-button:hover,
 menubutton.cx-chrome-button > button:hover { background: @cx_faint; }
-button.cx-chrome-button:checked            { background: alpha(@cx_accent, 0.16); color: @cx_accent; }
+button.cx-chrome-button:checked            { background: alpha(@cx_ink, 0.16); color: @cx_ink; }
 
 /* ── panes ──────────────────────────────────────────────────────────────── */
 paned.cx-panes > separator,
@@ -74,12 +78,12 @@ paned.cx-panes paned > separator {
   transition: background 120ms ease-out;
 }
 .cx-nav-list > row:hover    { background: @cx_faint; }
-.cx-nav-list > row:selected { background: alpha(@cx_accent, 0.18); color: @cx_fg; }
-.cx-nav-list:focus-within > row:selected { background: alpha(@cx_accent, 0.26); }
+.cx-nav-list > row:selected { background: alpha(@cx_ink, 0.18); color: @cx_fg; }
+.cx-nav-list:focus-within > row:selected { background: alpha(@cx_ink, 0.26); }
 
 .cx-section-row             { margin-top: 6px; }
 .cx-section-title           { font-weight: 600; }
-.cx-section-icon            { color: @cx_accent; -gtk-icon-size: 16px; }
+.cx-section-icon            { color: @cx_ink; -gtk-icon-size: 16px; }
 .cx-nav-list > row.cx-item-row { padding-left: 46px; }
 .cx-item-row label          { font-size: 0.93em; }
 
@@ -128,7 +132,7 @@ flowbox.cx-tile-grid > flowboxchild {
   border-radius: 14px;
   background: none;
   outline-offset: 3px;
-  outline-color: alpha(@cx_accent, 0.6);
+  outline-color: alpha(@cx_ink, 0.6);
 }
 flowbox.cx-tile-grid > flowboxchild:selected { background: none; color: @cx_fg; }
 
@@ -143,7 +147,7 @@ flowboxchild:hover > .cx-tile-card {
   box-shadow: 0 8px 22px alpha(black, 0.10), 0 0 0 1px @cx_hair;
 }
 flowboxchild:selected > .cx-tile-card {
-  box-shadow: 0 0 0 2px @cx_accent, 0 8px 22px alpha(@cx_accent, 0.22);
+  box-shadow: 0 0 0 2px @cx_ink, 0 8px 22px alpha(@cx_ink, 0.22);
 }
 .cx-tile-card .cx-badge     { background: @cx_card; box-shadow: 0 0 0 1px @cx_hair; }
 .cx-tile-card .cx-badge.cx-warn { background: mix(@cx_card, @cx_warn, 0.14); }
@@ -152,6 +156,25 @@ flowboxchild:selected > .cx-tile-card {
 
 .cx-field-label { color: @cx_dim; }
 .cx-field-value { }
+
+/* canvas tools (s008): a vertical strip down the canvas's left edge */
+.cx-toolstrip {
+  background: @cx_sidebar;
+  border-right: 1px solid @cx_hair;
+  padding: 6px 4px;
+}
+.cx-toolstrip > button.cx-tool {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+.cx-toolstrip > button.cx-tool:hover   { background: @cx_faint; }
+.cx-toolstrip > button.cx-tool:checked { background: alpha(@cx_ink, 0.18); color: @cx_ink; }
 
 /* rulers (s006): quiet, on the sidebar tone */
 .cx-ruler { background: @cx_sidebar; }
@@ -163,7 +186,7 @@ flowboxchild:selected > .cx-tile-card {
 .cx-panel-handle          { min-width: 5px; background: transparent; }
 .cx-panel-handle.cx-right { border-right: 1px solid @cx_hair; }
 .cx-panel-handle.cx-left  { border-left: 1px solid @cx_hair; }
-.cx-panel-handle.cx-left:hover { background: alpha(@cx_accent, 0.35); }
+.cx-panel-handle.cx-left:hover { background: alpha(@cx_ink, 0.35); }
 .cx-panel-handle.cx-shut  { border: none; }
 /* Shut, the tab waits unseen until the pointer finds the edge or the tab;
    open, it shows quietly; pointed at, it lights in the accent. */
@@ -196,6 +219,6 @@ flowboxchild:selected > .cx-tile-card {
 .cx-insp-empty              { color: @cx_dim; margin: 8px 18px; }
 
 /* ── welcome ────────────────────────────────────────────────────────────── */
-.cx-welcome-icon  { color: alpha(@cx_accent, 0.7); margin-bottom: 8px; }
+.cx-welcome-icon  { color: alpha(@cx_ink, 0.7); margin-bottom: 8px; }
 .cx-welcome-title { font-size: 1.4em; font-weight: 800; }
 .cx-welcome-body  { color: @cx_dim; }

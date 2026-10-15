@@ -487,6 +487,134 @@ void frames_set(DocJournal& j, Doc& d, const Doc::Id& id, const Rect& r) {
 
 bool frames_end(DocJournal& j) { return j.commit(); }
 
+Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r) {
+    if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
+    if (r.w < 1 || r.h < 1) return {};
+    static const char* what[] = {"text frame", "image frame", "shape"};
+    Doc::Id made;
+    j.run(std::string("Draw ") + what[static_cast<int>(kind)], {}, [&] {
+        std::vector<Doc::Id> ids;
+        Frame f;
+        f.owner = owner;
+        f.kind = kind;
+        f.x = r.x; f.y = r.y; f.w = r.w; f.h = r.h;
+        double z = 0;   // on top of the owner's frames
+        for (const auto& o : d.frames_on(owner)) z = std::max(z, d.as<Frame>(o)->z);
+        f.z = z + 1;
+        if (kind == FrameKind::Text) {
+            Doc::Id style;
+            for (const auto& s : d.ids_of<Style>())
+                if (d.as<Style>(s)->kind == StyleKind::Paragraph) { style = s; break; }
+            const Doc::Id story = d.fresh_id("story");
+            d.put(story, Story{"Story " + story.substr(story.find('.') + 1), {{style, ""}}});
+            ids.push_back(story);
+            f.story = story;
+        }
+        made = d.fresh_id("frame");
+        d.put(made, f);
+        ids.push_back(made);
+        return ids;
+    });
+    return made;
+}
+
+namespace {
+// The frame whose `next` is `id` ("" if none).
+Doc::Id prev_of(const Doc& d, const Doc::Id& id) {
+    for (const auto& o : d.ids_of<Frame>())
+        if (d.as<Frame>(o)->next == id) return o;
+    return {};
+}
+}  // namespace
+
+bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
+    std::vector<Doc::Id> frames;
+    for (const auto& id : ids) if (d.as<Frame>(id)) frames.push_back(id);
+    if (frames.empty()) return false;
+    // In the step: the frames, and every frame that points at one of them
+    // (its `next` is re-spliced).
+    std::vector<Doc::Id> touched = frames;
+    for (const auto& id : frames) {
+        const auto p = prev_of(d, id);
+        if (!p.empty() && std::find(touched.begin(), touched.end(), p) == touched.end()) touched.push_back(p);
+    }
+    return j.run("Delete " + plural(frames.size(), "frame", "frames"), touched, [&] {
+        for (const auto& id : frames) {
+            const auto* f = d.as<Frame>(id);
+            if (!f) continue;
+            const Doc::Id after = f->next;
+            const Doc::Id before = prev_of(d, id);
+            if (!before.empty()) {
+                Frame b = *d.as<Frame>(before);
+                b.next = after;
+                d.put(before, b);
+            }
+            d.put(id, std::nullopt);
+        }
+    });
+}
+
+bool thread_frames(DocJournal& j, Doc& d, const Doc::Id& from, const Doc::Id& to) {
+    const auto* a = d.as<Frame>(from);
+    const auto* b = d.as<Frame>(to);
+    if (!a || !b || from == to) return false;
+    if (a->kind != FrameKind::Text || b->kind != FrameKind::Text) return false;
+    if (!b->next.empty() || !prev_of(d, to).empty()) return false;   // `to` already in a thread
+    if (!b->story.empty() && b->story == a->story) return false;
+    std::vector<Doc::Id> touched{from, to};
+    if (!a->story.empty()) touched.push_back(a->story);
+    if (!b->story.empty() && b->story != a->story) touched.push_back(b->story);
+    return j.run("Thread frames", touched, [&] {
+        Frame fa = *d.as<Frame>(from);
+        Frame fb = *d.as<Frame>(to);
+        // `from` may have no story yet (an unthreaded tail): it takes `to`'s.
+        if (fa.story.empty()) {
+            fa.story = fb.story;
+            fb.story.clear();
+        }
+        if (!fb.story.empty() && fb.story != fa.story) {
+            // Append `to`'s text (skipping one empty paragraph) to `from`'s story.
+            Story sa = *d.as<Story>(fa.story);
+            const Story sb = *d.as<Story>(fb.story);
+            for (const auto& p : sb.paras)
+                if (!(sb.paras.size() == 1 && p.text.empty())) sa.paras.push_back(p);
+            d.put(fa.story, sa);
+            bool used = false;
+            for (const auto& o : d.ids_of<Frame>())
+                if (o != to && d.as<Frame>(o)->story == fb.story) used = true;
+            if (!used) d.put(fb.story, std::nullopt);
+        }
+        fb.story = fa.story;
+        fb.next = fa.next;    // slot in after `from`
+        fa.next = to;
+        d.put(from, fa);
+        d.put(to, fb);
+    });
+}
+
+bool unthread_after(DocJournal& j, Doc& d, const Doc::Id& from) {
+    const auto* a = d.as<Frame>(from);
+    if (!a || a->next.empty()) return false;
+    std::vector<Doc::Id> tail;
+    for (Doc::Id k = a->next; !k.empty() && d.as<Frame>(k) &&
+                              std::find(tail.begin(), tail.end(), k) == tail.end();
+         k = d.as<Frame>(k)->next)
+        tail.push_back(k);
+    std::vector<Doc::Id> touched{from};
+    touched.insert(touched.end(), tail.begin(), tail.end());
+    return j.run("Break thread", touched, [&] {
+        Frame fa = *d.as<Frame>(from);
+        fa.next.clear();
+        d.put(from, fa);
+        for (const auto& t : tail) {
+            Frame ft = *d.as<Frame>(t);
+            ft.story.clear();
+            ft.next.clear();
+            d.put(t, ft);
+        }
+    });
+}
+
 Doc::Id add_guide(DocJournal& j, Doc& d, const Doc::Id& owner, bool vertical, double pos) {
     if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
     Doc::Id made;
@@ -557,6 +685,12 @@ const std::vector<Verb>& verbs() {
         {"remove_section", [](DocJournal& j, Doc& d) { remove_section(j, d, d.ids_of<Section>().back()); }},
         {"move_frames", [](DocJournal& j, Doc& d) { move_frames(j, d, {"frame.1", "frame.4"}, 9, -3); }},
         {"add_guide", [](DocJournal& j, Doc& d) { add_guide(j, d, "page.6", true, 100); }},
+        {"add_text_frame", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Text, {54, 54, 200, 100}); }},
+        {"add_image_frame", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Image, {54, 200, 200, 100}); }},
+        {"add_shape", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Shape, {54, 400, 50, 50}); }},
+        {"delete_frames", [](DocJournal& j, Doc& d) { delete_frames(j, d, {"frame.2", "frame.4"}); }},  // mid-thread
+        {"thread_frames", [](DocJournal& j, Doc& d) { thread_frames(j, d, "frame.3", "frame.7"); }},   // merges a story
+        {"unthread_after", [](DocJournal& j, Doc& d) { unthread_after(j, d, "frame.1"); }},
         {"drag_guide", [](DocJournal& j, Doc& d) {
              guide_begin(j, d, "guide.1");
              guide_set(j, d, "guide.1", 60);

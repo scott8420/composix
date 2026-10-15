@@ -31,6 +31,8 @@ namespace composix::views {
 
 class Canvas : public widgets::DrawingArea {
 public:
+    // s008: what a drag on empty space does.
+    enum class Tool { Select, Text, Image, Shape };
     Canvas(core::Doc& d, core::DocJournal& j);
 
     // Show these pages / masters. A different set re-fits; the same set (a
@@ -53,6 +55,9 @@ public:
     void preview_guide(bool vertical, double at);          // a guide being pulled from a ruler (screen)
     void drop_guide(bool vertical, double x, double y);     // released: on a page -> one step
     void set_snap(bool on) { m_snap = on; }
+    void set_tool(Tool t);
+    Tool tool() const { return m_tool; }
+    void delete_selection();
     void set_show_guides(bool on) { m_show_guides = on; queue_draw(); }
 
     // Which assets are missing (the Outline knows; the canvas draws the cross).
@@ -62,9 +67,10 @@ public:
     sigc::signal<void()>& signal_zoom()      { return m_sig_zoom; }
     sigc::signal<void()>& signal_edited()    { return m_sig_edited; } // a drag / nudge ended: refresh the rest
     sigc::signal<void()>& signal_view()      { return m_sig_view; }   // zoom / pan / pointer moved: rulers repaint
+    sigc::signal<void()>& signal_tool()      { return m_sig_tool; }   // the tool changed (a key)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw };
 
     void draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
@@ -72,6 +78,9 @@ private:
                     bool from_master, const std::string& id);
     void draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr);
     void draw_guides(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
+    void draw_threads(const Cairo::RefPtr<Cairo::Context>& cr);
+    std::string out_port_hit(double sx, double sy) const;   // a text frame's out-port under the pointer
+    core::Rect port_rect(const std::string& frame, bool out) const;   // screen
 
     void read_mods();
     void on_drag_begin(double x, double y);
@@ -130,8 +139,15 @@ private:
 
     layout::FlowCache m_flows;   // s007: text, recomputed when the document changes
 
+    // s008
+    Tool        m_tool = Tool::Select;
+    std::string m_draw_page;                 // the page a frame is being drawn on
+    double      m_dx0 = 0, m_dy0 = 0;        // its first corner (layout)
+    core::Rect  m_draw;                      // the frame being drawn (layout)
+    std::string m_thread_from;               // "loaded": the next click threads into a frame
+
     std::function<bool(const std::string&)> m_missing;
-    sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view;
+    sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool;
 };
 
 class Ruler;
@@ -150,6 +166,8 @@ private:
     widgets::Box    m_head;
     widgets::Label  m_title;
     widgets::Label  m_count;
+    widgets::Box    m_tools;    // s008: Select / Text / Image / Shape
+    std::vector<Gtk::ToggleButton*> m_tool_buttons;
     widgets::Button m_fit;
     widgets::Label  m_zoom;
     widgets::Grid   m_grid;     // [corner][top ruler] / [left ruler][canvas]

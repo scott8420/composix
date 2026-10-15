@@ -9,6 +9,7 @@
 #include <gtkmm/eventcontrollermotion.h>
 #include <gtkmm/eventcontrollerscroll.h>
 #include <gtkmm/gesturedrag.h>
+#include <gtkmm/togglebutton.h>
 #include <pangomm/layout.h>
 
 #include <algorithm>
@@ -397,6 +398,15 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
         break;
     }
     case core::FrameKind::Image: {
+        if (f.asset.empty()) {   // an empty graphic frame: the classic X
+            cr->set_source_rgba(0.5, 0.5, 0.55, 0.8 * dim);
+            cr->set_line_width(1);
+            cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
+            cr->move_to(r.x, r.y); cr->line_to(r.r(), r.b());
+            cr->move_to(r.r(), r.y); cr->line_to(r.x, r.b());
+            cr->stroke();
+            break;
+        }
         const bool missing = m_missing && m_missing(f.asset);
         rgb(cr, tint_for(f.asset), 0.55 * dim);
         cr->rectangle(r.x, r.y, r.w, r.h);
@@ -438,8 +448,58 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
     cr->restore();
 }
 
-void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
+// A picked text frame shows its whole thread: out-port to in-port, in order.
+void Canvas::draw_threads(const Cairo::RefPtr<Cairo::Context>& cr) {
+    std::vector<std::string> stories;
+    for (const auto& id : m_sel)
+        if (const auto* f = m_doc.as<core::Frame>(id); f && f->kind == core::FrameKind::Text && !f->story.empty() &&
+                                                       std::find(stories.begin(), stories.end(), f->story) == stories.end())
+            stories.push_back(f->story);
+    cr->set_line_width(1.5);
+    cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.85);
+    for (const auto& st : stories) {
+        const auto chain = layout::thread_frames(m_doc, st);
+        for (std::size_t i = 0; i + 1 < chain.size(); ++i) {
+            const Rect a = port_rect(chain[i], true), b = port_rect(chain[i + 1], false);
+            if (a.w <= 0 || b.w <= 0) continue;
+            cr->move_to(a.cx(), a.cy());
+            cr->line_to(b.cx(), b.cy());
+        }
+    }
+    cr->stroke();
     cr->set_line_width(1);
+}
+
+Rect Canvas::port_rect(const std::string& frame, bool out) const {
+    const Rect r = m_vp.to_screen(core::frame_in_layout(m_doc, m_placed, frame));
+    if (r.w <= 24 || r.h <= 24) return {};
+    const double ps = 7;
+    return out ? Rect{std::round(r.r()) - ps - 3.5, std::round(r.b()) - ps - 3.5, ps, ps}
+               : Rect{std::round(r.x) + 3.5, std::round(r.y) + 3.5, ps, ps};
+}
+
+std::string Canvas::out_port_hit(double sx, double sy) const {
+    for (const auto& p : m_placed)
+        for (const auto& id : m_doc.frames_on(p.id)) {
+            if (m_doc.as<core::Frame>(id)->kind != core::FrameKind::Text) continue;
+            const Rect pr = port_rect(id, true);
+            if (pr.w > 0 && Rect{pr.x - 3, pr.y - 3, pr.w + 6, pr.h + 6}.contains(sx, sy)) return id;
+        }
+    return {};
+}
+
+void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
+    draw_threads(cr);
+    cr->set_line_width(1);
+    if (m_drag == Drag::Draw && m_draw.w > 0) {   // the frame being drawn
+        const Rect r = m_vp.to_screen(m_draw);
+        std::vector<double> dash{5, 3};
+        cr->set_dash(dash, 0);
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.9);
+        cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
+        cr->stroke();
+        cr->unset_dash();
+    }
     // Hover: a quiet outline on the frame under the pointer.
     if (!m_hover.empty() && std::find(m_sel.begin(), m_sel.end(), m_hover) == m_sel.end()) {
         const Rect r = m_vp.to_screen(core::frame_in_layout(m_doc, m_placed, m_hover));
@@ -500,6 +560,45 @@ void Canvas::on_drag_begin(double x, double y) {
         return;
     }
     read_mods();
+
+    double px0, py0;
+    m_vp.to_doc(x, y, px0, py0);
+    // Loaded with a thread: this click picks where the text continues.
+    if (!m_thread_from.empty()) {
+        const auto to = core::hit_frame(m_doc, m_placed, px0, py0, 3 / m_vp.scale());
+        const auto from = m_thread_from;
+        m_thread_from.clear();
+        m_drag = Drag::None;
+        if (!to.empty() && core::doc::thread_frames(m_journal, m_doc, from, to)) {
+            pick({from, to});
+            m_sig_edited.emit();
+        }
+        update_cursor();
+        queue_draw();
+        return;
+    }
+    // A text frame's out-port: click to load the thread; Alt-click to cut it.
+    if (const auto port = out_port_hit(x, y); !port.empty()) {
+        m_drag = Drag::None;
+        if (m_mods_alt) {
+            if (core::doc::unthread_after(m_journal, m_doc, port)) m_sig_edited.emit();
+        } else {
+            m_thread_from = port;
+        }
+        update_cursor();
+        queue_draw();
+        return;
+    }
+    // A drawing tool: drag out a frame on a page.
+    if (m_tool != Tool::Select) {
+        m_draw_page = core::page_at(m_placed, px0, py0);
+        m_drag = m_draw_page.empty() ? Drag::None : Drag::Draw;
+        m_dx0 = px0;
+        m_dy0 = py0;
+        m_draw = {};
+        m_targets = core::snap_targets(m_doc, m_placed, {});
+        return;
+    }
 
     // Handles first (on the whole selection), then a frame, then empty space.
     if (!m_sel.empty()) {
@@ -614,6 +713,25 @@ void Canvas::on_drag_update(double ox, double oy) {
         queue_draw();
         return;
     }
+    case Drag::Draw: {
+        double x1 = m_dx0 + ox / s, y1 = m_dy0 + oy / s;
+        if (m_mods_shift) {   // Shift: square
+            const double side = std::max(std::abs(x1 - m_dx0), std::abs(y1 - m_dy0));
+            x1 = m_dx0 + std::copysign(side, x1 - m_dx0);
+            y1 = m_dy0 + std::copysign(side, y1 - m_dy0);
+        }
+        m_snap_x = m_snap_y = NAN;
+        if (m_snap) {
+            const double tol = 6 / s;
+            const auto hx = core::snap_any({x1}, m_targets.xs, tol);
+            if (hx.hit()) { x1 += hx.delta; m_snap_x = hx.line; }
+            const auto hy = core::snap_any({y1}, m_targets.ys, tol);
+            if (hy.hit()) { y1 += hy.delta; m_snap_y = hy.line; }
+        }
+        m_draw = Rect::from_corners(m_dx0, m_dy0, x1, y1);
+        queue_draw();
+        return;
+    }
     case Drag::Guide: {
         if (!m_begun) {
             if (std::hypot(ox, oy) < 2) return;
@@ -672,6 +790,28 @@ void Canvas::on_drag_update(double ox, double oy) {
 void Canvas::on_drag_end(double, double) {
     const Drag was = m_drag;
     m_drag = Drag::None;
+    if (was == Drag::Draw) {
+        // Big enough to mean it (4 px on screen): a frame on the page it was
+        // started on, in that page's coordinates.
+        if (m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4) {
+            for (const auto& p : m_placed)
+                if (p.id == m_draw_page) {
+                    static const core::FrameKind kinds[] = {core::FrameKind::Text, core::FrameKind::Text,
+                                                            core::FrameKind::Image, core::FrameKind::Shape};
+                    const auto id = core::doc::add_frame(m_journal, m_doc, p.id, kinds[static_cast<int>(m_tool)],
+                                                         {m_draw.x - p.r.x, m_draw.y - p.r.y, m_draw.w, m_draw.h});
+                    if (!id.empty()) {
+                        relayout();
+                        pick({id});
+                        m_sig_edited.emit();
+                    }
+                }
+        }
+        m_draw = {};
+        m_snap_x = m_snap_y = NAN;
+        queue_draw();
+        return;
+    }
     if (was == Drag::Guide && m_begun && m_guide_off)
         core::doc::guide_remove_in_gesture(m_journal, m_doc, m_guide);
     if ((was == Drag::Move || was == Drag::Resize || was == Drag::Guide) && m_begun) {
@@ -711,9 +851,23 @@ bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
         return true;
     }
     if (kv == GDK_KEY_Escape) {
+        if (!m_thread_from.empty()) { m_thread_from.clear(); update_cursor(); queue_draw(); return true; }
         if (m_drag != Drag::None) { cancel_drag(); return true; }
         if (!m_sel.empty()) { pick({}); return true; }
         return false;
+    }
+    const bool alt = (st & Gdk::ModifierType::ALT_MASK) == Gdk::ModifierType::ALT_MASK;
+    if (!ctrl && !alt && m_drag == Drag::None) {   // s008: tools by letter (as InDesign), Delete
+        switch (kv) {
+        case GDK_KEY_v: case GDK_KEY_V: set_tool(Tool::Select); m_sig_tool.emit(); return true;
+        case GDK_KEY_t: case GDK_KEY_T: set_tool(Tool::Text);   m_sig_tool.emit(); return true;
+        case GDK_KEY_f: case GDK_KEY_F: set_tool(Tool::Image);  m_sig_tool.emit(); return true;
+        case GDK_KEY_m: case GDK_KEY_M: set_tool(Tool::Shape);  m_sig_tool.emit(); return true;
+        case GDK_KEY_Delete: case GDK_KEY_BackSpace:
+            if (!m_sel.empty()) { delete_selection(); return true; }
+            return false;
+        default: break;
+        }
     }
     double dx = 0, dy = 0;
     const double step = shift ? 10 : 1;   // points
@@ -765,8 +919,26 @@ void Canvas::on_motion(double x, double y) {
     update_cursor();
 }
 
+void Canvas::set_tool(Tool t) {
+    m_tool = t;
+    m_thread_from.clear();
+    update_cursor();
+}
+
+void Canvas::delete_selection() {
+    if (m_sel.empty()) return;
+    const auto gone = m_sel;
+    if (core::doc::delete_frames(m_journal, m_doc, gone)) {
+        pick({});
+        m_sig_edited.emit();
+    }
+}
+
 void Canvas::update_cursor() {
     if (m_space) { set_cursor(Gdk::Cursor::create(m_drag == Drag::Pan ? "grabbing" : "grab")); return; }
+    if (!m_thread_from.empty()) { set_cursor(Gdk::Cursor::create("copy")); return; }   // loaded with a thread
+    if (!out_port_hit(m_mx, m_my).empty()) { set_cursor(Gdk::Cursor::create("pointer")); return; }
+    if (m_tool != Tool::Select) { set_cursor(Gdk::Cursor::create("crosshair")); return; }
     if (!m_sel.empty()) {
         const auto h = core::handle_hit(m_vp.to_screen(selection_box()), m_mx, m_my);
         if (h != core::Handle::None) { set_cursor(Gdk::Cursor::create(cursor_for(h))); return; }
@@ -787,6 +959,7 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
       m_head("canvas_view.head", Gtk::Orientation::HORIZONTAL, 10),
       m_title("canvas_view.title"),
       m_count("canvas_view.count"),
+      m_tools("canvas_view.tools", Gtk::Orientation::VERTICAL),
       m_fit("canvas_view.fit"),
       m_zoom("canvas_view.zoom"),
       m_grid("canvas_view.grid"),
@@ -810,6 +983,37 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     m_zoom.set_tooltip_text("Zoom -- Ctrl+scroll, Ctrl+= / Ctrl+-, Ctrl+1 for 100%");
     m_head.append(m_title);
     m_head.append(m_count);
+    // s008: the tools -- a vertical strip down the canvas's left edge
+    // (Scott: object tools in a vertical panel, standard icons). Text and
+    // Image are the theme's icons; Adwaita has no pointer or shape icon, so
+    // those two ship in the resource bundle, drawn in the same symbolic style.
+    m_tools.add_css_class("cx-toolstrip");
+    m_tools.set_vexpand(true);
+    struct T { const char* icon; const char* name; const char* tip; Canvas::Tool tool; };
+    static const T tools[] = {
+        {"composix-tool-select-symbolic", "canvas_view.tool.select", "Select  (V)", Canvas::Tool::Select},
+        {"insert-text-symbolic",          "canvas_view.tool.text",   "Text frame  (T) \u2014 drag on a page", Canvas::Tool::Text},
+        {"image-x-generic-symbolic",      "canvas_view.tool.image",  "Image frame  (F) \u2014 drag on a page", Canvas::Tool::Image},
+        {"composix-tool-shape-symbolic",  "canvas_view.tool.shape",  "Shape  (M) \u2014 drag on a page; Shift for a square", Canvas::Tool::Shape},
+    };
+    Gtk::ToggleButton* first = nullptr;
+    for (const auto& t : tools) {
+        auto b = Gtk::make_managed<Gtk::ToggleButton>();
+        b->set_icon_name(t.icon);
+        b->set_name(t.name);
+        b->set_tooltip_text(t.tip);
+        b->add_css_class("cx-tool");
+        if (first) b->set_group(*first); else first = b;
+        const auto tool = t.tool;
+        b->signal_toggled().connect([this, b, tool] { if (b->get_active()) m_canvas.set_tool(tool); });
+        m_tools.append(*b);
+        m_tool_buttons.push_back(b);
+    }
+    first->set_active(true);
+    m_canvas.signal_tool().connect([this] {
+        const int i = static_cast<int>(m_canvas.tool());
+        if (i < static_cast<int>(m_tool_buttons.size())) m_tool_buttons[static_cast<std::size_t>(i)]->set_active(true);
+    });
     m_head.append(m_fit);
     m_head.append(m_zoom);
     append(m_head);
@@ -821,10 +1025,11 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     corner->set_name("canvas_view.ruler_corner");
     corner->add_css_class("cx-ruler");
     corner->set_size_request(20, 20);
-    m_grid.attach(*corner, 0, 0);
-    m_grid.attach(*m_top, 1, 0);
-    m_grid.attach(*m_left, 0, 1);
-    m_grid.attach(m_canvas, 1, 1);
+    m_grid.attach(m_tools, 0, 0, 1, 2);   // the tool strip, the full height
+    m_grid.attach(*corner, 1, 0);
+    m_grid.attach(*m_top, 2, 0);
+    m_grid.attach(*m_left, 1, 1);
+    m_grid.attach(m_canvas, 2, 1);
     m_grid.set_vexpand(true);
     append(m_grid);
     m_canvas.signal_zoom().connect(sigc::mem_fun(*this, &CanvasView::sync_zoom));
@@ -836,7 +1041,7 @@ CanvasView::~CanvasView() = default;
 void CanvasView::set_rulers(bool on) {
     m_top->set_visible(on);
     m_left->set_visible(on);
-    if (auto* c = m_grid.get_child_at(0, 0)) c->set_visible(on);
+    if (auto* c = m_grid.get_child_at(1, 0)) c->set_visible(on);
 }
 
 void CanvasView::set_title(const std::string& t, std::size_t n) {
