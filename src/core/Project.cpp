@@ -343,6 +343,35 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             fields.push_back({"Story", st ? st->name : "\u2014"});
             const auto [at, n] = thread_place(d, id);
             fields.push_back({"Thread", n > 1 ? std::to_string(at) + " of " + std::to_string(n) : "Not threaded"});
+            // s012: columns.
+            const int cols = column_count(*f);
+            std::vector<Choice> cc;
+            for (int k = 1; k <= 6; ++k) cc.push_back({std::to_string(k), std::to_string(k)});
+            fields.push_back({"Columns", std::to_string(cols), "columns", cc});
+            if (cols > 1) {
+                std::vector<Choice> gc;
+                for (double g : {6.0, 9.0, 12.0, 14.0, 18.0, 24.0, 36.0}) gc.push_back({pts(g), pts(g) + " pt"});
+                fields.push_back({"Gutter", pts(f->gutter) + " pt", "gutter", gc});
+                // Widths: the weights, smallest made 1 ("2 : 1"); presets by count.
+                const auto w = column_weights(*f, cols);
+                const double least = *std::min_element(w.begin(), w.end());
+                std::string shown;
+                bool equal = true;
+                for (double v : w) {
+                    shown += (shown.empty() ? "" : " : ") + pts(std::round(v / least * 10) / 10);
+                    equal = equal && std::abs(v - w[0]) < 1e-9;
+                }
+                if (equal) shown = "Equal";
+                std::vector<Choice> wc{{"", "Equal"}};
+                if (cols == 2) for (const char* p : {"2:1", "1:2", "3:2", "2:3", "3:1", "1:3"}) wc.push_back({p, std::string(p).replace(1, 1, " : ")});
+                if (cols == 3) for (const char* p : {"2:1:1", "1:2:1", "1:1:2"}) {
+                    std::string l = p;
+                    for (std::size_t i = 0; (i = l.find(':', i)) != std::string::npos; i += 3) l.replace(i, 1, " : ");
+                    wc.push_back({p, l});
+                }
+                fields.push_back({"Widths", shown, "widths", wc});
+                fields.push_back({"Balance", f->balance ? "On" : "Off", "balance", {{"0", "Off"}, {"1", "On"}}});
+            }
             if (st) title += " \u2014 " + st->name;
         } else if (f->kind == FrameKind::Image) {
             const auto* a = d.as<Asset>(f->asset);

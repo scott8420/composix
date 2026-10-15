@@ -395,6 +395,22 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
         cr->set_line_width(1);
         cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
         cr->stroke();
+        // s012: the columns' edges, either side of each gutter.
+        if (const int n = core::column_count(f); n > 1) {
+            cr->save();
+            std::vector<double> dash{3, 3};
+            cr->set_dash(dash, 0);
+            cr->set_source_rgba(0.45, 0.55, 0.7, 0.4 * dim);
+            for (int k = 0; k + 1 < n; ++k) {
+                for (double fx : {core::column_x(f, k) + core::column_width(f, k), core::column_x(f, k + 1)}) {
+                    const double x = std::round(r.x + fx * s) + 0.5;
+                    cr->move_to(x, r.y);
+                    cr->line_to(x, r.b());
+                }
+            }
+            cr->stroke();
+            cr->restore();
+        }
         // Thread ports: in (top-left), out (bottom-right); filled = linked.
         // The last frame of an overset story shows the red + instead.
         const auto [at, total] = core::thread_place(m_doc, id);
@@ -706,6 +722,16 @@ void Canvas::on_drag_begin(double x, double y) {
         return;
     }
 
+    // s012: a picked text frame's gutter -- drag it to share the width
+    // differently between the columns either side.
+    if (const int k = gutter_hit(x, y); k >= 0) {
+        const auto& f = *m_doc.as<core::Frame>(m_sel.front());
+        m_col0.clear();
+        for (int c = 0; c < core::column_count(f); ++c) m_col0.push_back(core::column_width(f, c));
+        m_gutter = k;
+        m_drag = Drag::Gutter;
+        return;
+    }
     // Handles first (on the whole selection), then a frame, then empty space.
     if (!m_sel.empty()) {
         m_handle = core::handle_hit(m_vp.to_screen(selection_box()), x, y);
@@ -774,6 +800,23 @@ void Canvas::on_drag_update(double ox, double oy) {
     switch (m_drag) {
     case Drag::None:
         return;
+    case Drag::Gutter: {
+        if (!m_begun) {
+            if (std::abs(ox) < 2) return;
+            core::doc::frames_begin(m_journal, m_doc, {m_sel.front()}, "Column widths");
+            m_begun = true;
+        }
+        const auto k = static_cast<std::size_t>(m_gutter);
+        const double total = m_col0[k] + m_col0[k + 1], least = std::min(18.0, total / 2);
+        auto w = m_col0;
+        w[k] = std::clamp(m_col0[k] + ox / s, least, total - least);
+        w[k + 1] = total - w[k];
+        for (auto& v : w) v = std::round(v * 2) / 2;   // half points: tidy weights
+        core::doc::edit_frames(m_journal, m_doc, {m_sel.front()}, "Column widths",
+                               [&](core::Frame& f) { f.widths = w; });
+        queue_draw();
+        return;
+    }
     case Drag::Text: {   // s010: drag-select, across the story's frames
         double lx, ly;
         m_vp.to_doc(m_px + ox, m_py + oy, lx, ly);
@@ -940,7 +983,7 @@ void Canvas::on_drag_end(double, double) {
     }
     if (was == Drag::Guide && m_begun && m_guide_off)
         core::doc::guide_remove_in_gesture(m_journal, m_doc, m_guide);
-    if ((was == Drag::Move || was == Drag::Resize || was == Drag::Guide) && m_begun) {
+    if ((was == Drag::Move || was == Drag::Resize || was == Drag::Guide || was == Drag::Gutter) && m_begun) {
         m_begun = false;
         core::doc::frames_end(m_journal);
         m_sig_edited.emit();
@@ -955,7 +998,7 @@ void Canvas::on_drag_end(double, double) {
 
 // Escape mid-drag: everything back where it was, no step.
 void Canvas::cancel_drag() {
-    if ((m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Guide) && m_begun) {
+    if ((m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Guide || m_drag == Drag::Gutter) && m_begun) {
         core::doc::frames_cancel(m_journal);
         m_sig_edited.emit();
     }
@@ -1045,6 +1088,7 @@ void Canvas::on_motion(double x, double y) {
     if (hg != m_hover_guide) { m_hover_guide = hg; queue_draw(); }
     const auto h = core::hit_frame(m_doc, m_placed, dx, dy, 3 / m_vp.scale());
     if (h != m_hover) { m_hover = h; queue_draw(); }
+    m_hover_gutter = gutter_hit(x, y);
     update_cursor();
 }
 
@@ -1063,6 +1107,24 @@ void Canvas::delete_selection() {
         pick({});
         m_sig_edited.emit();
     }
+}
+
+// ── s012: gutters ───────────────────────────────────────────────────────────
+int Canvas::gutter_hit(double sx, double sy) const {
+    if (m_sel.size() != 1 || editing() || m_tool != Tool::Select) return -1;
+    const auto* f = m_doc.as<core::Frame>(m_sel.front());
+    if (!f || f->kind != core::FrameKind::Text || core::column_count(*f) < 2) return -1;
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, m_sel.front());
+    if (lr.w <= 0) return -1;
+    const Rect r = m_vp.to_screen(lr);
+    if (sy < r.y || sy > r.b()) return -1;
+    const double s = m_vp.scale();
+    for (int k = 0; k + 1 < core::column_count(*f); ++k) {
+        const double mid = (core::column_x(*f, k) + core::column_width(*f, k) + core::column_x(*f, k + 1)) / 2;
+        const double half = std::max(4.0, (core::column_x(*f, k + 1) - core::column_x(*f, k) - core::column_width(*f, k)) * s / 2);
+        if (std::abs(sx - (r.x + mid * s)) <= half) return k;
+    }
+    return -1;
 }
 
 // ── s010: editing text ──────────────────────────────────────────────────────
@@ -1338,6 +1400,7 @@ void Canvas::update_cursor() {
         const auto h = core::handle_hit(m_vp.to_screen(selection_box()), m_mx, m_my);
         if (h != core::Handle::None) { set_cursor(Gdk::Cursor::create(cursor_for(h))); return; }
     }
+    if (m_hover_gutter >= 0 || m_drag == Drag::Gutter) { set_cursor(Gdk::Cursor::create("col-resize")); return; }
     if (!m_hover_guide.empty()) {
         const auto* g = m_doc.as<core::Guide>(m_hover_guide);
         set_cursor(Gdk::Cursor::create(g && g->vertical ? "col-resize" : "row-resize"));

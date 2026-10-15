@@ -104,7 +104,12 @@ void load_sample(Doc& d) {
     d.put("frame.7", Frame{pg[1], FrameKind::Text, m, 3 * in, tw, 1 * in, 0, 1, "story.3", "", ""});
     d.put("frame.8", Frame{pg[1], FrameKind::Image, 2.75 * in, 4.25 * in, 0.5 * in, 0.5 * in, 0, 2, "", "", "asset.3"});
     d.put("frame.9", Frame{pg[15], FrameKind::Image, 2.75 * in, 7.5 * in, 0.5 * in, 0.5 * in, 0, 2, "", "", "asset.3"});
-    d.put("frame.10", Frame{pg[15], FrameKind::Text, m, m, tw, 5 * in, 0, 1, "story.4", "", ""});
+    {   // Sources in two balanced columns (s012).
+        Frame src{pg[15], FrameKind::Text, m, m, tw, 5 * in, 0, 1, "story.4", "", ""};
+        src.columns = 2;
+        src.balance = true;
+        d.put("frame.10", src);
+    }
 
     // ── guides on the body master: the margins (s006) ──────────────────────
     d.put("guide.1", Guide{"master.2", true, m});

@@ -49,7 +49,8 @@ json to(const Record& r) {
         } else if constexpr (std::is_same_v<T, Frame>) {
             j = {{"kind", "frame"}, {"owner", v.owner}, {"type", en(v.kind)}, {"x", v.x}, {"y", v.y},
                  {"w", v.w}, {"h", v.h}, {"rot", v.rot}, {"z", v.z}, {"story", v.story},
-                 {"next", v.next}, {"asset", v.asset}, {"fit", en(v.fit)}};
+                 {"next", v.next}, {"asset", v.asset}, {"fit", en(v.fit)},
+                 {"columns", v.columns}, {"gutter", v.gutter}, {"balance", v.balance}, {"widths", v.widths}};
         } else if constexpr (std::is_same_v<T, Story>) {
             json paras = json::array();
             for (const auto& p : v.paras) {
@@ -138,6 +139,10 @@ std::optional<Record> from(const json& j) {
         v.next = val<std::string>(j, "next", "");
         v.asset = val<std::string>(j, "asset", "");
         v.fit = de(j, "fit", ImageFit::Fill);
+        v.columns = val(j, "columns", 1);
+        v.gutter = val(j, "gutter", 12.0);
+        v.balance = val(j, "balance", false);
+        v.widths = val(j, "widths", std::vector<double>{});
         return v;
     }
     if (k == "story") {

@@ -93,7 +93,7 @@ public:
     sigc::signal<void()>& signal_tool()      { return m_sig_tool; }   // the tool changed (a key)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter };
 
     void draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
@@ -130,6 +130,9 @@ private:
     core::TextPos hit_story(const std::string& frame, double lx, double ly);   // layout coords
     void draw_edit(const Cairo::RefPtr<Cairo::Context>& cr);
     void blink_restart();
+    // s012: a picked text frame's gutter under the pointer (screen): the
+    // column to its left, or -1.
+    int gutter_hit(double sx, double sy) const;
     const core::Story* edit_story() const { return m_doc.as<core::Story>(m_edit_story); }
 
     core::Doc&        m_doc;
@@ -198,6 +201,11 @@ private:
     gint64        m_last_press = 0;             // double-click, by hand (the drag gesture eats the click)
     double        m_last_px = 0, m_last_py = 0;
     int           m_clicks = 0;
+
+    // s012: dragging a gutter changes the widths of the columns either side
+    int                 m_gutter = -1;          // the column left of the gutter being dragged
+    int                 m_hover_gutter = -1;
+    std::vector<double> m_col0;                 // every column's width (points) at press
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool, m_sig_caret;
 };
 

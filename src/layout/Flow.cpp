@@ -118,6 +118,53 @@ std::vector<std::string> thread_frames(const core::Doc& d, const std::string& st
     return out;
 }
 
+namespace {
+struct Cursor { int p = 0; int start = 0; };
+
+// Fill one frame's columns from `c`, each column at most `hmax` tall. True
+// when the story ended inside this frame.
+bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr, Cursor& c, double hmax,
+                FrameText& ft) {
+    const int n = core::column_count(fr);
+    const int paras = static_cast<int>(st.paras.size());
+    for (int col = 0; col < n; ++col) {
+        const double cw = core::column_width(fr, col), cx = core::column_x(fr, col);
+        double y = 0;
+        while (c.p < paras) {
+            const auto& para = st.paras[static_cast<std::size_t>(c.p)];
+            const auto style = style_of(d, para.style);
+            const double lead = leading_of(style);
+            // s011: space before a paragraph -- not at the top of a column.
+            const double before = (c.start == 0 && y > 0) ? style.space_before : 0;
+            auto lay = make_layout(style, para.text.c_str() + c.start, static_cast<int>(para.text.size()) - c.start, cw, false);
+            apply_runs(lay.get(), d, para, c.start);
+            const int nl = pango_layout_get_line_count(lay.get());
+            int placed = 0;
+            double yy = y + before;
+            for (int i = 0; i < nl; ++i) {
+                if (yy + lead > hmax + 0.01) break;   // the column is full
+                PangoLayoutLine* line = pango_layout_get_line_readonly(lay.get(), i);
+                const int a = c.start + line->start_index;
+                ft.lines.push_back({c.p, a, a + line->length, yy, lead, col, cx});
+                yy += lead;
+                ++placed;
+            }
+            if (placed == nl) {   // the whole (rest of the) paragraph fit
+                y = yy + style.space_after;
+                ++c.p;
+                c.start = 0;
+                continue;
+            }
+            // Continue in the next column from the first line that didn't fit.
+            c.start += pango_layout_get_line_readonly(lay.get(), placed)->start_index;
+            break;
+        }
+        if (c.p >= paras) return true;
+    }
+    return false;
+}
+}  // namespace
+
 StoryFlow flow_story(const core::Doc& d, const std::string& story) {
     StoryFlow out;
     const auto* st = d.as<core::Story>(story);
@@ -126,38 +173,28 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
     for (const auto& f : chain) out.frames.push_back({f, {}});
     if (chain.empty()) return out;   // not placed: nothing flows, nothing is "over"
 
-    std::size_t fi = 0;
-    double y = 0;
-    for (int p = 0; p < static_cast<int>(st->paras.size()); ++p) {
-        const auto& text = st->paras[static_cast<std::size_t>(p)].text;
-        const auto style = style_of(d, st->paras[static_cast<std::size_t>(p)].style);
-        const double lead = leading_of(style);
-        int start = 0;
-        // s011: space before a paragraph -- not at the top of a frame.
-        if (y > 0) y += style.space_before;
-        while (true) {
-            if (fi >= chain.size()) { out.overset = true; return out; }
-            const auto& fr = *d.as<core::Frame>(chain[fi]);
-            auto lay = make_layout(style, text.c_str() + start, static_cast<int>(text.size()) - start, fr.w, false);
-            apply_runs(lay.get(), d, st->paras[static_cast<std::size_t>(p)], start);
-            const int n = pango_layout_get_line_count(lay.get());
-            int placed = 0;
-            for (int i = 0; i < n; ++i) {
-                if (y + lead > fr.h + 0.01) break;   // the frame is full
-                PangoLayoutLine* line = pango_layout_get_line_readonly(lay.get(), i);
-                const int a = start + line->start_index;
-                out.frames[fi].lines.push_back({p, a, a + line->length, y, lead});
-                y += lead;
-                ++placed;
-                ++out.lines;
+    Cursor c;
+    bool done = st->paras.empty();
+    for (std::size_t fi = 0; fi < chain.size() && !done; ++fi) {
+        const auto& fr = *d.as<core::Frame>(chain[fi]);
+        const Cursor at = c;
+        done = fill_frame(d, *st, fr, c, fr.h, out.frames[fi]);
+        if (done && fr.balance && core::column_count(fr) > 1) {
+            // The shortest column height that still holds the rest.
+            double lo = 0, hi = fr.h;
+            for (int k = 0; k < 24 && hi - lo > 0.25; ++k) {
+                const double mid = (lo + hi) / 2;
+                Cursor t = at;
+                FrameText tmp{chain[fi], {}};
+                if (fill_frame(d, *st, fr, t, mid, tmp)) hi = mid; else lo = mid;
             }
-            if (placed == n) { y += style.space_after; break; }   // the whole (rest of the) paragraph fit
-            // Continue in the next frame from the first line that didn't fit.
-            start += pango_layout_get_line_readonly(lay.get(), placed)->start_index;
-            ++fi;
-            y = 0;
+            c = at;
+            out.frames[fi].lines.clear();
+            fill_frame(d, *st, fr, c, hi, out.frames[fi]);
         }
     }
+    for (const auto& ft : out.frames) out.lines += static_cast<int>(ft.lines.size());
+    out.overset = !done;
     return out;
 }
 
@@ -190,14 +227,16 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
     std::size_t i = 0;
     while (i < ft->lines.size()) {
         const int p = ft->lines[i].para;
+        const int col = ft->lines[i].col;
         std::size_t j = i;
-        while (j < ft->lines.size() && ft->lines[j].para == p) ++j;
+        while (j < ft->lines.size() && ft->lines[j].para == p && ft->lines[j].col == col) ++j;
         if (p >= static_cast<int>(st->paras.size())) break;
         const auto& text = st->paras[static_cast<std::size_t>(p)].text;
         const auto style = style_of(d, st->paras[static_cast<std::size_t>(p)].style);
         const int from = std::min(ft->lines[i].start, static_cast<int>(text.size()));
         const bool continues = ft->lines[j - 1].end < static_cast<int>(text.size());
-        auto lay = make_layout(style, text.c_str() + from, static_cast<int>(text.size()) - from, fr->w, continues);
+        auto lay = make_layout(style, text.c_str() + from, static_cast<int>(text.size()) - from,
+                               core::column_width(*fr, col), continues);
         apply_runs(lay.get(), d, st->paras[static_cast<std::size_t>(p)], from);
         PangoLayoutIter* it = pango_layout_get_iter(lay.get());
         for (std::size_t k = i; k < j; ++k) {
@@ -208,7 +247,7 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
             const double h = logical.height / static_cast<double>(PANGO_SCALE);
             const double x = logical.x / static_cast<double>(PANGO_SCALE);
             const auto& ln = ft->lines[k];
-            f(Placed{&ln, lay.get(), pango_layout_iter_get_line_readonly(it), from, x,
+            f(Placed{&ln, lay.get(), pango_layout_iter_get_line_readonly(it), from, ln.x + x,
                      ln.y + (ln.h - h) / 2 + (bl - top)});
             if (!pango_layout_iter_next_line(it)) break;
         }
@@ -234,7 +273,7 @@ bool on_line(const core::Story& s, const Line& l, core::TextPos p) {
 double x_of(const Placed& pl, int byte) {
     PangoRectangle pos;
     pango_layout_index_to_pos(pl.lay, byte - pl.from, &pos);
-    return pos.x / static_cast<double>(PANGO_SCALE);
+    return pl.line->x + pos.x / static_cast<double>(PANGO_SCALE);
 }
 
 // The byte nearest x on a placed line.
@@ -287,9 +326,15 @@ core::TextPos hit_text(const core::Doc& d, const std::string& story, const Story
             if (!it->lines.empty()) return {it->lines.back().para, it->lines.back().end};
         return {};
     }
-    // The line under y (above the first: the first; below the last: the last).
-    const Line* want = &ft->lines.front();
-    for (const auto& l : ft->lines) if (y >= l.y) want = &l;
+    // The column under x (s012: the nearest that holds text), then the line
+    // under y in it (above the first: the first; below the last: the last).
+    const auto* fr = d.as<core::Frame>(frame);
+    int col = fr ? core::column_at(*fr, x) : 0;
+    while (col > 0 && std::none_of(ft->lines.begin(), ft->lines.end(), [&](const Line& l) { return l.col == col; })) --col;
+    const Line* want = nullptr;
+    for (const auto& l : ft->lines)
+        if (l.col == col && (!want || y >= l.y)) want = &l;
+    if (!want) want = &ft->lines.front();
     core::TextPos out{want->para, want->start};
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         if (pl.line == want) out = {want->para, byte_at_x(pl, x)};

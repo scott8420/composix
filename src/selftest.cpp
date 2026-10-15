@@ -887,6 +887,73 @@ int main() {
         check("text editing: through the door", d.strays() == 0);
     }
 
+    // ── s012: text columns ──────────────────────────────────────────────────
+    {
+        std::cout << "\n-- columns --\n";
+        namespace L = composix::layout;
+        const auto near = [](double a, double b) { return std::abs(a - b) < 0.01; };
+        core::Frame f;
+        f.w = 300; f.columns = 3; f.gutter = 15;
+        check("equal columns", near(core::column_width(f, 0), 90) && near(core::column_x(f, 2), 210));
+        f.widths = {2, 1, 1};
+        check("weighted 2:1:1", near(core::column_width(f, 0), 135) && near(core::column_width(f, 1), 67.5) &&
+                                near(core::column_x(f, 1), 150));
+        f.w = 600;
+        check("weights keep their proportions on resize", near(core::column_width(f, 0), 285));
+        f.widths = {1, 2};   // the wrong count: ignored, equal
+        check("weights that don't fit: equal", near(core::column_width(f, 0), core::column_width(f, 2)));
+        check("column at x: the nearest", core::column_at(f, 5) == 0 && core::column_at(f, 590) == 2 &&
+                                          core::column_at(f, -50) == 0);
+
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto one = L::flow_story(d, "story.1");
+        check("columns: one step", core::doc::edit_frames(j, d, {"frame.1"}, "Columns", [](core::Frame& fr) {
+                                       fr.columns = 2; fr.gutter = 18; fr.h = 140; }) && j.size() == 1);
+        const auto two = L::flow_story(d, "story.1");
+        const auto& ls = two.frames[0].lines;
+        const bool both = std::any_of(ls.begin(), ls.end(), [](const L::Line& l) { return l.col == 0; }) &&
+                          std::any_of(ls.begin(), ls.end(), [](const L::Line& l) { return l.col == 1; });
+        check("text fills column 1, then column 2", both);
+        const auto* f1 = d.as<core::Frame>("frame.1");
+        check("column 2 starts after column 1 and the gutter",
+              std::all_of(ls.begin(), ls.end(), [&](const L::Line& l) {
+                  return l.col == 0 ? l.x == 0 : near(l.x, core::column_width(*f1, 0) + 18);
+              }));
+        check("narrower columns: more lines", two.lines > one.lines);
+        // A place in column 2 round-trips through the caret and a click.
+        const L::Line* c2 = nullptr;
+        for (const auto& l : ls) if (l.col == 1) { c2 = &l; break; }
+        if (c2) {
+            const core::TextPos p{c2->para, c2->start + 2};
+            const auto ca = L::caret_at(d, "story.1", two, p);
+            check("caret in column 2: x past the gutter", ca.ok && ca.x > core::column_width(*f1, 0) + 18);
+            check("click in column 2 comes back", L::hit_text(d, "story.1", two, "frame.1", ca.x + 0.1, ca.y + 1) == p);
+            // Down from column 1's last line: column 2's first.
+            const L::Line* last1 = nullptr;
+            for (const auto& l : ls) if (l.col == 0) last1 = &l;
+            const auto down = L::line_move(d, "story.1", two, {last1->para, last1->start}, +1, 0);
+            check("down off column 1: into column 2", down.para == c2->para && down.byte >= c2->start &&
+                                                      down.byte <= c2->end);
+        } else {
+            check("column 2 has text", false);
+        }
+        // Balance: where the story ends, the columns come out even.
+        core::doc::edit_frames(j, d, {"frame.1"}, "Columns", [](core::Frame& fr) { fr.h = 600; fr.balance = true; });
+        const auto bal = L::flow_story(d, "story.1");
+        int n0 = 0, n1 = 0;
+        for (const auto& l : bal.frames[0].lines) (l.col == 0 ? n0 : n1)++;
+        check("balanced: the columns within a couple of lines", n1 > 0 && std::abs(n0 - n1) <= 3 && !bal.overset,
+              std::to_string(n0) + " / " + std::to_string(n1));
+        core::Doc back;
+        check("json: columns, gutter, balance, weights",
+              core::doc::edit_frames(j, d, {"frame.1"}, "Widths", [](core::Frame& fr) { fr.widths = {3, 2}; }) &&
+              core::from_json(back, core::to_json(d)) && *back.as<core::Frame>("frame.1") == *d.as<core::Frame>("frame.1"));
+        check("columns: through the door", d.strays() == 0);
+    }
+
     // ── s011: styles + fonts ────────────────────────────────────────────────
     {
         std::cout << "\n-- styles --\n";

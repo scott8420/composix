@@ -236,6 +236,43 @@ std::string master_label(const Doc& d, const Doc::Id& master) {
 // ─────────────────────────────────────────────────────────────────────────────
 // The verbs
 // ─────────────────────────────────────────────────────────────────────────────
+// ── columns (s012) ──────────────────────────────────────────────────────────
+int column_count(const Frame& f) { return std::clamp(f.columns, 1, 24); }
+std::vector<double> column_weights(const Frame& f, int n) {
+    std::vector<double> w(static_cast<std::size_t>(n), 1.0);
+    if (static_cast<int>(f.widths.size()) == n &&
+        std::all_of(f.widths.begin(), f.widths.end(), [](double v) { return v > 0; }))
+        w = f.widths;
+    return w;
+}
+double column_width(const Frame& f, int col) {
+    const int n = column_count(f);
+    const double g = n > 1 ? std::max(0.0, f.gutter) : 0;
+    const auto w = column_weights(f, n);
+    double sum = 0;
+    for (double v : w) sum += v;
+    const double room = std::max(1.0 * n, f.w - g * (n - 1));
+    return std::max(1.0, room * w[static_cast<std::size_t>(std::clamp(col, 0, n - 1))] / sum);
+}
+double column_x(const Frame& f, int col) {
+    const int n = column_count(f);
+    const double g = n > 1 ? std::max(0.0, f.gutter) : 0;
+    double x = 0;
+    for (int c = 0; c < std::clamp(col, 0, n - 1); ++c) x += column_width(f, c) + g;
+    return x;
+}
+int column_at(const Frame& f, double x) {
+    const int n = column_count(f);
+    int best = 0;
+    double dist = 1e300;
+    for (int c = 0; c < n; ++c) {
+        const double a = column_x(f, c), b = a + column_width(f, c);
+        const double dd = x < a ? a - x : x > b ? x - b : 0;
+        if (dd < dist) { dist = dd; best = c; }
+    }
+    return best;
+}
+
 // ── text positions (s010) ───────────────────────────────────────────────────
 namespace {
 bool cont(unsigned char c) { return (c & 0xC0) == 0x80; }   // a UTF-8 continuation byte
@@ -791,6 +828,26 @@ bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     });
 }
 
+bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const std::string& label,
+                 const std::function<void(Frame&)>& f) {
+    std::vector<Doc::Id> frames;
+    for (const auto& id : ids) {
+        const auto* fr = d.as<Frame>(id);
+        if (!fr) continue;
+        Frame t = *fr;
+        f(t);
+        if (!(t == *fr)) frames.push_back(id);
+    }
+    if (frames.empty()) return false;
+    return j.run(label, frames, [&] {
+        for (const auto& id : frames) {
+            Frame t = *d.as<Frame>(id);
+            f(t);
+            d.put(id, t);
+        }
+    });
+}
+
 // ── text (s010) ─────────────────────────────────────────────────────────────
 TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& text,
                   const std::string& label, const std::string& merge_key) {
@@ -1248,6 +1305,10 @@ const std::vector<Verb>& verbs() {
         {"enter", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 5}, {1, 5}, "\n"); }},
         {"paste_lines", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {0, 2}, {2, 4}, "one\ntwo\nthree", "Paste"); }},
         {"cut", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 0}, {3, 0}, "", "Cut"); }},
+        // s012: columns.
+        {"edit_frames", [](DocJournal& j, Doc& d) {
+             edit_frames(j, d, {"frame.1", "frame.10"}, "Columns", [](Frame& f) { f.columns = 2; f.gutter = 18; f.widths = {2, 1}; });
+         }},
         // s011: styles.
         {"set_para_style", [](DocJournal& j, Doc& d) { set_para_style(j, d, "story.1", {1, 0}, {3, 2}, "style.3"); }},
         {"set_char_style", [](DocJournal& j, Doc& d) { set_char_style(j, d, "story.1", {1, 4}, {2, 6}, "style.5"); }},

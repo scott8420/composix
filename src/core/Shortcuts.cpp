@@ -143,6 +143,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Ctrl+Left / Right, Home / End", "Text: by word, to the line's ends (Ctrl: the story's)"},
         {"Mouse", "", {}, "Ctrl+A / C / X / V", "Text: select the story, copy, cut, paste"},
         {"Mouse", "", {}, "Esc (editing)", "Stop editing; the frame stays picked"},
+        {"Mouse", "", {}, "Drag a gutter (a picked text frame)", "Make one column wider, its neighbour narrower"},
         {"Mouse", "", {}, "Drop an image file on a page", "Place it there (on an image frame: into it)"},
         {"Mouse", "", {}, "Esc", "Cancel a drag, put down a loaded image, then clear the picks"},
 

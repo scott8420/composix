@@ -274,6 +274,33 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             } else if (choice == "delete") {
                 did = core::doc::delete_styles(m_journal, m_doc, m_inspected);
             }
+        } else if (key == "columns" || key == "gutter" || key == "widths" || key == "balance") {   // s012
+            static const std::map<std::string, std::string> labels{
+                {"columns", "Columns"}, {"gutter", "Gutter"}, {"widths", "Column widths"}, {"balance", "Balance columns"}};
+            std::vector<std::string> text;
+            for (const auto& id : m_inspected)
+                if (const auto* f = m_doc.as<core::Frame>(id); f && f->kind == core::FrameKind::Text) text.push_back(id);
+            did = core::doc::edit_frames(m_journal, m_doc, text, labels.at(key), [&](core::Frame& f) {
+                if (key == "columns") {
+                    const int n = std::stoi(choice);
+                    if (n != f.columns) f.widths.clear();   // a new count starts even
+                    f.columns = n;
+                } else if (key == "gutter") {
+                    f.gutter = std::stod(choice);
+                } else if (key == "balance") {
+                    f.balance = choice == "1";
+                } else {   // "2:1:1" -> weights; "" -> equal
+                    std::vector<double> w;
+                    std::size_t at = 0;
+                    while (!choice.empty() && at <= choice.size()) {
+                        const auto c = choice.find(':', at);
+                        w.push_back(std::stod(choice.substr(at, c == std::string::npos ? std::string::npos : c - at)));
+                        if (c == std::string::npos) break;
+                        at = c + 1;
+                    }
+                    f.widths = w;
+                }
+            });
         } else if (key == "fit") {   // s009
             did = core::doc::set_fit(m_journal, m_doc, m_inspected, static_cast<core::ImageFit>(std::stoi(choice)));
         } else if (key == "frame_image") {

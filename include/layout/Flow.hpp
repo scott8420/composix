@@ -16,6 +16,9 @@
 //   * Each line advances by its style's leading; the baseline sits centred in
 //     the leading.
 //   * Text left over after the last frame is OVERSET.
+//   * s012: a frame is filled column by column (each at its own width); a
+//     BALANCED frame where the story ends gets the shortest column height
+//     that still holds the rest, so its columns come out even.
 #include "core/Doc.hpp"
 
 #include <cairo.h>
@@ -33,6 +36,8 @@ struct Line {
     int    end   = 0;
     double y     = 0;    // top of the line box, frame coordinates (points)
     double h     = 0;    // its leading (s010: the caret's height)
+    int    col   = 0;    // s012: the column it is in
+    double x     = 0;    // that column's left edge, frame coordinates
 };
 
 struct FrameText {

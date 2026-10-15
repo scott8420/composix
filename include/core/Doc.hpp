@@ -100,6 +100,10 @@ struct Frame {
     std::string next;                    // text: the next frame in the thread
     std::string asset;                   // image
     ImageFit    fit = ImageFit::Fill;    // image: how the picture sits in the frame (s009)
+    int         columns = 1;             // text (s012): columns inside the frame
+    double      gutter  = 12;            // text: points between them
+    bool        balance = false;         // text: even out the columns where the story ends
+    std::vector<double> widths;          // text: each column's relative weight (empty = equal)
     bool operator==(const Frame&) const = default;
 };
 
@@ -377,6 +381,12 @@ bool    embed_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id,
 bool    unembed_assets(DocJournal& j, Doc& d, const std::vector<Doc::Id>& assets);
 bool    set_fit(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ImageFit fit);
 
+// ── frame settings (s012) ───────────────────────────────────────────────────
+// Change frames' settings (columns, gutter, balance ...): `f` edits each;
+// one step for all.
+bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, const std::string& label,
+                 const std::function<void(Frame&)>& f);
+
 // ── text (s010) ─────────────────────────────────────────────────────────────
 // THE text verb: replace [a, b) in a story with `text` ('\n' splits a
 // paragraph; new paragraphs take the style of the one split). Typing,
@@ -431,6 +441,16 @@ struct Placed {
 };
 std::vector<Placed> layout_pages(const Doc& d, const std::vector<Doc::Id>& ids, double gap = 36);
 inline Rect frame_rect(const Frame& f) { return {f.x, f.y, f.w, f.h}; }
+// s012: a text frame's columns -- how many, each one's width and left edge
+// (frame coordinates), and which column an x falls in (the nearest). Widths
+// are the frame's width less the gutters, shared by the columns' weights
+// (equal when no weights are set), so they keep their proportions on resize.
+int    column_count(const Frame& f);
+double column_width(const Frame& f, int col);
+double column_x(const Frame& f, int col);
+int    column_at(const Frame& f, double x);
+// The weights for `n` columns from `f` (its own when they fit, else equal).
+std::vector<double> column_weights(const Frame& f, int n);
 // The masters a page shows, most basic first (a master's based-on chain).
 std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& page_or_master);
 // A frame's rect in layout (doc) space; empty if its owner isn't placed.
