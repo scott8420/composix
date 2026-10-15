@@ -1,0 +1,197 @@
+/* ───────────────────────────────────────────────────────────────────────────
+   Composix -- the house look (s002). Web / Mac roots: an airy source-list
+   navigator, cards on a soft pasteboard, an accent ring for selection, pills
+   for counts and badges, hairlines instead of boxes. Deliberately NOT the dark,
+   dense, panel-on-panel look of InDesign / Affinity Publisher.
+
+   Rules of the file (docs/look.md):
+   * Every colour is a token below, derived from the theme's own colours, so
+     light / dark follow the desktop with no second stylesheet.
+   * Style by CLASS (.cx-*). Widget NAMES are for debugging (Inspector,
+     registry dump, backtraces) -- dotted names are awkward CSS selectors.
+   * Paper stays paper-white in both appearances; that is painted in code.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── tokens ─────────────────────────────────────────────────────────────── */
+@define-color cx_accent      @theme_selected_bg_color;
+@define-color cx_fg          @theme_fg_color;
+@define-color cx_card        @theme_base_color;
+@define-color cx_sidebar     mix(@theme_bg_color, @theme_base_color, 0.35);
+@define-color cx_pasteboard  mix(@theme_bg_color, @theme_fg_color, 0.045);
+@define-color cx_hair        alpha(@theme_fg_color, 0.10);
+@define-color cx_dim         alpha(@theme_fg_color, 0.58);
+@define-color cx_faint       alpha(@theme_fg_color, 0.06);
+@define-color cx_warn        #d9822b;
+@define-color cx_bad         #d64545;
+
+/* ── header ─────────────────────────────────────────────────────────────── */
+headerbar.cx-header {
+  box-shadow: none;
+  border-bottom: 1px solid @cx_hair;
+  min-height: 46px;
+}
+.cx-doc-title    { font-weight: 700; }
+.cx-doc-subtitle { font-size: 0.78em; color: @cx_dim; }
+.cx-logo         { color: @cx_accent; }
+
+button.cx-chrome-button,
+menubutton.cx-chrome-button > button {
+  border-radius: 8px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+button.cx-chrome-button:hover,
+menubutton.cx-chrome-button > button:hover { background: @cx_faint; }
+button.cx-chrome-button:checked            { background: alpha(@cx_accent, 0.16); color: @cx_accent; }
+
+/* ── panes ──────────────────────────────────────────────────────────────── */
+paned.cx-panes > separator,
+paned.cx-panes paned > separator {
+  min-width: 1px;
+  background: @cx_hair;
+  background-image: none;
+}
+
+.cx-pane-heading {
+  font-size: 0.72em;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  color: @cx_dim;
+  margin: 14px 18px 6px;
+}
+
+/* ── navigator: a source list ───────────────────────────────────────────── */
+.cx-nav             { background: @cx_sidebar; }
+.cx-nav-list        { background: none; padding: 0 0 12px; }
+.cx-nav-list > row {
+  border-radius: 8px;
+  margin: 1px 8px;
+  padding: 3px 8px 3px 2px;
+  min-height: 26px;
+  transition: background 120ms ease-out;
+}
+.cx-nav-list > row:hover    { background: @cx_faint; }
+.cx-nav-list > row:selected { background: alpha(@cx_accent, 0.18); color: @cx_fg; }
+.cx-nav-list:focus-within > row:selected { background: alpha(@cx_accent, 0.26); }
+
+.cx-section-row             { margin-top: 6px; }
+.cx-section-title           { font-weight: 600; }
+.cx-section-icon            { color: @cx_accent; -gtk-icon-size: 16px; }
+.cx-nav-list > row.cx-item-row { padding-left: 46px; }
+.cx-item-row label          { font-size: 0.93em; }
+
+button.cx-disclose {
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  border-radius: 6px;
+  background: none;
+  box-shadow: none;
+  color: @cx_dim;
+  -gtk-icon-size: 12px;
+}
+button.cx-disclose:hover { background: @cx_faint; color: @cx_fg; }
+
+/* ── pills: counts and badges ───────────────────────────────────────────── */
+.cx-count {
+  font-size: 0.75em;
+  font-weight: 700;
+  color: @cx_dim;
+  background: @cx_faint;
+  border-radius: 999px;
+  padding: 1px 8px;
+  min-width: 10px;
+}
+.cx-badge {
+  font-size: 0.7em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: @cx_dim;
+  background: alpha(@theme_fg_color, 0.08);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.cx-badge.cx-warn { color: @cx_warn; background: alpha(@cx_warn, 0.16); }
+
+/* ── main views ─────────────────────────────────────────────────────────── */
+.cx-main         { background: @cx_pasteboard; }
+.cx-view-head    { padding: 20px 28px 12px; }
+.cx-view-title   { font-size: 1.65em; font-weight: 800; letter-spacing: -0.01em; }
+
+/* tiles: cards on the pasteboard */
+flowbox.cx-tile-grid { padding: 6px 28px 32px; background: none; }
+flowbox.cx-tile-grid > flowboxchild {
+  padding: 0;
+  border-radius: 14px;
+  background: none;
+  outline-offset: 3px;
+  outline-color: alpha(@cx_accent, 0.6);
+}
+flowbox.cx-tile-grid > flowboxchild:selected { background: none; color: @cx_fg; }
+
+.cx-tile-card {
+  background: @cx_card;
+  border-radius: 14px;
+  padding: 8px 12px 12px;
+  box-shadow: 0 1px 2px alpha(black, 0.07), 0 0 0 1px @cx_hair;
+  transition: box-shadow 160ms ease-out;
+}
+flowboxchild:hover > .cx-tile-card {
+  box-shadow: 0 8px 22px alpha(black, 0.10), 0 0 0 1px @cx_hair;
+}
+flowboxchild:selected > .cx-tile-card {
+  box-shadow: 0 0 0 2px @cx_accent, 0 8px 22px alpha(@cx_accent, 0.22);
+}
+.cx-tile-card .cx-badge     { background: @cx_card; box-shadow: 0 0 0 1px @cx_hair; }
+.cx-tile-card .cx-badge.cx-warn { background: mix(@cx_card, @cx_warn, 0.14); }
+.cx-tile-title              { font-weight: 700; margin-top: 4px; }
+.cx-tile-meta               { font-size: 0.8em; }
+
+.cx-field-label { color: @cx_dim; }
+.cx-field-value { }
+
+/* the opened item: a deeper pasteboard */
+.cx-pasteboard { background: mix(@cx_pasteboard, @theme_fg_color, 0.03); }
+
+/* ── the inspector's handle + pull tab (s003, as Samson) ───────────────── */
+.cx-panel-handle          { min-width: 5px; background: transparent; }
+.cx-panel-handle.cx-right { border-right: 1px solid @cx_hair; }
+.cx-panel-handle.cx-left  { border-left: 1px solid @cx_hair; }
+.cx-panel-handle.cx-shut  { border: none; }
+/* Shut, the tab waits unseen until the pointer finds the edge or the tab;
+   open, it shows quietly; pointed at, it lights in the accent. */
+.cx-pull-tab {
+  min-width: 20px;
+  min-height: 160px;
+  padding: 0;
+  font-size: 16px;
+  border-radius: 10px 0 0 10px;
+  border: 1px solid @cx_hair;
+  border-right: none;
+  background: mix(@cx_sidebar, @theme_fg_color, 0.05);
+  color: @cx_dim;
+  box-shadow: -2px 0 8px alpha(black, 0.12);
+  opacity: 0;
+  transition: opacity 160ms ease, background 160ms ease;
+}
+.cx-pull-tab.cx-open { opacity: 1; }
+.cx-pull-tab.cx-lit  { opacity: 1; background: @cx_accent; color: @theme_selected_fg_color; border-color: @cx_accent; }
+
+/* ── inspector ──────────────────────────────────────────────────────────── */
+.cx-inspector               { background: @cx_sidebar; }
+.cx-insp-title              { font-size: 1.25em; font-weight: 800; margin: 2px 18px 0; }
+.cx-insp-sub                { font-size: 0.82em; color: @cx_dim; margin: 0 18px 12px; }
+.cx-insp-fields             { margin: 4px 18px 18px; }
+.cx-insp-fields > label     { padding: 5px 0; border-bottom: 1px solid @cx_hair; }
+.cx-insp-fields .cx-field-label { font-size: 0.85em; }
+.cx-insp-fields .cx-field-value { font-size: 0.92em; }
+.cx-mixed                   { font-style: italic; color: @cx_dim; }
+.cx-insp-empty              { color: @cx_dim; margin: 8px 18px; }
+
+/* ── welcome ────────────────────────────────────────────────────────────── */
+.cx-welcome-icon  { color: alpha(@cx_accent, 0.7); margin-bottom: 8px; }
+.cx-welcome-title { font-size: 1.4em; font-weight: 800; }
+.cx-welcome-body  { color: @cx_dim; }
