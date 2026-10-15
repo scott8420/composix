@@ -174,6 +174,7 @@ private:
     // s013: the Export PDF sheet, and its choices for the session.
     std::unique_ptr<Gtk::Window>     m_export;
     bool                             m_pdf_bleed = true, m_pdf_marks = false;
+    bool                             m_pdf_print = true;   // s015: Plate (print) or cairo (screen)
     void export_pdf_to(const std::string& path);  // category: helper: write + report
 
     std::unique_ptr<AboutWindow>     m_about;

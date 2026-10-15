@@ -245,6 +245,13 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             if (para) f.push_back({"Leading", s.leading > 0 ? pt(s.leading) : "Auto", "leading", lead_ch});
             f.push_back({"Weight", s.bold ? "Bold" : "Regular", "bold", {{"0", "Regular"}, {"1", "Bold"}}});
             f.push_back({"Slant", s.italic ? "Italic" : "Roman", "italic", {{"0", "Roman"}, {"1", "Italic"}}});
+            // s015: its colour, a swatch.
+            {
+                std::vector<Choice> col{{"", para ? "Black" : "Inherit"}};
+                for (const auto& sw : d.ids_of<Swatch>()) col.push_back({sw, d.as<Swatch>(sw)->name});
+                const auto* cur = d.as<Swatch>(s.color);
+                f.push_back({"Color", cur ? cur->name : (para ? "Black" : "Inherit"), "color", col});
+            }
             if (para) {
                 f.push_back({"Align", align_text(s.align), "align", align_ch});
                 f.push_back({"Space before", pt(s.space_before), "before", space_ch});

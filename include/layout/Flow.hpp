@@ -22,8 +22,10 @@
 #include "core/Doc.hpp"
 
 #include <cairo.h>
+#include <pango/pango.h>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -61,6 +63,18 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story);
 // `ink`: the text's grey (screen: near-black; print, s013: 0 = pure black).
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
                      const std::string& frame, double ox, double oy, double ink = 0.08);
+
+// s015: the lines `flow` put in `frame`, exactly as drawn: the Pango line, its
+// left and baseline (frame coordinates), the paragraph, and the byte in it
+// where the line's layout starts (a run's layout byte + from = a byte in the
+// paragraph). The print exporter sets these through Plate.
+struct LineVisit {
+    PangoLayoutLine* line = nullptr;
+    double           x = 0, baseline = 0;
+    int              para = 0, from = 0;
+};
+void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                 const std::function<void(const LineVisit&)>& f);
 
 // ── editing geometry (s010) ─────────────────────────────────────────────────
 // All in FRAME coordinates (points), from the same layouts the drawing uses,

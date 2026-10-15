@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -887,6 +888,58 @@ int main() {
               L::selection_rects(d, "story.1", flow, "frame.1", {1, 0}, {1, 3}).size() == 1 &&
               L::selection_rects(d, "story.1", flow, "frame.1", {0, 0}, {1, 60}).size() == 3);
         check("text editing: through the door", d.strays() == 0);
+    }
+
+    // ── s015: the print PDF through Plate ───────────────────────────────────
+    {
+        std::cout << "\n-- print pdf (plate) --\n";
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::load_sample(d);
+        const L::ImageSource src = [](const core::Asset& a, double, double) -> cairo_surface_t* {
+            if (a.name == "harbor.psd") return nullptr;
+            cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 4);
+            cairo_t* c = cairo_create(s);
+            cairo_set_source_rgba(c, 0.2, 0.4, 0.6, 0.5);
+            cairo_paint(c);
+            cairo_destroy(c);
+            return s;
+        };
+        const auto base = fs::temp_directory_path() / "composix_selftest_plate";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        const auto out = (base / "print.pdf").string();
+        L::PdfOptions opt;
+        opt.marks = true;
+        opt.compress = false;
+        L::PdfReport rep;
+        std::string err;
+        check("print: ok", L::export_print_pdf(d, out, opt, src, &rep, &err), err);
+        std::string pdf;
+        { std::ifstream f(out, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); pdf = ss.str(); }
+        const auto has = [&](const std::string& s) { return pdf.find(s) != std::string::npos; };
+        check("print: every page", rep.pages == 16 && has("/Count 16"));
+        // Trim 432 x 648; the bleed 9 and the marks' slug 21 around it.
+        check("print: a TrimBox at the trim, inside the slug", has("/TrimBox [30 30 462 678]"));
+        check("print: a BleedBox the bleed beyond it", has("/BleedBox [21 21 471 687]"));
+        check("print: fonts embedded, subset, with ToUnicode",
+              (has("/FontFile2") || has("/FontFile3")) && has("/ToUnicode") && has("+DejaVu"));
+        check("print: body text in 100 K", has("0 0 0 1 k\n"));
+        check("print: the heading in Guild Rust's CMYK", has("0 0.7 0.9 0.2 k\n"));
+        check("print: crop marks in registration", has("1 1 1 1 K\n"));
+        check("print: folio page labels", has("/P (iv)"));
+        check("print: one embedding per image file",
+              [&] { int n = 0; for (std::size_t at = 0; (at = pdf.find("/Subtype /Image /Width 8", at)) != std::string::npos; ++at) ++n;
+                    return n == 4; }());   // guild-map + fleuron (placed twice): 2 images + their 2 soft masks
+        bool miss = false;
+        for (const auto& w : rep.warnings) miss = miss || w == "Missing image: harbor.psd";
+        check("print: the missing image reported", miss);
+        const auto o = core::project(d, "");
+        bool col = false;
+        for (const auto& f : o.find("style.2")->fields) col = col || (f.edit == "color" && f.value == "Guild Rust");
+        check("styles: Color shows the swatch, editable", col);
+        if (std::getenv("KEEP_PDF")) std::cout << "kept " << out << "\n"; else fs::remove_all(base, ec);
     }
 
     // ── s014: margins + master columns ──────────────────────────────────────

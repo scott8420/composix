@@ -346,13 +346,16 @@ void Shell::export_pdf_to(const std::string& path) {  // helper
     };
     layout::PdfReport rep;
     std::string err;
-    if (!layout::export_pdf(m_doc, path, opt, images, &rep, &err)) {
+    const bool ok = m_pdf_print ? layout::export_print_pdf(m_doc, path, opt, images, &rep, &err)
+                                : layout::export_pdf(m_doc, path, opt, images, &rep, &err);
+    if (!ok) {
         alert("Can’t export the PDF", err);
         if (auto lg = log::get(log::Area::Io)) lg->warn("export '{}': {}", path, err);
         return;
     }
     if (auto lg = log::get(log::Area::Io))
-        lg->info("exported '{}': {} page(s), {} warning(s)", path, rep.pages, rep.warnings.size());
+        lg->info("exported '{}' ({}): {} page(s), {} warning(s)", path, m_pdf_print ? "print, plate" : "screen, cairo",
+                 rep.pages, rep.warnings.size());
     std::string detail = std::filesystem::path(path).filename().string();
     if (rep.warnings.empty()) detail += "\n\nNothing to check.";
     else {

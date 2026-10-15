@@ -57,7 +57,7 @@ void load_sample(Doc& d) {
 
     // ── styles ──────────────────────────────────────────────────────────────
     d.put("style.1", Style{"Body", StyleKind::Paragraph, 1, "Serif", 11, 14, false, false, Align::Justify});
-    d.put("style.2", Style{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6});
+    d.put("style.2", Style{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6, "swatch.3"});
     d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
     d.put("style.4", Style{"Source", StyleKind::Paragraph, 4, "Serif", 10, 12, false, false, Align::Left});
     // Not used yet: a style a designer keeps ready (and the one Delete is offered on).

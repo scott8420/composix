@@ -41,6 +41,11 @@ target_include_directories(composix_core PUBLIC include)
 # of the pump, no consumer inherits the include (CANON: surprise-free build).
 target_include_directories(composix_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
+# ── Plate (s015): our PDF writer -- a standalone library in libs/plate, reusable
+# by other apps (its own CMakeLists, tests, README). plate_pango feeds it Pango
+# lines. composix_layout's print exporter writes through it.
+add_subdirectory(libs/plate)
+
 # ── composix_layout -- text flow (s007): Pango + cairo, NO gtk ─────────────────
 # Its own library so the flow is measured and selftested headless. The app and
 # the selftest both link it; core stays free of it.
@@ -49,9 +54,11 @@ add_library(composix_layout STATIC
     src/layout/Flow.cpp
     # s013: PDF export (cairo's PDF surface; images handed in by the app).
     src/layout/Export.cpp
+    # s015: print PDF through Plate (page boxes, CMYK colour, subset fonts).
+    src/layout/PlateExport.cpp
 )
 target_include_directories(composix_layout PUBLIC include ${PANGOCAIRO_INCLUDE_DIRS})
-target_link_libraries(composix_layout PUBLIC composix_core ${PANGOCAIRO_LIBRARIES})
+target_link_libraries(composix_layout PUBLIC composix_core plate_pango ${PANGOCAIRO_LIBRARIES})
 target_link_directories(composix_layout PUBLIC ${PANGOCAIRO_LIBRARY_DIRS})
 target_compile_options(composix_layout PUBLIC ${PANGOCAIRO_CFLAGS_OTHER})
 

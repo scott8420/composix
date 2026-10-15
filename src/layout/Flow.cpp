@@ -59,6 +59,12 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
         if (cs->size > 0) add(pango_attr_size_new(static_cast<int>(std::lround(cs->size * PANGO_SCALE))));
         if (cs->bold) add(pango_attr_weight_new(PANGO_WEIGHT_BOLD));
         if (cs->italic) add(pango_attr_style_new(PANGO_STYLE_ITALIC));
+        if (const auto* sw = d.as<core::Swatch>(cs->color)) {   // s015: its colour, as the screen shows it
+            const auto c = sw->preview;
+            add(pango_attr_foreground_new(static_cast<guint16>(((c >> 16) & 0xff) * 257),
+                                          static_cast<guint16>(((c >> 8) & 0xff) * 257),
+                                          static_cast<guint16>((c & 0xff) * 257)));
+        }
     }
     pango_layout_set_attributes(l, attrs);
     pango_attr_list_unref(attrs);
@@ -293,12 +299,27 @@ int byte_at_x(const Placed& pl, double x) {
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
                      const std::string& frame, double ox, double oy, double ink) {
     cairo_save(cr);
-    cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
+    const auto* st = d.as<core::Story>(story);
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
+        // The paragraph style's colour (s015), else the ink.
+        const core::Swatch* sw = nullptr;
+        if (st && pl.line->para < static_cast<int>(st->paras.size()))
+            if (const auto* ps = d.as<core::Style>(st->paras[static_cast<std::size_t>(pl.line->para)].style))
+                sw = d.as<core::Swatch>(ps->color);
+        if (sw) cairo_set_source_rgb(cr, ((sw->preview >> 16) & 0xff) / 255.0, ((sw->preview >> 8) & 0xff) / 255.0,
+                                     (sw->preview & 0xff) / 255.0);
+        else cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
         cairo_move_to(cr, ox + pl.x, oy + pl.base);
         pango_cairo_show_layout_line(cr, pl.pl);
     });
     cairo_restore(cr);
+}
+
+void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                 const std::function<void(const LineVisit&)>& f) {
+    walk_frame(d, story, flow, frame, [&](const Placed& pl) {
+        f(LineVisit{pl.pl, pl.x, pl.base, pl.line->para, pl.from});
+    });
 }
 
 Caret caret_at(const core::Doc& d, const std::string& story, const StoryFlow& flow, core::TextPos p) {

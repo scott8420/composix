@@ -200,6 +200,15 @@ void Shell::on_export_pdf() {  // handler
         bleed->set_name("export.bleed");
         auto marks = Gtk::make_managed<Gtk::CheckButton>("Crop marks");
         marks->set_name("export.marks");
+        // s015: which writer. Print = Plate (page boxes, CMYK, subset fonts);
+        // Screen = cairo (RGB, for viewing and sharing).
+        auto print = Gtk::make_managed<Gtk::CheckButton>("For print \u2014 trim / bleed boxes, CMYK colour");
+        print->set_name("export.print");
+        auto screen = Gtk::make_managed<Gtk::CheckButton>("For screen \u2014 RGB");
+        screen->set_name("export.screen");
+        screen->set_group(*print);
+        box->append(*print);
+        box->append(*screen);
         box->append(*bleed);
         box->append(*marks);
         auto note = Gtk::make_managed<Gtk::Label>("Every page at its own size, fonts embedded,\nimages at full resolution.");
@@ -227,9 +236,10 @@ void Shell::on_export_pdf() {  // handler
         }, false);
         w.add_controller(keys);
         w.set_default_widget(*go);
-        go->signal_clicked().connect([this, bleed, marks] {
+        go->signal_clicked().connect([this, bleed, marks, print] {
             m_pdf_bleed = bleed->get_active();
             m_pdf_marks = marks->get_active();
+            m_pdf_print = print->get_active();
             m_export->set_visible(false);
             auto dialog = Gtk::FileDialog::create();
             dialog->set_title("Export PDF");
@@ -253,6 +263,10 @@ void Shell::on_export_pdf() {  // handler
             b->set_active(m_pdf_bleed);
         } else if (c->get_name() == "export.marks") {
             static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_marks);
+        } else if (c->get_name() == "export.print") {
+            static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_print);
+        } else if (c->get_name() == "export.screen") {
+            static_cast<Gtk::CheckButton*>(c)->set_active(!m_pdf_print);
         }
     }
     m_export->set_transient_for(*this);
@@ -383,6 +397,9 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 did = core::doc::set_char_style(m_journal, m_doc, story, a, b, choice);
             }
             cv.grab_focus();   // back to typing
+        } else if (key == "color") {   // s015: a style's swatch
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Color",
+                                         [&](core::Style& st) { st.color = choice; });
         } else if (key == "font" || key == "size" || key == "leading" || key == "bold" || key == "italic" ||
                    key == "align" || key == "before" || key == "after") {   // s011: style settings
             static const std::map<std::string, std::string> labels{

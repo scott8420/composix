@@ -25,6 +25,7 @@ struct PdfOptions {
     bool        bleed = true;    // extend the media by the document's bleed
     bool        marks = false;   // crop marks outside the bleed
     std::string title;           // the PDF's title ("" = the document's)
+    bool        compress = true; // print writer: false leaves content streams readable (tests, debugging)
 };
 
 struct PdfReport {
@@ -39,5 +40,16 @@ using ImageSource = std::function<cairo_surface_t*(const core::Asset& a, double 
 
 bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& opt, const ImageSource& images,
                 PdfReport* report = nullptr, std::string* err = nullptr);
+
+// s015: the PRINT PDF, written by Plate (libs/plate) instead of cairo: the
+// same pages, plus a TrimBox / BleedBox on every page, colour as the swatches
+// say (process CMYK stays CMYK; RGB stays RGB; black text is 100 K; crop marks
+// in registration), fonts subset by HarfBuzz. Spot colours go as their CMYK
+// for now (separations: s016).
+bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOptions& opt, const ImageSource& images,
+                      PdfReport* report = nullptr, std::string* err = nullptr);
+
+// What's worth a look after an export (shared by both writers).
+void preflight(const core::Doc& d, const std::vector<std::string>& missing, int pages, PdfReport* report);
 
 }  // namespace composix::layout

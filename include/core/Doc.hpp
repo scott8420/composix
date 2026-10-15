@@ -146,6 +146,7 @@ struct Style {
     bool        bold   = false, italic = false;
     Align       align  = Align::Left;
     double      space_before = 0, space_after = 0;   // s011: points, paragraph styles
+    std::string color;                   // s015: a swatch id; "" = black (a character style: inherit)
     bool operator==(const Style&) const = default;
 };
 

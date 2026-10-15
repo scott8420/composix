@@ -69,7 +69,7 @@ json to(const Record& r) {
             j = {{"kind", "style"}, {"name", v.name}, {"type", en(v.kind)}, {"pos", v.pos},
                  {"family", v.family}, {"size", v.size}, {"leading", v.leading}, {"bold", v.bold},
                  {"italic", v.italic}, {"align", en(v.align)}, {"space_before", v.space_before},
-                 {"space_after", v.space_after}};
+                 {"space_after", v.space_after}, {"color", v.color}};
         } else if constexpr (std::is_same_v<T, Swatch>) {
             j = {{"kind", "swatch"}, {"name", v.name}, {"pos", v.pos}, {"model", en(v.model)},
                  {"v", v.v}, {"spot", v.spot}, {"preview", v.preview}};
@@ -179,6 +179,7 @@ std::optional<Record> from(const json& j) {
         v.align = de(j, "align", Align::Left);
         v.space_before = val(j, "space_before", 0.0);
         v.space_after = val(j, "space_after", 0.0);
+        v.color = val<std::string>(j, "color", "");
         return v;
     }
     if (k == "swatch") {
