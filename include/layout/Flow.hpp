@@ -58,8 +58,9 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story);
 
 // Draw what `flow` put in `frame`, with the frame's top-left at (ox, oy) in the
 // cairo context's current user space (points). The caller sets the scale.
+// `ink`: the text's grey (screen: near-black; print, s013: 0 = pure black).
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
-                     const std::string& frame, double ox, double oy);
+                     const std::string& frame, double ox, double oy, double ink = 0.08);
 
 // ── editing geometry (s010) ─────────────────────────────────────────────────
 // All in FRAME coordinates (points), from the same layouts the drawing uses,

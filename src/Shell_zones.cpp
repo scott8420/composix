@@ -165,6 +165,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
 
     auto place = Gio::Menu::create();   // s009
     place->append("Place Image\u2026", "win.place");
+    place->append("Export PDF\u2026", "win.export-pdf");   // s013
     menu->append_section(place);
 
     m_edit_menu = Gio::Menu::create();

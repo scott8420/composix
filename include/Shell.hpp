@@ -80,6 +80,7 @@ private:
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
+    void on_export_pdf();                        // category: handler: the Export PDF sheet -> a file -> the report
     void on_asset_action(const std::string& act);   // category: handler: relink / update / embed / unembed (inspector)
     bool on_close_request() override;            // category: handler: unsaved changes? ask first
     void on_recent_open(const std::string& p);   // category: handler: open a recent project (parameterised)
@@ -167,6 +168,11 @@ private:
     views::CanvasView  m_canvas_view{m_doc, m_journal};
     Glib::RefPtr<Gio::Menu>         m_edit_menu;
     Glib::RefPtr<Gio::SimpleAction> m_act_undo, m_act_redo;
+
+    // s013: the Export PDF sheet, and its choices for the session.
+    std::unique_ptr<Gtk::Window>     m_export;
+    bool                             m_pdf_bleed = true, m_pdf_marks = false;
+    void export_pdf_to(const std::string& path);  // category: helper: write + report
 
     std::unique_ptr<AboutWindow>     m_about;
     std::unique_ptr<ShortcutsDialog> m_shortcuts;

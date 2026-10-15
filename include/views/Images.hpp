@@ -31,6 +31,12 @@ Cairo::RefPtr<Cairo::ImageSurface> get(const std::string& path, std::int64_t sta
 void paint(const Cairo::RefPtr<Cairo::Context>& cr, const Cairo::RefPtr<Cairo::ImageSurface>& pic,
            double x, double y, double w, double h, double alpha = 1.0);
 
+// s013: the picture for PRINT -- a new cairo surface reference at the file's
+// full resolution (a vector rendered for 300 ppi at want_w x want_h points);
+// a JPEG carries its original bytes, so the PDF embeds it untouched. nullptr
+// when it can't be read.
+cairo_surface_t* print_surface(const std::string& path, double want_w, double want_h);
+
 // The file patterns the Place dialog offers.
 const std::vector<std::string>& patterns();
 

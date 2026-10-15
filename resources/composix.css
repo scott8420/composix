@@ -228,3 +228,7 @@ button.cx-insp-action       { border-radius: 8px; padding: 2px 10px; min-height:
 .cx-welcome-icon  { color: alpha(@cx_ink, 0.7); margin-bottom: 8px; }
 .cx-welcome-title { font-size: 1.4em; font-weight: 800; }
 .cx-welcome-body  { color: @cx_dim; }
+
+/* ── the Export PDF sheet (s013) ─────────────────────────────────────────── */
+.cx-export-title { font-size: 1.15em; font-weight: 800; }
+.cx-export-note  { color: @cx_dim; font-size: 0.85em; }

@@ -330,3 +330,36 @@ std::string Shell::embed_copy(const core::Asset& a, std::string* err) {  // help
 }
 
 }  // namespace composix
+
+#include "layout/Export.hpp"
+
+namespace composix {
+
+// Write the PDF, then say what was written and what wants a look (s013).
+void Shell::export_pdf_to(const std::string& path) {  // helper
+    layout::PdfOptions opt;
+    opt.bleed = m_pdf_bleed;
+    opt.marks = m_pdf_marks;
+    const std::string dir = m_project_dir;
+    const layout::ImageSource images = [dir](const core::Asset& a, double w, double h) {
+        return views::images::print_surface(core::resolve_asset(a, dir), w, h);
+    };
+    layout::PdfReport rep;
+    std::string err;
+    if (!layout::export_pdf(m_doc, path, opt, images, &rep, &err)) {
+        alert("Can’t export the PDF", err);
+        if (auto lg = log::get(log::Area::Io)) lg->warn("export '{}': {}", path, err);
+        return;
+    }
+    if (auto lg = log::get(log::Area::Io))
+        lg->info("exported '{}': {} page(s), {} warning(s)", path, rep.pages, rep.warnings.size());
+    std::string detail = std::filesystem::path(path).filename().string();
+    if (rep.warnings.empty()) detail += "\n\nNothing to check.";
+    else {
+        detail += "\n\nWorth a look:";
+        for (const auto& w : rep.warnings) detail += "\n• " + w;
+    }
+    alert("Exported " + std::to_string(rep.pages) + (rep.pages == 1 ? " page" : " pages"), detail);
+}
+
+}  // namespace composix

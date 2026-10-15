@@ -13,6 +13,7 @@
 
 #include "core/Doc.hpp"
 #include "layout/Flow.hpp"
+#include "layout/Export.hpp"
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
 #include "core/Shortcuts.hpp"
@@ -27,6 +28,7 @@
 #include <fstream>
 #include <iostream>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -885,6 +887,58 @@ int main() {
               L::selection_rects(d, "story.1", flow, "frame.1", {1, 0}, {1, 3}).size() == 1 &&
               L::selection_rects(d, "story.1", flow, "frame.1", {0, 0}, {1, 60}).size() == 3);
         check("text editing: through the door", d.strays() == 0);
+    }
+
+    // ── s013: PDF output ────────────────────────────────────────────────────
+    {
+        std::cout << "\n-- pdf --\n";
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::load_sample(d);
+        // A fake image source: a flat plate for every asset but harbor.psd.
+        int asked = 0;
+        const L::ImageSource src = [&](const core::Asset& a, double, double) -> cairo_surface_t* {
+            ++asked;
+            if (a.name == "harbor.psd") return nullptr;
+            cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 64, 32);
+            cairo_t* c = cairo_create(s);
+            cairo_set_source_rgb(c, 0.2, 0.4, 0.6);
+            cairo_paint(c);
+            cairo_destroy(c);
+            return s;
+        };
+        const auto base = fs::temp_directory_path() / "composix_selftest_pdf";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        const auto out = (base / "book.pdf").string();
+        L::PdfReport rep;
+        std::string err;
+        check("export: ok", L::export_pdf(d, out, {true, true, ""}, src, &rep, &err), err);
+        std::string pdf;
+        { std::ifstream f(out, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); pdf = ss.str(); }
+        check("export: a PDF", pdf.rfind("%PDF-", 0) == 0);
+        int pages = 0;
+        for (std::size_t at = 0; (at = pdf.find("/Type /Page", at)) != std::string::npos; ++at)
+            if (pdf.compare(at, 12, "/Type /Pages") != 0) ++pages;
+        check("export: every page", rep.pages == 16 && pages == 16, std::to_string(pages));
+        check("export: fonts embedded", pdf.find("/FontFile") != std::string::npos);
+        check("export: images asked for", asked >= 4, std::to_string(asked));
+        check("export: the title", pdf.find("Sample Book") != std::string::npos);
+        // Trim 432 x 648, bleed 9, slug 21 each side: 492 x 708; the foldout wider.
+        check("export: page size = trim + bleed + slug", pdf.find("/MediaBox [ 0 0 492 708 ]") != std::string::npos);
+        check("export: the foldout's own (wider) size",
+              pdf.find("/MediaBox [ 0 0 " + std::to_string(static_cast<int>(d.as<core::Page>(d.pages()[10])->w) + 60)) != std::string::npos);
+        check("export: page labels are the folios", pdf.find("(iv)") != std::string::npos);
+        bool miss = false;
+        for (const auto& w : rep.warnings) miss = miss || w == "Missing image: harbor.psd";
+        check("export: the missing image reported", miss);
+        check("export: no bleed, no marks = trim size", L::export_pdf(d, out, {false, false, ""}, src, &rep, &err));
+        { std::ifstream f(out, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); pdf = ss.str(); }
+        check("...432 x 648", pdf.find("/MediaBox [ 0 0 432 648 ]") != std::string::npos);
+        check("export: refuses an unwritable path",
+              !L::export_pdf(d, "/nonexistent-dir/x.pdf", {}, src, nullptr, &err) && !err.empty());
+        fs::remove_all(base, ec);
     }
 
     // ── s012: text columns ──────────────────────────────────────────────────

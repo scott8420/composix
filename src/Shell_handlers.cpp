@@ -6,6 +6,12 @@
 #include "core/Recents.hpp"
 
 #include <gtkmm/alertdialog.h>
+#include <gtkmm/box.h>
+#include <gtkmm/button.h>
+#include <gtkmm/checkbutton.h>
+#include <gtkmm/eventcontrollerkey.h>
+#include <gtkmm/label.h>
+#include <gtkmm/window.h>
 #include <glibmm/main.h>
 #include <gtkmm/filedialog.h>
 #include <giomm/asyncresult.h>
@@ -120,6 +126,89 @@ void Shell::on_asset_action(const std::string& act) {  // handler
     } else if (act == "unembed") {
         core::doc::unembed_assets(m_journal, m_doc, assets);
     }
+}
+
+// ── PDF (s013) ─────────────────────────────────────────────────────────────
+// A small sheet: Bleed, Crop marks, then Export... names the file.
+void Shell::on_export_pdf() {  // handler
+    if (!m_export) {
+        m_export = std::make_unique<Gtk::Window>();
+        auto& w = *m_export;
+        w.set_name("export");
+        w.set_title("Export PDF");
+        w.set_modal(true);
+        w.set_resizable(false);
+        w.set_hide_on_close(true);
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 10);
+        box->set_name("export.box");
+        box->add_css_class("cx-export");
+        box->set_margin(18);
+        auto head = Gtk::make_managed<Gtk::Label>("Export PDF");
+        head->set_name("export.title");
+        head->add_css_class("cx-export-title");
+        head->set_xalign(0);
+        box->append(*head);
+        auto bleed = Gtk::make_managed<Gtk::CheckButton>();
+        bleed->set_name("export.bleed");
+        auto marks = Gtk::make_managed<Gtk::CheckButton>("Crop marks");
+        marks->set_name("export.marks");
+        box->append(*bleed);
+        box->append(*marks);
+        auto note = Gtk::make_managed<Gtk::Label>("Every page at its own size, fonts embedded,\nimages at full resolution.");
+        note->set_name("export.note");
+        note->add_css_class("cx-export-note");
+        note->set_xalign(0);
+        box->append(*note);
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+        row->set_halign(Gtk::Align::END);
+        auto cancel = Gtk::make_managed<Gtk::Button>("Cancel");
+        cancel->set_name("export.cancel");
+        auto go = Gtk::make_managed<Gtk::Button>("Export…");
+        go->set_name("export.go");
+        go->add_css_class("suggested-action");
+        row->append(*cancel);
+        row->append(*go);
+        box->append(*row);
+        w.set_child(*box);
+        cancel->signal_clicked().connect([this] { m_export->set_visible(false); });
+        auto keys = Gtk::EventControllerKey::create();   // Esc closes the sheet
+        keys->signal_key_pressed().connect([this](guint kv, guint, Gdk::ModifierType) {
+            if (kv != GDK_KEY_Escape) return false;
+            m_export->set_visible(false);
+            return true;
+        }, false);
+        w.add_controller(keys);
+        w.set_default_widget(*go);
+        go->signal_clicked().connect([this, bleed, marks] {
+            m_pdf_bleed = bleed->get_active();
+            m_pdf_marks = marks->get_active();
+            m_export->set_visible(false);
+            auto dialog = Gtk::FileDialog::create();
+            dialog->set_title("Export PDF");
+            dialog->set_initial_name(m_doc.settings().title + ".pdf");
+            dialog->save(*this, [this, dialog](const Glib::RefPtr<Gio::AsyncResult>& result) {
+                try {
+                    auto f = dialog->save_finish(result);
+                    if (f && !f->get_path().empty()) export_pdf_to(f->get_path());
+                } catch (const Glib::Error& e) {
+                    if (auto lg = log::get(log::Area::Io)) lg->info("export: dismissed ({})", e.what());
+                }
+            });
+        });
+    }
+    // Refresh the sheet's state each time (the bleed comes from the document).
+    auto* box = static_cast<Gtk::Box*>(m_export->get_child());
+    for (auto* c = box->get_first_child(); c; c = c->get_next_sibling()) {
+        if (c->get_name() == "export.bleed") {
+            auto* b = static_cast<Gtk::CheckButton*>(c);
+            b->set_label("Bleed (" + core::inches(m_doc.settings().bleed) + " in)");
+            b->set_active(m_pdf_bleed);
+        } else if (c->get_name() == "export.marks") {
+            static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_marks);
+        }
+    }
+    m_export->set_transient_for(*this);
+    m_export->present();
 }
 
 // Closing with unsaved changes asks first. "Save" on a never-saved document

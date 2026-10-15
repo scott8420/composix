@@ -291,9 +291,9 @@ int byte_at_x(const Placed& pl, double x) {
 }  // namespace
 
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
-                     const std::string& frame, double ox, double oy) {
+                     const std::string& frame, double ox, double oy, double ink) {
     cairo_save(cr);
-    cairo_set_source_rgb(cr, 0.08, 0.08, 0.1);
+    cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         cairo_move_to(cr, ox + pl.x, oy + pl.base);
         pango_cairo_show_layout_line(cr, pl.pl);

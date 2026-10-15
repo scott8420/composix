@@ -47,6 +47,8 @@ target_include_directories(composix_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/thi
 pkg_check_modules(PANGOCAIRO REQUIRED pangocairo)
 add_library(composix_layout STATIC
     src/layout/Flow.cpp
+    # s013: PDF export (cairo's PDF surface; images handed in by the app).
+    src/layout/Export.cpp
 )
 target_include_directories(composix_layout PUBLIC include ${PANGOCAIRO_INCLUDE_DIRS})
 target_link_libraries(composix_layout PUBLIC composix_core ${PANGOCAIRO_LIBRARIES})

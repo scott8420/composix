@@ -98,6 +98,34 @@ void paint(const Cairo::RefPtr<Cairo::Context>& cr, const Cairo::RefPtr<Cairo::I
     cr->restore();
 }
 
+cairo_surface_t* print_surface(const std::string& path, double want_w, double want_h) {
+    if (path.empty()) return nullptr;
+    try {
+        Glib::RefPtr<Gdk::Pixbuf> pb;
+        if (is_svg(path)) {
+            const int w = std::max(1, static_cast<int>(want_w / 72.0 * 300)), h = std::max(1, static_cast<int>(want_h / 72.0 * 300));
+            pb = Gdk::Pixbuf::create_from_file(path, w, h, true);
+        } else {
+            pb = Gdk::Pixbuf::create_from_file(path);
+        }
+        auto surf = to_surface(pb);
+        if (!surf) return nullptr;
+        cairo_surface_t* raw = cairo_surface_reference(surf->cobj());
+        auto ext = std::filesystem::path(path).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (ext == ".jpg" || ext == ".jpeg") {   // the original JPEG goes into the PDF as is
+            gchar* bytes = nullptr;
+            gsize len = 0;
+            if (g_file_get_contents(path.c_str(), &bytes, &len, nullptr))
+                cairo_surface_set_mime_data(raw, CAIRO_MIME_TYPE_JPEG, reinterpret_cast<unsigned char*>(bytes), len,
+                                            g_free, bytes);
+        }
+        return raw;
+    } catch (const Glib::Error&) {
+        return nullptr;
+    }
+}
+
 const std::vector<std::string>& patterns() {
     static const std::vector<std::string> p{"*.png", "*.jpg", "*.jpeg", "*.tif", "*.tiff", "*.gif",
                                             "*.bmp", "*.svg", "*.webp"};
