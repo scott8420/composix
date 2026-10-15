@@ -17,6 +17,7 @@
 #include "widgets/Widgets.hpp"
 
 #include <gdkmm/rgba.h>
+#include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/eventcontrollerscroll.h>
 #include <gtkmm/gesturedrag.h>
 #include <sigc++/signal.h>
@@ -35,6 +36,7 @@ public:
     // s008: what a drag on empty space does.
     enum class Tool { Select, Text, Image, Shape };
     Canvas(core::Doc& d, core::DocJournal& j);
+    ~Canvas() override;
 
     // Show these pages / masters. A different set re-fits; the same set (a
     // refresh) keeps the zoom, the scroll and the selection.
@@ -69,6 +71,15 @@ public:
     void load_image(const core::ImageFile& f);
     bool loaded() const { return m_loaded.has_value(); }
 
+    // s010: editing text in place. Double-click a text frame (or click one
+    // with the Text tool; a new text frame starts editing): a caret, typing
+    // through the IM, Backspace / Delete / Enter, arrows (Shift extends, Ctrl
+    // by word), Home / End, Ctrl+A, cut / copy / paste, drag to select,
+    // double-click a word. Esc ends editing with the frame picked. Every
+    // change is core::doc::edit_text -- a burst of typing is one step.
+    bool editing() const { return !m_edit_story.empty(); }
+    void end_edit();
+
     sigc::signal<void()>& signal_selection() { return m_sig_sel; }    // the picks changed (by the user)
     sigc::signal<void()>& signal_zoom()      { return m_sig_zoom; }
     sigc::signal<void()>& signal_edited()    { return m_sig_edited; } // a drag / nudge ended: refresh the rest
@@ -76,7 +87,7 @@ public:
     sigc::signal<void()>& signal_tool()      { return m_sig_tool; }   // the tool changed (a key)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text };
 
     void draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
@@ -104,6 +115,16 @@ private:
     void update_cursor();
     void place_loaded(double lx, double ly, const core::Rect* drawn);   // s009: layout coords
     bool on_drop(const Glib::ValueBase& v, double x, double y);
+    // s010: editing
+    void begin_edit(const std::string& frame, core::TextPos at);
+    bool edit_key(guint kv, Gdk::ModifierType st);
+    // kind: "type" / "erase" merge into a burst; "" is a step of its own.
+    void edit_insert(const std::string& text, const std::string& kind, const std::string& label);
+    void set_caret(core::TextPos p, bool extend, bool keep_goal = false);
+    core::TextPos hit_story(const std::string& frame, double lx, double ly);   // layout coords
+    void draw_edit(const Cairo::RefPtr<Cairo::Context>& cr);
+    void blink_restart();
+    const core::Story* edit_story() const { return m_doc.as<core::Story>(m_edit_story); }
 
     core::Doc&        m_doc;
     core::DocJournal& m_journal;
@@ -157,6 +178,20 @@ private:
     // s009
     std::string                    m_dir;      // the project folder ("" = unsaved)
     std::optional<core::ImageFile> m_loaded;   // Place: the file waiting for a click
+
+    // s010: editing
+    std::string   m_edit_story, m_edit_frame;   // editing when the story is set
+    core::TextPos m_caret, m_anchor;            // the selection is [anchor, caret)
+    double        m_goal_x = NAN;               // up / down keep to this x (frame coords)
+    bool          m_caret_on = true;
+    sigc::connection m_blink;
+    int           m_burst = 0;                  // a new number = a new undo step
+    std::string   m_burst_kind;
+    GtkIMContext*                         m_im = nullptr;   // C API: gtkmm 4.10 has no wrapper
+    Glib::RefPtr<Gtk::EventControllerKey> m_keys;
+    gint64        m_last_press = 0;             // double-click, by hand (the drag gesture eats the click)
+    double        m_last_px = 0, m_last_py = 0;
+    int           m_clicks = 0;
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool;
 };
 

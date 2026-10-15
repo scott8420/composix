@@ -243,6 +243,26 @@ std::string numbering_text(Numbering n);
 std::string side_text(Side s);
 std::string master_label(const Doc& d, const Doc::Id& master);  // "B-Body", "None"
 
+// ── text positions (s010) ───────────────────────────────────────────────────
+// A place in a story: paragraph index, BYTE offset into its UTF-8 text (always
+// on a character boundary). Ordered as the text reads.
+struct TextPos {
+    int para = 0;
+    int byte = 0;
+    auto operator<=>(const TextPos&) const = default;
+};
+// Inside the story's text (a paragraph that exists, a byte on a boundary).
+TextPos clamp_pos(const Story& s, TextPos p);
+TextPos next_char(const Story& s, TextPos p);   // across a paragraph end, too
+TextPos prev_char(const Story& s, TextPos p);
+TextPos next_word(const Story& s, TextPos p);   // to the start of the next word
+TextPos prev_word(const Story& s, TextPos p);   // to the start of this / the previous word
+TextPos story_end(const Story& s);
+// The text between two places, paragraphs joined by '\n'.
+std::string text_between(const Story& s, TextPos a, TextPos b);
+// The word around a place (double-click): [first, last).
+std::pair<TextPos, TextPos> word_at(const Story& s, TextPos p);
+
 // ── images (s009) ───────────────────────────────────────────────────────────
 // A file as the UI found it on disk. The core never decodes: the app probes
 // the file (views/Images) and hands the verbs what it learned.
@@ -342,6 +362,15 @@ bool    relink_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id
 bool    embed_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id, std::string>>& rels);
 bool    unembed_assets(DocJournal& j, Doc& d, const std::vector<Doc::Id>& assets);
 bool    set_fit(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ImageFit fit);
+
+// ── text (s010) ─────────────────────────────────────────────────────────────
+// THE text verb: replace [a, b) in a story with `text` ('\n' splits a
+// paragraph; new paragraphs take the style of the one split). Typing,
+// Backspace, Delete, Enter, paste, cut -- all this one verb. A merge key folds
+// a burst of keystrokes into ONE step. Returns where the caret goes (just
+// after the inserted text); `a` (clamped) when nothing changed.
+TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& text,
+                  const std::string& label = "Typing", const std::string& merge_key = {});
 
 // ── guides (s006) ───────────────────────────────────────────────────────────
 // Pulled out of a ruler onto a page: one step. Dragged: one gesture (the same

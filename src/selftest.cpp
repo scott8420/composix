@@ -808,6 +808,85 @@ int main() {
         check("frame tools: through the door", d.strays() == 0);
     }
 
+    // ── s010: text editing ──────────────────────────────────────────────────
+    {
+        std::cout << "\n-- text editing --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        using P = core::TextPos;
+        const auto para = [&](int i) { return d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(i)].text; };
+        const auto n0 = d.as<core::Story>("story.1")->paras.size();
+        const std::string p1 = para(1);
+
+        // A burst of typing is one step.
+        P c{1, 0};
+        for (const char* k : {"N", "e", "w", " "}) c = core::doc::edit_text(j, d, "story.1", c, c, k, "Typing", "type:1");
+        check("typing: in place, caret after", para(1).rfind("New ", 0) == 0 && c == P{1, 4});
+        check("typing: a burst is ONE step", j.size() == 1);
+        j.undo();
+        check("undo: the burst gone", para(1) == p1);
+
+        c = core::doc::edit_text(j, d, "story.1", {1, 3}, {1, 3}, "\n");
+        check("enter: splits the paragraph", d.as<core::Story>("story.1")->paras.size() == n0 + 1 &&
+                                             para(1) == p1.substr(0, 3) && para(2) == p1.substr(3) && c == P{2, 0});
+        check("enter: the new paragraph keeps the style",
+              d.as<core::Story>("story.1")->paras[1].style == d.as<core::Story>("story.1")->paras[2].style);
+        c = core::doc::edit_text(j, d, "story.1", core::prev_char(*d.as<core::Story>("story.1"), c), c, "", "Delete text");
+        check("backspace at a paragraph's start: joins it back", para(1) == p1 && c == P{1, 3} &&
+                                                                 d.as<core::Story>("story.1")->paras.size() == n0);
+        c = core::doc::edit_text(j, d, "story.1", {0, 0}, {0, 0}, "a\r\nb\nc", "Paste");
+        check("paste: three lines, three paragraphs", para(0) == "a" && para(1) == "b" &&
+                                                      c == P{2, 1} && para(2).rfind("c", 0) == 0);
+        j.undo();
+        check("undo paste", d.as<core::Story>("story.1")->paras.size() == n0);
+        check("no change, no step", core::doc::edit_text(j, d, "story.1", {1, 2}, {1, 2}, "") == P{1, 2} &&
+                                    j.undo_label() != "Typing");
+
+        core::Story u;
+        u.paras = {{"", "caf\xC3\xA9 ok"}, {"", "two words"}};
+        check("utf-8: next over a 2-byte char", core::next_char(u, {0, 3}) == P{0, 5});
+        check("utf-8: prev back over it", core::prev_char(u, {0, 5}) == P{0, 3});
+        check("utf-8: clamp off a continuation byte", core::clamp_pos(u, {0, 4}) == P{0, 3});
+        check("char: across the paragraph end", core::next_char(u, {0, 8}) == P{1, 0} && core::prev_char(u, {1, 0}) == P{0, 8});
+        check("word: next", core::next_word(u, {0, 0}) == P{0, 6} && core::next_word(u, {0, 6}) == P{1, 0});
+        check("word: prev", core::prev_word(u, {1, 4}) == P{1, 0} && core::prev_word(u, {1, 0}) == P{0, 6});
+        check("word at (double-click)", core::word_at(u, {1, 5}) == std::make_pair(P{1, 4}, P{1, 9}));
+        check("text between: joined with \\n", core::text_between(u, {0, 6}, {1, 3}) == "ok\ntwo");
+
+        // Geometry: the caret, a hit back, up / down, edges, selections. The
+        // first frame made short, so the story runs on into the second.
+        {
+            const auto f1 = *d.as<core::Frame>("frame.1");
+            core::doc::frames_begin(j, d, {"frame.1"}, "Resize frame");
+            core::doc::frames_set(j, d, "frame.1", {f1.x, f1.y, f1.w, 60});
+            core::doc::frames_end(j);
+        }
+        const auto flow = L::flow_story(d, "story.1");
+        const auto ca = L::caret_at(d, "story.1", flow, {1, 10});
+        check("caret: found, in the first frame", ca.ok && ca.frame == "frame.1" && ca.h > 0, ca.frame);
+        const auto back = L::hit_text(d, "story.1", flow, ca.frame, ca.x + 0.1, ca.y + ca.h / 2);
+        check("hit: the caret's own place comes back", back == P{1, 10},
+              std::to_string(back.para) + "," + std::to_string(back.byte));
+        const auto down = L::line_move(d, "story.1", flow, {1, 10}, +1, ca.x);
+        const auto up = L::line_move(d, "story.1", flow, down, -1, ca.x);
+        check("down then up: home again", up == P{1, 10} && down != up);
+        const auto e = L::line_edge(d, "story.1", flow, {1, 10}, true);
+        const auto h = L::line_edge(d, "story.1", flow, {1, 10}, false);
+        check("home / end of the line", h.byte <= 10 && e.byte > 10 && h.para == 1 && e.para == 1);
+        // The last line of frame.1 goes on into frame.2.
+        const auto& last = flow.frames[0].lines.back();
+        const auto next = L::line_move(d, "story.1", flow, {last.para, last.start}, +1, 0);
+        check("down off a frame's last line: into the next frame",
+              L::caret_at(d, "story.1", flow, next).frame == "frame.2");
+        check("selection: one rect per line touched",
+              L::selection_rects(d, "story.1", flow, "frame.1", {1, 0}, {1, 3}).size() == 1 &&
+              L::selection_rects(d, "story.1", flow, "frame.1", {0, 0}, {1, 60}).size() == 3);
+        check("text editing: through the door", d.strays() == 0);
+    }
+
     // ── s009: images ─────────────────────────────────────────────────────────
     {
         std::cout << "\n-- images --\n";

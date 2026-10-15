@@ -99,11 +99,29 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
     drop->signal_drop().connect(sigc::mem_fun(*this, &Canvas::on_drop), false);
     add_controller(drop);
 
-    auto keys = Gtk::EventControllerKey::create();
-    keys->signal_key_pressed().connect(
+    m_keys = Gtk::EventControllerKey::create();
+    m_keys->signal_key_pressed().connect(
         [this](guint kv, guint, Gdk::ModifierType st) { return on_key(kv, st); }, false);
-    keys->signal_key_released().connect([this](guint kv, guint, Gdk::ModifierType) { on_key_up(kv); });
-    add_controller(keys);
+    m_keys->signal_key_released().connect([this](guint kv, guint, Gdk::ModifierType) { on_key_up(kv); });
+    add_controller(m_keys);
+
+    // s010: typed text arrives through an input method (dead keys, compose,
+    // non-Latin input) -- attached to the key controller only while editing,
+    // so V / T / F / M stay tools otherwise.
+    m_im = gtk_im_multicontext_new();
+    gtk_im_context_set_use_preedit(m_im, FALSE);
+    g_signal_connect(m_im, "commit", G_CALLBACK(+[](GtkIMContext*, const char* t, gpointer self) {
+        auto* c = static_cast<Canvas*>(self);
+        if (c->editing() && t) c->edit_insert(t, "type", "Typing");
+    }), this);
+}
+
+Canvas::~Canvas() {
+    m_blink.disconnect();
+    if (m_im) {
+        g_signal_handlers_disconnect_by_data(m_im, this);
+        g_object_unref(m_im);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -122,6 +140,15 @@ void Canvas::show_pages(const std::vector<std::string>& ids) {
 
 void Canvas::model_changed() {
     relayout();
+    // s010: editing survives the change (an undo) if its story and frame do.
+    if (editing()) {
+        const auto* fr = m_doc.as<core::Frame>(m_edit_frame);
+        if (!edit_story() || !fr || fr->story != m_edit_story) end_edit();
+        else {
+            m_caret = core::clamp_pos(*edit_story(), m_caret);
+            m_anchor = core::clamp_pos(*edit_story(), m_anchor);
+        }
+    }
     // Drop picks that are gone or no longer on a shown page.
     std::vector<std::string> keep;
     for (const auto& id : m_sel)
@@ -543,7 +570,8 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
         cr->stroke();
     }
-    if (!m_sel.empty()) {
+    if (editing()) draw_edit(cr);
+    if (!m_sel.empty() && !editing()) {
         const Rect box = m_vp.to_screen(selection_box());
         if (m_sel.size() > 1) {
             std::vector<double> dash{4, 3};
@@ -606,6 +634,41 @@ void Canvas::on_drag_begin(double x, double y) {
 
     double px0, py0;
     m_vp.to_doc(x, y, px0, py0);
+
+    // s010: clicks counted by hand (double-click = edit / pick a word).
+    const gint64 now = g_get_monotonic_time();
+    if (now - m_last_press < 400000 && std::hypot(x - m_last_px, y - m_last_py) < 5) ++m_clicks;
+    else m_clicks = 1;
+    m_last_press = now;
+    m_last_px = x;
+    m_last_py = y;
+    {
+        const auto under = core::hit_frame(m_doc, m_placed, px0, py0, 3 / m_vp.scale());
+        const auto* uf = m_doc.as<core::Frame>(under);
+        const bool text_frame = uf && uf->kind == core::FrameKind::Text && !uf->story.empty();
+        if (editing()) {
+            if (text_frame && uf->story == m_edit_story) {   // a click in the story: the caret
+                const auto at = hit_story(under, px0, py0);
+                if (m_clicks >= 2) {
+                    const auto [a, b] = core::word_at(*edit_story(), at);
+                    m_anchor = a;
+                    set_caret(b, true);
+                } else {
+                    set_caret(at, m_mods_shift);
+                }
+                m_edit_frame = under;
+                m_drag = Drag::Text;
+                return;
+            }
+            end_edit();   // a click anywhere else ends editing, then does its own thing
+        }
+        if (m_thread_from.empty() && !m_loaded && text_frame && !m_mods_alt && out_port_hit(x, y).empty() &&
+            ((m_tool == Tool::Select && m_clicks >= 2) || m_tool == Tool::Text)) {
+            begin_edit(under, hit_story(under, px0, py0));
+            m_drag = Drag::Text;
+            return;
+        }
+    }
     // Loaded with a thread: this click picks where the text continues.
     if (!m_thread_from.empty()) {
         const auto to = core::hit_frame(m_doc, m_placed, px0, py0, 3 / m_vp.scale());
@@ -711,6 +774,15 @@ void Canvas::on_drag_update(double ox, double oy) {
     switch (m_drag) {
     case Drag::None:
         return;
+    case Drag::Text: {   // s010: drag-select, across the story's frames
+        double lx, ly;
+        m_vp.to_doc(m_px + ox, m_py + oy, lx, ly);
+        auto f = core::hit_frame(m_doc, m_placed, lx, ly, 3 / s);
+        const auto* fr = m_doc.as<core::Frame>(f);
+        if (!fr || fr->story != m_edit_story) f = m_edit_frame;
+        set_caret(hit_story(f, lx, ly), true);
+        return;
+    }
     case Drag::Pan:
         m_vp.set_origin(m_ox0 + ox, m_oy0 + oy);
         queue_draw();
@@ -833,6 +905,7 @@ void Canvas::on_drag_update(double ox, double oy) {
 void Canvas::on_drag_end(double, double) {
     const Drag was = m_drag;
     m_drag = Drag::None;
+    if (was == Drag::Text) { queue_draw(); return; }
     if (was == Drag::Draw && m_loaded) {   // s009: a click places, a drag draws its frame
         const bool drawn = m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4;
         place_loaded(m_dx0, m_dy0, drawn ? &m_draw : nullptr);
@@ -855,6 +928,8 @@ void Canvas::on_drag_end(double, double) {
                         relayout();
                         pick({id});
                         m_sig_edited.emit();
+                        // s010: a new text frame is ready to type in (as InDesign).
+                        if (m_tool == Tool::Text) begin_edit(id, {0, 0});
                     }
                 }
         }
@@ -895,6 +970,7 @@ void Canvas::cancel_drag() {
 }
 
 bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
+    if (editing()) return edit_key(kv, st);
     const bool shift = (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
     const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
     if (kv == GDK_KEY_space && !ctrl) {
@@ -973,6 +1049,7 @@ void Canvas::on_motion(double x, double y) {
 }
 
 void Canvas::set_tool(Tool t) {
+    end_edit();
     m_tool = t;
     m_thread_from.clear();
     m_loaded.reset();
@@ -986,6 +1063,191 @@ void Canvas::delete_selection() {
         pick({});
         m_sig_edited.emit();
     }
+}
+
+// ── s010: editing text ──────────────────────────────────────────────────────
+void Canvas::begin_edit(const std::string& frame, core::TextPos at) {
+    const auto* f = m_doc.as<core::Frame>(frame);
+    if (!f || f->kind != core::FrameKind::Text || f->story.empty()) return;
+    m_edit_story = f->story;
+    m_edit_frame = frame;
+    m_caret = m_anchor = core::clamp_pos(*edit_story(), at);
+    m_goal_x = NAN;
+    m_burst_kind.clear();
+    ++m_burst;
+    gtk_im_context_set_client_widget(m_im, GTK_WIDGET(gobj()));
+    gtk_event_controller_key_set_im_context(m_keys->gobj(), m_im);
+    gtk_im_context_focus_in(m_im);
+    grab_focus();
+    pick({frame});
+    blink_restart();
+    update_cursor();
+    if (auto lg = log::get(log::Area::View)) lg->info("edit: {} in {}", m_edit_story, frame);
+}
+
+void Canvas::end_edit() {
+    if (!editing()) return;
+    gtk_im_context_focus_out(m_im);
+    gtk_im_context_reset(m_im);
+    gtk_event_controller_key_set_im_context(m_keys->gobj(), nullptr);
+    gtk_im_context_set_client_widget(m_im, nullptr);
+    m_blink.disconnect();
+    m_edit_story.clear();
+    m_drag = m_drag == Drag::Text ? Drag::None : m_drag;
+    queue_draw();
+    update_cursor();
+}
+
+void Canvas::blink_restart() {
+    m_caret_on = true;
+    m_blink.disconnect();
+    m_blink = Glib::signal_timeout().connect([this] {
+        m_caret_on = !m_caret_on;
+        queue_draw();
+        return editing();
+    }, 530);
+    queue_draw();
+}
+
+core::TextPos Canvas::hit_story(const std::string& frame, double lx, double ly) {
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
+    const auto& flow = m_flows.get(m_doc, m_edit_story.empty() ? m_doc.as<core::Frame>(frame)->story : m_edit_story);
+    const std::string story = m_edit_story.empty() ? m_doc.as<core::Frame>(frame)->story : m_edit_story;
+    return layout::hit_text(m_doc, story, flow, frame, lx - lr.x, ly - lr.y);
+}
+
+void Canvas::set_caret(core::TextPos p, bool extend, bool keep_goal) {
+    const auto* st = edit_story();
+    if (!st) return;
+    m_caret = core::clamp_pos(*st, p);
+    if (!extend) m_anchor = m_caret;
+    if (!keep_goal) m_goal_x = NAN;
+    m_burst_kind.clear();   // a move ends the typing burst: the next keys are a new step
+    blink_restart();
+}
+
+void Canvas::edit_insert(const std::string& text, const std::string& kind, const std::string& label) {
+    if (!edit_story()) return;
+    if (kind.empty() || kind != m_burst_kind) { ++m_burst; m_burst_kind = kind; }
+    const std::string key = kind.empty() ? std::string{} : kind + ":" + m_edit_story + ":" + std::to_string(m_burst);
+    m_caret = core::doc::edit_text(m_journal, m_doc, m_edit_story, m_anchor, m_caret, text, label, key);
+    m_anchor = m_caret;
+    m_goal_x = NAN;
+    if (kind.empty()) m_burst_kind.clear();
+    m_sig_edited.emit();
+    blink_restart();
+}
+
+bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {
+    const auto* story = edit_story();
+    if (!story) { end_edit(); return false; }
+    const bool shift = (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
+    const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
+    const bool sel = m_anchor != m_caret;
+    const auto lo = std::min(m_anchor, m_caret), hi = std::max(m_anchor, m_caret);
+    const auto& flow = m_flows.get(m_doc, m_edit_story);
+    switch (kv) {
+    case GDK_KEY_Escape: {
+        const auto f = m_edit_frame;
+        end_edit();
+        pick({f});
+        return true;
+    }
+    case GDK_KEY_BackSpace:
+        if (!sel) m_anchor = ctrl ? core::prev_word(*story, m_caret) : core::prev_char(*story, m_caret);
+        if (m_anchor != m_caret) edit_insert("", "erase", "Delete text");
+        return true;
+    case GDK_KEY_Delete: case GDK_KEY_KP_Delete:
+        if (!sel) m_caret = ctrl ? core::next_word(*story, m_caret) : core::next_char(*story, m_caret);
+        if (m_anchor != m_caret) edit_insert("", "erase", "Delete text");
+        return true;
+    case GDK_KEY_Return: case GDK_KEY_KP_Enter:
+        edit_insert("\n", "type", "Typing");
+        return true;
+    case GDK_KEY_Tab:
+        edit_insert("\t", "type", "Typing");
+        return true;
+    case GDK_KEY_Left: case GDK_KEY_KP_Left:
+        if (sel && !shift) set_caret(lo, false);
+        else set_caret(ctrl ? core::prev_word(*story, m_caret) : core::prev_char(*story, m_caret), shift);
+        return true;
+    case GDK_KEY_Right: case GDK_KEY_KP_Right:
+        if (sel && !shift) set_caret(hi, false);
+        else set_caret(ctrl ? core::next_word(*story, m_caret) : core::next_char(*story, m_caret), shift);
+        return true;
+    case GDK_KEY_Up: case GDK_KEY_Down: case GDK_KEY_KP_Up: case GDK_KEY_KP_Down: {
+        const int dir = (kv == GDK_KEY_Up || kv == GDK_KEY_KP_Up) ? -1 : 1;
+        if (std::isnan(m_goal_x)) m_goal_x = layout::caret_at(m_doc, m_edit_story, flow, m_caret).x;
+        set_caret(layout::line_move(m_doc, m_edit_story, flow, m_caret, dir, m_goal_x), shift, true);
+        return true;
+    }
+    case GDK_KEY_Home: case GDK_KEY_KP_Home:
+        set_caret(ctrl ? core::TextPos{} : layout::line_edge(m_doc, m_edit_story, flow, m_caret, false), shift);
+        return true;
+    case GDK_KEY_End: case GDK_KEY_KP_End:
+        set_caret(ctrl ? core::story_end(*story) : layout::line_edge(m_doc, m_edit_story, flow, m_caret, true), shift);
+        return true;
+    default: break;
+    }
+    if (ctrl) {
+        switch (kv) {
+        case GDK_KEY_a: case GDK_KEY_A:
+            m_anchor = {};
+            set_caret(core::story_end(*story), true);
+            return true;
+        case GDK_KEY_c: case GDK_KEY_C: case GDK_KEY_x: case GDK_KEY_X:
+            if (!sel) return true;
+            get_clipboard()->set_text(core::text_between(*story, lo, hi));
+            if (kv == GDK_KEY_x || kv == GDK_KEY_X) edit_insert("", "", "Cut");
+            return true;
+        case GDK_KEY_v: case GDK_KEY_V:
+            get_clipboard()->read_text_async([this](const Glib::RefPtr<Gio::AsyncResult>& r) {
+                try {
+                    const auto t = get_clipboard()->read_text_finish(r);
+                    if (editing() && !t.empty()) edit_insert(t.raw(), "", "Paste");
+                } catch (const Glib::Error&) {}
+            });
+            return true;
+        default:
+            return false;   // Ctrl+Z, Ctrl+S ... belong to the window
+        }
+    }
+    return true;   // anything else typed is the input method's (or nothing)
+}
+
+void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
+    const auto& flow = m_flows.get(m_doc, m_edit_story);
+    const auto lo = std::min(m_anchor, m_caret), hi = std::max(m_anchor, m_caret);
+    cr->save();
+    for (const auto& ft : flow.frames) {
+        const Rect lr = core::frame_in_layout(m_doc, m_placed, ft.frame);
+        if (lr.w <= 0) continue;
+        // The frames being typed in: a quiet accent outline.
+        const Rect fr = m_vp.to_screen(lr);
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.6);
+        cr->set_line_width(1);
+        cr->rectangle(std::round(fr.x) + 0.5, std::round(fr.y) + 0.5, std::round(fr.w), std::round(fr.h));
+        cr->stroke();
+        for (const auto& r : layout::selection_rects(m_doc, m_edit_story, flow, ft.frame, lo, hi)) {
+            const Rect sr = m_vp.to_screen(Rect{lr.x + r.x, lr.y + r.y, r.w, r.h});
+            cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.28);
+            cr->rectangle(sr.x, sr.y, sr.w, sr.h);
+            cr->fill();
+        }
+    }
+    if (m_caret_on && lo == hi) {
+        const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
+        const Rect lr = c.ok ? core::frame_in_layout(m_doc, m_placed, c.frame) : Rect{};
+        if (c.ok && lr.w > 0) {
+            const Rect sr = m_vp.to_screen(Rect{lr.x + c.x, lr.y + c.y, 0, c.h});
+            cr->set_source_rgb(0.05, 0.05, 0.08);
+            cr->set_line_width(std::max(1.0, std::min(2.0, m_vp.scale())));
+            cr->move_to(std::round(sr.x) + 0.5, sr.y);
+            cr->line_to(std::round(sr.x) + 0.5, sr.b());
+            cr->stroke();
+        }
+    }
+    cr->restore();
 }
 
 // ── s009: placing images ────────────────────────────────────────────────────
@@ -1059,7 +1321,14 @@ bool Canvas::on_drop(const Glib::ValueBase& v, double x, double y) {
 void Canvas::update_cursor() {
     if (m_space) { set_cursor(Gdk::Cursor::create(m_drag == Drag::Pan ? "grabbing" : "grab")); return; }
     if (!m_thread_from.empty() || m_loaded) { set_cursor(Gdk::Cursor::create("copy")); return; }   // loaded
-    if (!out_port_hit(m_mx, m_my).empty()) { set_cursor(Gdk::Cursor::create("pointer")); return; }
+    if (!out_port_hit(m_mx, m_my).empty() && !editing()) { set_cursor(Gdk::Cursor::create("pointer")); return; }
+    if (editing() || m_tool == Tool::Text) {   // s010: the I-beam over text you can type in
+        const auto* f = m_doc.as<core::Frame>(m_hover);
+        if (f && f->kind == core::FrameKind::Text && !f->story.empty() && (!editing() || f->story == m_edit_story)) {
+            set_cursor(Gdk::Cursor::create("text"));
+            return;
+        }
+    }
     if (m_tool != Tool::Select) { set_cursor(Gdk::Cursor::create("crosshair")); return; }
     if (!m_sel.empty()) {
         const auto h = core::handle_hit(m_vp.to_screen(selection_box()), m_mx, m_my);

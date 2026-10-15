@@ -118,7 +118,7 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
                 if (y + lead > fr.h + 0.01) break;   // the frame is full
                 PangoLayoutLine* line = pango_layout_get_line_readonly(lay.get(), i);
                 const int a = start + line->start_index;
-                out.frames[fi].lines.push_back({p, a, a + line->length, y});
+                out.frames[fi].lines.push_back({p, a, a + line->length, y, lead});
                 y += lead;
                 ++placed;
                 ++out.lines;
@@ -133,47 +133,202 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
     return out;
 }
 
-void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
-                     const std::string& frame, double ox, double oy) {
+namespace {
+
+// One placed line, as the drawing and the editing geometry both see it.
+struct Placed {
+    const Line*      line;
+    PangoLayout*     lay;      // the paragraph's layout in this frame
+    PangoLayoutLine* pl;
+    int              from;     // the byte the layout starts at in the paragraph
+    double           x;        // the line's left (alignment), frame coords
+    double           base;     // its baseline, frame coords
+};
+
+const FrameText* frame_text(const StoryFlow& flow, const std::string& frame) {
+    for (const auto& f : flow.frames) if (f.frame == frame) return &f;
+    return nullptr;
+}
+
+// Walk a frame's lines. Lines of one paragraph in a frame come from ONE
+// layout started where this frame's part of the paragraph starts -- the same
+// text at the same width breaks exactly as the flow measured it.
+template <class F>
+void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, F&& f) {
     const auto* st = d.as<core::Story>(story);
     const auto* fr = d.as<core::Frame>(frame);
-    if (!st || !fr) return;
-    const FrameText* ft = nullptr;
-    for (const auto& f : flow.frames) if (f.frame == frame) ft = &f;
-    if (!ft || ft->lines.empty()) return;
-
-    cairo_save(cr);
-    cairo_set_source_rgb(cr, 0.08, 0.08, 0.1);
-    // Lines of one paragraph in this frame are drawn from ONE layout started
-    // where this frame's part of the paragraph starts -- the same text at the
-    // same width breaks exactly as the flow measured it.
+    const FrameText* ft = frame_text(flow, frame);
+    if (!st || !fr || !ft || ft->lines.empty()) return;
     std::size_t i = 0;
     while (i < ft->lines.size()) {
         const int p = ft->lines[i].para;
         std::size_t j = i;
         while (j < ft->lines.size() && ft->lines[j].para == p) ++j;
+        if (p >= static_cast<int>(st->paras.size())) break;
         const auto& text = st->paras[static_cast<std::size_t>(p)].text;
         const auto style = style_of(d, st->paras[static_cast<std::size_t>(p)].style);
-        const double lead = leading_of(style);
-        const int from = ft->lines[i].start;
+        const int from = std::min(ft->lines[i].start, static_cast<int>(text.size()));
         const bool continues = ft->lines[j - 1].end < static_cast<int>(text.size());
         auto lay = make_layout(style, text.c_str() + from, static_cast<int>(text.size()) - from, fr->w, continues);
         PangoLayoutIter* it = pango_layout_get_iter(lay.get());
         for (std::size_t k = i; k < j; ++k) {
             PangoRectangle logical;
             pango_layout_iter_get_line_extents(it, nullptr, &logical);
-            const double base = pango_layout_iter_get_baseline(it) / static_cast<double>(PANGO_SCALE);
+            const double bl = pango_layout_iter_get_baseline(it) / static_cast<double>(PANGO_SCALE);
             const double top = logical.y / static_cast<double>(PANGO_SCALE);
             const double h = logical.height / static_cast<double>(PANGO_SCALE);
             const double x = logical.x / static_cast<double>(PANGO_SCALE);
-            cairo_move_to(cr, ox + x, oy + ft->lines[k].y + (lead - h) / 2 + (base - top));
-            pango_cairo_show_layout_line(cr, pango_layout_iter_get_line_readonly(it));
+            const auto& ln = ft->lines[k];
+            f(Placed{&ln, lay.get(), pango_layout_iter_get_line_readonly(it), from, x,
+                     ln.y + (ln.h - h) / 2 + (bl - top)});
             if (!pango_layout_iter_next_line(it)) break;
         }
         pango_layout_iter_free(it);
         i = j;
     }
+}
+
+int para_len(const core::Story& s, int p) {
+    return p >= 0 && p < static_cast<int>(s.paras.size()) ? static_cast<int>(s.paras[static_cast<std::size_t>(p)].text.size()) : 0;
+}
+
+// Is `p` on this line? At a soft wrap the place belongs to the NEXT line
+// (where typing there would appear) -- except at the paragraph's very end.
+bool on_line(const core::Story& s, const Line& l, core::TextPos p) {
+    if (l.para != p.para) return false;
+    if (p.byte < l.start) return false;
+    if (p.byte < l.end) return true;
+    return p.byte == l.end && l.end == para_len(s, l.para);
+}
+
+// x of a byte on a placed line, frame coords.
+double x_of(const Placed& pl, int byte) {
+    PangoRectangle pos;
+    pango_layout_index_to_pos(pl.lay, byte - pl.from, &pos);
+    return pos.x / static_cast<double>(PANGO_SCALE);
+}
+
+// The byte nearest x on a placed line.
+int byte_at_x(const Placed& pl, double x) {
+    int index = 0, trailing = 0;
+    pango_layout_line_x_to_index(pl.pl, static_cast<int>(std::lround((x - pl.x) * PANGO_SCALE)), &index, &trailing);
+    const char* text = pango_layout_get_text(pl.lay);
+    const char* at = text + index;
+    for (int t = 0; t < trailing && *at; ++t) at = g_utf8_next_char(at);
+    int b = pl.from + static_cast<int>(at - text);
+    // Never past the line's own end (a wrapped line's trailing space).
+    return std::clamp(b, pl.line->start, pl.line->end);
+}
+
+}  // namespace
+
+void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                     const std::string& frame, double ox, double oy) {
+    cairo_save(cr);
+    cairo_set_source_rgb(cr, 0.08, 0.08, 0.1);
+    walk_frame(d, story, flow, frame, [&](const Placed& pl) {
+        cairo_move_to(cr, ox + pl.x, oy + pl.base);
+        pango_cairo_show_layout_line(cr, pl.pl);
+    });
     cairo_restore(cr);
+}
+
+Caret caret_at(const core::Doc& d, const std::string& story, const StoryFlow& flow, core::TextPos p) {
+    Caret c;
+    const auto* st = d.as<core::Story>(story);
+    if (!st) return c;
+    for (const auto& ft : flow.frames) {
+        walk_frame(d, story, flow, ft.frame, [&](const Placed& pl) {
+            if (c.ok || !on_line(*st, *pl.line, p)) return;
+            c = {true, ft.frame, x_of(pl, p.byte), pl.line->y, pl.line->h};
+        });
+        if (c.ok) break;
+    }
+    return c;
+}
+
+core::TextPos hit_text(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                       const std::string& frame, double x, double y) {
+    const FrameText* ft = frame_text(flow, frame);
+    if (!ft || ft->lines.empty()) {
+        // An empty frame of the story: the end of the text before it, else the start.
+        const auto* st = d.as<core::Story>(story);
+        if (!st) return {};
+        for (auto it = flow.frames.rbegin(); it != flow.frames.rend(); ++it)
+            if (!it->lines.empty()) return {it->lines.back().para, it->lines.back().end};
+        return {};
+    }
+    // The line under y (above the first: the first; below the last: the last).
+    const Line* want = &ft->lines.front();
+    for (const auto& l : ft->lines) if (y >= l.y) want = &l;
+    core::TextPos out{want->para, want->start};
+    walk_frame(d, story, flow, frame, [&](const Placed& pl) {
+        if (pl.line == want) out = {want->para, byte_at_x(pl, x)};
+    });
+    return out;
+}
+
+core::TextPos line_move(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                        core::TextPos p, int dir, double goal_x) {
+    const auto* st = d.as<core::Story>(story);
+    if (!st) return p;
+    // Every line of the thread, in order.
+    std::vector<std::pair<const FrameText*, const Line*>> all;
+    for (const auto& ft : flow.frames) for (const auto& l : ft.lines) all.push_back({&ft, &l});
+    int cur = -1;
+    for (int i = 0; i < static_cast<int>(all.size()); ++i)
+        if (on_line(*st, *all[static_cast<std::size_t>(i)].second, p)) { cur = i; break; }
+    if (cur < 0) return p;
+    const int to = cur + dir;
+    if (to < 0) return {0, 0};                                                  // above the first line: the start
+    if (to >= static_cast<int>(all.size())) return {all.back().second->para, all.back().second->end};   // the end
+    const auto [ft, line] = all[static_cast<std::size_t>(to)];
+    core::TextPos out{line->para, line->start};
+    walk_frame(d, story, flow, ft->frame, [&](const Placed& pl) {
+        if (pl.line == line) out = {line->para, byte_at_x(pl, goal_x)};
+    });
+    return out;
+}
+
+core::TextPos line_edge(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                        core::TextPos p, bool end) {
+    const auto* st = d.as<core::Story>(story);
+    if (!st) return p;
+    for (const auto& ft : flow.frames)
+        for (const auto& l : ft.lines)
+            if (on_line(*st, l, p)) {
+                if (!end) return {l.para, l.start};
+                // The end of a wrapped line is before its trailing space.
+                int e = l.end;
+                const auto& t = st->paras[static_cast<std::size_t>(l.para)].text;
+                if (e < static_cast<int>(t.size()))
+                    while (e > l.start && t[static_cast<std::size_t>(e - 1)] == ' ') --e;
+                return {l.para, e};
+            }
+    return p;
+}
+
+std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                                        const std::string& frame, core::TextPos a, core::TextPos b) {
+    std::vector<core::Rect> out;
+    if (b < a) std::swap(a, b);
+    if (a == b) return out;
+    const auto* st = d.as<core::Story>(story);
+    if (!st) return out;
+    walk_frame(d, story, flow, frame, [&](const Placed& pl) {
+        const Line& l = *pl.line;
+        if (l.para < a.para || l.para > b.para) return;
+        const int s = l.para == a.para ? std::max(a.byte, l.start) : l.start;
+        const int e = l.para == b.para ? std::min(b.byte, l.end) : l.end;
+        const bool para_end_selected = l.end == para_len(*st, l.para) && l.para < b.para;
+        if (s > e || (s == e && !para_end_selected)) return;
+        if (l.para == a.para && a.byte > l.end) return;
+        double x0 = x_of(pl, s), x1 = x_of(pl, e);
+        if (x1 < x0) std::swap(x0, x1);
+        if (para_end_selected) x1 += 4;   // the paragraph break, shown as a sliver
+        out.push_back({x0, l.y, x1 - x0, l.h});
+    });
+    return out;
 }
 
 const StoryFlow& FlowCache::get(const core::Doc& d, const std::string& story) {

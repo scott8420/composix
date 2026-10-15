@@ -32,6 +32,7 @@ struct Line {
     int    start = 0;    // byte range in that paragraph's text
     int    end   = 0;
     double y     = 0;    // top of the line box, frame coordinates (points)
+    double h     = 0;    // its leading (s010: the caret's height)
 };
 
 struct FrameText {
@@ -54,6 +55,29 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story);
 // cairo context's current user space (points). The caller sets the scale.
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
                      const std::string& frame, double ox, double oy);
+
+// ── editing geometry (s010) ─────────────────────────────────────────────────
+// All in FRAME coordinates (points), from the same layouts the drawing uses,
+// so the caret sits exactly where the glyphs are.
+struct Caret {
+    bool        ok = false;   // false: the place is overset (in no frame)
+    std::string frame;
+    double      x = 0, y = 0, h = 0;   // the caret: x, top, height
+};
+Caret caret_at(const core::Doc& d, const std::string& story, const StoryFlow& flow, core::TextPos p);
+// The place nearest (x, y) in a frame of the story (clamped to its lines).
+core::TextPos hit_text(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                       const std::string& frame, double x, double y);
+// Up / down one line (dir -1 / +1) through the whole thread, keeping to
+// `goal_x` (the x the caret had when the run of up / downs began).
+core::TextPos line_move(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                        core::TextPos p, int dir, double goal_x);
+// The start / end of the line the place is on.
+core::TextPos line_edge(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                        core::TextPos p, bool end);
+// The selection [a, b) as rectangles in one frame.
+std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                                        const std::string& frame, core::TextPos a, core::TextPos b);
 
 // Flows, recomputed only when the document changes (Doc::revision()).
 class FlowCache {

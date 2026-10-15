@@ -236,6 +236,112 @@ std::string master_label(const Doc& d, const Doc::Id& master) {
 // ─────────────────────────────────────────────────────────────────────────────
 // The verbs
 // ─────────────────────────────────────────────────────────────────────────────
+// ── text positions (s010) ───────────────────────────────────────────────────
+namespace {
+bool cont(unsigned char c) { return (c & 0xC0) == 0x80; }   // a UTF-8 continuation byte
+// A "word" character: letters, digits, anything non-ASCII; not space / punctuation.
+bool wordy(unsigned char c) { return c >= 0x80 || std::isalnum(c) || c == '_' || c == '\''; }
+}  // namespace
+
+TextPos clamp_pos(const Story& s, TextPos p) {
+    if (s.paras.empty()) return {0, 0};
+    p.para = std::clamp(p.para, 0, static_cast<int>(s.paras.size()) - 1);
+    const auto& t = s.paras[static_cast<std::size_t>(p.para)].text;
+    p.byte = std::clamp(p.byte, 0, static_cast<int>(t.size()));
+    while (p.byte > 0 && p.byte < static_cast<int>(t.size()) && cont(static_cast<unsigned char>(t[static_cast<std::size_t>(p.byte)])))
+        --p.byte;
+    return p;
+}
+
+TextPos story_end(const Story& s) {
+    if (s.paras.empty()) return {0, 0};
+    return {static_cast<int>(s.paras.size()) - 1, static_cast<int>(s.paras.back().text.size())};
+}
+
+TextPos next_char(const Story& s, TextPos p) {
+    p = clamp_pos(s, p);
+    if (s.paras.empty()) return p;
+    const auto& t = s.paras[static_cast<std::size_t>(p.para)].text;
+    if (p.byte >= static_cast<int>(t.size())) {
+        if (p.para + 1 < static_cast<int>(s.paras.size())) return {p.para + 1, 0};
+        return p;
+    }
+    ++p.byte;
+    while (p.byte < static_cast<int>(t.size()) && cont(static_cast<unsigned char>(t[static_cast<std::size_t>(p.byte)]))) ++p.byte;
+    return p;
+}
+
+TextPos prev_char(const Story& s, TextPos p) {
+    p = clamp_pos(s, p);
+    if (s.paras.empty()) return p;
+    if (p.byte == 0) {
+        if (p.para > 0) return {p.para - 1, static_cast<int>(s.paras[static_cast<std::size_t>(p.para - 1)].text.size())};
+        return p;
+    }
+    const auto& t = s.paras[static_cast<std::size_t>(p.para)].text;
+    --p.byte;
+    while (p.byte > 0 && cont(static_cast<unsigned char>(t[static_cast<std::size_t>(p.byte)]))) --p.byte;
+    return p;
+}
+
+namespace {
+unsigned char byte_at(const Story& s, TextPos p) {   // '\n' at a paragraph's end
+    const auto& t = s.paras[static_cast<std::size_t>(p.para)].text;
+    return p.byte < static_cast<int>(t.size()) ? static_cast<unsigned char>(t[static_cast<std::size_t>(p.byte)]) : '\n';
+}
+}  // namespace
+
+TextPos next_word(const Story& s, TextPos p) {
+    p = clamp_pos(s, p);
+    if (s.paras.empty()) return p;
+    const TextPos end = story_end(s);
+    while (p < end && wordy(byte_at(s, p))) p = next_char(s, p);    // the rest of this word
+    while (p < end && !wordy(byte_at(s, p))) p = next_char(s, p);   // the gap after it
+    return p;
+}
+
+TextPos prev_word(const Story& s, TextPos p) {
+    p = clamp_pos(s, p);
+    if (s.paras.empty()) return p;
+    const auto before = [&](TextPos q) { return byte_at(s, prev_char(s, q)); };
+    while (p > TextPos{} && !wordy(before(p))) p = prev_char(s, p);
+    while (p > TextPos{} && wordy(before(p))) p = prev_char(s, p);
+    return p;
+}
+
+std::pair<TextPos, TextPos> word_at(const Story& s, TextPos p) {
+    p = clamp_pos(s, p);
+    if (s.paras.empty()) return {p, p};
+    const auto& t = s.paras[static_cast<std::size_t>(p.para)].text;
+    int a = p.byte, b = p.byte;
+    const auto w = [&](int i) { return wordy(static_cast<unsigned char>(t[static_cast<std::size_t>(i)])); };
+    if (b < static_cast<int>(t.size()) && w(b)) {
+        while (a > 0 && w(a - 1)) --a;
+        while (b < static_cast<int>(t.size()) && w(b)) ++b;
+    } else if (a > 0 && w(a - 1)) {
+        while (a > 0 && w(a - 1)) --a;
+    } else if (b < static_cast<int>(t.size())) {   // on a space / punctuation: just that character
+        b = next_char(s, p).byte;
+    }
+    return {{p.para, a}, {p.para, b}};
+}
+
+std::string text_between(const Story& s, TextPos a, TextPos b) {
+    if (s.paras.empty()) return {};
+    a = clamp_pos(s, a);
+    b = clamp_pos(s, b);
+    if (b < a) std::swap(a, b);
+    std::string out;
+    for (int p = a.para; p <= b.para; ++p) {
+        const auto& t = s.paras[static_cast<std::size_t>(p)].text;
+        const int from = p == a.para ? a.byte : 0;
+        const int to = p == b.para ? b.byte : static_cast<int>(t.size());
+        out += t.substr(static_cast<std::size_t>(from), static_cast<std::size_t>(to - from));
+        if (p < b.para) out += '\n';
+    }
+    return out;
+}
+
 // ── images (s009) ───────────────────────────────────────────────────────────
 std::string resolve_asset(const Asset& a, const std::string& dir) {
     namespace fs = std::filesystem;
@@ -647,6 +753,52 @@ bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     });
 }
 
+// ── text (s010) ─────────────────────────────────────────────────────────────
+TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& text,
+                  const std::string& label, const std::string& merge_key) {
+    const auto* st = d.as<Story>(story);
+    if (!st) return a;
+    Story s = *st;
+    if (s.paras.empty()) {   // a story with no paragraph yet: one, in the first paragraph style
+        Doc::Id style;
+        for (const auto& id : d.ids_of<Style>())
+            if (d.as<Style>(id)->kind == StyleKind::Paragraph) { style = id; break; }
+        s.paras.push_back({style, ""});
+    }
+    a = clamp_pos(s, a);
+    b = clamp_pos(s, b);
+    if (b < a) std::swap(a, b);
+
+    // The inserted text as lines (\r\n and \r count as \n).
+    std::vector<std::string> pieces(1);
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '\r') { if (i + 1 < text.size() && text[i + 1] == '\n') ++i; pieces.emplace_back(); }
+        else if (c == '\n') pieces.emplace_back();
+        else pieces.back() += c;
+    }
+    const auto& pa = s.paras[static_cast<std::size_t>(a.para)];
+    const auto& pb = s.paras[static_cast<std::size_t>(b.para)];
+    const std::string head = pa.text.substr(0, static_cast<std::size_t>(a.byte));
+    const std::string tail = pb.text.substr(static_cast<std::size_t>(b.byte));
+    const std::string style = pa.style;
+
+    std::vector<Para> made;
+    for (std::size_t i = 0; i < pieces.size(); ++i) {
+        std::string t = (i == 0 ? head : std::string()) + pieces[i];
+        if (i + 1 == pieces.size()) t += tail;
+        made.push_back({style, std::move(t)});
+    }
+    s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
+    s.paras.insert(s.paras.begin() + a.para, made.begin(), made.end());
+
+    TextPos caret{a.para + static_cast<int>(pieces.size()) - 1,
+                  static_cast<int>((pieces.size() == 1 ? head.size() : 0) + pieces.back().size())};
+    if (s == *st) return a;
+    j.run(label, {story}, [&] { d.put(story, s); }, merge_key);
+    return caret;
+}
+
 // ── images (s009) ───────────────────────────────────────────────────────────
 namespace {
 // The linked asset for this file (the same path is one asset), or a new id.
@@ -955,6 +1107,11 @@ const std::vector<Verb>& verbs() {
              frames_end(j);
          }},
         {"remove_guide", [](DocJournal& j, Doc& d) { remove_guide(j, d, "guide.2"); }},
+        // s010: text. Typing, Enter (a split), a paste across paragraphs, a cut.
+        {"type_text", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 3}, {1, 3}, "abc"); }},
+        {"enter", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 5}, {1, 5}, "\n"); }},
+        {"paste_lines", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {0, 2}, {2, 4}, "one\ntwo\nthree", "Paste"); }},
+        {"cut", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 0}, {3, 0}, "", "Cut"); }},
         // s009: images. The files are made up -- the core never opens them.
         {"place_image", [](DocJournal& j, Doc& d) {   // replaces harbor.psd, which goes
              place_image(j, d, "frame.4", {"/pics/cove.png", "cove.png", 2400, 1600, false, "RGB", 7});
