@@ -81,6 +81,8 @@ private:
     void on_save_as();                           // category: handler: name a new project folder -> save
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
     void on_export_pdf();                        // category: handler: the Export PDF sheet -> a file -> the report
+    void on_tiles_move(const std::vector<std::string>& ids, const std::string& target, bool before);  // category: handler: pages dragged
+    bool page_action(const std::string& act, const std::vector<std::string>& ids);  // category: helper: add / delete / section
     void on_asset_action(const std::string& act);   // category: handler: relink / update / embed / unembed (inspector)
     bool on_close_request() override;            // category: handler: unsaved changes? ask first
     void on_recent_open(const std::string& p);   // category: handler: open a recent project (parameterised)

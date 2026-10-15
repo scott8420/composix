@@ -257,6 +257,23 @@ void Canvas::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
 void Canvas::draw_guides(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p) {
     const Rect sr = m_vp.to_screen(p.r);
     const double s = m_vp.scale();
+    // s014: the margins (magenta) and the page's columns (violet), from its master.
+    if (const Rect mr = core::margin_rect(m_doc, p.id); mr.w > 0) {
+        const Rect smr = m_vp.to_screen(Rect{p.r.x + mr.x, p.r.y + mr.y, mr.w, mr.h});
+        cr->set_line_width(1);
+        cr->set_source_rgba(0.85, 0.25, 0.65, 0.7);
+        cr->rectangle(std::round(smr.x) + 0.5, std::round(smr.y) + 0.5, std::round(smr.w), std::round(smr.h));
+        cr->stroke();
+        const auto cols = core::page_columns(m_doc, p.id);
+        cr->set_source_rgba(0.5, 0.35, 0.9, 0.6);
+        for (std::size_t c = 0; c + 1 < cols.size(); ++c)
+            for (double x : {cols[c].x1, cols[c + 1].x0}) {
+                const double sx = std::round(sr.x + x * s) + 0.5;
+                cr->move_to(sx, smr.y);
+                cr->line_to(sx, smr.b());
+            }
+        cr->stroke();
+    }
     auto owners = p.master ? std::vector<std::string>{} : core::master_chain(m_doc, p.id);
     owners.push_back(p.id);
     cr->set_line_width(1);
@@ -960,13 +977,40 @@ void Canvas::on_drag_end(double, double) {
     if (was == Drag::Draw) {
         // Big enough to mean it (4 px on screen): a frame on the page it was
         // started on, in that page's coordinates.
-        if (m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4) {
+        const bool drawn = m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4;
+        // s014: a Text-tool CLICK inside the margins makes a frame filling the
+        // page's column there.
+        if (!drawn && m_tool == Tool::Text) {
+            for (const auto& p : m_placed) {
+                if (p.id != m_draw_page) continue;
+                const Rect mr = core::margin_rect(m_doc, p.id);
+                const double lx = m_dx0 - p.r.x, ly = m_dy0 - p.r.y;
+                if (mr.w <= 0 || ly < mr.y || ly > mr.b()) break;
+                for (const auto& c : core::page_columns(m_doc, p.id))
+                    if (lx >= c.x0 && lx <= c.x1) {
+                        const auto id = core::doc::add_frame(m_journal, m_doc, p.id, core::FrameKind::Text,
+                                                             {c.x0, mr.y, c.x1 - c.x0, mr.h});
+                        if (!id.empty()) {
+                            relayout();
+                            pick({id});
+                            m_sig_edited.emit();
+                            begin_edit(id, {0, 0});
+                        }
+                    }
+            }
+        }
+        if (drawn) {
             for (const auto& p : m_placed)
                 if (p.id == m_draw_page) {
                     static const core::FrameKind kinds[] = {core::FrameKind::Text, core::FrameKind::Text,
                                                             core::FrameKind::Image, core::FrameKind::Shape};
+                    // s014: a text frame drawn across the margins takes the page's columns.
+                    const Rect own{m_draw.x - p.r.x, m_draw.y - p.r.y, m_draw.w, m_draw.h};
+                    const Rect mr = core::margin_rect(m_doc, p.id);
+                    auto [cols, gut] = core::page_column_setup(m_doc, p.id);
+                    if (!(mr.w > 0 && std::abs(own.x - mr.x) < 1 && std::abs(own.r() - mr.r()) < 1)) cols = 1;
                     const auto id = core::doc::add_frame(m_journal, m_doc, p.id, kinds[static_cast<int>(m_tool)],
-                                                         {m_draw.x - p.r.x, m_draw.y - p.r.y, m_draw.w, m_draw.h});
+                                                         own, cols, gut);
                     if (!id.empty()) {
                         relayout();
                         pick({id});

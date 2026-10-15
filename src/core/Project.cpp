@@ -147,12 +147,19 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         const std::string sec = d.section_of(pid);
         Thumb th{K::Page, p.w / kPt, p.h / kPt, 0xffffff, !p.folds.empty()};
         th.panels = static_cast<int>(p.folds.size()) + 1;
+        // s014: what can be done to pages, as buttons.
+        bool starts = false;
+        for (const auto& sid : d.ids_of<Section>()) starts = starts || d.as<Section>(sid)->start_page == pid;
+        Field acts{"", "", "page", {{"add", "Add page after"}, {"delete", "Delete"}}};
+        if (!starts) acts.choices.push_back({"section", "Start section"});
+        acts.buttons = true;
         o.add({pid, G::Pages, "Page " + d.folio(pid), p.folds.empty() ? "" : "Foldout", th,
                {{"Folio", d.folio(pid)},
                 {"Size", size_text(p.w, p.h, p.folds.size()), "size", size_choices},
                 {"Master", master_label(d, p.master), "master", master_choices},
                 {"Section", sec.empty() ? "—" : d.as<Section>(sec)->name},
-                {"Side", side_text(d.side_of(pid))}}});
+                {"Side", side_text(d.side_of(pid))},
+                acts}});
     }
 
     // ── Masters ─────────────────────────────────────────────────────────────
@@ -162,11 +169,24 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         for (const auto& pid : pages) n += d.as<Page>(pid)->master == mid;
         Thumb th{K::Page, m.w / kPt, m.h / kPt, 0xffffff, !m.folds.empty()};
         th.panels = static_cast<int>(m.folds.size()) + 1;
-        o.add({mid, G::Masters, master_label(d, mid), m.folds.empty() ? "" : "Foldout", th,
-               {{"Size", size_text(m.w, m.h, m.folds.size())},
-                {"Columns", std::to_string(m.columns)},
-                {"Based on", m.based_on.empty() ? "—" : master_label(d, m.based_on)},
-                {"Used by", n == 1 ? "1 page" : std::to_string(n) + " pages"}}});
+        // s014: margins and columns, editable.
+        static const double margins[] = {0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1, 1.25, 1.5, 2, 2.5, 3};
+        std::vector<Choice> mc;
+        for (double v : margins) mc.push_back({pts(v * kPt), inches(v * kPt) + " in"});
+        std::vector<Choice> cc, gc;
+        for (int k = 1; k <= 6; ++k) cc.push_back({std::to_string(k), std::to_string(k)});
+        for (double g : {6.0, 9.0, 12.0, 14.0, 18.0, 24.0, 36.0}) gc.push_back({pts(g), pts(g) + " pt"});
+        const auto in = [](double v) { return inches(v) + " in"; };
+        std::vector<Field> f{{"Size", size_text(m.w, m.h, m.folds.size())},
+                             {"Columns", std::to_string(m.columns), "mcolumns", cc}};
+        if (m.columns > 1) f.push_back({"Gutter", pts(m.gutter) + " pt", "mgutter", gc});
+        f.push_back({"Top", in(m.margins.top), "mtop", mc});
+        f.push_back({"Bottom", in(m.margins.bottom), "mbottom", mc});
+        f.push_back({"Inside", in(m.margins.inside), "minside", mc});
+        f.push_back({"Outside", in(m.margins.outside), "moutside", mc});
+        f.push_back({"Based on", m.based_on.empty() ? "—" : master_label(d, m.based_on)});
+        f.push_back({"Used by", n == 1 ? "1 page" : std::to_string(n) + " pages"});
+        o.add({mid, G::Masters, master_label(d, mid), m.folds.empty() ? "" : "Foldout", th, f});
     }
 
     // ── Stories ─────────────────────────────────────────────────────────────

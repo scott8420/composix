@@ -135,6 +135,9 @@ flowbox.cx-tile-grid > flowboxchild {
   outline-color: alpha(@cx_ink, 0.6);
 }
 flowbox.cx-tile-grid > flowboxchild:selected { background: none; color: @cx_fg; }
+/* s014: where dragged pages will land */
+flowbox.cx-tile-grid > flowboxchild.cx-drop-before { box-shadow: inset 4px 0 0 @cx_ink; }
+flowbox.cx-tile-grid > flowboxchild.cx-drop-after  { box-shadow: inset -4px 0 0 @cx_ink; }
 
 .cx-tile-card {
   background: @cx_card;

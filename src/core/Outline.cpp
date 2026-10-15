@@ -52,6 +52,21 @@ std::vector<Field> shared_fields(const std::vector<const Item*>& sel) {
             if (hit->edit != f.edit || hit->choices != f.choices) editable = false;
         }
         if (!everywhere) continue;
+        if (f.buttons) {   // actions: the ones every item offers (s014)
+            Field g{f.label, "", f.edit, {}};
+            g.buttons = true;
+            for (const auto& c : f.choices) {
+                bool all = true;
+                for (std::size_t i = 1; i < sel.size() && all; ++i) {
+                    const auto& fs = sel[i]->fields;
+                    const auto hit = std::find_if(fs.begin(), fs.end(), [&](const Field& h) { return h.buttons && h.edit == f.edit; });
+                    all = hit != fs.end() && std::find(hit->choices.begin(), hit->choices.end(), c) != hit->choices.end();
+                }
+                if (all) g.choices.push_back(c);
+            }
+            if (!g.choices.empty()) out.push_back(std::move(g));
+            continue;
+        }
         Field g{f.label, same ? f.value : std::string(kMixed), {}, {}};
         if (!f.cols.empty()) {   // per column: the value where all agree, Mixed where not
             const auto split = [](const std::string& v) {

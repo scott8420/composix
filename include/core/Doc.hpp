@@ -80,6 +80,12 @@ struct Page {
     bool operator==(const Page&) const = default;
 };
 
+// Page margins (s014), points. Facing pages: inside = by the spine.
+struct Margins {
+    double top = 54, bottom = 54, inside = 54, outside = 54;
+    bool operator==(const Margins&) const = default;
+};
+
 struct Master {
     std::string         prefix;          // "B"
     std::string         name;            // "Body"
@@ -88,6 +94,8 @@ struct Master {
     std::vector<double> folds;
     int                 columns = 1;
     std::string         based_on;        // another master's id, or ""
+    Margins             margins;         // s014
+    double              gutter = 12;     // s014: between the page's columns
     bool operator==(const Master&) const = default;
 };
 
@@ -351,7 +359,10 @@ void frames_cancel(DocJournal& j);
 // ── frame tools (s008) ──────────────────────────────────────────────────────
 // Draw a frame on a page / master (rect in its coordinates). A new TEXT frame
 // gets a story of its own (one empty paragraph in the first paragraph style).
-Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r);
+// s014: `columns` / `gutter` for a text frame (one drawn across the margins
+// takes the page's columns).
+Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r,
+                  int columns = 1, double gutter = 12);
 // Delete frames. A text frame leaving a thread is spliced out (the frame
 // before it points past it) so the story reflows through what is left. A
 // story whose LAST frame goes goes with it, and so does an image whose last
@@ -380,6 +391,10 @@ bool    relink_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id
 bool    embed_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id, std::string>>& rels);
 bool    unembed_assets(DocJournal& j, Doc& d, const std::vector<Doc::Id>& assets);
 bool    set_fit(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ImageFit fit);
+
+// ── masters (s014) ──────────────────────────────────────────────────────────
+bool edit_masters(DocJournal& j, Doc& d, const std::vector<Doc::Id>& masters, const std::string& label,
+                  const std::function<void(Master&)>& f);
 
 // ── frame settings (s012) ───────────────────────────────────────────────────
 // Change frames' settings (columns, gutter, balance ...): `f` edits each;
@@ -451,6 +466,14 @@ double column_x(const Frame& f, int col);
 int    column_at(const Frame& f, double x);
 // The weights for `n` columns from `f` (its own when they fit, else equal).
 std::vector<double> column_weights(const Frame& f, int n);
+// s014: a page's (or master's) margins and columns, from its master; in its
+// own coordinates. A left-hand page mirrors inside / outside. Empty when it
+// has no master (no margins to show).
+Rect margin_rect(const Doc& d, const Doc::Id& page_or_master);
+struct ColumnSpan { double x0, x1; };
+std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& page_or_master);
+// The page's column count and gutter (1 / 12 with no master).
+std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& page_or_master);
 // The masters a page shows, most basic first (a master's based-on chain).
 std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& page_or_master);
 // A frame's rect in layout (doc) space; empty if its owner isn't placed.

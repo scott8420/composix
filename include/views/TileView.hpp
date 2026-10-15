@@ -30,6 +30,12 @@ public:
 
     sigc::signal<void(const std::vector<std::string>&)>& signal_selection() { return m_sel; }
     sigc::signal<void(const std::vector<std::string>&)>& signal_open()      { return m_open; }
+    // s014: Delete / Backspace on the tiles; tiles dragged onto another
+    // (before it when dropped on its left half). Only where reorderable.
+    sigc::signal<void(const std::vector<std::string>&)>& signal_delete()    { return m_del; }
+    sigc::signal<void(const std::vector<std::string>&, const std::string& target, bool before)>& signal_move() {
+        return m_move;
+    }
 
 private:
     widgets::Box            m_head;
@@ -40,7 +46,10 @@ private:
 
     std::map<const Gtk::FlowBoxChild*, std::string> m_id_of;
     bool m_quiet = false;
-    sigc::signal<void(const std::vector<std::string>&)> m_sel, m_open;
+    sigc::signal<void(const std::vector<std::string>&)> m_sel, m_open, m_del;
+    sigc::signal<void(const std::vector<std::string>&, const std::string&, bool)> m_move;
+    std::vector<std::string> m_drag_ids;   // the tiles being dragged
+    bool m_reorder = false;                // the pages segment
 };
 
 }  // namespace composix::views

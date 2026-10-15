@@ -128,6 +128,54 @@ void Shell::on_asset_action(const std::string& act) {  // handler
     }
 }
 
+// ── pages (s014) ───────────────────────────────────────────────────────────
+bool Shell::page_action(const std::string& act, const std::vector<std::string>& ids) {  // helper
+    std::vector<std::string> pages;
+    for (const auto& id : ids) if (m_doc.as<core::Page>(id)) pages.push_back(id);
+    if (pages.empty()) return false;
+    if (act == "add") {
+        const auto last = pages.back();
+        const auto made = core::doc::add_pages(m_journal, m_doc, last, 1, m_doc.as<core::Page>(last)->master);
+        if (made.empty()) return false;
+        Glib::signal_idle().connect_once([this, made] { m_tiles.show_section(m_outline, core::Segment::Pages, made); on_tiles_selection(made); });
+        return true;
+    }
+    if (act == "delete") {
+        if (pages.size() >= m_doc.pages().size()) {
+            alert("A document keeps at least one page", "Add a page first, then delete these.");
+            return false;
+        }
+        const auto next = core::doc::neighbour_page(m_doc, pages);
+        const bool ok = core::doc::remove_pages(m_journal, m_doc, pages);
+        if (ok && !next.empty())
+            Glib::signal_idle().connect_once([this, next] { m_tiles.show_section(m_outline, core::Segment::Pages, {next}); on_tiles_selection({next}); });
+        return ok;
+    }
+    if (act == "section") {
+        const int n = static_cast<int>(m_doc.ids_of<core::Section>().size()) + 1;
+        return !core::doc::add_section(m_journal, m_doc, pages.front(), "Section " + std::to_string(n),
+                                       core::Numbering::Arabic, 1).empty();
+    }
+    return false;
+}
+
+void Shell::on_tiles_move(const std::vector<std::string>& ids, const std::string& target, bool before) {  // handler
+    if (std::find(ids.begin(), ids.end(), target) != ids.end()) return;   // onto itself
+    std::vector<std::string> rest;
+    for (const auto& p : m_doc.pages())
+        if (std::find(ids.begin(), ids.end(), p) == ids.end()) rest.push_back(p);
+    const auto it = std::find(rest.begin(), rest.end(), target);
+    if (it == rest.end()) return;
+    const std::string after = before ? (it == rest.begin() ? std::string{} : *(it - 1)) : target;
+    if (core::doc::move_pages(m_journal, m_doc, ids, after)) {
+        Glib::signal_idle().connect_once([this, ids] {
+            m_tiles.show_section(m_outline, core::Segment::Pages, ids);
+            on_tiles_selection(ids);
+        });
+        if (auto lg = log::get(log::Area::Shell)) lg->info("moved {} page(s) {} {}", ids.size(), before ? "before" : "after", target);
+    }
+}
+
 // ── PDF (s013) ─────────────────────────────────────────────────────────────
 // A small sheet: Bleed, Crop marks, then Export... names the file.
 void Shell::on_export_pdf() {  // handler
@@ -363,6 +411,22 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             } else if (choice == "delete") {
                 did = core::doc::delete_styles(m_journal, m_doc, m_inspected);
             }
+        } else if (key == "mcolumns" || key == "mgutter" || key == "mtop" || key == "mbottom" ||
+                   key == "minside" || key == "moutside") {   // s014: a master's margins / columns
+            static const std::map<std::string, std::string> labels{
+                {"mcolumns", "Page columns"}, {"mgutter", "Page gutter"}, {"mtop", "Top margin"},
+                {"mbottom", "Bottom margin"}, {"minside", "Inside margin"}, {"moutside", "Outside margin"}};
+            const double v = std::stod(choice);
+            did = core::doc::edit_masters(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Master& m) {
+                if (key == "mcolumns") m.columns = static_cast<int>(v);
+                else if (key == "mgutter") m.gutter = v;
+                else if (key == "mtop") m.margins.top = v;
+                else if (key == "mbottom") m.margins.bottom = v;
+                else if (key == "minside") m.margins.inside = v;
+                else m.margins.outside = v;
+            });
+        } else if (key == "page") {   // s014: Add page after / Delete / Start section
+            did = page_action(choice, m_inspected);
         } else if (key == "columns" || key == "gutter" || key == "widths" || key == "balance") {   // s012
             static const std::map<std::string, std::string> labels{
                 {"columns", "Columns"}, {"gutter", "Gutter"}, {"widths", "Column widths"}, {"balance", "Balance columns"}};

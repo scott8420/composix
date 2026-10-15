@@ -132,6 +132,8 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     // s005: the canvas. Its picks drive the inspector; a finished drag or a
     // nudge refreshes the other views (mid-drag only the canvas repaints).
     auto& cv = m_canvas_view.canvas();
+    m_tiles.signal_move().connect(sigc::mem_fun(*this, &Shell::on_tiles_move));   // s014
+    m_tiles.signal_delete().connect([this](const std::vector<std::string>& ids) { page_action("delete", ids); });
     cv.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));
     cv.signal_caret().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));   // s011: the text inspector
     cv.signal_edited().connect([this] { queue_refresh(); });

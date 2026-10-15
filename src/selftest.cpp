@@ -889,6 +889,43 @@ int main() {
         check("text editing: through the door", d.strays() == 0);
     }
 
+    // ── s014: margins + master columns ──────────────────────────────────────
+    {
+        std::cout << "\n-- margins --\n";
+        const auto near = [](double a, double b) { return std::abs(a - b) < 0.01; };
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // Find a right and a left Body page.
+        std::string right, left;
+        for (const auto& p : d.pages()) {
+            if (d.as<core::Page>(p)->master != "master.2") continue;
+            if (d.side_of(p) == core::Side::Right && right.empty()) right = p;
+            if (d.side_of(p) == core::Side::Left && left.empty()) left = p;
+        }
+        auto r = core::margin_rect(d, right);
+        check("margins: a right page, inside on the left", near(r.x, 54) && near(r.y, 54) && near(r.w, 432 - 108));
+        core::doc::edit_masters(j, d, {"master.2"}, "Margins", [](core::Master& m) { m.margins.inside = 72; });
+        r = core::margin_rect(d, right);
+        const auto l = core::margin_rect(d, left);
+        check("margins: inside by the spine -- mirrored on a left page", near(r.x, 72) && near(l.x, 54) && near(l.r(), 432 - 72));
+        check("margins: the chapter master's deep top", near(core::margin_rect(d, "master.3").y, 180));
+        const auto cols = core::page_columns(d, d.pages()[10]);   // the foldout
+        check("columns: the foldout master's three", cols.size() == 3 && cols[0].x1 < cols[1].x0);
+        check("columns: none without a master", core::page_columns(d, "nope").empty());
+        core::doc::edit_masters(j, d, {"master.2"}, "Columns", [](core::Master& m) { m.columns = 2; m.gutter = 18; });
+        const auto bc = core::page_columns(d, right);
+        check("columns: two, the gutter between", bc.size() == 2 && near(bc[1].x0 - bc[0].x1, 18));
+        const auto t = core::snap_targets(d, core::layout_pages(d, {right}), {});
+        check("snap: to the margins and column edges",
+              std::find_if(t.xs.begin(), t.xs.end(), [&](double x) { return near(x, bc[0].x1); }) != t.xs.end());
+        core::Doc back;
+        check("json: margins and gutter", core::from_json(back, core::to_json(d)) &&
+                                          *back.as<core::Master>("master.2") == *d.as<core::Master>("master.2"));
+        check("margins: through the door", d.strays() == 0);
+    }
+
     // ── s013: PDF output ────────────────────────────────────────────────────
     {
         std::cout << "\n-- pdf --\n";

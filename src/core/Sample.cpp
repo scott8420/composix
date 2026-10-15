@@ -22,9 +22,18 @@ void load_sample(Doc& d) {
     // ── masters ─────────────────────────────────────────────────────────────
     d.put("master.1", Master{"A", "Front", 1, s.trim_w, s.trim_h, {}, 1, ""});
     d.put("master.2", Master{"B", "Body", 2, s.trim_w, s.trim_h, {}, 1, ""});
-    d.put("master.3", Master{"C", "Chapter", 3, s.trim_w, s.trim_h, {}, 1, "master.2"});
+    {   // A chapter opener sinks its text: a deep top margin.
+        Master c{"C", "Chapter", 3, s.trim_w, s.trim_h, {}, 1, "master.2"};
+        c.margins.top = 2.5 * in;
+        d.put("master.3", c);
+    }
     const auto fold3 = doc::size_presets(s)[2];
-    d.put("master.4", Master{"D", "Foldout", 4, fold3.w, fold3.h, fold3.folds, 3, ""});
+    {   // The foldout: narrow margins, a column per panel.
+        Master f{"D", "Foldout", 4, fold3.w, fold3.h, fold3.folds, 3, ""};
+        f.margins = {0.5 * in, 0.5 * in, 0.25 * in, 0.25 * in};
+        f.gutter = 0.25 * in;
+        d.put("master.4", f);
+    }
 
     // ── pages: 4 front, 10 body (one a foldout), 2 back ────────────────────
     std::vector<Doc::Id> pg;

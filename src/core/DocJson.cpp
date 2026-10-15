@@ -45,7 +45,9 @@ json to(const Record& r) {
                  {"master", v.master}};
         } else if constexpr (std::is_same_v<T, Master>) {
             j = {{"kind", "master"}, {"prefix", v.prefix}, {"name", v.name}, {"pos", v.pos}, {"w", v.w},
-                 {"h", v.h}, {"folds", v.folds}, {"columns", v.columns}, {"based_on", v.based_on}};
+                 {"h", v.h}, {"folds", v.folds}, {"columns", v.columns}, {"based_on", v.based_on},
+                 {"margins", {v.margins.top, v.margins.bottom, v.margins.inside, v.margins.outside}},
+                 {"gutter", v.gutter}};
         } else if constexpr (std::is_same_v<T, Frame>) {
             j = {{"kind", "frame"}, {"owner", v.owner}, {"type", en(v.kind)}, {"x", v.x}, {"y", v.y},
                  {"w", v.w}, {"h", v.h}, {"rot", v.rot}, {"z", v.z}, {"story", v.story},
@@ -126,6 +128,11 @@ std::optional<Record> from(const json& j) {
         v.folds = val(j, "folds", std::vector<double>{});
         v.columns = val(j, "columns", 1);
         v.based_on = val<std::string>(j, "based_on", "");
+        if (j.contains("margins") && j.at("margins").is_array() && j.at("margins").size() == 4) {
+            const auto& m = j.at("margins");
+            v.margins = {m[0].get<double>(), m[1].get<double>(), m[2].get<double>(), m[3].get<double>()};
+        }
+        v.gutter = val(j, "gutter", 12.0);
         return v;
     }
     if (k == "frame") {

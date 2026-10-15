@@ -742,7 +742,8 @@ void frames_set(DocJournal& j, Doc& d, const Doc::Id& id, const Rect& r) {
 
 bool frames_end(DocJournal& j) { return j.commit(); }
 
-Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r) {
+Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r,
+                  int columns, double gutter) {
     if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
     if (r.w < 1 || r.h < 1) return {};
     static const char* what[] = {"text frame", "image frame", "shape"};
@@ -753,6 +754,7 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
         f.owner = owner;
         f.kind = kind;
         f.x = r.x; f.y = r.y; f.w = r.w; f.h = r.h;
+        if (kind == FrameKind::Text) { f.columns = std::max(1, columns); f.gutter = gutter; }
         double z = 0;   // on top of the owner's frames
         for (const auto& o : d.frames_on(owner)) z = std::max(z, d.as<Frame>(o)->z);
         f.z = z + 1;
@@ -825,6 +827,26 @@ bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
             d.put(id, std::nullopt);
         }
         for (const auto& o : orphans) d.put(o, std::nullopt);
+    });
+}
+
+bool edit_masters(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const std::string& label,
+                  const std::function<void(Master&)>& f) {
+    std::vector<Doc::Id> ms;
+    for (const auto& id : ids) {
+        const auto* m = d.as<Master>(id);
+        if (!m) continue;
+        Master t = *m;
+        f(t);
+        if (!(t == *m)) ms.push_back(id);
+    }
+    if (ms.empty()) return false;
+    return j.run(label, ms, [&] {
+        for (const auto& id : ms) {
+            Master t = *d.as<Master>(id);
+            f(t);
+            d.put(id, t);
+        }
     });
 }
 
@@ -1305,6 +1327,10 @@ const std::vector<Verb>& verbs() {
         {"enter", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 5}, {1, 5}, "\n"); }},
         {"paste_lines", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {0, 2}, {2, 4}, "one\ntwo\nthree", "Paste"); }},
         {"cut", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 0}, {3, 0}, "", "Cut"); }},
+        // s014: master margins / columns.
+        {"edit_masters", [](DocJournal& j, Doc& d) {
+             edit_masters(j, d, {"master.2", "master.3"}, "Margins", [](Master& m) { m.margins.top = 72; m.columns = 2; });
+         }},
         // s012: columns.
         {"edit_frames", [](DocJournal& j, Doc& d) {
              edit_frames(j, d, {"frame.1", "frame.10"}, "Columns", [](Frame& f) { f.columns = 2; f.gutter = 18; f.widths = {2, 1}; });
@@ -1461,6 +1487,44 @@ Doc::Id page_at(const std::vector<Placed>& pl, double x, double y) {
     return {};
 }
 
+namespace {
+const Master* master_of(const Doc& d, const Doc::Id& id) {
+    if (const auto* m = d.as<Master>(id)) return m;
+    if (const auto* p = d.as<Page>(id)) return d.as<Master>(p->master);
+    return nullptr;
+}
+}  // namespace
+
+Rect margin_rect(const Doc& d, const Doc::Id& id) {
+    const auto* m = master_of(d, id);
+    if (!m) return {};
+    double w = m->w, h = m->h;
+    if (const auto* p = d.as<Page>(id)) { w = p->w; h = p->h; }
+    const auto& mg = m->margins;
+    // A left-hand page: the spine is on its right.
+    const bool left = d.as<Page>(id) && d.side_of(id) == Side::Left;
+    const double l = left ? mg.outside : mg.inside, r = left ? mg.inside : mg.outside;
+    if (w - l - r < 1 || h - mg.top - mg.bottom < 1) return {};
+    return {l, mg.top, w - l - r, h - mg.top - mg.bottom};
+}
+
+std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& id) {
+    const auto* m = master_of(d, id);
+    if (!m) return {1, 12};
+    return {std::clamp(m->columns, 1, 24), std::max(0.0, m->gutter)};
+}
+
+std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& id) {
+    const Rect r = margin_rect(d, id);
+    if (r.w <= 0) return {};
+    const auto [n, g] = page_column_setup(d, id);
+    const double cw = (r.w - g * (n - 1)) / n;
+    if (cw < 1) return {{r.x, r.r()}};
+    std::vector<ColumnSpan> out;
+    for (int c = 0; c < n; ++c) out.push_back({r.x + c * (cw + g), r.x + c * (cw + g) + cw});
+    return out;
+}
+
 SnapTargets snap_targets(const Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& exclude) {
     SnapTargets t;
     const auto skip = [&](const Doc::Id& id) { return std::find(exclude.begin(), exclude.end(), id) != exclude.end(); };
@@ -1471,6 +1535,11 @@ SnapTargets snap_targets(const Doc& d, const std::vector<Placed>& pl, const std:
         if (const auto* pg = d.as<Page>(p.id)) folds = &pg->folds;
         else if (const auto* m = d.as<Master>(p.id)) folds = &m->folds;
         if (folds) for (double f : *folds) t.xs.push_back(p.r.x + f);
+        // s014: margins and the page's column edges.
+        if (const Rect mr = margin_rect(d, p.id); mr.w > 0) {
+            t.ys.insert(t.ys.end(), {p.r.y + mr.y, p.r.y + mr.b()});
+            for (const auto& c : page_columns(d, p.id)) t.xs.insert(t.xs.end(), {p.r.x + c.x0, p.r.x + c.x1});
+        }
         auto owners = p.master ? std::vector<Doc::Id>{} : master_chain(d, p.id);
         owners.push_back(p.id);
         for (const auto& o : owners) {
