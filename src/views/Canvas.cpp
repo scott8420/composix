@@ -1082,6 +1082,7 @@ void Canvas::begin_edit(const std::string& frame, core::TextPos at) {
     pick({frame});
     blink_restart();
     update_cursor();
+    m_sig_caret.emit();
     if (auto lg = log::get(log::Area::View)) lg->info("edit: {} in {}", m_edit_story, frame);
 }
 
@@ -1096,6 +1097,7 @@ void Canvas::end_edit() {
     m_drag = m_drag == Drag::Text ? Drag::None : m_drag;
     queue_draw();
     update_cursor();
+    m_sig_caret.emit();
 }
 
 void Canvas::blink_restart() {
@@ -1124,6 +1126,7 @@ void Canvas::set_caret(core::TextPos p, bool extend, bool keep_goal) {
     if (!keep_goal) m_goal_x = NAN;
     m_burst_kind.clear();   // a move ends the typing burst: the next keys are a new step
     blink_restart();
+    m_sig_caret.emit();
 }
 
 void Canvas::edit_insert(const std::string& text, const std::string& kind, const std::string& label) {
@@ -1136,6 +1139,7 @@ void Canvas::edit_insert(const std::string& text, const std::string& kind, const
     if (kind.empty()) m_burst_kind.clear();
     m_sig_edited.emit();
     blink_restart();
+    m_sig_caret.emit();
 }
 
 bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {

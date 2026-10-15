@@ -103,9 +103,19 @@ struct Frame {
     bool operator==(const Frame&) const = default;
 };
 
+// A character style over bytes [start, end) of a paragraph (s011). A
+// paragraph's runs are sorted, never overlap, never empty; text outside any
+// run is in the paragraph style alone.
+struct Run {
+    int         start = 0, end = 0;
+    std::string style;                   // a character style id
+    bool operator==(const Run&) const = default;
+};
+
 struct Para {
-    std::string style;                   // a paragraph style id
-    std::string text;
+    std::string      style;              // a paragraph style id
+    std::string      text;
+    std::vector<Run> runs;               // s011
     bool operator==(const Para&) const = default;
 };
 
@@ -123,6 +133,7 @@ struct Style {
     double      size   = 11, leading = 14;   // points; 0 = inherit (character styles)
     bool        bold   = false, italic = false;
     Align       align  = Align::Left;
+    double      space_before = 0, space_after = 0;   // s011: points, paragraph styles
     bool operator==(const Style&) const = default;
 };
 
@@ -262,6 +273,9 @@ TextPos story_end(const Story& s);
 std::string text_between(const Story& s, TextPos a, TextPos b);
 // The word around a place (double-click): [first, last).
 std::pair<TextPos, TextPos> word_at(const Story& s, TextPos p);
+// The character style at a place: the character before it carries on (as
+// typing continues it); at a paragraph's start, the first character's.
+std::string char_style_at(const Para& p, int byte);
 
 // ── images (s009) ───────────────────────────────────────────────────────────
 // A file as the UI found it on disk. The core never decodes: the app probes
@@ -371,6 +385,21 @@ bool    set_fit(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, Image
 // after the inserted text); `a` (clamped) when nothing changed.
 TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& text,
                   const std::string& label = "Typing", const std::string& merge_key = {});
+
+// ── styles (s011) ───────────────────────────────────────────────────────────
+// The paragraphs [a.para .. b.para] take a paragraph style. One step.
+bool set_para_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style);
+// [a, b) takes a character style ("" = none). One step.
+bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style);
+// Change styles' settings: `f` edits each; one step for all of them.
+bool edit_styles(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles, const std::string& label,
+                 const std::function<void(Style&)>& f);
+// A copy of a style, just after it ("Body copy"). Its id.
+Doc::Id duplicate_style(DocJournal& j, Doc& d, const Doc::Id& style);
+// Delete styles nothing uses (paragraphs, runs, generated lists). One step.
+bool delete_styles(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles);
+// How many paragraphs (paragraph style) / runs (character style) use it.
+int style_uses(const Doc& d, const Doc::Id& style);
 
 // ── guides (s006) ───────────────────────────────────────────────────────────
 // Pulled out of a ruler onto a page: one step. Dragged: one gesture (the same

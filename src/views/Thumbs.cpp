@@ -238,11 +238,13 @@ void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W
     case K::Style: {   // a specimen
         cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.9);
         auto lay = wd.create_pango_layout(t.sample.empty() ? "Aa" : t.sample);
-        std::string font = "Serif";
-        if (t.bold) font += " Bold";
-        if (t.italic) font += " Italic";
-        font += large ? " 96" : " 44";
-        lay->set_font_description(Pango::FontDescription(font));
+        // The style's own font (s011), by API: a family name may hold spaces / digits.
+        Pango::FontDescription fd;
+        fd.set_family(t.family.empty() ? "Serif" : t.family);
+        fd.set_weight(t.bold ? Pango::Weight::BOLD : Pango::Weight::NORMAL);
+        fd.set_style(t.italic ? Pango::Style::ITALIC : Pango::Style::NORMAL);
+        fd.set_size((large ? 96 : 44) * PANGO_SCALE);
+        lay->set_font_description(fd);
         int lw, lh;
         lay->get_pixel_size(lw, lh);
         cr->move_to((W - lw) / 2.0, (H - lh) / 2.0);

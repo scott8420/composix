@@ -79,6 +79,12 @@ public:
     // change is core::doc::edit_text -- a burst of typing is one step.
     bool editing() const { return !m_edit_story.empty(); }
     void end_edit();
+    const std::string& edit_story_id() const { return m_edit_story; }
+    // The selection, in reading order (equal = just the caret).
+    std::pair<core::TextPos, core::TextPos> edit_range() const {
+        return {std::min(m_anchor, m_caret), std::max(m_anchor, m_caret)};
+    }
+    sigc::signal<void()>& signal_caret() { return m_sig_caret; }   // s011: caret / selection / editing changed
 
     sigc::signal<void()>& signal_selection() { return m_sig_sel; }    // the picks changed (by the user)
     sigc::signal<void()>& signal_zoom()      { return m_sig_zoom; }
@@ -192,7 +198,7 @@ private:
     gint64        m_last_press = 0;             // double-click, by hand (the drag gesture eats the click)
     double        m_last_px = 0, m_last_py = 0;
     int           m_clicks = 0;
-    sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool;
+    sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool, m_sig_caret;
 };
 
 class Ruler;

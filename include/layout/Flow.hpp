@@ -79,6 +79,10 @@ core::TextPos line_edge(const core::Doc& d, const std::string& story, const Stor
 std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& story, const StoryFlow& flow,
                                         const std::string& frame, core::TextPos a, core::TextPos b);
 
+// The installed font families (Pango / fontconfig), sorted, with the generic
+// Serif / Sans / Monospace first. Read once.
+const std::vector<std::string>& font_families();
+
 // Flows, recomputed only when the document changes (Doc::revision()).
 class FlowCache {
 public:

@@ -39,6 +39,31 @@ core::Style style_of(const core::Doc& d, const std::string& id) {
 
 double leading_of(const core::Style& s) { return s.leading > 0 ? s.leading : std::max(1.0, s.size * 1.2); }
 
+// s011: a paragraph's character styles, as Pango attributes over the part of
+// its text this layout holds (bytes from `from`).
+void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int from) {
+    if (p.runs.empty()) return;
+    PangoAttrList* attrs = pango_attr_list_new();
+    const int n = static_cast<int>(p.text.size());
+    for (const auto& r : p.runs) {
+        const int a = std::max(r.start, from), b = std::min(r.end, n);
+        if (b <= a) continue;
+        const auto* cs = d.as<core::Style>(r.style);
+        if (!cs) continue;
+        const auto add = [&](PangoAttribute* at) {
+            at->start_index = static_cast<guint>(a - from);
+            at->end_index = static_cast<guint>(b - from);
+            pango_attr_list_insert(attrs, at);
+        };
+        if (!cs->family.empty()) add(pango_attr_family_new(cs->family.c_str()));
+        if (cs->size > 0) add(pango_attr_size_new(static_cast<int>(std::lround(cs->size * PANGO_SCALE))));
+        if (cs->bold) add(pango_attr_weight_new(PANGO_WEIGHT_BOLD));
+        if (cs->italic) add(pango_attr_style_new(PANGO_STYLE_ITALIC));
+    }
+    pango_layout_set_attributes(l, attrs);
+    pango_attr_list_unref(attrs);
+}
+
 LayoutPtr make_layout(const core::Style& st, const char* text, int len, double width, bool justify_last) {
     LayoutPtr l(pango_layout_new(measure_context()));
     PangoFontDescription* fd = pango_font_description_new();
@@ -108,10 +133,13 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
         const auto style = style_of(d, st->paras[static_cast<std::size_t>(p)].style);
         const double lead = leading_of(style);
         int start = 0;
+        // s011: space before a paragraph -- not at the top of a frame.
+        if (y > 0) y += style.space_before;
         while (true) {
             if (fi >= chain.size()) { out.overset = true; return out; }
             const auto& fr = *d.as<core::Frame>(chain[fi]);
             auto lay = make_layout(style, text.c_str() + start, static_cast<int>(text.size()) - start, fr.w, false);
+            apply_runs(lay.get(), d, st->paras[static_cast<std::size_t>(p)], start);
             const int n = pango_layout_get_line_count(lay.get());
             int placed = 0;
             for (int i = 0; i < n; ++i) {
@@ -123,7 +151,7 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
                 ++placed;
                 ++out.lines;
             }
-            if (placed == n) break;   // the whole (rest of the) paragraph fit
+            if (placed == n) { y += style.space_after; break; }   // the whole (rest of the) paragraph fit
             // Continue in the next frame from the first line that didn't fit.
             start += pango_layout_get_line_readonly(lay.get(), placed)->start_index;
             ++fi;
@@ -170,6 +198,7 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
         const int from = std::min(ft->lines[i].start, static_cast<int>(text.size()));
         const bool continues = ft->lines[j - 1].end < static_cast<int>(text.size());
         auto lay = make_layout(style, text.c_str() + from, static_cast<int>(text.size()) - from, fr->w, continues);
+        apply_runs(lay.get(), d, st->paras[static_cast<std::size_t>(p)], from);
         PangoLayoutIter* it = pango_layout_get_iter(lay.get());
         for (std::size_t k = i; k < j; ++k) {
             PangoRectangle logical;
@@ -329,6 +358,26 @@ std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& s
         out.push_back({x0, l.y, x1 - x0, l.h});
     });
     return out;
+}
+
+const std::vector<std::string>& font_families() {
+    static const std::vector<std::string> list = [] {
+        std::vector<std::string> out{"Serif", "Sans", "Monospace"};   // fontconfig's generics first
+        PangoFontFamily** fams = nullptr;
+        int n = 0;
+        pango_font_map_list_families(pango_cairo_font_map_get_default(), &fams, &n);
+        std::vector<std::string> named;
+        for (int i = 0; i < n; ++i) named.emplace_back(pango_font_family_get_name(fams[i]));
+        g_free(fams);
+        std::sort(named.begin(), named.end(), [](const std::string& a, const std::string& b) {
+            return g_ascii_strcasecmp(a.c_str(), b.c_str()) < 0;
+        });
+        named.erase(std::unique(named.begin(), named.end()), named.end());
+        for (auto& f : named)
+            if (std::find(out.begin(), out.end(), f) == out.end()) out.push_back(std::move(f));
+        return out;
+    }();
+    return list;
 }
 
 const StoryFlow& FlowCache::get(const core::Doc& d, const std::string& story) {

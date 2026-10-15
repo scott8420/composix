@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <map>
+#include <tuple>
 
 #include "views/Images.hpp"
 
@@ -231,6 +233,47 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "starts") {
             did = core::doc::set_starts(m_journal, m_doc, m_inspected,
                                         static_cast<core::Side>(std::stoi(choice)));
+        } else if (key == "pstyle" || key == "cstyle") {   // s011: the text being edited
+            auto& cv = m_canvas_view.canvas();
+            if (!cv.editing()) return;
+            auto [a, b] = cv.edit_range();
+            const auto story = cv.edit_story_id();
+            if (key == "pstyle") {
+                did = core::doc::set_para_style(m_journal, m_doc, story, a, b, choice);
+            } else {
+                // Just a caret: the word it is in (as a word processor does).
+                if (a == b) if (const auto* st = m_doc.as<core::Story>(story)) std::tie(a, b) = core::word_at(*st, a);
+                did = core::doc::set_char_style(m_journal, m_doc, story, a, b, choice);
+            }
+            cv.grab_focus();   // back to typing
+        } else if (key == "font" || key == "size" || key == "leading" || key == "bold" || key == "italic" ||
+                   key == "align" || key == "before" || key == "after") {   // s011: style settings
+            static const std::map<std::string, std::string> labels{
+                {"font", "Font"}, {"size", "Size"}, {"leading", "Leading"}, {"bold", "Weight"},
+                {"italic", "Slant"}, {"align", "Align"}, {"before", "Space before"}, {"after", "Space after"}};
+            const double v = (key == "font") ? 0 : std::stod(choice);
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Style& s) {
+                if (key == "font") s.family = choice;
+                else if (key == "size") {
+                    // Leading follows the size when it was the usual ratio (or auto).
+                    if (s.size > 0 && s.leading > 0 && std::abs(s.leading - s.size * 1.2) < 1.5) s.leading = std::round(v * 1.2 * 2) / 2;
+                    s.size = v;
+                }
+                else if (key == "leading") s.leading = v;
+                else if (key == "bold") s.bold = v != 0;
+                else if (key == "italic") s.italic = v != 0;
+                else if (key == "align") s.align = static_cast<core::Align>(static_cast<int>(v));
+                else if (key == "before") s.space_before = v;
+                else if (key == "after") s.space_after = v;
+            });
+        } else if (key == "style") {   // s011: Duplicate / Delete
+            if (choice == "duplicate" && !m_inspected.empty()) {
+                const auto made = core::doc::duplicate_style(m_journal, m_doc, m_inspected.front());
+                did = !made.empty();
+                if (did) Glib::signal_idle().connect_once([this, made] { m_tiles.show_section(m_outline, core::Segment::Styles, {made}); on_tiles_selection({made}); });
+            } else if (choice == "delete") {
+                did = core::doc::delete_styles(m_journal, m_doc, m_inspected);
+            }
         } else if (key == "fit") {   // s009
             did = core::doc::set_fit(m_journal, m_doc, m_inspected, static_cast<core::ImageFit>(std::stoi(choice)));
         } else if (key == "frame_image") {
@@ -260,7 +303,17 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
 // Frames picked on the canvas: the inspector shows them (shared fields across
 // several); nothing picked: back to the opened pages.
 void Shell::on_canvas_selection() {  // handler
-    const auto& sel = m_canvas_view.canvas().selection();
+    auto& cv = m_canvas_view.canvas();
+    // s011: typing in a frame -- the inspector is about the text.
+    if (cv.editing()) {
+        const auto* st = m_doc.as<core::Story>(cv.edit_story_id());
+        const auto [a, b] = cv.edit_range();
+        m_inspected = {cv.edit_story_id()};
+        m_inspector.show("Text \u2014 " + (st ? st->name : std::string("story")), "Editing",
+                         core::text_fields(m_doc, cv.edit_story_id(), a, b));
+        return;
+    }
+    const auto& sel = cv.selection();
     if (sel.empty()) {
         m_inspected = m_pick.items;
         m_inspector.show_items(resolve(m_pick.items));

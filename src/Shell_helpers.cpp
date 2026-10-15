@@ -85,7 +85,7 @@ core::Outline Shell::project_now() const {  // helper
     std::vector<std::string> over;
     for (const auto& sid : m_doc.ids_of<core::Story>())
         if (layout::flow_story(m_doc, sid).overset) over.push_back(sid);
-    return core::project(m_doc, m_project_dir, &over);
+    return core::project(m_doc, m_project_dir, &over, &layout::font_families());
 }
 
 void Shell::queue_refresh() {  // helper

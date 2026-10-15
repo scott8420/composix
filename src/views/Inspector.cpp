@@ -142,6 +142,13 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             dd->add_css_class("cx-field-edit");
             dd->set_hexpand(true);
             dd->set_selected(at);
+            // A long list (s011: the installed fonts) can be searched by typing.
+            if (labels.size() > 24) {
+                GtkExpression* ex = gtk_property_expression_new(GTK_TYPE_STRING_OBJECT, nullptr, "string");
+                gtk_drop_down_set_expression(dd->gobj(), ex);
+                gtk_expression_unref(ex);
+                gtk_drop_down_set_enable_search(dd->gobj(), TRUE);
+            }
             if (f.value == core::kMixed) {
                 dd->add_css_class("cx-mixed");
                 dd->set_tooltip_text("Mixed \u2014 pick one to set all of them");

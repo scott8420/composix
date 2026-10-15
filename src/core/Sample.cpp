@@ -48,10 +48,12 @@ void load_sample(Doc& d) {
 
     // ── styles ──────────────────────────────────────────────────────────────
     d.put("style.1", Style{"Body", StyleKind::Paragraph, 1, "Serif", 11, 14, false, false, Align::Justify});
-    d.put("style.2", Style{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left});
+    d.put("style.2", Style{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6});
     d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
     d.put("style.4", Style{"Source", StyleKind::Paragraph, 4, "Serif", 10, 12, false, false, Align::Left});
-    d.put("style.5", Style{"Emphasis", StyleKind::Character, 5, "Serif", 0, 0, false, true, Align::Left});
+    // Not used yet: a style a designer keeps ready (and the one Delete is offered on).
+    d.put("style.6", Style{"Pull Quote", StyleKind::Paragraph, 6, "Serif", 14, 18, false, true, Align::Center, 6, 6});
+    d.put("style.5", Style{"Emphasis", StyleKind::Character, 5, "", 0, 0, false, true, Align::Left});
 
     // ── stories ─────────────────────────────────────────────────────────────
     Story ch;
@@ -72,7 +74,7 @@ void load_sample(Doc& d) {
                            {{"style.3", "Fig. 1 — The trade routes, as surveyed in the third year."}}});
     d.put("story.3", Story{"Dedication", {{"style.1", "For everyone who ever finished a manuscript."}}});
     d.put("story.4", Story{"Sources",
-                           {{"style.4", "Almanac of the Outer Ports, 3rd ed."},
+                           {{"style.4", "Almanac of the Outer Ports, 3rd ed.", {{0, 26, "style.5"}}},   // the title in Emphasis
                             {"style.4", "Harbor Registers, vols. II–IV."},
                             {"style.4", "Letters of the Surveyor General."}}});
 

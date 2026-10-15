@@ -52,12 +52,21 @@ json to(const Record& r) {
                  {"next", v.next}, {"asset", v.asset}, {"fit", en(v.fit)}};
         } else if constexpr (std::is_same_v<T, Story>) {
             json paras = json::array();
-            for (const auto& p : v.paras) paras.push_back({{"style", p.style}, {"text", p.text}});
+            for (const auto& p : v.paras) {
+                json jp = {{"style", p.style}, {"text", p.text}};
+                if (!p.runs.empty()) {
+                    json runs = json::array();
+                    for (const auto& r : p.runs) runs.push_back({{"start", r.start}, {"end", r.end}, {"style", r.style}});
+                    jp["runs"] = runs;
+                }
+                paras.push_back(jp);
+            }
             j = {{"kind", "story"}, {"name", v.name}, {"paras", paras}};
         } else if constexpr (std::is_same_v<T, Style>) {
             j = {{"kind", "style"}, {"name", v.name}, {"type", en(v.kind)}, {"pos", v.pos},
                  {"family", v.family}, {"size", v.size}, {"leading", v.leading}, {"bold", v.bold},
-                 {"italic", v.italic}, {"align", en(v.align)}};
+                 {"italic", v.italic}, {"align", en(v.align)}, {"space_before", v.space_before},
+                 {"space_after", v.space_after}};
         } else if constexpr (std::is_same_v<T, Swatch>) {
             j = {{"kind", "swatch"}, {"name", v.name}, {"pos", v.pos}, {"model", en(v.model)},
                  {"v", v.v}, {"spot", v.spot}, {"preview", v.preview}};
@@ -136,7 +145,13 @@ std::optional<Record> from(const json& j) {
         v.name = val<std::string>(j, "name", "");
         if (j.contains("paras"))
             for (const auto& p : j.at("paras"))
-                v.paras.push_back({val<std::string>(p, "style", ""), val<std::string>(p, "text", "")});
+            {
+                Para para{val<std::string>(p, "style", ""), val<std::string>(p, "text", ""), {}};
+                if (p.contains("runs"))
+                    for (const auto& r : p.at("runs"))
+                        para.runs.push_back({val(r, "start", 0), val(r, "end", 0), val<std::string>(r, "style", "")});
+                v.paras.push_back(std::move(para));
+            }
         return v;
     }
     if (k == "style") {
@@ -150,6 +165,8 @@ std::optional<Record> from(const json& j) {
         v.bold = val(j, "bold", false);
         v.italic = val(j, "italic", false);
         v.align = de(j, "align", Align::Left);
+        v.space_before = val(j, "space_before", 0.0);
+        v.space_after = val(j, "space_after", 0.0);
         return v;
     }
     if (k == "swatch") {

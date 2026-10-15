@@ -132,6 +132,7 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     // nudge refreshes the other views (mid-drag only the canvas repaints).
     auto& cv = m_canvas_view.canvas();
     cv.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));
+    cv.signal_caret().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));   // s011: the text inspector
     cv.signal_edited().connect([this] { queue_refresh(); });
     // s009: files change behind our back (an image edited in another app):
     // coming back to the window re-reads link status and redraws the pictures.

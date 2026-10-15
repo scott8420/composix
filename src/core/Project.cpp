@@ -103,7 +103,8 @@ std::string pts(double v) {
 
 }  // namespace
 
-Outline project(const Doc& d, const std::string& dir, const std::vector<std::string>* overset) {
+Outline project(const Doc& d, const std::string& dir, const std::vector<std::string>* overset,
+                const std::vector<std::string>* fonts) {
     Outline o;
     using G = Segment;
     using K = ThumbKind;
@@ -194,20 +195,48 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
     }
 
     // ── Styles ──────────────────────────────────────────────────────────────
-    for (const auto& sid : d.ids_of<Style>()) {
-        const auto& s = *d.as<Style>(sid);
-        std::string font = s.family;
-        if (s.bold) font += " Bold";
-        if (s.italic) font += " Italic";
-        if (s.size > 0) font += " " + pts(s.size) + "/" + pts(s.leading);
-        Thumb th{K::Style, 6, 9, 0x222222, false, "Aa"};
-        th.bold = s.bold;
-        th.italic = s.italic;
-        std::vector<Field> f{{"Kind", s.kind == StyleKind::Paragraph ? "Paragraph" : "Character"},
-                             {"Font", font}};
-        if (s.kind == StyleKind::Paragraph) f.push_back({"Align", align_text(s.align)});
-        f.push_back({"Used", s.kind == StyleKind::Paragraph ? std::to_string(used[sid]) + "×" : "—"});
-        o.add({sid, G::Styles, s.name, "", th, f});
+    // s011: every setting editable (dropdowns), plus Duplicate / Delete.
+    {
+        static const double sizes[] = {6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32, 36, 42, 48, 60, 72};
+        static const double spaces[] = {0, 2, 3, 4, 6, 8, 9, 12, 18, 24, 36};
+        const auto pt = [](double v) { return pts(v) + " pt"; };
+        std::vector<Choice> size_ch, lead_ch{{"0", "Auto"}}, space_ch;
+        for (double v : sizes) { size_ch.push_back({pts(v), pt(v)}); lead_ch.push_back({pts(v), pt(v)}); }
+        for (double v : spaces) space_ch.push_back({pts(v), pt(v)});
+        std::vector<Choice> font_ch;
+        if (fonts) for (const auto& f : *fonts) font_ch.push_back({f, f});
+        std::vector<Choice> align_ch;
+        for (int i = 0; i < 4; ++i) align_ch.push_back({std::to_string(i), align_text(static_cast<Align>(i))});
+        for (const auto& sid : d.ids_of<Style>()) {
+            const auto& s = *d.as<Style>(sid);
+            const bool para = s.kind == StyleKind::Paragraph;
+            Thumb th{K::Style, 6, 9, 0x222222, false, "Aa"};
+            th.bold = s.bold;
+            th.italic = s.italic;
+            th.family = s.family;
+            const int uses = doc::style_uses(d, sid);
+            std::vector<Field> f{{"Kind", para ? "Paragraph" : "Character"}};
+            // A character style leaves unset what it doesn't change ("Inherit").
+            auto fc = font_ch, sc = size_ch;
+            if (!para) { fc.insert(fc.begin(), {"", "Inherit"}); sc.insert(sc.begin(), {"0", "Inherit"}); }
+            if (!fonts) fc.clear();
+            f.push_back({"Font", s.family.empty() ? "Inherit" : s.family, fc.empty() ? "" : "font", fc});
+            f.push_back({"Size", s.size > 0 ? pt(s.size) : "Inherit", "size", sc});
+            if (para) f.push_back({"Leading", s.leading > 0 ? pt(s.leading) : "Auto", "leading", lead_ch});
+            f.push_back({"Weight", s.bold ? "Bold" : "Regular", "bold", {{"0", "Regular"}, {"1", "Bold"}}});
+            f.push_back({"Slant", s.italic ? "Italic" : "Roman", "italic", {{"0", "Roman"}, {"1", "Italic"}}});
+            if (para) {
+                f.push_back({"Align", align_text(s.align), "align", align_ch});
+                f.push_back({"Space before", pt(s.space_before), "before", space_ch});
+                f.push_back({"Space after", pt(s.space_after), "after", space_ch});
+            }
+            f.push_back({"Used", uses ? std::to_string(uses) + "×" : "Not used"});
+            Field act{"", "", "style", {{"duplicate", "Duplicate"}}};
+            if (!uses) act.choices.push_back({"delete", "Delete"});
+            act.buttons = true;
+            f.push_back(act);
+            o.add({sid, G::Styles, s.name, uses ? "" : "Unused", th, f});
+        }
     }
 
     // ── Links & assets ──────────────────────────────────────────────────────
@@ -334,6 +363,50 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         }
         out.push_back({id, Segment::Pages, title, "", {}, fields});
     }
+    return out;
+}
+
+std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a, TextPos b) {
+    std::vector<Field> out;
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return out;
+    a = clamp_pos(*st, a);
+    b = clamp_pos(*st, b);
+    if (b < a) std::swap(a, b);
+    std::vector<Choice> pc, cc{{"", "None"}};
+    for (const auto& id : d.ids_of<Style>()) {
+        const auto* s = d.as<Style>(id);
+        (s->kind == StyleKind::Paragraph ? pc : cc).push_back({id, s->name});
+    }
+    // The paragraph style: one, or Mixed.
+    std::string ps = st->paras[static_cast<std::size_t>(a.para)].style;
+    for (int p = a.para; p <= b.para; ++p)
+        if (st->paras[static_cast<std::size_t>(p)].style != ps) { ps = "\x01"; break; }
+    // The character style over the selection (at the caret: what typing gets).
+    std::string cs;
+    if (a == b) {
+        cs = char_style_at(st->paras[static_cast<std::size_t>(a.para)], a.byte);
+    } else {
+        bool first = true;
+        for (TextPos q = a; q < b; q = next_char(*st, q)) {
+            const auto& para = st->paras[static_cast<std::size_t>(q.para)];
+            if (q.byte >= static_cast<int>(para.text.size())) continue;   // a paragraph break
+            const std::string here = char_style_at(para, q.byte + 1);
+            if (first) { cs = here; first = false; }
+            else if (here != cs) { cs = "\x01"; break; }
+        }
+    }
+    const auto name = [&](const std::string& id, const char* none) {
+        if (id == "\x01") return std::string(kMixed);
+        const auto* s = d.as<Style>(id);
+        return s ? s->name : std::string(none);
+    };
+    out.push_back({"Paragraph style", name(ps, "None"), "pstyle", pc});
+    out.push_back({"Character style", name(cs, "None"), "cstyle", cc});
+    const std::string sel = text_between(*st, a, b);
+    std::size_t chars = 0;
+    for (unsigned char c : sel) chars += (c & 0xC0) != 0x80;
+    out.push_back({"Selection", a == b ? "Caret" : std::to_string(chars) + (chars == 1 ? " character" : " characters")});
     return out;
 }
 

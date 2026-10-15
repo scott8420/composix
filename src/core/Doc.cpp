@@ -342,6 +342,44 @@ std::string text_between(const Story& s, TextPos a, TextPos b) {
     return out;
 }
 
+std::string char_style_at(const Para& p, int byte) {
+    const int at = byte > 0 ? byte - 1 : 0;
+    for (const auto& r : p.runs)
+        if (at >= r.start && at < r.end) return r.style;
+    return {};
+}
+
+namespace {
+// Text with its character style, piece by piece (s011): how edits keep runs.
+struct Span { std::string text, style; };
+std::vector<Span> spans_of(const Para& p, int from, int to) {
+    std::vector<Span> out;
+    int at = from;
+    for (const auto& r : p.runs) {
+        if (r.end <= from || r.start >= to) continue;
+        const int a = std::max(r.start, from), b = std::min(r.end, to);
+        if (a > at) out.push_back({p.text.substr(static_cast<std::size_t>(at), static_cast<std::size_t>(a - at)), {}});
+        out.push_back({p.text.substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)), r.style});
+        at = b;
+    }
+    if (to > at) out.push_back({p.text.substr(static_cast<std::size_t>(at), static_cast<std::size_t>(to - at)), {}});
+    return out;
+}
+Para para_of(const std::string& style, const std::vector<Span>& spans) {
+    Para p{style, {}, {}};
+    for (const auto& sp : spans) {
+        if (sp.text.empty()) continue;
+        const int a = static_cast<int>(p.text.size());
+        p.text += sp.text;
+        const int b = static_cast<int>(p.text.size());
+        if (sp.style.empty()) continue;
+        if (!p.runs.empty() && p.runs.back().end == a && p.runs.back().style == sp.style) p.runs.back().end = b;
+        else p.runs.push_back({a, b, sp.style});
+    }
+    return p;
+}
+}  // namespace
+
 // ── images (s009) ───────────────────────────────────────────────────────────
 std::string resolve_asset(const Asset& a, const std::string& dir) {
     namespace fs = std::filesystem;
@@ -779,24 +817,122 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     }
     const auto& pa = s.paras[static_cast<std::size_t>(a.para)];
     const auto& pb = s.paras[static_cast<std::size_t>(b.para)];
-    const std::string head = pa.text.substr(0, static_cast<std::size_t>(a.byte));
-    const std::string tail = pb.text.substr(static_cast<std::size_t>(b.byte));
+    // Runs ride along (s011): the text before / after keeps its character
+    // styles; what is typed or pasted takes the style it lands in.
+    const auto head = spans_of(pa, 0, a.byte);
+    const auto tail = spans_of(pb, b.byte, static_cast<int>(pb.text.size()));
+    // Replacing a selection: the new text takes the first replaced
+    // character's style (as InDesign); typing at a caret, the one before it.
+    const std::string cstyle = (b != a && a.byte < static_cast<int>(pa.text.size())) ? char_style_at(pa, a.byte + 1)
+                                                                                     : char_style_at(pa, a.byte);
     const std::string style = pa.style;
+    std::size_t head_len = 0;
+    for (const auto& sp : head) head_len += sp.text.size();
 
     std::vector<Para> made;
     for (std::size_t i = 0; i < pieces.size(); ++i) {
-        std::string t = (i == 0 ? head : std::string()) + pieces[i];
-        if (i + 1 == pieces.size()) t += tail;
-        made.push_back({style, std::move(t)});
+        std::vector<Span> sp;
+        if (i == 0) sp = head;
+        sp.push_back({pieces[i], cstyle});
+        if (i + 1 == pieces.size()) sp.insert(sp.end(), tail.begin(), tail.end());
+        made.push_back(para_of(style, sp));
     }
     s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
     s.paras.insert(s.paras.begin() + a.para, made.begin(), made.end());
 
     TextPos caret{a.para + static_cast<int>(pieces.size()) - 1,
-                  static_cast<int>((pieces.size() == 1 ? head.size() : 0) + pieces.back().size())};
+                  static_cast<int>((pieces.size() == 1 ? head_len : 0) + pieces.back().size())};
     if (s == *st) return a;
     j.run(label, {story}, [&] { d.put(story, s); }, merge_key);
     return caret;
+}
+
+// ── styles (s011) ───────────────────────────────────────────────────────────
+bool set_para_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style) {
+    const auto* st = d.as<Story>(story);
+    const auto* sty = d.as<Style>(style);
+    if (!st || !sty || sty->kind != StyleKind::Paragraph || st->paras.empty()) return false;
+    a = clamp_pos(*st, a);
+    b = clamp_pos(*st, b);
+    if (b < a) std::swap(a, b);
+    Story s = *st;
+    for (int p = a.para; p <= b.para; ++p) s.paras[static_cast<std::size_t>(p)].style = style;
+    if (s == *st) return false;
+    return j.run("Paragraph style: " + sty->name, {story}, [&] { d.put(story, s); });
+}
+
+bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style) {
+    const auto* st = d.as<Story>(story);
+    const auto* sty = style.empty() ? nullptr : d.as<Style>(style);
+    if (!st || st->paras.empty() || (!style.empty() && (!sty || sty->kind != StyleKind::Character))) return false;
+    a = clamp_pos(*st, a);
+    b = clamp_pos(*st, b);
+    if (b < a) std::swap(a, b);
+    if (a == b) return false;
+    Story s = *st;
+    for (int p = a.para; p <= b.para; ++p) {
+        auto& para = s.paras[static_cast<std::size_t>(p)];
+        const int n = static_cast<int>(para.text.size());
+        const int from = p == a.para ? a.byte : 0, to = p == b.para ? b.byte : n;
+        auto sp = spans_of(para, 0, from);
+        for (auto x : spans_of(para, from, to)) { x.style = style; sp.push_back(x); }
+        const auto rest = spans_of(para, to, n);
+        sp.insert(sp.end(), rest.begin(), rest.end());
+        para = para_of(para.style, sp);
+    }
+    if (s == *st) return false;
+    return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
+                 [&] { d.put(story, s); });
+}
+
+bool edit_styles(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const std::string& label,
+                 const std::function<void(Style&)>& f) {
+    std::vector<Doc::Id> styles;
+    for (const auto& id : ids) if (d.as<Style>(id)) styles.push_back(id);
+    if (styles.empty()) return false;
+    return j.run(label, styles, [&] {
+        for (const auto& id : styles) {
+            Style st = *d.as<Style>(id);
+            f(st);
+            d.put(id, st);
+        }
+    });
+}
+
+Doc::Id duplicate_style(DocJournal& j, Doc& d, const Doc::Id& style) {
+    const auto* st = d.as<Style>(style);
+    if (!st) return {};
+    Doc::Id made;
+    j.run("Duplicate style " + st->name, {}, [&]() -> std::vector<Doc::Id> {
+        Style copy = *d.as<Style>(style);
+        copy.name += " copy";
+        copy.pos = d.pos_after<Style>(style);
+        made = d.fresh_id("style");
+        d.put(made, copy);
+        return {made};
+    });
+    return made;
+}
+
+int style_uses(const Doc& d, const Doc::Id& style) {
+    int n = 0;
+    for (const auto& sid : d.ids_of<Story>())
+        for (const auto& p : d.as<Story>(sid)->paras) {
+            n += p.style == style;
+            for (const auto& r : p.runs) n += r.style == style;
+        }
+    for (const auto& lid : d.ids_of<GenList>())
+        for (const auto& fs : d.as<GenList>(lid)->from_styles) n += fs == style;
+    return n;
+}
+
+bool delete_styles(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
+    std::vector<Doc::Id> gone;
+    for (const auto& id : ids) if (d.as<Style>(id) && style_uses(d, id) == 0) gone.push_back(id);
+    if (gone.empty()) return false;
+    return j.run("Delete " + plural(gone.size(), "style", "styles"), gone, [&] {
+        for (const auto& id : gone) d.put(id, std::nullopt);
+    });
 }
 
 // ── images (s009) ───────────────────────────────────────────────────────────
@@ -1112,6 +1248,15 @@ const std::vector<Verb>& verbs() {
         {"enter", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 5}, {1, 5}, "\n"); }},
         {"paste_lines", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {0, 2}, {2, 4}, "one\ntwo\nthree", "Paste"); }},
         {"cut", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 0}, {3, 0}, "", "Cut"); }},
+        // s011: styles.
+        {"set_para_style", [](DocJournal& j, Doc& d) { set_para_style(j, d, "story.1", {1, 0}, {3, 2}, "style.3"); }},
+        {"set_char_style", [](DocJournal& j, Doc& d) { set_char_style(j, d, "story.1", {1, 4}, {2, 6}, "style.5"); }},
+        {"clear_char_style", [](DocJournal& j, Doc& d) { set_char_style(j, d, "story.4", {0, 5}, {0, 12}, ""); }},
+        {"edit_styles", [](DocJournal& j, Doc& d) {
+             edit_styles(j, d, {"style.1", "style.4"}, "Size", [](Style& s) { s.size = 12; s.leading = 15; });
+         }},
+        {"duplicate_style", [](DocJournal& j, Doc& d) { duplicate_style(j, d, "style.1"); }},
+        {"delete_unused_style", [](DocJournal& j, Doc& d) { delete_styles(j, d, {"style.6", "style.1"}); }},  // Body is used: stays
         // s009: images. The files are made up -- the core never opens them.
         {"place_image", [](DocJournal& j, Doc& d) {   // replaces harbor.psd, which goes
              place_image(j, d, "frame.4", {"/pics/cove.png", "cove.png", 2400, 1600, false, "RGB", 7});

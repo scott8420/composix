@@ -48,6 +48,7 @@ struct Thumb {
     bool          italic = false;
     std::string   file;              // images (s009): the file to draw, "" = a stand-in
     std::int64_t  stamp  = 0;        // its time, so a changed file redraws
+    std::string   family;            // style specimens (s011): its font
 };
 
 // A field the inspector may EDIT carries a key (what the UI asks the shell to
@@ -100,13 +101,20 @@ class Doc;
 // be found). Item ids ARE record ids, so a pick names records directly.
 // `overset` (s007): the stories whose text runs past their last frame --
 // measured by the layout library, which core cannot see; null = unknown.
+// `fonts` (s011): the installed families, which the style fields offer (the
+// layout library lists them; null = the Font field is read-only).
 Outline project(const Doc& d, const std::string& project_dir,
-                const std::vector<std::string>* overset = nullptr);
+                const std::vector<std::string>* overset = nullptr,
+                const std::vector<std::string>* fonts = nullptr);
 
 // s005: frames picked on the canvas, as items the inspector reads (fields:
 // Kind, On, X, Y, W, H, and Story + Thread or Asset). Not in the navigator.
 std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& frames,
                               const std::string& project_dir = {});
+// s011: the text being edited -- Paragraph style / Character style (editable:
+// "pstyle" / "cstyle"), Selection. Mixed where the selection differs.
+struct TextPos;
+std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a, TextPos b);
 // "Text frame", "3 frames".
 std::string frames_title(const std::vector<Item>& items);
 

@@ -706,17 +706,17 @@ int main() {
             core::load_sample(e);
             core::Doc::Loading load(e);
             auto f1 = *e.as<core::Frame>("frame.1");
-            f1.h = 60;
+            f1.h = 62;
             e.put("frame.1", f1);
             auto f2 = *e.as<core::Frame>("frame.2");
             f2.w = 150;   // much narrower
             e.put("frame.2", f2);
             const auto g = L::flow_story(e, "story.1");
             check("flows on into the next frame", !g.frames[1].lines.empty() && !g.overset);
-            // 60 pt holds the 28 pt heading line + two 14 pt body lines (56);
-            // a third body line would end at 70.
-            check("frame 1 holds exactly what fits (28 + 14 + 14)", g.frames[0].lines.size() == 3 &&
-                                                                    g.frames[0].lines[2].y == 42,
+            // 62 pt holds the 28 pt heading line, its 6 pt space after (s011)
+            // and two 14 pt body lines (62); a third would end at 76.
+            check("frame 1 holds exactly what fits (28 + 6 + 14 + 14)", g.frames[0].lines.size() == 3 &&
+                                                                    g.frames[0].lines[2].y == 48,
                   std::to_string(g.frames[0].lines.size()));
             check("still every byte once, across widths", covers(e, g, "story.1"));
             check("narrower frame: more lines", g.lines > f.lines, std::to_string(g.lines) + " vs " + std::to_string(f.lines));
@@ -861,7 +861,7 @@ int main() {
         {
             const auto f1 = *d.as<core::Frame>("frame.1");
             core::doc::frames_begin(j, d, {"frame.1"}, "Resize frame");
-            core::doc::frames_set(j, d, "frame.1", {f1.x, f1.y, f1.w, 60});
+            core::doc::frames_set(j, d, "frame.1", {f1.x, f1.y, f1.w, 62});
             core::doc::frames_end(j);
         }
         const auto flow = L::flow_story(d, "story.1");
@@ -885,6 +885,97 @@ int main() {
               L::selection_rects(d, "story.1", flow, "frame.1", {1, 0}, {1, 3}).size() == 1 &&
               L::selection_rects(d, "story.1", flow, "frame.1", {0, 0}, {1, 60}).size() == 3);
         check("text editing: through the door", d.strays() == 0);
+    }
+
+    // ── s011: styles + fonts ────────────────────────────────────────────────
+    {
+        std::cout << "\n-- styles --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        using P = core::TextPos;
+        const auto runs = [&](const char* story, int p) { return d.as<core::Story>(story)->paras[static_cast<std::size_t>(p)].runs; };
+        const auto text = [&](const char* story, int p) { return d.as<core::Story>(story)->paras[static_cast<std::size_t>(p)].text; };
+
+        // story.4 para 0: "Almanac of the Outer Ports" (0-26) in Emphasis.
+        auto c = core::doc::edit_text(j, d, "story.4", {0, 7}, {0, 7}, "XX");
+        check("typing inside a run: the run grows", runs("story.4", 0).size() == 1 && runs("story.4", 0)[0].end == 28);
+        c = core::doc::edit_text(j, d, "story.4", {0, 28}, {0, 28}, "!");
+        check("typing at a run's end continues its style", runs("story.4", 0)[0].end == 29);
+        c = core::doc::edit_text(j, d, "story.4", {0, 0}, {0, 0}, ">");
+        check("typing before a run (at the start) takes the first character's style",
+              runs("story.4", 0)[0].start == 0 && runs("story.4", 0)[0].end == 30);
+        j.undo(); j.undo(); j.undo();
+        core::doc::edit_text(j, d, "story.4", {0, 10}, {0, 10}, "\n");
+        check("enter inside a run: both halves keep it", runs("story.4", 0) == std::vector<core::Run>{{0, 10, "style.5"}} &&
+                                                       runs("story.4", 1) == std::vector<core::Run>{{0, 16, "style.5"}});
+        j.undo();
+        core::doc::edit_text(j, d, "story.4", {0, 26}, {0, 35}, "Z");   // replace from just after the run
+        check("replacing a selection takes its first character's style", runs("story.4", 0) == std::vector<core::Run>{{0, 26, "style.5"}});
+        j.undo();
+        core::doc::edit_text(j, d, "story.4", {0, 0}, {0, 7}, "Book");
+        check("...and inside a run, the run's", runs("story.4", 0) == std::vector<core::Run>{{0, 23, "style.5"}});
+        j.undo();
+        core::doc::edit_text(j, d, "story.4", {0, 3}, {0, 30}, "");
+        check("deleting across a run's end trims it", runs("story.4", 0) == std::vector<core::Run>{{0, 3, "style.5"}} &&
+                                                      text("story.4", 0) == "Almd ed.", text("story.4", 0));
+        j.undo();
+
+        check("char style over plain text", core::doc::set_char_style(j, d, "story.1", {1, 4}, {1, 10}, "style.5") &&
+                                            runs("story.1", 1) == std::vector<core::Run>{{4, 10, "style.5"}});
+        check("...touching runs of one style merge",
+              core::doc::set_char_style(j, d, "story.1", {1, 10}, {1, 14}, "style.5") &&
+              runs("story.1", 1) == std::vector<core::Run>{{4, 14, "style.5"}});
+        check("clear part of a run splits it", core::doc::set_char_style(j, d, "story.1", {1, 6}, {1, 8}, "") &&
+                                               runs("story.1", 1) == std::vector<core::Run>({{4, 6, "style.5"}, {8, 14, "style.5"}}));
+        check("char style refuses a paragraph style", !core::doc::set_char_style(j, d, "story.1", {1, 0}, {1, 3}, "style.1"));
+        check("para style across paragraphs", core::doc::set_para_style(j, d, "story.1", {1, 5}, {2, 1}, "style.6") &&
+                                              d.as<core::Story>("story.1")->paras[1].style == "style.6" &&
+                                              d.as<core::Story>("story.1")->paras[2].style == "style.6" &&
+                                              d.as<core::Story>("story.1")->paras[3].style == "style.1");
+        check("para style refuses a character style", !core::doc::set_para_style(j, d, "story.1", {1, 0}, {1, 0}, "style.5"));
+
+        check("edit styles: one step for two", core::doc::edit_styles(j, d, {"style.1", "style.4"}, "Size",
+                                                                      [](core::Style& s) { s.size = 13; }) &&
+                                               d.as<core::Style>("style.4")->size == 13 && j.undo_label() == "Size");
+        const auto dup = core::doc::duplicate_style(j, d, "style.1");
+        check("duplicate: a copy, named so, just after", d.as<core::Style>(dup) &&
+                                                         d.as<core::Style>(dup)->name == "Body copy" &&
+                                                         d.ids_of<core::Style>()[1] == dup);
+        check("uses: counted", core::doc::style_uses(d, "style.5") >= 1 && core::doc::style_uses(d, dup) == 0);
+        check("delete: refuses a used style", !core::doc::delete_styles(j, d, {"style.1"}));
+        check("delete: an unused one goes", core::doc::delete_styles(j, d, {dup}) && !d.as<core::Style>(dup));
+
+        // The flow: spacing and a bold run.
+        core::Doc e;
+        core::load_sample(e);
+        const auto f0 = L::flow_story(e, "story.1");
+        check("space after a heading (6 pt)", f0.frames[0].lines[1].y == 28 + 6);
+        int n_before = 0;
+        for (const auto& l : f0.frames[0].lines) n_before += l.para == 1;
+        {
+            core::Doc::Loading load(e);
+            auto st = *e.as<core::Story>("story.1");
+            st.paras[1].runs = {{0, static_cast<int>(st.paras[1].text.size()), "style.7"}};
+            e.put("story.1", st);
+            e.put("style.7", core::Style{"Huge", core::StyleKind::Character, 7, "", 30, 0, true, false});
+        }
+        const auto f1 = L::flow_story(e, "story.1");
+        int n_after = 0;
+        for (const auto& l : f1.frames[0].lines) n_after += l.para == 1;
+        check("a big bold run breaks into more lines", n_after > n_before,
+              std::to_string(n_before) + " -> " + std::to_string(n_after));
+
+        core::Doc back;
+        check("json: runs and spacing round trip", core::from_json(back, core::to_json(d)) &&
+                                                   *back.as<core::Story>("story.4") == *d.as<core::Story>("story.4") &&
+                                                   *back.as<core::Style>("style.2") == *d.as<core::Style>("style.2"));
+        const auto& fams = L::font_families();
+        check("fonts: listed, the generics first", fams.size() >= 3 && fams[0] == "Serif" && fams[1] == "Sans",
+              std::to_string(fams.size()));
+        check("styles: through the door", d.strays() == 0);
     }
 
     // ── s009: images ─────────────────────────────────────────────────────────
