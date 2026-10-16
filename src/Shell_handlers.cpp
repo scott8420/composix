@@ -808,27 +808,29 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 else if (key == "col_rule_tint") f.col_rule.tint = std::stod(choice) / 100;
                 else f.col_rule.inset = std::stod(choice);
             });
-        } else if (key == "inset") {   // s040
-            const double v = std::stod(choice);
-            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Text inset", [&](core::Frame& f) {
-                if (f.kind == core::FrameKind::Text) f.inset = {v, v, v, v};
+        } else if (key == "inset" || key == "wrap_off") {   // s040 / s018; s067: per side
+            // "<points>" (a preset) or "a:<points>" -- all four; "k:<points>" -- side k (T R B L).
+            const auto colon = choice.find(':');
+            int side = -1;
+            if (colon != std::string::npos && choice.compare(0, colon, "a") != 0) side = std::stoi(choice.substr(0, colon));
+            const double v = std::stod(colon == std::string::npos ? choice : choice.substr(colon + 1));
+            did = core::doc::set_side(m_journal, m_doc, m_inspected,
+                                      key == "inset" ? core::doc::SideOf::Inset : core::doc::SideOf::Wrap, side, v);
+        } else if (key == "wrap") {   // s018: text wrap
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Text wrap", [&](core::Frame& f) {
+                const auto w = static_cast<core::Wrap>(std::stoi(choice));
+                // Turned on with no offset: a little air (9 pt) to start.
+                if (f.wrap == core::Wrap::None && w != core::Wrap::None && f.wrap_off == core::Sides{}) f.wrap_off = {9, 9, 9, 9};
+                f.wrap = w;
             });
-        } else if (key == "wrap" || key == "wrap_off") {   // s018: text wrap
-            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, key == "wrap" ? "Text wrap" : "Wrap offset",
-                                         [&](core::Frame& f) {
-                if (key == "wrap") {
-                    const auto w = static_cast<core::Wrap>(std::stoi(choice));
-                    // Turned on with no offset: a little air (9 pt) to start.
-                    if (f.wrap == core::Wrap::None && w != core::Wrap::None && f.wrap_off == core::Sides{}) f.wrap_off = {9, 9, 9, 9};
-                    f.wrap = w;
-                } else {
-                    const double v = std::stod(choice);
-                    f.wrap_off = {v, v, v, v};
-                }
-            });
-        } else if (key == "columns" || key == "gutter" || key == "widths" || key == "balance") {   // s012
+        } else if (key == "colw" && !choice.empty() && choice[0] != '=') {   // s067: "k:<points>" -- column k's width
+            const auto colon = choice.find(':');
+            did = core::doc::set_column_width(m_journal, m_doc, m_inspected, std::stoi(choice.substr(0, colon)),
+                                              std::stod(choice.substr(colon + 1)));
+        } else if (key == "columns" || key == "gutter" || key == "widths" || key == "balance" || key == "colw") {   // s012
             static const std::map<std::string, std::string> labels{
-                {"columns", "Columns"}, {"gutter", "Gutter"}, {"widths", "Column widths"}, {"balance", "Balance columns"}};
+                {"columns", "Columns"}, {"gutter", "Gutter"}, {"widths", "Column widths"}, {"colw", "Column widths"},
+                {"balance", "Balance columns"}};
             std::vector<std::string> text;
             for (const auto& id : m_inspected)
                 if (const auto* f = m_doc.as<core::Frame>(id); f && f->kind == core::FrameKind::Text) text.push_back(id);
@@ -841,10 +843,10 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                     f.gutter = std::stod(choice);
                 } else if (key == "balance") {
                     f.balance = choice == "1";
-                } else {   // "2:1:1" -> weights; "" -> equal
+                } else {   // "2:1:1" -> weights; "" -> equal (s067: "=2:1" / "=" from the Widths row's presets)
                     std::vector<double> w;
-                    std::size_t at = 0;
-                    while (!choice.empty() && at <= choice.size()) {
+                    std::size_t at = (!choice.empty() && choice[0] == '=') ? 1 : 0;
+                    while (!choice.empty() && at < choice.size()) {
                         const auto c = choice.find(':', at);
                         w.push_back(std::stod(choice.substr(at, c == std::string::npos ? std::string::npos : c - at)));
                         if (c == std::string::npos) break;

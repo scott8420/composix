@@ -629,6 +629,15 @@ bool edit_masters(DocJournal& j, Doc& d, const std::vector<Doc::Id>& masters, co
 // one step for all.
 bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, const std::string& label,
                  const std::function<void(Frame&)>& f);
+// s067: one side of a frame's text inset (text frames) or wrap offset --
+// side 0..3 = top / right / bottom / left, -1 = all four ("same all
+// round"). Points, 0..500. One step for all the frames.
+enum class SideOf { Inset, Wrap };
+bool set_side(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, SideOf which, int side, double pts);
+// s067: a column's width typed (points): that column takes it, the others
+// share what's left in their proportions (text frames with more than `col`
+// columns). At least 1 pt each. One step.
+bool set_column_width(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, int col, double pts);
 
 // ── text (s010) ─────────────────────────────────────────────────────────────
 // THE text verb: replace [a, b) in a story with `text` ('\n' splits a

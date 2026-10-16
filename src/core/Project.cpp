@@ -63,7 +63,7 @@ void mark_typed(std::vector<Field>& fields) {
         {"ssize", 1, 0, 1296}, {"leading", 1, 0, 1296}, {"before", 1, 0, 1000}, {"after", 1, 0, 1000},
         {"lindent", 1, 0, 1000}, {"rindent", 1, 0, 1000}, {"findent", 1, -1000, 1000},
         {"mtop", 72, 0, 5000}, {"mbottom", 72, 0, 5000}, {"minside", 72, 0, 5000}, {"moutside", 72, 0, 5000},
-        {"mgutter", 1, 0, 500}, {"gutter", 1, 0, 500}, {"inset", 1, 0, 500}, {"wrap_off", 1, 0, 500},
+        {"mgutter", 1, 0, 500}, {"gutter", 1, 0, 500}, {"inset", 1, 0, 500}, {"wrap_off", 1, 0, 500}, {"colw", 1, 1, 20000},
         {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
         {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500},
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
@@ -118,6 +118,14 @@ std::string pts(double v) {
     std::ostringstream o;
     o << v;
     return o.str();
+}
+
+// s067: four sides as a typed compact row, T R B L, with the link.
+Field sides_row(const std::string& label, const Sides& s, const std::string& key, std::vector<Choice> presets) {
+    Field f{label, pts(s.top) + "\t" + pts(s.right) + "\t" + pts(s.bottom) + "\t" + pts(s.left), key, std::move(presets)};
+    f.cols = {"T", "R", "B", "L"};
+    f.link = true;
+    return f;
 }
 
 }  // namespace
@@ -604,13 +612,9 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             static const char* names[] = {"None", "Around", "Jump"};
             fields.push_back({"Wrap", names[static_cast<int>(f->wrap)], "wrap", {{"0", "None"}, {"1", "Around"}, {"2", "Jump"}}});
             if (f->wrap != Wrap::None) {
-                const auto& o = f->wrap_off;
-                const bool even = o.top == o.right && o.top == o.bottom && o.top == o.left;
                 std::vector<Choice> oc;
                 for (double v : {0.0, 3.0, 6.0, 9.0, 12.0, 18.0, 24.0, 36.0}) oc.push_back({pts(v), pts(v) + " pt"});
-                fields.push_back({"Wrap offset", even ? pts(o.top) + " pt"
-                                                      : pts(o.top) + " / " + pts(o.right) + " / " + pts(o.bottom) + " / " + pts(o.left),
-                                  "wrap_off", oc});
+                fields.push_back(sides_row("Wrap offset (pt)", f->wrap_off, "wrap_off", oc));   // s067: per side
             }
         }
         if (f->kind == FrameKind::Text) {
@@ -627,24 +631,21 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 std::vector<Choice> gc;
                 for (double g : {6.0, 9.0, 12.0, 14.0, 18.0, 24.0, 36.0}) gc.push_back({pts(g), pts(g) + " pt"});
                 fields.push_back({"Gutter", pts(f->gutter) + " pt", "gutter", gc});
-                // Widths: the weights, smallest made 1 ("2 : 1"); presets by count.
-                const auto w = column_weights(*f, cols);
-                const double least = *std::min_element(w.begin(), w.end());
-                std::string shown;
-                bool equal = true;
-                for (double v : w) {
-                    shown += (shown.empty() ? "" : " : ") + pts(std::round(v / least * 10) / 10);
-                    equal = equal && std::abs(v - w[0]) < 1e-9;
-                }
-                if (equal) shown = "Equal";
-                std::vector<Choice> wc{{"", "Equal"}};
-                if (cols == 2) for (const char* p : {"2:1", "1:2", "3:2", "2:3", "3:1", "1:3"}) wc.push_back({p, std::string(p).replace(1, 1, " : ")});
+                // s067: Widths -- each column's width typed (points), one
+                // column each; the ratio presets ("=2:1") in a menu beside.
+                std::vector<Choice> wc{{"=", "Equal"}};
+                if (cols == 2) for (const char* p : {"2:1", "1:2", "3:2", "2:3", "3:1", "1:3"}) wc.push_back({std::string("=") + p, std::string(p).replace(1, 1, " : ")});
                 if (cols == 3) for (const char* p : {"2:1:1", "1:2:1", "1:1:2"}) {
                     std::string l = p;
                     for (std::size_t i = 0; (i = l.find(':', i)) != std::string::npos; i += 3) l.replace(i, 1, " : ");
-                    wc.push_back({p, l});
+                    wc.push_back({std::string("=") + p, l});
                 }
-                fields.push_back({"Widths", shown, "widths", wc});
+                Field widths{"Widths (pt)", "", "colw", wc};
+                for (int c = 0; c < cols; ++c) {
+                    widths.value += (c ? "\t" : "") + pts(std::round(column_width(*f, c) * 10) / 10);
+                    widths.cols.push_back(std::to_string(c + 1));
+                }
+                fields.push_back(widths);
                 fields.push_back({"Balance", f->balance ? "On" : "Off", "balance", {{"0", "Off"}, {"1", "On"}}});
                 // s055: a rule between the columns -- its weight, then (when on) its ink and inset.
                 {
@@ -674,13 +675,9 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 fields.push_back({"Vertical", va[static_cast<std::size_t>(f->valign)].label, "valign", va});
             }
             {   // s040: the text held in from the frame's edges.
-                const auto& o = f->inset;
-                const bool even = o.top == o.right && o.top == o.bottom && o.top == o.left;
                 std::vector<Choice> ic;
                 for (double v : {0.0, 3.0, 4.0, 6.0, 9.0, 12.0, 18.0, 24.0}) ic.push_back({pts(v), pts(v) + " pt"});
-                fields.push_back({"Inset", even ? pts(o.top) + " pt"
-                                                : pts(o.top) + " / " + pts(o.right) + " / " + pts(o.bottom) + " / " + pts(o.left),
-                                  "inset", ic});
+                fields.push_back(sides_row("Inset (pt)", f->inset, "inset", ic));   // s067: per side
             }
             if (st) title += " \u2014 " + st->name;
         } else if (f->kind == FrameKind::Image) {

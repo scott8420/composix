@@ -222,6 +222,8 @@ flowboxchild:selected > .cx-tile-card {
 /* s009: a compact row -- X Y W H headers over their values */
 .cx-insp-cols               { padding: 4px 0 5px; border-bottom: 1px solid @cx_hair; }
 .cx-col-head                { font-size: 0.72em; font-weight: 700; letter-spacing: 0.06em; color: @cx_dim; }
+/* s067: the link (same all round) and the presets beside a compact row -- slim */
+.cx-insp-mini, .cx-insp-mini > button { min-width: 20px; min-height: 24px; padding: 0 2px; }
 /* s009: actions under the fields (Relink…, Embed, Place…) */
 .cx-insp-actions            { margin-top: 10px; }
 button.cx-insp-action       { border-radius: 8px; padding: 2px 10px; min-height: 26px; font-size: 0.88em; }

@@ -92,6 +92,27 @@ Inspector::Inspector()
     clear();
 }
 
+// s041: a typed value's presets, in a menu (s067: shared with compact rows).
+Gtk::MenuButton* Inspector::presets_button(const std::string& key, const std::vector<core::Choice>& choices) {
+    auto mb = Gtk::make_managed<Gtk::MenuButton>();
+    mb->set_name("inspector.presets." + key);
+    mb->set_icon_name("pan-down-symbolic");
+    mb->set_tooltip_text("Presets");
+    auto pop = Gtk::make_managed<Gtk::Popover>();
+    auto list = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
+    for (const auto& c : choices) {
+        auto b = Gtk::make_managed<Gtk::Button>(c.label);
+        b->add_css_class("flat");
+        if (auto* lab = dynamic_cast<Gtk::Label*>(b->get_child())) lab->set_xalign(0.0f);
+        const std::string id = c.id;
+        b->signal_clicked().connect([this, pop, key, id] { pop->popdown(); m_edit.emit(key, id); });
+        list->append(*b);
+    }
+    pop->set_child(*list);
+    mb->set_popover(*pop);
+    return mb;
+}
+
 void Inspector::fill(const std::string& title, const std::string& sub,
                      const std::vector<core::Field>& fields) {
     if (m_has_shown && title == m_shown_title && sub == m_shown_sub && fields == m_shown) return;
@@ -139,6 +160,13 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             g->set_hexpand(true);
             std::vector<std::string> vals(1);
             for (char c : f.value) { if (c == '\t') vals.emplace_back(); else vals.back() += c; }
+            // s067: four sides with a link -- linked when they all agree.
+            auto linked = std::make_shared<bool>(false);
+            if (f.link) {
+                *linked = vals.size() == f.cols.size() && vals[0] != core::kMixed;
+                for (const auto& v : vals) *linked = *linked && v == vals[0];
+            }
+            static const char* side_names[] = {"Top", "Right", "Bottom", "Left"};
             for (std::size_t k = 0; k < f.cols.size(); ++k) {
                 auto h = Gtk::make_managed<Gtk::Label>(f.cols[k]);
                 h->add_css_class("cx-col-head");
@@ -147,8 +175,12 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                 if (!f.edit.empty() && f.unit > 0) {   // s041: each column typed
                     const std::string key = f.edit, idx = std::to_string(k);
                     auto en = typed_entry("inspector.edit." + key + "." + idx, k < vals.size() ? vals[k] : "", f.unit, f.lo, f.hi,
-                                          [this, key, idx](const std::string& v) { m_edit.emit(key, idx + ":" + v); });
-                    en->set_width_chars(4);
+                                          [this, key, idx, linked](const std::string& v) {
+                                              m_edit.emit(key, (*linked ? std::string("a") : idx) + ":" + v);
+                                          });
+                    // Room for the link / presets beside them without widening the panel.
+                    en->set_width_chars(f.link || !f.choices.empty() ? 3 : 4);
+                    if (f.link && k < 4) en->set_tooltip_text(side_names[k]);
                     g->attach(*en, static_cast<int>(k), 1);
                     continue;
                 }
@@ -159,7 +191,42 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                 v->set_can_focus(false);
                 g->attach(*v, static_cast<int>(k), 1);
             }
-            m_fields.attach(*g, 1, row);
+            if (!f.link && f.choices.empty()) {
+                m_fields.attach(*g, 1, row);
+                ++row;
+                continue;
+            }
+            // s067: the link and / or the presets, beside the values.
+            auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+            box->set_hexpand(true);
+            box->append(*g);
+            const std::string key = f.edit;
+            if (f.link) {
+                auto tb = Gtk::make_managed<Gtk::ToggleButton>();
+                tb->set_name("inspector.link." + key);
+                tb->set_icon_name("insert-link-symbolic");
+                tb->add_css_class("flat");
+                tb->set_valign(Gtk::Align::END);
+                tb->set_tooltip_text("Same all round");
+                tb->add_css_class("cx-insp-mini");
+                tb->set_active(*linked);
+                const std::string first = vals[0];
+                const bool even = *linked;
+                tb->signal_toggled().connect([this, tb, linked, key, first, even] {
+                    if (m_painting) return;
+                    *linked = tb->get_active();
+                    // Linking sides that differ makes all four the first (top).
+                    if (*linked && !even && first != core::kMixed && !first.empty()) m_edit.emit(key, "a:" + first);
+                });
+                box->append(*tb);
+            }
+            if (!f.choices.empty() && !f.link) {   // a linked row: typing in one column IS the preset
+                auto mb = presets_button(key, f.choices);
+                mb->set_valign(Gtk::Align::END);
+                mb->add_css_class("cx-insp-mini");
+                box->append(*mb);
+            }
+            m_fields.attach(*box, 1, row);
             ++row;
             continue;
         }
@@ -203,25 +270,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             const std::string key = f.edit;
             box->append(*typed_entry("inspector.edit." + key, f.value, f.unit, f.lo, f.hi,
                                      [this, key](const std::string& v) { m_edit.emit(key, v); }));
-            if (!f.choices.empty()) {
-                auto mb = Gtk::make_managed<Gtk::MenuButton>();
-                mb->set_name("inspector.presets." + key);
-                mb->set_icon_name("pan-down-symbolic");
-                mb->set_tooltip_text("Presets");
-                auto pop = Gtk::make_managed<Gtk::Popover>();
-                auto list = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
-                for (const auto& c : f.choices) {
-                    auto b = Gtk::make_managed<Gtk::Button>(c.label);
-                    b->add_css_class("flat");
-                    if (auto* lab = dynamic_cast<Gtk::Label*>(b->get_child())) lab->set_xalign(0.0f);
-                    const std::string id = c.id;
-                    b->signal_clicked().connect([this, pop, key, id] { pop->popdown(); m_edit.emit(key, id); });
-                    list->append(*b);
-                }
-                pop->set_child(*list);
-                mb->set_popover(*pop);
-                box->append(*mb);
-            }
+            if (!f.choices.empty()) box->append(*presets_button(key, f.choices));
             m_fields.attach(*box, 1, row);
         } else if (!f.edit.empty()) {
             // An editable field: a dropdown of its choices.

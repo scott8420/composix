@@ -1190,6 +1190,40 @@ bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const s
     });
 }
 
+// ── per-side values (s067) ──────────────────────────────────────────────────
+bool set_side(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, SideOf which, int side, double pts) {
+    if (side < -1 || side > 3) return false;
+    const double v = std::clamp(pts, 0.0, 500.0);
+    return edit_frames(j, d, frames, which == SideOf::Inset ? "Text inset" : "Wrap offset", [&](Frame& f) {
+        if (which == SideOf::Inset && f.kind != FrameKind::Text) return;
+        Sides& s = which == SideOf::Inset ? f.inset : f.wrap_off;
+        if (side == -1 || side == 0) s.top = v;
+        if (side == -1 || side == 1) s.right = v;
+        if (side == -1 || side == 2) s.bottom = v;
+        if (side == -1 || side == 3) s.left = v;
+    });
+}
+bool set_column_width(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, int col, double pts) {
+    return edit_frames(j, d, frames, "Column width", [&](Frame& f) {
+        const int n = column_count(f);
+        if (f.kind != FrameKind::Text || n < 2 || col < 0 || col >= n) return;
+        std::vector<double> w(static_cast<std::size_t>(n));
+        double room = 0;
+        for (int c = 0; c < n; ++c) room += (w[static_cast<std::size_t>(c)] = column_width(f, c));
+        const double v = std::clamp(pts, 1.0, std::max(1.0, room - (n - 1)));
+        double others = room - w[static_cast<std::size_t>(col)];
+        const double left = room - v;
+        for (int c = 0; c < n; ++c) {
+            auto& x = w[static_cast<std::size_t>(c)];
+            if (c == col) x = v;
+            else x = std::max(1.0, others > 0 ? x * left / others : left / (n - 1));
+        }
+        // Kept as weights, rounded to a hundredth of a point (stable in a file).
+        for (auto& x : w) x = std::round(x * 100) / 100;
+        f.widths = w;
+    });
+}
+
 // ── text (s010) ─────────────────────────────────────────────────────────────
 TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& text,
                   const std::string& label, const std::string& merge_key) {
@@ -2083,6 +2117,10 @@ const std::vector<Verb>& verbs() {
         {"edit_frames", [](DocJournal& j, Doc& d) {
              edit_frames(j, d, {"frame.1", "frame.10"}, "Columns", [](Frame& f) { f.columns = 2; f.gutter = 18; f.widths = {2, 1}; });
          }},
+        // s067: per-side insets / wrap offsets, a column's width typed.
+        {"set_side_inset", [](DocJournal& j, Doc& d) { set_side(j, d, {"frame.1"}, SideOf::Inset, 3, 14); }},
+        {"set_side_wrap", [](DocJournal& j, Doc& d) { set_side(j, d, {"frame.11"}, SideOf::Wrap, -1, 20); }},
+        {"set_column_width", [](DocJournal& j, Doc& d) { set_column_width(j, d, {"frame.10"}, 0, 150); }},
         // s011: styles.
         {"set_para_style", [](DocJournal& j, Doc& d) { set_para_style(j, d, "story.1", {1, 0}, {3, 2}, "style.3"); }},
         {"set_char_style", [](DocJournal& j, Doc& d) { set_char_style(j, d, "story.1", {1, 4}, {2, 6}, "style.5"); }},

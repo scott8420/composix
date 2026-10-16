@@ -1636,7 +1636,7 @@ int main() {
         bool wf = false, of = false;
         for (const auto& f : items.front().fields) {
             wf = wf || (f.edit == "wrap" && f.value == "Around");
-            of = of || (f.edit == "wrap_off" && f.value == "9 pt");
+            of = of || (f.edit == "wrap_off" && f.value == "9\t9\t9\t9");
         }
         check("wrap: inspector shows Wrap + offset", wf && of);
     }
@@ -2740,6 +2740,96 @@ int main() {
     }
 
     {
+        std::cout << "\n-- per-side insets, wrap offsets, typed column widths (s067) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto lines_of = [&](const std::string& story, const std::string& frame) {
+            for (const auto& f : L::flow_story(d, story).frames) if (f.frame == frame) return f.lines;
+            return std::vector<L::Line>{};
+        };
+        const auto in0 = d.as<core::Frame>("frame.1")->inset;
+        const auto before = lines_of("story.1", "frame.1");
+        // One side: the left inset alone.
+        check("inset: the left side alone, one step", D::set_side(j, d, {"frame.1"}, D::SideOf::Inset, 3, 30) && j.size() == 1);
+        const auto& f1 = *d.as<core::Frame>("frame.1");
+        check("inset: only the left changed", f1.inset.left == 30 && f1.inset.top == in0.top && f1.inset.right == in0.right &&
+                                                  f1.inset.bottom == in0.bottom);
+        const auto left = lines_of("story.1", "frame.1");
+        bool inside = !left.empty();
+        for (const auto& l : left) inside = inside && l.x >= 30 - 0.01;
+        check("inset: every line right of the left inset", inside);
+        check("inset: the first line's top unchanged", !left.empty() && !before.empty() && std::abs(left[0].y - before[0].y) < 0.01);
+        // The top alone moves the first line down by the difference.
+        D::set_side(j, d, {"frame.1"}, D::SideOf::Inset, 0, in0.top + 24);
+        const auto top = lines_of("story.1", "frame.1");
+        check("inset: the top alone moves the first line down", !top.empty() && std::abs(top[0].y - (before[0].y + 24)) < 0.01);
+        check("inset: all four (same all round)", D::set_side(j, d, {"frame.1"}, D::SideOf::Inset, -1, 5) &&
+                                                     d.as<core::Frame>("frame.1")->inset == core::Sides{5, 5, 5, 5});
+        check("inset: held to 500 pt", D::set_side(j, d, {"frame.1"}, D::SideOf::Inset, 2, 900) &&
+                                          d.as<core::Frame>("frame.1")->inset.bottom == 500);
+        check("inset: not on a picture", !D::set_side(j, d, {"frame.11"}, D::SideOf::Inset, 0, 12));
+        check("inset: a side out of range refused", !D::set_side(j, d, {"frame.1"}, D::SideOf::Inset, 4, 12));
+        const auto steps = j.size();
+        j.undo();
+        j.undo();
+        j.undo();
+        j.undo();
+        check("inset: undo, side by side, back to the start", j.size() == steps && d.as<core::Frame>("frame.1")->inset == in0);
+        // Wrap: the right side alone widens the band on the right only.
+        const auto w0 = core::wrap_rects(d, "frame.1");
+        check("wrap: the right side alone", D::set_side(j, d, {"frame.11"}, D::SideOf::Wrap, 1, 30));
+        const auto w1 = core::wrap_rects(d, "frame.1");
+        check("wrap: its band reaches further right, the left edge stays",
+              w0.size() == 1 && w1.size() == 1 && std::abs(w1[0].x1 - (w0[0].x1 + 21)) < 1e-6 && std::abs(w1[0].x0 - w0[0].x0) < 1e-6);
+        // Columns: one typed, the others share the rest in their proportions.
+        const auto& src = *d.as<core::Frame>("frame.10");
+        const double room = core::column_width(src, 0) + core::column_width(src, 1);
+        check("column width: one step", D::set_column_width(j, d, {"frame.10"}, 0, 150));
+        const auto& s1 = *d.as<core::Frame>("frame.10");
+        check("column width: the first takes 150 pt, the second the rest",
+              std::abs(core::column_width(s1, 0) - 150) < 0.02 && std::abs(core::column_width(s1, 0) + core::column_width(s1, 1) - room) < 0.02,
+              std::to_string(core::column_width(s1, 0)) + " / " + std::to_string(core::column_width(s1, 1)));
+        D::set_column_width(j, d, {"frame.10"}, 1, 1e6);
+        check("column width: too wide leaves the other at least 1 pt", core::column_width(*d.as<core::Frame>("frame.10"), 0) >= 1 - 1e-9);
+        D::edit_frames(j, d, {"frame.10"}, "Columns", [](core::Frame& f) { f.columns = 3; f.widths = {2, 1, 1}; });
+        const auto& s3 = *d.as<core::Frame>("frame.10");
+        const double room3 = core::column_width(s3, 0) + core::column_width(s3, 1) + core::column_width(s3, 2);
+        D::set_column_width(j, d, {"frame.10"}, 0, room3 / 4);
+        const auto& s4 = *d.as<core::Frame>("frame.10");
+        check("column width: the others keep their proportions",
+              std::abs(core::column_width(s4, 1) - core::column_width(s4, 2)) < 0.02 && std::abs(core::column_width(s4, 0) - room3 / 4) < 0.02);
+        check("column width: not on a one-column frame", !D::set_column_width(j, d, {"frame.1"}, 0, 100));
+        // The inspector: four typed sides with the link; widths typed, one per column.
+        const auto field = [](const std::vector<core::Field>& fs, const std::string& key) -> const core::Field* {
+            for (const auto& f : fs) if (f.edit == key) return &f;
+            return nullptr;
+        };
+        D::set_side(j, d, {"frame.1"}, D::SideOf::Inset, 3, 12);
+        const auto items = core::frame_items(d, {"frame.1", "frame.10", "frame.11"});
+        const auto* ins = field(items.at(0).fields, "inset");
+        check("inspector: Inset is four typed sides with a link",
+              ins && ins->link && ins->cols.size() == 4 && ins->unit == 1 && ins->value.find('\t') != std::string::npos &&
+              ins->value.substr(ins->value.rfind('\t') + 1) == "12");
+        const auto* cw = field(items.at(1).fields, "colw");
+        check("inspector: Widths typed, one per column, presets beside",
+              cw && cw->cols.size() == 3 && cw->unit == 1 && !cw->choices.empty() && cw->choices[0].id == "=");
+        const auto* wo = field(items.at(2).fields, "wrap_off");
+        check("inspector: Wrap offset is four typed sides", wo && wo->link && wo->cols.size() == 4 && wo->value == "9\t30\t9\t9");
+        {   // what the inspector actually shows goes through shared_fields
+            std::vector<const core::Item*> one{&items.at(0)};
+            const auto sh = core::shared_fields(one);
+            check("inspector: the link survives the shared view", field(sh, "inset") && field(sh, "inset")->link);
+        }
+        std::string err;
+        core::Doc e;
+        check("json: per-side insets and typed widths kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;
@@ -3573,7 +3663,7 @@ int main() {
                                      std::abs(lines_of("story.1", "frame.1")[0].y - before[0].y) < 1e-9);
         bool row = false;
         const auto items1 = core::frame_items(d, {"frame.6"});   // (kept: a range-for over a temporary's member dangles)
-        for (const auto& f : items1.at(0).fields) row = row || (f.edit == "inset" && f.value == "6 pt");
+        for (const auto& f : items1.at(0).fields) row = row || (f.edit == "inset" && f.value == "6\t6\t6\t6");
         check("inspector: the caption's Inset", row);
         std::string err;
         core::Doc e;

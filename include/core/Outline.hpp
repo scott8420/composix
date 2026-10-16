@@ -79,6 +79,11 @@ struct Field {
     // s060: a value typed as TEXT (a name; a whole number): an entry that
     // sends what's typed, as typed, on Enter or leaving it.
     bool text = false;
+    // s067: a typed compact row of four sides (T R B L) with a "same all
+    // round" link: linked (shown when all four agree), a value typed in
+    // any column goes to all four ("a:points"); unlinked, to its own
+    // ("k:points"). Linking unequal sides makes all four the first.
+    bool link = false;
     bool operator==(const Field&) const = default;
 };
 

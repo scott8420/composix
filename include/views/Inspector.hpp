@@ -36,6 +36,7 @@ public:
 
 private:
     void fill(const std::string& title, const std::string& sub, const std::vector<core::Field>& fields);
+    Gtk::MenuButton* presets_button(const std::string& key, const std::vector<core::Choice>& choices);
     Gtk::Entry* typed_entry(const std::string& name, const std::string& value, double unit, double lo, double hi,
                             std::function<void(const std::string&)> send);
 
