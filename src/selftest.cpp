@@ -2740,6 +2740,78 @@ int main() {
     }
 
     {
+        std::cout << "\n-- wrap options (s069) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto field = [](const std::vector<core::Field>& fs, const std::string& key) -> const core::Field* {
+            for (const auto& f : fs) if (f.edit == key) return &f;
+            return nullptr;
+        };
+        // The sample: the lighthouse (frame.11) sits above the opening text (frame.1) and wraps it.
+        const auto& pic = *d.as<core::Frame>("frame.11");
+        const auto& txt = *d.as<core::Frame>("frame.1");
+        check("sample: the picture is above the text", pic.owner == txt.owner && pic.z > txt.z);
+        check("wrap: it pushes the text", core::wrap_rects(d, "frame.1").size() == 1);
+        // Ignore wrap: the text frame alone, one step; the lines run straight through.
+        check("ignore wrap: one step", D::edit_frames(j, d, {"frame.1"}, "Ignore text wrap",
+                                                      [](core::Frame& f) { f.ignore_wrap = true; }) && j.size() == 1);
+        check("ignore wrap: nothing pushes it", core::wrap_rects(d, "frame.1").empty());
+        // Ignoring wrap sets the text exactly as if the picture had no wrap.
+        const auto lines_of = [&] {
+            for (const auto& fr : L::flow_story(d, "story.1").frames) if (fr.frame == "frame.1") return fr.lines;
+            return std::vector<L::Line>{};
+        };
+        const auto ignored = lines_of();
+        D::edit_frames(j, d, {"frame.11"}, "Text wrap", [](core::Frame& f) { f.wrap = core::Wrap::None; });
+        const auto none = lines_of();
+        j.undo();
+        bool same = !ignored.empty() && ignored.size() == none.size();
+        for (std::size_t i = 0; same && i < none.size(); ++i)
+            same = std::abs(ignored[i].x - none[i].x) < 1e-6 && std::abs(ignored[i].y - none[i].y) < 1e-6 &&
+                   ignored[i].start == none[i].start && ignored[i].end == none[i].end;
+        check("ignore wrap: the text sets as with no wrap at all", same);
+        const auto items = core::frame_items(d, {"frame.1"});
+        const auto* iw = field(items.at(0).fields, "ignore_wrap");
+        check("inspector: a text frame's Others' wrap", iw && iw->value == "Ignored" && iw->choices.size() == 2);
+        j.undo();
+        check("ignore wrap: undo -- pushed again", core::wrap_rects(d, "frame.1").size() == 1);
+        // Wrap only text beneath: the picture is above -> still pushes; put it below -> it doesn't.
+        check("beneath: one step", D::set_wrap_beneath(j, d, true) && d.settings().wrap_beneath && !D::set_wrap_beneath(j, d, true));
+        check("beneath: a frame above still pushes", core::wrap_rects(d, "frame.1").size() == 1);
+        D::edit_frames(j, d, {"frame.11"}, "Arrange", [&](core::Frame& f) { f.z = txt.z - 1; });
+        check("beneath: a frame below doesn't", core::wrap_rects(d, "frame.1").empty());
+        D::set_wrap_beneath(j, d, false);
+        check("all text: below pushes too", core::wrap_rects(d, "frame.1").size() == 1);
+        D::set_wrap_beneath(j, d, true);
+        // A master's wrapping item sits beneath every page frame.
+        const auto chain = core::master_chain(d, txt.owner);
+        check("beneath: the page has a master", !chain.empty());
+        if (!chain.empty()) {
+            const auto added = D::add_frame(j, d, chain.back(), core::FrameKind::Shape, {txt.x + 20, txt.y + 40, 60, 60});
+            const bool made = !added.empty() && D::edit_frames(j, d, {added}, "Text wrap", [](core::Frame& f) {
+                f.wrap = core::Wrap::Around;
+                f.z = 1e6;   // top of its master -- still under the page
+            });
+            check("beneath: a master's wrap stays under the page's text", made && core::wrap_rects(d, "frame.1").empty());
+            D::set_wrap_beneath(j, d, false);
+            check("all text: the master's wrap pushes", !core::wrap_rects(d, "frame.1").empty());
+        }
+        const auto o = core::project(d, "");
+        const auto* dw = field(o.find("doc")->fields, "dwrap");
+        check("inspector: Document settings' Text wrap", dw && dw->value == "All text");
+        D::set_wrap_beneath(j, d, true);
+        D::edit_frames(j, d, {"frame.1"}, "Ignore text wrap", [](core::Frame& f) { f.ignore_wrap = true; });
+        std::string err;
+        core::Doc e;
+        check("json: both kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records() &&
+                                     e.settings().wrap_beneath && e.as<core::Frame>("frame.1")->ignore_wrap, err);
+    }
+
+    {
         std::cout << "\n-- up a level (s068) --\n";
         core::Doc d;
         core::DocJournal j{d};

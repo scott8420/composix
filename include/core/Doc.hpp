@@ -85,6 +85,9 @@ struct Settings {
     double      trim_w = 6 * kPt, trim_h = 9 * kPt;
     double      bleed  = 0.125 * kPt;
     bool        facing = true;
+    // s069: a frame's text wrap pushes only text frames beneath it in the
+    // stacking order (masters below their pages); off: every text frame.
+    bool        wrap_beneath = false;
     ExportPrefs exp;                     // s032
     bool operator==(const Settings&) const = default;
 };
@@ -170,6 +173,7 @@ struct Frame {
     bool        autosize = false;        // s048: text -- its height follows its text (top fixed; the
                                          // last frame of its thread, one column)
     ColumnRule  col_rule;                // s055: text -- a rule between its columns
+    bool        ignore_wrap = false;     // s069: text -- other frames' wrap doesn't push this text
     bool operator==(const Frame&) const = default;
 };
 
@@ -534,6 +538,8 @@ bool set_title(DocJournal& j, Doc& d, const std::string& title);
 bool set_trim(DocJournal& j, Doc& d, double w, double h);
 bool set_bleed(DocJournal& j, Doc& d, double bleed);
 bool set_facing(DocJournal& j, Doc& d, bool facing);
+// s069: wrap pushes only text beneath (Settings::wrap_beneath). One step.
+bool set_wrap_beneath(DocJournal& j, Doc& d, bool on);
 // s062: pages' own margins -- `f` edits them (starting from what they use
 // now); `reset` drops them (back to the master's). One step.
 bool edit_page_margins(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const std::string& label,
@@ -874,7 +880,10 @@ const std::vector<int>& tint_steps();
 std::string tint_text(double tint);
 // s018: what pushes a text frame's lines aside -- every OTHER frame with a
 // wrap on its owner and on the owner's masters, grown by its offsets, in the
-// text frame's coordinates. (Stacking doesn't matter, as InDesign's default.)
+// text frame's coordinates. Stacking doesn't matter (InDesign's default)
+// unless the document says wrap pushes only text beneath (s069: then only
+// frames ABOVE the text frame -- masters below their pages, then by z).
+// A text frame set to ignore wrap gets none (s069).
 struct WrapRect {
     double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
     bool   jump = false;

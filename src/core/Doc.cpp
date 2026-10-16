@@ -1095,6 +1095,15 @@ bool set_facing(DocJournal& j, Doc& d, bool facing) {
     });
 }
 
+bool set_wrap_beneath(DocJournal& j, Doc& d, bool on) {   // s069
+    if (on == d.settings().wrap_beneath) return false;
+    return j.run("Text wrap affects", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.wrap_beneath = on;
+        d.put("doc", s);
+    });
+}
+
 bool set_export(DocJournal& j, Doc& d, const ExportPrefs& e) {
     if (d.settings().exp == e) return false;
     return j.run("Export settings", {"doc"}, [&] {
@@ -2069,6 +2078,10 @@ const std::vector<Verb>& verbs() {
         {"set_trim", [](DocJournal& j, Doc& d) { set_trim(j, d, 5.5 * kPt, 8.5 * kPt); }},
         {"set_bleed", [](DocJournal& j, Doc& d) { set_bleed(j, d, d.settings().bleed + 9); }},
         {"set_facing", [](DocJournal& j, Doc& d) { set_facing(j, d, !d.settings().facing); }},
+        {"set_wrap_beneath", [](DocJournal& j, Doc& d) { set_wrap_beneath(j, d, true); }},   // s069
+        {"ignore_wrap", [](DocJournal& j, Doc& d) {
+             edit_frames(j, d, {"frame.1"}, "Ignore text wrap", [](Frame& f) { f.ignore_wrap = true; });
+         }},
         {"section_start_at", [](DocJournal& j, Doc& d) { set_section_start_at(j, d, {d.ids_of<Section>().back()}, 5); }},
         {"section_master", [](DocJournal& j, Doc& d) {
              const auto sec = d.ids_of<Section>().back();
@@ -2367,13 +2380,19 @@ std::string tint_text(double t) { return std::to_string(static_cast<int>(std::lr
 std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
     std::vector<WrapRect> out;
     const auto* t = d.as<Frame>(id);
-    if (!t) return out;
+    if (!t || t->ignore_wrap) return out;   // s069
     auto owners = master_chain(d, t->owner);
     owners.push_back(t->owner);
+    // s069: the stacking order, bottom up -- the most basic master's frames
+    // first, the text frame's own owner's last, each by z.
+    const bool beneath = d.settings().wrap_beneath;
+    bool above = false;   // walking up: past the text frame yet?
     for (const auto& o : owners)
         for (const auto& fid : d.frames_on(o)) {
+            if (fid == id) { above = true; continue; }
             const auto* f = d.as<Frame>(fid);
-            if (fid == id || !f || f->wrap == Wrap::None) continue;
+            if (!f || f->wrap == Wrap::None) continue;
+            if (beneath && !above) continue;   // below the text: it doesn't push
             if (o != t->owner && !master_item_on(d, fid, t->owner)) continue;   // s025: not shown on this page
             WrapRect r{f->x - f->wrap_off.left - t->x, f->y - f->wrap_off.top - t->y,
                        f->x + f->w + f->wrap_off.right - t->x, f->y + f->h + f->wrap_off.bottom - t->y,

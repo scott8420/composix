@@ -564,6 +564,12 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::set_trim(m_journal, m_doc, k == 0 ? v : st.trim_w, k == 1 ? v : st.trim_h);
         } else if (key == "dbleed") {
             did = core::doc::set_bleed(m_journal, m_doc, std::stod(choice));
+        } else if (key == "dwrap") {   // s069
+            did = core::doc::set_wrap_beneath(m_journal, m_doc, choice == "1");
+        } else if (key == "ignore_wrap") {   // s069
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Ignore text wrap", [&](core::Frame& f) {
+                if (f.kind == core::FrameKind::Text) f.ignore_wrap = choice == "1";
+            });
         } else if (key == "dfacing") {
             did = core::doc::set_facing(m_journal, m_doc, choice == "1");
         } else if (key == "pmargins") {   // s062: a page's own margins, or back to the master's

@@ -168,6 +168,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         std::vector<Field> f{title, trim,
                              {"Bleed", inches(st.bleed) + " in", "dbleed", bc},
                              {"Pages", st.facing ? "Facing" : "Single", "dfacing", {{"1", "Facing"}, {"0", "Single"}}},
+                             {"Text wrap", st.wrap_beneath ? "Text beneath" : "All text", "dwrap",   // s069
+                              {{"0", "All text"}, {"1", "Text beneath"}}},
                              {"Length", std::to_string(d.pages().size()) + (d.pages().size() == 1 ? " page" : " pages")}};
         mark_typed(f);
         o.add({"doc", G::Document, "Document settings", "", {K::Section, 6, 9, 0x9a8f88}, f});
@@ -665,6 +667,9 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                     }
                 }
             }
+            // s069: other frames' wrap -- pushes this text, or not.
+            fields.push_back({"Others' wrap", f->ignore_wrap ? "Ignored" : "Pushes the text", "ignore_wrap",
+                              {{"0", "Pushes the text"}, {"1", "Ignored"}}});
             {   // s048: the height follows the text (the last frame of a thread, one column).
                 const bool can = f->next.empty() && column_count(*f) == 1;
                 fields.push_back({"Auto-size", f->autosize ? (can ? "Height" : "Height (not here)") : "Off", "autosize",

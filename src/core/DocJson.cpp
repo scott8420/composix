@@ -37,7 +37,7 @@ json to(const Record& r) {
         json j;
         if constexpr (std::is_same_v<T, Settings>) {
             j = {{"kind", "settings"}, {"title", v.title}, {"trim_w", v.trim_w}, {"trim_h", v.trim_h},
-                 {"bleed", v.bleed}, {"facing", v.facing},
+                 {"bleed", v.bleed}, {"facing", v.facing}, {"wrap_beneath", v.wrap_beneath},
                  {"export", {{"print", v.exp.print}, {"bleed", v.exp.bleed}, {"marks", v.exp.marks},
                              {"profile", v.exp.profile}, {"convert", v.exp.convert}, {"standard", v.exp.standard}}}};
         } else if constexpr (std::is_same_v<T, Section>) {
@@ -67,6 +67,7 @@ json to(const Record& r) {
                  {"wrap_off", {v.wrap_off.top, v.wrap_off.right, v.wrap_off.bottom, v.wrap_off.left}}};
             if (v.valign != VAlign::Top) j["valign"] = en(v.valign);   // s042
             if (v.autosize) j["autosize"] = true;                      // s048
+            if (v.ignore_wrap) j["ignore_wrap"] = true;                // s069
             if (!(v.inset == Sides{})) j["inset"] = {v.inset.top, v.inset.right, v.inset.bottom, v.inset.left};   // s040
             if (!(v.col_rule == ColumnRule{}))   // s055
                 j["col_rule"] = {{"weight", v.col_rule.weight}, {"color", v.col_rule.color},
@@ -142,6 +143,7 @@ std::optional<Record> from(const json& j) {
         v.trim_h = val(j, "trim_h", v.trim_h);
         v.bleed = val(j, "bleed", v.bleed);
         v.facing = val(j, "facing", v.facing);
+        v.wrap_beneath = val(j, "wrap_beneath", false);   // s069
         if (j.contains("export")) {   // s032
             const auto& e = j.at("export");
             v.exp = {val(e, "print", true), val(e, "bleed", true), val(e, "marks", false),
@@ -219,6 +221,7 @@ std::optional<Record> from(const json& j) {
         v.wrap = de(j, "wrap", Wrap::None);
         v.valign = de(j, "valign", VAlign::Top);   // s042
         v.autosize = val(j, "autosize", false);    // s048
+        v.ignore_wrap = val(j, "ignore_wrap", false);   // s069
         if (j.contains("wrap_off") && j["wrap_off"].is_array() && j["wrap_off"].size() == 4) {
             const auto& a = j["wrap_off"];
             v.wrap_off = {a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>()};
