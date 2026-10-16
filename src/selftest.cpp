@@ -17,6 +17,7 @@
 #include "layout/Export.hpp"
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
+#include "core/Settings.hpp"
 #include "core/Shortcuts.hpp"
 #include "core/Stones.hpp"
 #include "core/Undo.hpp"
@@ -1894,6 +1895,59 @@ int main() {
         keep.fold_local = false;
         D::change_hits(j, d, D::find_all(d, D::FindOpts{.italic = true, .skip_cstyle = "style.5"}), keep, "Change All");
         check("change fmt: fold off keeps the local italic", core::local_at(p1(), 1).italic == 1 && core::char_style_at(p1(), 1) == "style.5");
+    }
+
+    {
+        std::cout << "\n-- swatches: use, groups, view setting (s052) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        load_plain(d);
+        core::Swatch ink{"Test Ink", 99, core::ColorModel::Spot, {0, 0, 0, 0}, "PMS Test", 0x336699};
+        core::Swatch rgb{"Test RGB", 99.5, core::ColorModel::RGB, {10, 20, 30, 0}, "", 0x0a141e};
+        {
+            core::Doc::Loading load(d);
+            d.put("swatch.t1", ink);
+            d.put("swatch.t2", rgb);
+        }
+        check("swatch: a new one is unused", D::swatch_uses(d, "swatch.t1") == 0 && D::swatch_uses(d, "") == 0);
+        {
+            core::Doc::Loading load(d);
+            auto f = *d.as<core::Frame>("frame.11");
+            f.fill = "swatch.t1";
+            f.stroke = "swatch.t1";
+            d.put("frame.11", f);
+            auto st = *d.as<core::Style>("style.1");
+            st.rule_below.color = "swatch.t1";
+            d.put("style.1", st);
+            auto story = *d.as<core::Story>("story.1");
+            story.paras[1].runs = {{0, 3, "", core::Local{-1, -1, 0, "swatch.t1"}}};
+            d.put("story.1", story);
+        }
+        check("swatch: fill, stroke, a rule and a word's colour all count", D::swatch_uses(d, "swatch.t1") == 4);
+        const auto o = core::project(d, "");
+        const auto field = [&](const char* id, const char* label) {
+            const auto* it = o.find(id);
+            if (!it) return std::string("?");
+            for (const auto& f : it->fields) if (f.label == label) return f.value;
+            return std::string("-");
+        };
+        check("swatch: the tile says where it's used", field("swatch.t1", "Used") == "4 places" && field("swatch.t2", "Used") == "Unused");
+        check("swatch: grouped by kind -- spot inks, RGB apart",
+              o.find("swatch.t1") && o.find("swatch.t1")->group == "Spot inks" &&
+              o.find("swatch.t2") && o.find("swatch.t2")->group.rfind("RGB", 0) == 0);
+        bool all_grouped = true;
+        for (const auto* it : o.in(core::Segment::Colors)) all_grouped = all_grouped && !it->group.empty();
+        check("swatch: every colour has a group", all_grouped);
+        const auto dir = std::filesystem::temp_directory_path() / "composix_s052";
+        const auto file = (dir / "settings.json").string();
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        check("settings: first run is empty", core::load_settings(file).empty());
+        core::AppSettings a{{"colors.view", "list"}, {"other", "x"}};
+        check("settings: round-trip", core::save_settings(file, a) && core::load_settings(file) == a);
+        { std::ofstream bad(file); bad << "{not json"; }
+        check("settings: unreadable -> empty, no throw", core::load_settings(file).empty());
+        std::filesystem::remove_all(dir, ec);
     }
 
     {

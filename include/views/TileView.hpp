@@ -21,9 +21,16 @@
 
 namespace composix::views {
 
+// s052: how big the tiles are -- Colors offers all three (others: Large).
+enum class TileSize { Large, Small, List };
+
 class TileView : public widgets::Box {
 public:
     TileView();
+
+    TileSize tile_size() const { return m_size; }
+    void     set_tile_size(TileSize z);   // redraws the section on show (quietly: no signal)
+    sigc::signal<void(TileSize)>& signal_tile_size() { return m_size_sig; }
 
     // `keep`: tiles to leave selected (a refresh after an edit), silently.
     void show_section(const core::Outline& o, core::Segment s, const std::vector<std::string>& keep = {});
@@ -46,7 +53,19 @@ private:
     widgets::Label          m_title;
     widgets::Label          m_count;
     widgets::ScrolledWindow m_scroll;
+    widgets::Box            m_body;      // s052: m_grid, or the grouped grids
     widgets::FlowBox        m_grid;
+    widgets::Box            m_groups;    // s052: a heading + a grid per item group
+    widgets::Box            m_sizes;     // s052: Large / Small / List
+    std::vector<Gtk::FlowBox*> m_grids;  // the grids on show
+    TileSize                m_size = TileSize::Large;
+    sigc::signal<void(TileSize)> m_size_sig;
+    core::Outline           m_last;      // the section on show, to redraw at another size
+    core::Segment           m_seg = core::Segment::Document;
+    bool                    m_shown = false;
+
+    void setup_grid(Gtk::FlowBox& g);
+    void sync_size_buttons();
 
     std::map<const Gtk::FlowBoxChild*, std::vector<std::string>> m_id_of;   // s028: a spread tile: its pages
     std::function<std::vector<std::vector<std::string>>()> m_grouping;

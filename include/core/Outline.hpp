@@ -86,6 +86,7 @@ struct Item {
     std::string        badge;     // short corner tag: "Foldout", "Missing", "Spot"
     Thumb              thumb;
     std::vector<Field> fields;    // tile + inspector metadata, display order
+    std::string        group;     // s052: a heading the tile view sorts under ("" = none)
 };
 
 class Outline {

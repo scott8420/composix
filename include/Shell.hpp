@@ -10,6 +10,7 @@
 #include "views/StoryEditor.hpp"
 #include "views/PanelHandle.hpp"
 #include "views/TileView.hpp"
+#include "core/Settings.hpp"
 
 #include <gtkmm/applicationwindow.h>
 #include <giomm/menu.h>
@@ -181,6 +182,9 @@ private:
     // Recents state (core data; UI holds it + resolves the path -- the seam).
     std::vector<std::string>        m_recents;
     std::string                     m_recents_file;
+    // s052: the app's own choices between runs (settings.json beside recent.json).
+    core::AppSettings               m_settings;
+    std::string                     m_settings_file;
     Glib::RefPtr<Gio::Menu>         m_recents_menu;
     Glib::RefPtr<Gio::SimpleAction> m_recents_clear;
 

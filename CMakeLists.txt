@@ -27,6 +27,7 @@ configure_file(src/core/HyphenData.cpp.in ${CMAKE_CURRENT_BINARY_DIR}/HyphenData
 
 add_library(composix_core STATIC
     src/core/Recents.cpp
+    src/core/Settings.cpp
     src/core/TextMap.cpp
     # The SHORTCUT-REGISTRY paradigm: one list, two consumers (App wires accels
     # from it, ShortcutsDialog renders from it) so a key and its advertised row

@@ -259,3 +259,17 @@ menubutton.cx-preflight.cx-bad  > button { color: @cx_bad; }
 row.cx-item-row.cx-spread-top    { box-shadow: inset 3px 0 0 alpha(@cx_ink, 0.45); border-bottom-left-radius: 0; }
 row.cx-item-row.cx-spread-bottom { box-shadow: inset 3px 0 0 alpha(@cx_ink, 0.45); border-top-left-radius: 0; }
 row.cx-item-row.cx-spread-gap    { margin-top: 5px; }
+
+/* s052: tile sizes and groups (Colors) */
+.cx-tile-group {
+  font-weight: 700;
+  font-size: 0.85em;
+  color: @cx_dim;
+  letter-spacing: 0.04em;
+  padding: 14px 30px 2px;
+}
+.cx-tile-card.cx-tile-small { padding: 6px 8px 8px; border-radius: 10px; }
+flowbox.cx-tile-list { padding-top: 2px; padding-bottom: 8px; }
+flowbox.cx-tile-list > flowboxchild { border-radius: 9px; }
+.cx-tile-card.cx-tile-row  { padding: 5px 12px; border-radius: 9px; }
+.cx-tile-row .cx-tile-title { margin-top: 0; }

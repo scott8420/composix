@@ -39,6 +39,8 @@ void Shell::build_ui() {
     // (Cairn set it after, so the list loaded from "" and came up empty on
     // every launch -- found in s004.)
     m_recents_file = recents_file();
+    m_settings_file = (std::filesystem::path(m_recents_file).parent_path() / "settings.json").string();   // s052
+    m_settings = core::load_settings(m_settings_file);
     bind_actions();    // bindings
     bind_views();      // bindings
 

@@ -109,6 +109,23 @@ std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
     return out;
 }
 
+int swatch_uses(const Doc& d, const Doc::Id& sw) {
+    if (sw.empty()) return 0;
+    int n = 0;
+    for (const auto& id : d.ids_of<Frame>()) {
+        const auto& f = *d.as<Frame>(id);
+        n += (f.fill == sw) + (f.stroke == sw);
+    }
+    for (const auto& id : d.ids_of<Style>()) {
+        const auto& s = *d.as<Style>(id);
+        n += (s.color == sw) + (s.rule_above.color == sw) + (s.rule_below.color == sw);
+    }
+    for (const auto& id : d.ids_of<Story>())
+        for (const auto& p : d.as<Story>(id)->paras)
+            for (const auto& r : p.runs) n += r.local.color == sw;
+    return n;
+}
+
 int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& c, const std::string& label) {
     std::erase_if(hits, [&](const Hit& h) { return !d.as<Story>(h.story); });
     if (hits.empty()) return 0;

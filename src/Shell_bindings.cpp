@@ -179,6 +179,15 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_nav.signal_pick().connect(sigc::mem_fun(*this, &Shell::on_nav_pick));
     m_tiles.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_tiles_selection));
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
+    // s052: the Colors view's size, kept between runs.
+    {
+        const auto v = m_settings["colors.view"];
+        m_tiles.set_tile_size(v == "small" ? views::TileSize::Small : v == "list" ? views::TileSize::List : views::TileSize::Large);
+        m_tiles.signal_tile_size().connect([this](views::TileSize z) {
+            m_settings["colors.view"] = z == views::TileSize::Small ? "small" : z == views::TileSize::List ? "list" : "large";
+            core::save_settings(m_settings_file, m_settings);
+        });
+    }
     // s033: the story editor's edits refresh the other views.
     m_story_ed.signal_edited().connect([this] { set_dirty(true); queue_refresh(); });
     // s031: the navigator brackets them too.

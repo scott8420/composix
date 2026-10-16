@@ -456,8 +456,18 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         std::string badge = s.model == ColorModel::Spot ? "Spot" : (s.model == ColorModel::RGB ? "RGB" : "");
         std::string type = s.model == ColorModel::Spot ? "Spot"
                          : s.model == ColorModel::RGB  ? "Process (converts at output)" : "Process";
+        // s052: how much it's used, and a heading by kind -- spot inks
+        // apart, RGB apart (it converts at output: the CMYK report's list).
+        const int uses = doc::swatch_uses(d, sid);
+        std::string used = uses == 0 ? "Unused" : uses == 1 ? "1 place" : std::to_string(uses) + " places";
+        // Black is what text with no colour prints in, Paper the page itself.
+        if (s.name == "Black") used = uses == 0 ? "Text (default)" : "Text, " + used;
+        if (s.name == "Paper" && uses == 0) used = "The page";
+        const std::string group = s.model == ColorModel::Spot ? "Spot inks"
+                                : s.model == ColorModel::RGB  ? "RGB \u2014 converts at output"
+                                : s.model == ColorModel::Gray ? "Gray" : "Process (CMYK)";
         o.add({sid, G::Colors, s.name, badge, {K::Swatch, 1, 1, s.preview},
-               {{"Model", model_text(s.model)}, {"Value", swatch_value(s)}, {"Type", type}}});
+               {{"Model", model_text(s.model)}, {"Value", swatch_value(s)}, {"Used", used}, {"Type", type}}, group});
     }
 
     // ── Generated lists ─────────────────────────────────────────────────────

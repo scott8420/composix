@@ -7,6 +7,8 @@
 #include <gtkmm/widgetpaintable.h>
 #include <gtkmm/droptarget.h>
 #include <gtkmm/eventcontrollerkey.h>
+#include <gtkmm/gestureclick.h>
+#include <gtkmm/togglebutton.h>
 #include <gdkmm/contentprovider.h>
 #include <gtkmm/flowboxchild.h>
 #include <gtkmm/grid.h>
@@ -16,6 +18,7 @@
 #include <glibmm/main.h>
 
 #include <algorithm>
+#include <tuple>
 
 namespace composix::views {
 
@@ -24,6 +27,10 @@ constexpr int kThumbH = 150;
 constexpr int kCardW  = 176;   // every card the same width: the grid stays a grid
 constexpr int kFieldsOnTile = 3;
 constexpr int kSpreadW = 272;   // s028: two pages a card, and still two cards a row in the usual width
+// s052: the small tiles and the list's chip.
+constexpr int kSmallW = 96, kSmallH = 64;
+constexpr int kChip   = 28;
+constexpr int kListFields = 3;
 }
 
 TileView::TileView()
@@ -32,7 +39,10 @@ TileView::TileView()
       m_title("tiles.title"),
       m_count("tiles.count"),
       m_scroll("tiles.scroll"),
-      m_grid("tiles.grid") {
+      m_body("tiles.body", Gtk::Orientation::VERTICAL),
+      m_grid("tiles.grid"),
+      m_groups("tiles.groups", Gtk::Orientation::VERTICAL),
+      m_sizes("tiles.sizes", Gtk::Orientation::HORIZONTAL) {
     add_css_class("cx-tiles");
 
     m_head.add_css_class("cx-view-head");
@@ -42,28 +52,35 @@ TileView::TileView()
     m_count.set_valign(Gtk::Align::CENTER);
     m_head.append(m_title);
     m_head.append(m_count);
+
+    // s052: Large / Small / List (Colors).
+    m_sizes.add_css_class("linked");
+    m_sizes.set_hexpand(true);
+    m_sizes.set_halign(Gtk::Align::END);
+    m_sizes.set_valign(Gtk::Align::CENTER);
+    Gtk::ToggleButton* first = nullptr;
+    for (const auto& [z, key, label, tip] : {std::tuple{TileSize::Large, "large", "Large", "Large tiles"},
+                                             std::tuple{TileSize::Small, "small", "Small", "Small tiles"},
+                                             std::tuple{TileSize::List, "list", "List", "A swatch and its name, one a line"}}) {
+        auto b = Gtk::make_managed<Gtk::ToggleButton>(label);
+        b->set_name(std::string("tiles.size.") + key);
+        b->set_tooltip_text(tip);
+        if (first) b->set_group(*first); else first = b;
+        b->signal_toggled().connect([this, b, z = z] {
+            if (!b->get_active() || m_quiet || z == m_size) return;
+            m_size = z;
+            if (auto lg = log::get(log::Area::View)) lg->info("tiles: size {}", static_cast<int>(z));
+            if (m_shown) show_section(m_last, m_seg, selected());
+            m_size_sig.emit(z);
+        });
+        m_sizes.append(*b);
+    }
+    m_sizes.set_visible(false);
+    m_head.append(m_sizes);
     append(m_head);
 
-    m_grid.set_selection_mode(Gtk::SelectionMode::MULTIPLE);
-    m_grid.set_activate_on_single_click(false);
-    m_grid.set_homogeneous(true);
-    m_grid.set_valign(Gtk::Align::START);
-    m_grid.set_max_children_per_line(40);
-    m_grid.set_column_spacing(18);
-    m_grid.set_row_spacing(18);
-    m_grid.add_css_class("cx-tile-grid");
-    m_grid.signal_selected_children_changed().connect([this] {
-        if (m_quiet) return;
-        m_sel.emit(selected());
-    });
-    m_grid.signal_child_activated().connect([this](Gtk::FlowBoxChild* c) {
-        auto ids = selected();
-        const auto it = m_id_of.find(c);
-        if (it == m_id_of.end()) return;
-        if (std::find(ids.begin(), ids.end(), it->second.front()) == ids.end()) ids = it->second;
-        if (auto lg = log::get(log::Area::View)) lg->info("tiles open: {}", ids.size());
-        m_open.emit(ids);
-    });
+    setup_grid(m_grid);
+    m_grid.set_name("tiles.grid");
 
     // s014: Delete / Backspace on the selected tiles.
     auto keys = Gtk::EventControllerKey::create();
@@ -76,18 +93,105 @@ TileView::TileView()
     }, false);
     m_grid.add_controller(keys);
 
+    m_groups.set_visible(false);
+    m_body.append(m_grid);
+    m_body.append(m_groups);
     m_scroll.set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
     m_scroll.set_vexpand(true);
-    m_scroll.set_child(m_grid);
+    m_scroll.set_child(m_body);
     append(m_scroll);
+    sync_size_buttons();
+}
+
+void TileView::set_tile_size(TileSize z) {
+    m_size = z;
+    sync_size_buttons();
+}
+
+void TileView::sync_size_buttons() {
+    m_quiet = true;
+    int i = 0;
+    for (auto* c = m_sizes.get_first_child(); c; c = c->get_next_sibling(), ++i)
+        if (auto* b = dynamic_cast<Gtk::ToggleButton*>(c)) b->set_active(i == static_cast<int>(m_size));
+    m_quiet = false;
+}
+
+// A grid of tiles: multi-select, double-click opens. s052: several grids
+// (one per group) act as one -- a plain click in one clears the others.
+void TileView::setup_grid(Gtk::FlowBox& g) {
+    g.set_selection_mode(Gtk::SelectionMode::MULTIPLE);
+    g.set_activate_on_single_click(false);
+    g.set_homogeneous(true);
+    g.set_valign(Gtk::Align::START);
+    g.add_css_class("cx-tile-grid");
+    g.signal_selected_children_changed().connect([this] {
+        if (m_quiet) return;
+        m_sel.emit(selected());
+    });
+    auto click = Gtk::GestureClick::create();
+    click->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+    auto* cp = click.get();
+    click->signal_pressed().connect([this, &g, cp](int, double, double) {
+        const auto st = cp->get_current_event_state();
+        if ((st & (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK)) != Gdk::ModifierType{}) return;
+        for (auto* o : m_grids) if (o != &g) o->unselect_all();
+    });
+    g.add_controller(click);
+    g.signal_child_activated().connect([this](Gtk::FlowBoxChild* c) {
+        auto ids = selected();
+        const auto it = m_id_of.find(c);
+        if (it == m_id_of.end()) return;
+        if (std::find(ids.begin(), ids.end(), it->second.front()) == ids.end()) ids = it->second;
+        if (auto lg = log::get(log::Area::View)) lg->info("tiles open: {}", ids.size());
+        m_open.emit(ids);
+    });
 }
 
 void TileView::show_section(const core::Outline& o, core::Segment s, const std::vector<std::string>& keep) {
     m_quiet = true;
+    if (&o != &m_last) m_last = o;
+    m_seg = s;
+    m_shown = true;
     while (auto* c = m_grid.get_first_child()) m_grid.remove(*c);
+    while (auto* c = m_groups.get_first_child()) m_groups.remove(*c);
     m_id_of.clear();
+    m_grids.clear();
 
     const auto items = o.in(s);
+    // s052: Colors comes Large, Small or as a List, under its groups' headings.
+    const bool sized = s == core::Segment::Colors;
+    const TileSize z = sized ? m_size : TileSize::Large;
+    m_sizes.set_visible(sized);
+    bool grouped = false;
+    for (const auto* it : items) grouped = grouped || (sized && !it->group.empty());
+    m_grid.set_visible(!grouped);
+    m_groups.set_visible(grouped);
+    const auto fit = [z](Gtk::FlowBox& g) {
+        g.set_max_children_per_line(z == TileSize::List ? 1 : 40);
+        g.set_column_spacing(z == TileSize::Large ? 18 : 12);
+        g.set_row_spacing(z == TileSize::Large ? 18 : z == TileSize::Small ? 12 : 4);
+        if (z == TileSize::List) g.add_css_class("cx-tile-list"); else g.remove_css_class("cx-tile-list");
+    };
+    std::map<std::string, Gtk::FlowBox*> grid_of;
+    const auto grid_for = [&](const std::string& gname) -> Gtk::FlowBox& {
+        if (!grouped) return m_grid;
+        if (auto f = grid_of.find(gname); f != grid_of.end()) return *f->second;
+        auto head = Gtk::make_managed<Gtk::Label>(gname.empty() ? std::string("Other") : gname);
+        head->set_name("tiles.group." + std::to_string(grid_of.size()) + ".head");
+        head->add_css_class("cx-tile-group");
+        head->set_xalign(0.0f);
+        m_groups.append(*head);
+        auto g = Gtk::make_managed<Gtk::FlowBox>();
+        g->set_name("tiles.group." + std::to_string(grid_of.size()));
+        setup_grid(*g);
+        fit(*g);
+        m_groups.append(*g);
+        m_grids.push_back(g);
+        grid_of[gname] = g;
+        return *g;
+    };
+    fit(m_grid);
+    if (!grouped) m_grids.push_back(&m_grid);
     m_reorder = s == core::Segment::Pages;
     m_title.set_text(core::segment_info(s).title);
     m_count.set_text(std::to_string(items.size()));
@@ -130,67 +234,139 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
         child->add_css_class("cx-tile");
         if (flag) child->add_css_class("cx-flagged");
 
-        auto card = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
-        card->add_css_class("cx-tile-card");
-
-        // Thumbnail, with the badge overlaid top-right.
-        const int tw = spreads ? kSpreadW : kCardW;   // a spread's card holds two pages
-        auto overlay = Gtk::make_managed<Gtk::Overlay>();
-        auto area = Gtk::make_managed<Gtk::DrawingArea>();
-        area->set_name("tiles.tile." + tile_id + ".thumb");
-        area->add_css_class("cx-thumb");
-        area->set_content_width(tw);
-        area->set_content_height(kThumbH);
-        area->set_draw_func([area, thumbs](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
-            if (thumbs.size() == 1) paint_thumb(cr, *area, w, h, thumbs.front());
-            else paint_spread(cr, *area, w, h, thumbs);
-        });
-        overlay->set_child(*area);
-        if (!badge.empty()) {
+        Gtk::Box* card = nullptr;
+        if (z == TileSize::List) {   // s052: chip, name, its leading values, badge
+            card = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 12);
+            card->add_css_class("cx-tile-card");
+            card->add_css_class("cx-tile-row");
+            auto area = Gtk::make_managed<Gtk::DrawingArea>();
+            area->set_name("tiles.tile." + tile_id + ".thumb");
+            area->set_content_width(kChip);
+            area->set_content_height(kChip);
+            area->set_valign(Gtk::Align::CENTER);
+            area->set_draw_func([area, thumbs](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+                paint_thumb(cr, *area, w, h, thumbs.front());
+            });
+            card->append(*area);
+            auto title = Gtk::make_managed<Gtk::Label>(title_text);
+            title->add_css_class("cx-tile-title");
+            title->set_xalign(0.0f);
+            title->set_hexpand(true);
+            title->set_ellipsize(Pango::EllipsizeMode::END);
+            title->set_width_chars(14);
+            card->append(*title);
+            int k = 0;
+            for (const auto& f : it->fields) {
+                if (k++ == kListFields) break;
+                auto v = Gtk::make_managed<Gtk::Label>(f.value);
+                v->add_css_class("cx-field-value");
+                v->add_css_class("cx-tile-meta");
+                v->set_tooltip_text(f.label);
+                v->set_xalign(0.0f);
+                v->set_width_chars(k == 2 ? 18 : 10);
+                v->set_max_width_chars(k == 2 ? 18 : 10);
+                v->set_ellipsize(Pango::EllipsizeMode::END);
+                card->append(*v);
+            }
             auto b = Gtk::make_managed<Gtk::Label>(badge);
             b->add_css_class("cx-badge");
             if (flag) b->add_css_class("cx-warn");
-            b->set_halign(Gtk::Align::END);
-            b->set_valign(Gtk::Align::START);
-            b->set_margin(6);
-            overlay->add_overlay(*b);
-        }
-        card->append(*overlay);
+            b->set_valign(Gtk::Align::CENTER);
+            b->set_width_chars(5);
+            b->set_opacity(badge.empty() ? 0 : 1);
+            card->append(*b);
+        } else if (z == TileSize::Small) {   // s052: the thumbnail and the name
+            card = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 2);
+            card->add_css_class("cx-tile-card");
+            card->add_css_class("cx-tile-small");
+            auto overlay = Gtk::make_managed<Gtk::Overlay>();
+            auto area = Gtk::make_managed<Gtk::DrawingArea>();
+            area->set_name("tiles.tile." + tile_id + ".thumb");
+            area->add_css_class("cx-thumb");
+            area->set_content_width(kSmallW);
+            area->set_content_height(kSmallH);
+            area->set_draw_func([area, thumbs](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+                paint_thumb(cr, *area, w, h, thumbs.front());
+            });
+            overlay->set_child(*area);
+            if (!badge.empty()) {
+                auto b = Gtk::make_managed<Gtk::Label>(badge);
+                b->add_css_class("cx-badge");
+                b->set_halign(Gtk::Align::END);
+                b->set_valign(Gtk::Align::START);
+                overlay->add_overlay(*b);
+            }
+            card->append(*overlay);
+            auto title = Gtk::make_managed<Gtk::Label>(title_text);
+            title->add_css_class("cx-tile-title");
+            title->set_xalign(0.0f);
+            title->set_ellipsize(Pango::EllipsizeMode::END);
+            title->set_max_width_chars(1);
+            card->append(*title);
+            card->set_size_request(kSmallW, -1);
+        } else {
+            card = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+            card->add_css_class("cx-tile-card");
 
-        auto title = Gtk::make_managed<Gtk::Label>(title_text);
-        title->add_css_class("cx-tile-title");
-        title->set_xalign(0.0f);
-        title->set_ellipsize(Pango::EllipsizeMode::END);
-        title->set_max_width_chars(1);   // let the card's width decide
-        title->set_hexpand(true);
-        card->append(*title);
+            // Thumbnail, with the badge overlaid top-right.
+            const int tw = spreads ? kSpreadW : kCardW;   // a spread's card holds two pages
+            auto overlay = Gtk::make_managed<Gtk::Overlay>();
+            auto area = Gtk::make_managed<Gtk::DrawingArea>();
+            area->set_name("tiles.tile." + tile_id + ".thumb");
+            area->add_css_class("cx-thumb");
+            area->set_content_width(tw);
+            area->set_content_height(kThumbH);
+            area->set_draw_func([area, thumbs](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+                if (thumbs.size() == 1) paint_thumb(cr, *area, w, h, thumbs.front());
+                else paint_spread(cr, *area, w, h, thumbs);
+            });
+            overlay->set_child(*area);
+            if (!badge.empty()) {
+                auto b = Gtk::make_managed<Gtk::Label>(badge);
+                b->add_css_class("cx-badge");
+                if (flag) b->add_css_class("cx-warn");
+                b->set_halign(Gtk::Align::END);
+                b->set_valign(Gtk::Align::START);
+                b->set_margin(6);
+                overlay->add_overlay(*b);
+            }
+            card->append(*overlay);
 
-        auto meta = Gtk::make_managed<Gtk::Grid>();
-        meta->add_css_class("cx-tile-meta");
-        meta->set_column_spacing(8);
-        int row = 0;
-        for (const auto& f : it->fields) {
-            if (row == kFieldsOnTile) break;
-            // A spread: each page's value, when they differ ("B-Body / C-Chapter").
-            std::string value = f.value;
-            for (std::size_t k = 1; k < group.size(); ++k)
-                for (const auto& g : group[k]->fields)
-                    if (g.label == f.label && g.value != f.value) value += " / " + g.value;
-            auto l = Gtk::make_managed<Gtk::Label>(f.label);
-            l->add_css_class("cx-field-label");
-            l->set_xalign(0.0f);
-            auto v = Gtk::make_managed<Gtk::Label>(value);
-            v->add_css_class("cx-field-value");
-            v->set_xalign(0.0f);
-            v->set_hexpand(true);
-            v->set_ellipsize(Pango::EllipsizeMode::END);
-            v->set_max_width_chars(1);
-            meta->attach(*l, 0, row);
-            meta->attach(*v, 1, row);
-            ++row;
+            auto title = Gtk::make_managed<Gtk::Label>(title_text);
+            title->add_css_class("cx-tile-title");
+            title->set_xalign(0.0f);
+            title->set_ellipsize(Pango::EllipsizeMode::END);
+            title->set_max_width_chars(1);   // let the card's width decide
+            title->set_hexpand(true);
+            card->append(*title);
+
+            auto meta = Gtk::make_managed<Gtk::Grid>();
+            meta->add_css_class("cx-tile-meta");
+            meta->set_column_spacing(8);
+            int row = 0;
+            for (const auto& f : it->fields) {
+                if (row == kFieldsOnTile) break;
+                // A spread: each page's value, when they differ ("B-Body / C-Chapter").
+                std::string value = f.value;
+                for (std::size_t k = 1; k < group.size(); ++k)
+                    for (const auto& g : group[k]->fields)
+                        if (g.label == f.label && g.value != f.value) value += " / " + g.value;
+                auto l = Gtk::make_managed<Gtk::Label>(f.label);
+                l->add_css_class("cx-field-label");
+                l->set_xalign(0.0f);
+                auto v = Gtk::make_managed<Gtk::Label>(value);
+                v->add_css_class("cx-field-value");
+                v->set_xalign(0.0f);
+                v->set_hexpand(true);
+                v->set_ellipsize(Pango::EllipsizeMode::END);
+                v->set_max_width_chars(1);
+                meta->attach(*l, 0, row);
+                meta->attach(*v, 1, row);
+                ++row;
+            }
+            card->append(*meta);
+            card->set_size_request(tw, -1);
         }
-        card->append(*meta);
-        card->set_size_request(tw, -1);
 
         child->set_child(*card);
         if (m_reorder) {
@@ -238,11 +414,12 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
             }, false);
             child->add_controller(drop);
         }
-        m_grid.append(*child);
+        auto& grid = grid_for(it->group);
+        grid.append(*child);
         m_id_of[child] = gids;
         bool keep_it = false;
         for (const auto& g : gids) keep_it = keep_it || std::find(keep.begin(), keep.end(), g) != keep.end();
-        if (keep_it) m_grid.select_child(*child);
+        if (keep_it) grid.select_child(*child);
     }
     m_quiet = false;
     if (auto lg = log::get(log::Area::View))
@@ -251,11 +428,12 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
 
 std::vector<std::string> TileView::selected() const {
     std::vector<std::string> out;
-    for (auto* c = m_grid.get_first_child(); c; c = c->get_next_sibling()) {
-        auto* fc = dynamic_cast<const Gtk::FlowBoxChild*>(c);
-        if (!fc || !fc->is_selected()) continue;
-        if (auto it = m_id_of.find(fc); it != m_id_of.end()) out.insert(out.end(), it->second.begin(), it->second.end());
-    }
+    for (const auto* g : m_grids)
+        for (auto* c = g->get_first_child(); c; c = c->get_next_sibling()) {
+            auto* fc = dynamic_cast<const Gtk::FlowBoxChild*>(c);
+            if (!fc || !fc->is_selected()) continue;
+            if (auto it = m_id_of.find(fc); it != m_id_of.end()) out.insert(out.end(), it->second.begin(), it->second.end());
+        }
     return out;
 }
 

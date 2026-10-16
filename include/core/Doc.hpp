@@ -664,6 +664,11 @@ struct Verb {
 };
 const std::vector<Verb>& verbs();
 
+// s052: how many places use a swatch -- frames' fill / stroke, styles'
+// colour and rules, words' local colour (each frame, style or run once
+// per use). 0 = unused.
+int swatch_uses(const Doc& d, const Doc::Id& swatch);
+
 // ── Find / Change (s022) ────────────────────────────────────────────────────
 // What to look for: text (in one paragraph), optionally only in a
 // paragraph style and / or wholly in a character style. No text and a
