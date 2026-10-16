@@ -109,9 +109,28 @@ void Shell::build_find_bar() {  // zone
     r3->append(*apl);
     r3->append(*m_find_apply);
 
+    // s056: how Find reads, and where it looks.
+    auto r4 = row("find.row4");
+    auto mdl = Gtk::make_managed<Gtk::Label>("As");
+    mdl->add_css_class("cx-field-label");
+    m_find_mode = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Text", "Wildcards", "Regex"}));
+    m_find_mode->set_name("find.mode");
+    m_find_mode->set_tooltip_text("Wildcards: ^9 digit, ^$ letter, ^w space, ^? any character.\n"
+                                  "Regex: a regular expression; Change to takes $1, $2 ... and $& (the whole match).");
+    auto scl = Gtk::make_managed<Gtk::Label>("Search");
+    scl->add_css_class("cx-field-label");
+    m_find_scope = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Document", "This story", "Selection"}));
+    m_find_scope->set_name("find.scope");
+    m_find_scope->set_tooltip_text("This story / Selection: the text you were in (and had selected) when you opened Find");
+    r4->append(*mdl);
+    r4->append(*m_find_mode);
+    r4->append(*scl);
+    r4->append(*m_find_scope);
+
     bar->append(*r1);
     bar->append(*r2);
     bar->append(*r3);
+    bar->append(*r4);
     m_find_rev->set_child(*bar);
     m_main_over.add_overlay(*m_find_rev);
 
@@ -126,6 +145,8 @@ void Shell::build_find_bar() {  // zone
     m_find_word->signal_toggled().connect(again);
     m_find_in->property_selected().signal_changed().connect(again);
     m_find_format->property_selected().signal_changed().connect(again);
+    m_find_mode->property_selected().signal_changed().connect(again);    // s056
+    m_find_scope->property_selected().signal_changed().connect(again);
     m_find_apply->property_selected().signal_changed().connect(again);   // s051: what's already in it drops out
     m_find_what->signal_activate().connect([this] { find_go(+1); });
     m_find_with->signal_activate().connect([this] { find_change(false); });
@@ -161,11 +182,20 @@ void Shell::on_find() {  // handler
         }
     m_find_in->set_model(Gtk::StringList::create(in));
     m_find_apply->set_model(Gtk::StringList::create(apply));
-    // Words selected on the canvas start the search.
+    // Words selected on the canvas start the search. s056: the story and
+    // selection are kept for This story / Selection; a selection across
+    // paragraphs is a place to look, not a thing to find.
     auto& cv = m_canvas_view.canvas();
+    m_find_story.clear();
+    m_find_from = m_find_to = {};
     if (cv.editing()) {
         const auto [a, b] = cv.edit_range();
-        if (a.para == b.para && a != b)
+        m_find_story = cv.edit_story_id();
+        m_find_from = a;
+        m_find_to = b;
+        if (a.para != b.para) m_find_scope->set_selected(2);
+        else if (m_find_scope->get_selected() == 2 && a == b) m_find_scope->set_selected(1);
+        if (a.para == b.para && a != b && m_find_scope->get_selected() != 2)
             if (const auto* st = m_doc.as<core::Story>(cv.edit_story_id()))
                 m_find_what->set_text(st->paras[static_cast<std::size_t>(a.para)].text.substr(
                     static_cast<std::size_t>(a.byte), static_cast<std::size_t>(b.byte - a.byte)));
@@ -186,6 +216,23 @@ void Shell::find_refresh() {  // helper
         const auto& id = m_find_styles[i - 1];
         (m_doc.as<core::Style>(id)->kind == core::StyleKind::Paragraph ? f.pstyle : f.cstyle) = id;
     }
+    // s056: how it reads, where it looks.
+    f.mode = static_cast<core::doc::FindOpts::Mode>(std::min(2u, m_find_mode->get_selected()));
+    const auto scope = m_find_scope->get_selected();
+    if (scope >= 1) f.story = m_find_story.empty() ? std::string("-") : m_find_story;   // "-": nothing to search
+    if (scope == 2) {
+        f.in_range = true;
+        f.from = m_find_from;
+        f.to = m_find_to;
+    }
+    {
+        std::string why;
+        const bool ok = core::doc::find_pattern_ok(f, &why);
+        if (ok) m_find_what->remove_css_class("error"); else m_find_what->add_css_class("error");
+        m_find_bad = ok ? std::string{} : "Pattern: " + why;
+        if (scope >= 1 && m_find_story.empty()) m_find_bad = "Click into text, then Ctrl+F";
+        else if (scope == 2 && m_find_from == m_find_to) m_find_bad = "Select text, then Ctrl+F";
+    }
     const auto fm = m_find_format->get_selected();   // s051
     f.bold = fm == 1 || fm == 3;
     f.italic = fm == 2 || fm == 3;
@@ -204,6 +251,7 @@ void Shell::find_status(const std::string& extra) {  // helper
     else if (m_hits.empty()) t = "No matches";
     else if (m_hit < 0) t = std::to_string(m_hits.size()) + (m_hits.size() == 1 ? " match" : " matches");
     else t = std::to_string(m_hit + 1) + " of " + std::to_string(m_hits.size());
+    if (!m_find_bad.empty() && m_hits.empty() && !t.empty()) t = m_find_bad;   // s056
     if (!extra.empty()) t = extra;
     m_find_count->set_text(t);
 }
@@ -252,6 +300,7 @@ void Shell::find_change(bool all) {  // helper
         const auto& id = m_find_styles[i - 1];
         (m_doc.as<core::Style>(id)->kind == core::StyleKind::Paragraph ? c.pstyle : c.cstyle) = id;
     }
+    c.expand = m_find_mode->get_selected() != 0;   // s056: $1 ... from the pattern
     // s051: an empty "Change to" with a style to apply keeps the words (it
     // deleted them before -- the style then had nothing to go on).
     c.set_text = !c.with.empty() || (c.pstyle.empty() && c.cstyle.empty());
@@ -272,7 +321,8 @@ void Shell::find_change(bool all) {  // helper
     const auto h = m_hits[static_cast<std::size_t>(m_hit)];
     core::doc::change_hits(m_journal, m_doc, {h}, c, "Change");
     // On to the next one after what was put there.
-    const int end = c.set_text ? h.a.byte + static_cast<int>(c.with.size()) : (h.b.para == h.a.para ? h.b.byte : 0);
+    const auto put = c.expand ? core::doc::expand_groups(c.with, h.groups) : c.with;   // s056
+    const int end = c.set_text ? h.a.byte + static_cast<int>(put.size()) : (h.b.para == h.a.para ? h.b.byte : 0);
     m_hits_rev = ~0ull;
     find_refresh();
     int next = -1, last_of_story = -1;

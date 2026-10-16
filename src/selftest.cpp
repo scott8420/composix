@@ -2242,6 +2242,61 @@ int main() {
     }
 
     {
+        std::cout << "\n-- find: patterns + scope (s056) --\n";
+        namespace D = core::doc;
+        using M = D::FindOpts::Mode;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        load_plain(d);
+        {
+            core::Doc::Loading load(d);
+            core::Story st;
+            st.name = "Patterns";
+            st.paras = {{"style.1", "Call 555-1234 or 555-9876.", {}},
+                        {"style.1", "Caf\u00e9 cr\u00e8me, na\u00efve r\u00e9sum\u00e9.", {}},
+                        {"style.1", "Chapter 12 and chapter 3.", {}}};
+            d.put("story.f", st);
+        }
+        const auto find = [&](D::FindOpts f) { f.story = f.story.empty() ? "story.f" : f.story; return D::find_all(d, f); };
+        auto h = find({.what = "^9^9^9-^9^9^9^9", .mode = M::Wildcards});
+        check("wildcards: ^9 a digit", h.size() == 2 && h[0].a == core::TextPos{0, 5} && h[0].b == core::TextPos{0, 13});
+        h = find({.what = "^$^$^$^$", .whole_word = true, .mode = M::Wildcards});
+        check("wildcards: ^$ a letter -- accented ones too, by character",
+              std::any_of(h.begin(), h.end(), [](const D::Hit& x) { return x.a == core::TextPos{1, 0} && x.b == core::TextPos{1, 5}; }) &&
+              h.front().a == core::TextPos{0, 0});   // "Call" too
+        h = find({.what = "Caf^?", .match_case = true, .mode = M::Wildcards});
+        check("wildcards: ^? one character (two bytes here)", h.size() == 1 && h[0].b == core::TextPos{1, 5});
+        check("wildcards: the rest is plain (a dot is a dot)", find({.what = "^9.", .mode = M::Wildcards}).size() == 2 &&
+                                                               find({.what = "^9", .mode = M::Text}).empty());
+        h = find({.what = "chapter (\\d+)", .mode = M::Regex});
+        check("regex: matches, case folded, groups kept", h.size() == 2 && h[0].groups.size() == 2 && h[0].groups[1] == "12" &&
+                                                           h[1].groups[1] == "3");
+        check("regex: match case", find({.what = "chapter (\\d+)", .match_case = true, .mode = M::Regex}).size() == 1);
+        std::string why;
+        check("regex: a bad pattern says why, finds nothing",
+              !D::find_pattern_ok({.what = "(abc", .mode = M::Regex}, &why) && why == "unbalanced ( )" &&
+              find({.what = "(abc", .mode = M::Regex}).empty() && D::find_pattern_ok({.what = "(abc"}));
+        check("regex: an empty match finds nothing", find({.what = "x*", .mode = M::Regex}).empty());
+        check("groups: $1 $& $$, unknown left", D::expand_groups("$$1 $& $9 $2", {"ab", "a"}) == "$1 ab $9 $2");
+        const auto steps = j.size();
+        const int n = D::change_hits(j, d, h, {.with = "Ch. $1", .expand = true}, "Change All");
+        check("change: groups put in, one step", n == 2 && j.size() == steps + 1 &&
+                                                 d.as<core::Story>("story.f")->paras[2].text == "Ch. 12 and Ch. 3.");
+        j.undo();
+        // Scope.
+        check("scope: one story", find({.what = "the", .story = "story.1"}).size() > 0 && find({.what = "the"}).empty());
+        check("scope: every story", D::find_all(d, {.what = "555"}).size() == 2);
+        h = find({.what = "^9", .mode = M::Wildcards, .in_range = true, .from = {0, 5}, .to = {0, 8}});
+        check("scope: a selection -- only inside it", h.size() == 3 && h.back().b == core::TextPos{0, 8});
+        h = find({.what = "chapter", .in_range = true, .from = {1, 0}, .to = {2, 7}});
+        check("scope: a selection across paragraphs", h.size() == 1 && h[0].a == core::TextPos{2, 0});
+        h = find({.pstyle = "style.1", .in_range = true, .from = {0, 20}, .to = {1, 4}});
+        check("scope: a style alone -- each paragraph's part in it", h.size() == 2 && h[0].a == core::TextPos{0, 20} &&
+                                                                     h[1].b == core::TextPos{1, 4});
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

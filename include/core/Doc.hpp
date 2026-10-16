@@ -709,12 +709,31 @@ struct FindOpts {
     // already in this character style (what Apply is about to put on).
     bool        bold = false, italic = false;
     Doc::Id     skip_cstyle;
+    // s056: how `what` reads -- plain text; Wildcards (^9 a digit, ^$ a
+    // letter, ^w white space, ^? any character, ^^ a caret; the rest
+    // plain); or a regular expression (ECMAScript; "." is one character;
+    // case folding ASCII only). A pattern finds within one paragraph.
+    enum class Mode { Text, Wildcards, Regex };
+    Mode        mode = Mode::Text;
+    // s056: where -- every story (""), one story, or a stretch of it
+    // (`from` .. `to`, when `in_range`).
+    Doc::Id     story;
+    bool        in_range = false;
+    TextPos     from, to;
 };
 struct Hit {
     Doc::Id story;
     TextPos a, b;
+    // s056: a pattern's groups ($0 the whole match, $1 ...), for Change to.
+    std::vector<std::string> groups;
     bool operator==(const Hit&) const = default;
 };
+// s056: is `f.what` a pattern that reads (Wildcards / Regex)? `err` says
+// what's wrong with it. Plain text always reads.
+bool find_pattern_ok(const FindOpts& f, std::string* err = nullptr);
+// s056: `with` with a hit's groups put in: $1..$9, $& (the whole match),
+// $$ (a dollar). A group the pattern hasn't is left as written.
+std::string expand_groups(const std::string& with, const std::vector<std::string>& groups);
 // Every hit, in reading order: stories by the first page their thread
 // starts on (masters', then unplaced, after), then by position.
 std::vector<Hit> find_all(const Doc& d, const FindOpts& f);
@@ -729,6 +748,8 @@ struct ChangeOpts {
     // what the style says goes, so the style alone carries it (a later
     // change to the style is seen on those words too).
     bool        fold_local = true;
+    // s056: `with` takes the hit's groups ($1 ...) -- a pattern's Change to.
+    bool        expand = false;
 };
 // Change the hits -- ONE step ("Change" / "Change All (n)"). The hits are
 // done last to first, so the earlier ones keep their places. Returns how

@@ -243,6 +243,11 @@ private:
     Gtk::DropDown*                   m_find_in = nullptr;
     Gtk::DropDown*                   m_find_apply = nullptr;
     Gtk::DropDown*                   m_find_format = nullptr;   // s051: Any / Bold / Italic / Bold Italic
+    Gtk::DropDown*                   m_find_mode = nullptr;     // s056: Text / Wildcards / Regex
+    Gtk::DropDown*                   m_find_scope = nullptr;    // s056: Document / This story / Selection
+    std::string                      m_find_story;              // s056: the story and selection when Find opened
+    core::TextPos                    m_find_from, m_find_to;
+    std::string                      m_find_bad;                // s056: why nothing can be found (a bad pattern ...)
     Gtk::Label*                      m_find_count = nullptr;
     std::vector<std::string>         m_find_styles;   // the dropdowns' ids after "Any" / "Leave"
     std::vector<core::doc::Hit>      m_hits;
