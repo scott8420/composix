@@ -145,6 +145,7 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
 
 void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core::Doc::Id& on_page) {
     for (const auto& fid : c.d.frames_on(owner)) {
+        if (owner != on_page && !core::master_item_on(c.d, fid, on_page)) continue;   // s025
         const auto& f = *c.d.as<core::Frame>(fid);
         pg.save();
         if (f.opacity < 1) pg.set_alpha(f.opacity, f.opacity);   // s021: fill, content and stroke alike

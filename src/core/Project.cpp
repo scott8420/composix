@@ -392,6 +392,13 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             }
         }
         fields.push_back({"Opacity", tint_text(f->opacity), "opacity", tint_choices(0)});   // s021
+        // s025: a master's item shows on both sides, or one; a page's copy
+        // of one says so and can go back.
+        if (d.as<Master>(f->owner)) {
+            static const char* sides[] = {"Every page", "Right pages", "Left pages"};
+            fields.push_back({"Shows on", sides[static_cast<int>(f->side)], "side",
+                              {{"0", "Every page"}, {"1", "Right pages"}, {"2", "Left pages"}}});
+        }
         {   // s018: text wrap -- how this frame pushes OTHER frames' text aside.
             static const char* names[] = {"None", "Around", "Jump"};
             fields.push_back({"Wrap", names[static_cast<int>(f->wrap)], "wrap", {{"0", "None"}, {"1", "Around"}, {"2", "Jump"}}});
@@ -456,6 +463,14 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             if (a && link_status(*a, dir) == LinkStatus::Modified) act.choices.push_back({"update", "Update"});
             act.buttons = true;
             fields.push_back(act);
+        }
+        // s025: last -- what it overrides, and the way back.
+        if (!f->overrides.empty()) {
+            const auto* mf = d.as<Frame>(f->overrides);
+            fields.push_back({"Overrides", mf ? master_label(d, mf->owner) + " item" : "a removed master item"});
+            Field back{"", "", "override", {{"remove", "Remove override"}}};
+            back.buttons = true;
+            fields.push_back(back);
         }
         out.push_back({id, Segment::Pages, title, "", {}, fields});
     }

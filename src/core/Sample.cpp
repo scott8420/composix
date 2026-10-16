@@ -142,7 +142,27 @@ void load_sample(Doc& d) {
     d.put("story.5", Story{"Folio (front)", {{"style.7", kMarkPage}}});
     d.put("story.6", Story{"Folio (body)", {{"style.7", kMarkPage}}});
     d.put("frame.12", Frame{"master.1", FrameKind::Text, m, s.trim_h - 0.5 * in, tw, 0.25 * in, 0, 1, "story.5", "", ""});
-    d.put("frame.13", Frame{"master.2", FrameKind::Text, m, s.trim_h - 0.5 * in, tw, 0.25 * in, 0, 1, "story.6", "", ""});
+    {   // s025: the body master is a facing one -- folios at the outside
+        // corners: the right-hand pages' at the right, the left-hand pages'
+        // at the left (each frame shows on its side's pages only).
+        Frame r{"master.2", FrameKind::Text, m + tw - 0.5 * in, s.trim_h - 0.5 * in, 0.5 * in, 0.25 * in, 0, 1, "story.6", "", ""};
+        r.side = Side::Right;
+        d.put("frame.13", r);
+        Frame l{"master.2", FrameKind::Text, m, s.trim_h - 0.5 * in, 0.5 * in, 0.25 * in, 0, 2, "story.7", "", ""};
+        l.side = Side::Left;
+        d.put("story.7", Story{"Folio (body, left)", {{"style.7", kMarkPage}}});
+        d.put("frame.14", l);
+        // The chapter opener's folio, overridden on its page: centred there.
+        Frame o = r;
+        o.owner = pg[4];
+        o.overrides = "frame.13";
+        o.side = Side::Any;
+        o.x = m;
+        o.w = tw;
+        o.story = "story.8";
+        d.put("story.8", Story{"Folio (page 1)", {{"style.7", kMarkPage}}});
+        d.put("frame.15", o);
+    }
 
     // ── guides on the body master: the margins (s006) ──────────────────────
     d.put("guide.1", Guide{"master.2", true, m});

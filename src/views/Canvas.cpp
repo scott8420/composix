@@ -371,7 +371,8 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
     if (!p.master)
         for (const auto& m : core::master_chain(m_doc, p.id))
             for (const auto& fid : m_doc.frames_on(m))
-                draw_frame(cr, *m_doc.as<core::Frame>(fid), p.r.x, p.r.y, true, fid, p.id);
+                if (core::master_item_on(m_doc, fid, p.id))   // s025: its side, not overridden here
+                    draw_frame(cr, *m_doc.as<core::Frame>(fid), p.r.x, p.r.y, true, fid, p.id);
     for (const auto& fid : m_doc.frames_on(p.id))
         draw_frame(cr, *m_doc.as<core::Frame>(fid), p.r.x, p.r.y, false, fid, p.id);
 
@@ -824,6 +825,23 @@ void Canvas::on_drag_begin(double x, double y) {
             return;
         }
     }
+    // s025: Ctrl+Shift+click a master's item on a page: override it there --
+    // the page's own copy, picked (InDesign's gesture).
+    if (m_mods_ctrl && m_mods_shift) {
+        core::Doc::Id page;
+        const auto mf = core::hit_master_item(m_doc, m_placed, dx, dy, 3 / m_vp.scale(), &page);
+        if (!mf.empty() && core::hit_frame(m_doc, m_placed, dx, dy, 0).empty()) {
+            const auto made = core::doc::override_master_item(m_journal, m_doc, page, mf);
+            if (!made.empty()) {
+                relayout();
+                pick({made});
+                m_sig_edited.emit();
+                if (auto lg = log::get(log::Area::View)) lg->info("override {} on {} -> {}", mf, page, made);
+            }
+            m_drag = Drag::None;
+            return;
+        }
+    }
     const auto hit = core::hit_frame(m_doc, m_placed, dx, dy, 3 / m_vp.scale());
     const bool adding = m_mods_shift;
     if (!hit.empty()) {
@@ -855,6 +873,7 @@ void Canvas::read_mods() {
     const auto st = m_gdrag->get_current_event_state();
     m_mods_shift = (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
     m_mods_alt   = (st & Gdk::ModifierType::ALT_MASK) == Gdk::ModifierType::ALT_MASK;
+    m_mods_ctrl  = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
 }
 
 void Canvas::on_drag_update(double ox, double oy) {

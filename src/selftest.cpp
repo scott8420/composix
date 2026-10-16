@@ -1913,6 +1913,49 @@ int main() {
                   return w.rfind("Overset text: Chapters", 0) == 0; }));
     }
 
+    {
+        std::cout << "\n-- master overrides --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("sides: the right folio on right pages only", !core::master_item_on(d, "frame.13", "page.6") &&
+                                                            core::master_item_on(d, "frame.13", "page.7") &&
+                                                            core::master_item_on(d, "frame.14", "page.6") &&
+                                                            !core::master_item_on(d, "frame.14", "page.7"));
+        check("override: the chapter opener's own folio hides the master's", !core::master_item_on(d, "frame.13", "page.5"));
+        L::FlowCache flows;
+        const auto k5 = L::page_key(d, flows, "page.5");
+        const auto has_rec = [](const L::PageKey& k, const std::string& id) {
+            return std::any_of(k.recs.begin(), k.recs.end(), [&](const auto& r) { return r.first == id; });
+        };
+        check("drawn: the page's copy, not the master's", has_rec(k5, "frame.15") && !has_rec(k5, "frame.13") && !has_rec(k5, "frame.14"));
+        const auto steps = j.size();
+        const auto made = core::doc::override_master_item(j, d, "page.7", "frame.13");
+        const auto* mf = d.as<core::Frame>(made);
+        check("override: a page copy, one step", mf && mf->owner == "page.7" && mf->overrides == "frame.13" && j.size() == steps + 1);
+        check("override: its own story, the same words", mf && mf->story != "story.6" &&
+                                                         d.as<core::Story>(mf->story)->paras[0].text == core::kMarkPage);
+        check("override: the master's hidden there", !core::master_item_on(d, "frame.13", "page.7"));
+        check("override: not twice, not where it doesn't show", core::doc::override_master_item(j, d, "page.7", "frame.13").empty() &&
+                                                                core::doc::override_master_item(j, d, "page.6", "frame.13").empty());
+        const std::string story = mf ? mf->story : "";
+        check("remove override: back to the master's, its story gone", core::doc::remove_overrides(j, d, {made}) &&
+                                                                       !d.as<core::Frame>(made) && !d.as<core::Story>(story) &&
+                                                                       core::master_item_on(d, "frame.13", "page.7"));
+        j.undo();
+        check("remove override: undo, the copy back", d.as<core::Frame>(made) && !core::master_item_on(d, "frame.13", "page.7"));
+        // Ctrl+Shift+click finds the master's item under the pointer on a page.
+        const auto pl = core::layout_pages(d, {"page.9"});
+        const auto* r = d.as<core::Frame>("frame.13");
+        core::Doc::Id on;
+        check("hit: a master item on a page", core::hit_master_item(d, pl, pl[0].r.x + r->x + 5, pl[0].r.y + r->y + 5, 1, &on) == "frame.13" &&
+                                              on == "page.9");
+        check("hit: not on the wrong side", core::hit_master_item(d, core::layout_pages(d, {"page.8"}),
+                                                                  pl[0].r.x + r->x + 5, pl[0].r.y + r->y + 5, 1, &on).empty());
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

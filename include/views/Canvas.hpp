@@ -165,6 +165,7 @@ private:
     core::Rect  m_marquee;                     // screen
     bool        m_space = false;
     bool        m_mods_shift = false, m_mods_alt = false;   // read from the drag's events
+    bool        m_mods_ctrl = false;                       // s025: Ctrl+Shift+click overrides a master item
     Glib::RefPtr<Gtk::GestureDrag> m_gdrag;
     Glib::RefPtr<Gtk::EventControllerScroll> m_gscroll;
     double      m_mx = 0, m_my = 0;            // the pointer, screen

@@ -833,6 +833,52 @@ bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     });
 }
 
+Doc::Id override_master_item(DocJournal& j, Doc& d, const Doc::Id& page, const Doc::Id& mf) {
+    const auto* f = d.as<Frame>(mf);
+    if (!f || !d.as<Page>(page) || !d.as<Master>(f->owner)) return {};
+    const auto chain = master_chain(d, page);
+    if (std::find(chain.begin(), chain.end(), f->owner) == chain.end() || !master_item_on(d, mf, page)) return {};
+    Doc::Id made;
+    j.run("Override master item", {}, [&] {
+        std::vector<Doc::Id> ids;   // what's made: the step's records
+        Frame c = *d.as<Frame>(mf);
+        c.owner = page;
+        c.overrides = mf;
+        c.side = Side::Any;
+        c.next.clear();
+        c.z = 0;
+        for (const auto& o : d.frames_on(page)) c.z = std::max(c.z, d.as<Frame>(o)->z + 1);
+        if (const auto* st = d.as<Story>(c.story)) {   // its own words from here on
+            Story s = *st;
+            s.name += " (page " + d.folio(page) + ")";
+            c.story = d.fresh_id("story");
+            d.put(c.story, s);
+            ids.push_back(c.story);
+        }
+        made = d.fresh_id("frame");
+        d.put(made, c);
+        ids.push_back(made);
+        return ids;
+    });
+    return made;
+}
+
+bool remove_overrides(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
+    std::vector<Doc::Id> frames, stories;
+    for (const auto& id : ids)
+        if (const auto* f = d.as<Frame>(id); f && !f->overrides.empty()) {
+            frames.push_back(id);
+            if (!f->story.empty() && !used_by_other(d, f->story, {id})) stories.push_back(f->story);
+        }
+    if (frames.empty()) return false;
+    auto touched = frames;
+    touched.insert(touched.end(), stories.begin(), stories.end());
+    return j.run(frames.size() == 1 ? "Remove override" : "Remove overrides", touched, [&] {
+        for (const auto& id : frames) d.put(id, std::nullopt);
+        for (const auto& s : stories) d.put(s, std::nullopt);
+    });
+}
+
 bool edit_masters(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const std::string& label,
                   const std::function<void(Master&)>& f) {
     std::vector<Doc::Id> ms;
@@ -1310,6 +1356,8 @@ const std::vector<Verb>& verbs() {
         {"add_image_frame", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Image, {54, 200, 200, 100}); }},
         {"add_shape", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Shape, {54, 400, 50, 50}); }},
         {"delete_frames", [](DocJournal& j, Doc& d) { delete_frames(j, d, {"frame.2", "frame.4"}); }},  // mid-thread
+        {"override_master_item", [](DocJournal& j, Doc& d) { override_master_item(j, d, "page.7", "frame.13"); }},   // s025
+        {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
         {"thread_frames", [](DocJournal& j, Doc& d) { thread_frames(j, d, "frame.3", "frame.7"); }},   // merges a story
         {"unthread_after", [](DocJournal& j, Doc& d) { unthread_after(j, d, "frame.1"); }},
         {"drag_guide", [](DocJournal& j, Doc& d) {
@@ -1455,6 +1503,7 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
         for (const auto& fid : d.frames_on(o)) {
             const auto* f = d.as<Frame>(fid);
             if (fid == id || !f || f->wrap == Wrap::None) continue;
+            if (o != t->owner && !master_item_on(d, fid, t->owner)) continue;   // s025: not shown on this page
             WrapRect r{f->x - f->wrap_off.left - t->x, f->y - f->wrap_off.top - t->y,
                        f->x + f->w + f->wrap_off.right - t->x, f->y + f->h + f->wrap_off.bottom - t->y,
                        f->wrap == Wrap::Jump};
@@ -1481,6 +1530,35 @@ Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double 
         for (auto it = own.rbegin(); it != own.rend(); ++it) {   // topmost first
             const Rect r = frame_in_layout(d, pl, *it);
             if (Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) return *it;
+        }
+    }
+    return {};
+}
+
+bool master_item_on(const Doc& d, const Doc::Id& fid, const Doc::Id& page) {
+    const auto* f = d.as<Frame>(fid);
+    if (!f || !d.as<Page>(page)) return true;
+    if (f->side != Side::Any && d.side_of(page) != Side::Any && f->side != d.side_of(page)) return false;
+    for (const auto& own : d.frames_on(page))
+        if (d.as<Frame>(own)->overrides == fid) return false;
+    return true;
+}
+
+Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, double y, double tol, Doc::Id* page) {
+    for (const auto& p : pl) {
+        if (!d.as<Page>(p.id)) continue;
+        auto chain = master_chain(d, p.id);
+        for (auto m = chain.rbegin(); m != chain.rend(); ++m) {   // nearest master first
+            const auto items = d.frames_on(*m);
+            for (auto it = items.rbegin(); it != items.rend(); ++it) {
+                if (!master_item_on(d, *it, p.id)) continue;
+                const auto& f = *d.as<Frame>(*it);
+                const Rect r{p.r.x + f.x, p.r.y + f.y, f.w, f.h};
+                if (Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) {
+                    if (page) *page = p.id;
+                    return *it;
+                }
+            }
         }
     }
     return {};

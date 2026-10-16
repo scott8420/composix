@@ -553,6 +553,13 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 else if (key == "stroke") f.stroke = choice;
                 else f.stroke_w = std::stod(choice);
             });
+        } else if (key == "side") {   // s025: which pages a master item shows on
+            const auto side = static_cast<core::Side>(std::stoi(choice));
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Shows on", [&](core::Frame& f) {
+                if (m_doc.as<core::Master>(f.owner)) f.side = side;
+            });
+        } else if (key == "override") {   // s025: back to the master's
+            did = core::doc::remove_overrides(m_journal, m_doc, m_inspected);
         } else if (key == "wrap" || key == "wrap_off") {   // s018: text wrap
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, key == "wrap" ? "Text wrap" : "Wrap offset",
                                          [&](core::Frame& f) {

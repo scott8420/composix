@@ -126,6 +126,11 @@ struct Frame {
     double      stroke_w = 1;            // points
     double      fill_tint = 1, stroke_tint = 1;   // s021: of the swatch, 0.05..1 (a spot prints as a tint of its ink)
     double      opacity = 1;             // s021: the frame's fill, content and stroke, 0..1 (below 1: transparency)
+    // s025: a master's item: which pages it shows on (Any, or only Left /
+    // Right ones -- a facing master's outside folios). A page's item: the
+    // master item it OVERRIDES on that page ("" = its own), hiding that one.
+    Side        side = Side::Any;
+    std::string overrides;
     Wrap        wrap = Wrap::None;       // s018: pushes text in other frames aside
     Sides       wrap_off;                // points beyond the frame's edges
     bool operator==(const Frame&) const = default;
@@ -386,6 +391,12 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
 // story whose LAST frame goes goes with it, and so does an image whose last
 // placement goes (s009, as InDesign). One step.
 bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
+// s025: a master's item on `page` becomes the page's own -- a copy (a text
+// frame gets its own copy of the story) that hides the master's there.
+// "" if it isn't a master item shown on that page, or is already overridden.
+Doc::Id override_master_item(DocJournal& j, Doc& d, const Doc::Id& page, const Doc::Id& master_frame);
+// Back to the master's: the page copies go (their stories with them).
+bool remove_overrides(DocJournal& j, Doc& d, const std::vector<Doc::Id>& page_frames);
 // Thread `from` -> `to` (`to` goes into the thread right after `from`). `to`
 // must be a text frame that is not already threaded; its own text is appended
 // to `from`'s story and its old story goes if nothing else uses it. One step.
@@ -557,6 +568,12 @@ Rect frame_in_layout(const Doc& d, const std::vector<Placed>& pl, const Doc::Id&
 // The topmost of a placed page's OWN frames under (x, y), within `tol`
 // points; "" if none. Master items are not picked on a page (as InDesign).
 Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double y, double tol);
+// s025: does master item `fid` show on `page`? (Its side matches the page's,
+// and the page hasn't overridden it.) Any non-page: true.
+bool master_item_on(const Doc& d, const Doc::Id& fid, const Doc::Id& page);
+// The topmost master item showing on a placed PAGE under (x, y) -- what
+// Ctrl+Shift+click overrides. "" if none.
+Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, double y, double tol, Doc::Id* page);
 // Every own frame touched by `r` (touching selects -- Curvz's marquee rule).
 std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r);
 // Guides on a page or master (its own; master_chain gives the inherited).

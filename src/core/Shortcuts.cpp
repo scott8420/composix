@@ -150,6 +150,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Text tool: click inside the margins", "A text frame filling that page column"},
         {"Mouse", "", {}, "Drag a gutter (a picked text frame)", "Make one column wider, its neighbour narrower"},
         {"Mouse", "", {}, "Drop an image file on a page", "Place it there (on an image frame: into it)"},
+        {"Mouse", "", {}, "Ctrl+Shift+click", "Override a master item on a page (its own copy; Remove override goes back)"},
         {"Mouse", "", {}, "Esc", "Cancel a drag, put down a loaded image, then clear the picks"},
 
         // ── Text (s023: special characters, while editing) ─────────────────

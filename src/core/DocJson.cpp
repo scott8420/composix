@@ -55,6 +55,7 @@ json to(const Record& r) {
                  {"columns", v.columns}, {"gutter", v.gutter}, {"balance", v.balance}, {"widths", v.widths},
                  {"fill", v.fill}, {"stroke", v.stroke}, {"stroke_w", v.stroke_w},
                  {"fill_tint", v.fill_tint}, {"stroke_tint", v.stroke_tint}, {"opacity", v.opacity},
+                 {"side", en(v.side)}, {"overrides", v.overrides},
                  {"wrap", en(v.wrap)},
                  {"wrap_off", {v.wrap_off.top, v.wrap_off.right, v.wrap_off.bottom, v.wrap_off.left}}};
         } else if constexpr (std::is_same_v<T, Story>) {
@@ -161,6 +162,8 @@ std::optional<Record> from(const json& j) {
         v.fill_tint = val(j, "fill_tint", 1.0);
         v.stroke_tint = val(j, "stroke_tint", 1.0);
         v.opacity = val(j, "opacity", 1.0);
+        v.side = de(j, "side", Side::Any);
+        v.overrides = val<std::string>(j, "overrides", "");
         v.wrap = de(j, "wrap", Wrap::None);
         if (j.contains("wrap_off") && j["wrap_off"].is_array() && j["wrap_off"].size() == 4) {
             const auto& a = j["wrap_off"];

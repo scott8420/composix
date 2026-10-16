@@ -52,6 +52,7 @@ void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
                  const ImageSource& images, std::set<std::string>* missing, const PageDraw& how,
                  const core::Doc::Id& on_page) {
     for (const auto& fid : d.frames_on(owner)) {
+        if (owner != on_page && !core::master_item_on(d, fid, on_page)) continue;   // s025
         const auto& f = *d.as<core::Frame>(fid);
         // s021: the swatch at its tint; the frame's opacity on each part.
         const double op = std::clamp(f.opacity, 0.0, 1.0);
@@ -127,6 +128,7 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
     for (const auto& o : owners) {
         rec(o);
         for (const auto& fid : d.frames_on(o)) {
+            if (o != id && !core::master_item_on(d, fid, id)) continue;   // s025: not shown here
             rec(fid);
             const auto& f = *d.as<core::Frame>(fid);
             if (!f.asset.empty()) rec(f.asset);
