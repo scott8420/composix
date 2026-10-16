@@ -113,6 +113,8 @@ void load_sample(Doc& d) {
         Frame cap{pg[10], FrameKind::Text, 0.25 * in, 7.25 * in, 6 * in, 0.75 * in, 0, 2, "story.2", "", ""};
         cap.stroke = "swatch.3";
         cap.stroke_w = 0.5;
+        cap.fill = "swatch.3";     // s021: a 15% tint of the spot ink behind it
+        cap.fill_tint = 0.15;
         d.put("frame.6", cap);
     }
     // Dedication, ornaments, sources.

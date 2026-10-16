@@ -55,6 +55,17 @@ std::string color_op(const Color& c, bool stroke) {
 static std::string spot_op(int idx, double tint, bool stroke) {
     return "/CS" + std::to_string(idx) + (stroke ? " CS " : " cs ") + num(tint) + (stroke ? " SCN\n" : " scn\n");
 }
+void Page::set_alpha(double fill, double stroke) {
+    fill = std::clamp(fill, 0.0, 1.0);
+    stroke = std::clamp(stroke, 0.0, 1.0);
+    if (fill < 1 || stroke < 1) ++m_doc.m_transparent;
+    const Alpha want{fill, stroke};
+    std::size_t i = 0;
+    while (i < m_alphas.size() && !(m_alphas[i] == want)) ++i;
+    if (i == m_alphas.size()) m_alphas.push_back(want);
+    m_ops += "/GS" + std::to_string(i) + " gs\n";
+}
+
 void Page::set_fill(const Color& c0) {
     const Color c = m_doc.prepare(c0);
     if (c.space == Color::Space::Spot) {
@@ -398,6 +409,13 @@ bool Document::save(const std::string& path, std::string* err) {
             for (int im : pg.m_images_used) res += " /Im" + std::to_string(im) + " " + std::to_string(image_obj[static_cast<std::size_t>(im)]) + " 0 R";
             res += " >>";
         }
+        if (!pg.m_alphas.empty()) {   // s021
+            res += " /ExtGState <<";
+            for (std::size_t a = 0; a < pg.m_alphas.size(); ++a)
+                res += " /GS" + std::to_string(a) + " << /Type /ExtGState /ca " + num(pg.m_alphas[a].fill) + " /CA " +
+                       num(pg.m_alphas[a].stroke) + " >>";
+            res += " >>";
+        }
         if (!pg.m_spots_used.empty()) {
             res += " /ColorSpace <<";
             for (int sp : pg.m_spots_used) res += " /CS" + std::to_string(sp) + " " + std::to_string(spot_obj[static_cast<std::size_t>(sp)]) + " 0 R";
@@ -477,6 +495,7 @@ std::vector<std::string> Document::preflight() const {
         }
         if (rgb) p.push_back(std::to_string(rgb) + " RGB image(s) -- X-1a allows CMYK and gray only");
         if (alpha) p.push_back(std::to_string(alpha) + " image(s) with transparency -- X-1a allows none");
+        if (m_transparent) p.push_back("opacity below 100% (" + std::to_string(m_transparent) + "x) -- X-1a allows no transparency");
     }
     return p;
 }

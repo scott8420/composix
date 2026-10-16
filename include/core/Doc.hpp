@@ -124,6 +124,8 @@ struct Frame {
     std::vector<double> widths;          // text: each column's relative weight (empty = equal)
     std::string fill, stroke;            // s016: swatch ids ("" = none) -- a frame's background / outline
     double      stroke_w = 1;            // points
+    double      fill_tint = 1, stroke_tint = 1;   // s021: of the swatch, 0.05..1 (a spot prints as a tint of its ink)
+    double      opacity = 1;             // s021: the frame's fill, content and stroke, 0..1 (below 1: transparency)
     Wrap        wrap = Wrap::None;       // s018: pushes text in other frames aside
     Sides       wrap_off;                // points beyond the frame's edges
     bool operator==(const Frame&) const = default;
@@ -161,6 +163,7 @@ struct Style {
     Align       align  = Align::Left;
     double      space_before = 0, space_after = 0;   // s011: points, paragraph styles
     std::string color;                   // s015: a swatch id; "" = black (a character style: inherit)
+    double      color_tint = 1;          // s021: of that swatch, 0.05..1
     bool operator==(const Style&) const = default;
 };
 
@@ -489,6 +492,11 @@ struct ColumnSpan { double x0, x1; };
 std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& page_or_master);
 // The page's column count and gutter (1 / 12 with no master).
 std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& page_or_master);
+// s021: a swatch's screen colour at a tint (mixed toward paper white).
+std::uint32_t tint_rgb(std::uint32_t rgb, double tint);
+// The tints offered (percent), and how a tint reads ("40%").
+const std::vector<int>& tint_steps();
+std::string tint_text(double tint);
 // s018: what pushes a text frame's lines aside -- every OTHER frame with a
 // wrap on its owner and on the owner's masters, grown by its offsets, in the
 // text frame's coordinates. (Stacking doesn't matter, as InDesign's default.)

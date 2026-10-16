@@ -49,15 +49,19 @@ void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const Ima
 
 void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, FlowCache& flows,
                  const ImageSource& images, std::set<std::string>* missing, const PageDraw& how) {
-    const auto paint = [&](const std::string& sw) {
-        const auto* s = d.as<core::Swatch>(sw);
-        if (!s) return false;
-        cairo_set_source_rgb(cr, ((s->preview >> 16) & 0xff) / 255.0, ((s->preview >> 8) & 0xff) / 255.0, (s->preview & 0xff) / 255.0);
-        return true;
-    };
     for (const auto& fid : d.frames_on(owner)) {
         const auto& f = *d.as<core::Frame>(fid);
-        if (paint(f.fill)) { cairo_rectangle(cr, f.x, f.y, f.w, f.h); cairo_fill(cr); }   // s016
+        // s021: the swatch at its tint; the frame's opacity on each part.
+        const double op = std::clamp(f.opacity, 0.0, 1.0);
+        const auto paint = [&](const std::string& sw, double tint) {
+            const auto* s = d.as<core::Swatch>(sw);
+            if (!s) return false;
+            const auto c = core::tint_rgb(s->preview, tint);
+            cairo_set_source_rgba(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0, op);
+            return true;
+        };
+        if (paint(f.fill, f.fill_tint)) { cairo_rectangle(cr, f.x, f.y, f.w, f.h); cairo_fill(cr); }   // s016
+        if (op < 1) cairo_push_group(cr);
         switch (f.kind) {
         case core::FrameKind::Text:
             if (f.story.empty()) break;
@@ -72,7 +76,8 @@ void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
         case core::FrameKind::Shape:   // its fill / stroke are all it has
             break;
         }
-        if (f.stroke_w > 0 && paint(f.stroke)) {
+        if (op < 1) { cairo_pop_group_to_source(cr); cairo_paint_with_alpha(cr, op); }
+        if (f.stroke_w > 0 && paint(f.stroke, f.stroke_tint)) {
             cairo_set_line_width(cr, f.stroke_w);
             cairo_rectangle(cr, f.x, f.y, f.w, f.h);
             cairo_stroke(cr);

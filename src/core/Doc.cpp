@@ -1410,6 +1410,23 @@ std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& id) {
     return chain;
 }
 
+std::uint32_t tint_rgb(std::uint32_t rgb, double t) {
+    t = std::clamp(t, 0.0, 1.0);
+    std::uint32_t out = 0;
+    for (int sh : {16, 8, 0}) {
+        const double c = (rgb >> sh) & 0xff;
+        out |= static_cast<std::uint32_t>(std::lround(255 - t * (255 - c))) << sh;
+    }
+    return out;
+}
+
+const std::vector<int>& tint_steps() {
+    static const std::vector<int> v{100, 90, 80, 70, 60, 50, 40, 30, 25, 20, 15, 10, 5};
+    return v;
+}
+
+std::string tint_text(double t) { return std::to_string(static_cast<int>(std::lround(t * 100))) + "%"; }
+
 std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
     std::vector<WrapRect> out;
     const auto* t = d.as<Frame>(id);

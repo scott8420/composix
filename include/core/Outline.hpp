@@ -110,6 +110,7 @@ Outline project(const Doc& d, const std::string& project_dir,
 
 // s005: frames picked on the canvas, as items the inspector reads (fields:
 // Kind, On, X, Y, W, H, and Story + Thread or Asset). Not in the navigator.
+std::vector<Choice> tint_choices(int least = 5);   // s021: "100%" .. "5%" (least 0: also "0%")
 std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& frames,
                               const std::string& project_dir = {});
 // s011: the text being edited -- Paragraph style / Character style (editable:

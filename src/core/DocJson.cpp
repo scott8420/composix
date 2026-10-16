@@ -54,6 +54,7 @@ json to(const Record& r) {
                  {"next", v.next}, {"asset", v.asset}, {"fit", en(v.fit)},
                  {"columns", v.columns}, {"gutter", v.gutter}, {"balance", v.balance}, {"widths", v.widths},
                  {"fill", v.fill}, {"stroke", v.stroke}, {"stroke_w", v.stroke_w},
+                 {"fill_tint", v.fill_tint}, {"stroke_tint", v.stroke_tint}, {"opacity", v.opacity},
                  {"wrap", en(v.wrap)},
                  {"wrap_off", {v.wrap_off.top, v.wrap_off.right, v.wrap_off.bottom, v.wrap_off.left}}};
         } else if constexpr (std::is_same_v<T, Story>) {
@@ -72,7 +73,8 @@ json to(const Record& r) {
             j = {{"kind", "style"}, {"name", v.name}, {"type", en(v.kind)}, {"pos", v.pos},
                  {"family", v.family}, {"size", v.size}, {"leading", v.leading}, {"bold", v.bold},
                  {"italic", v.italic}, {"align", en(v.align)}, {"space_before", v.space_before},
-                 {"space_after", v.space_after}, {"color", v.color}};
+                 {"space_after", v.space_after}, {"color", v.color},
+                 {"color_tint", v.color_tint}};
         } else if constexpr (std::is_same_v<T, Swatch>) {
             j = {{"kind", "swatch"}, {"name", v.name}, {"pos", v.pos}, {"model", en(v.model)},
                  {"v", v.v}, {"spot", v.spot}, {"preview", v.preview}};
@@ -156,6 +158,9 @@ std::optional<Record> from(const json& j) {
         v.fill = val<std::string>(j, "fill", "");
         v.stroke = val<std::string>(j, "stroke", "");
         v.stroke_w = val(j, "stroke_w", 1.0);
+        v.fill_tint = val(j, "fill_tint", 1.0);
+        v.stroke_tint = val(j, "stroke_tint", 1.0);
+        v.opacity = val(j, "opacity", 1.0);
         v.wrap = de(j, "wrap", Wrap::None);
         if (j.contains("wrap_off") && j["wrap_off"].is_array() && j["wrap_off"].size() == 4) {
             const auto& a = j["wrap_off"];
@@ -191,6 +196,7 @@ std::optional<Record> from(const json& j) {
         v.space_before = val(j, "space_before", 0.0);
         v.space_after = val(j, "space_after", 0.0);
         v.color = val<std::string>(j, "color", "");
+        v.color_tint = val(j, "color_tint", 1.0);
         return v;
     }
     if (k == "swatch") {

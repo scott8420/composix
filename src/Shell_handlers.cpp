@@ -486,6 +486,18 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 did = core::doc::set_char_style(m_journal, m_doc, story, a, b, choice);
             }
             cv.grab_focus();   // back to typing
+        } else if (key == "color_tint") {   // s021
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Tint",
+                                         [&](core::Style& st) { st.color_tint = std::stod(choice) / 100; });
+        } else if (key == "fill_tint" || key == "stroke_tint" || key == "opacity") {   // s021
+            static const std::map<std::string, std::string> labels{
+                {"fill_tint", "Fill tint"}, {"stroke_tint", "Stroke tint"}, {"opacity", "Opacity"}};
+            const double v = std::stod(choice) / 100;
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Frame& f) {
+                if (key == "fill_tint") f.fill_tint = v;
+                else if (key == "stroke_tint") f.stroke_tint = v;
+                else f.opacity = v;
+            });
         } else if (key == "color") {   // s015: a style's swatch
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Color",
                                          [&](core::Style& st) { st.color = choice; });

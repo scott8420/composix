@@ -253,6 +253,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 for (const auto& sw : d.ids_of<Swatch>()) col.push_back({sw, d.as<Swatch>(sw)->name});
                 const auto* cur = d.as<Swatch>(s.color);
                 f.push_back({"Color", cur ? cur->name : (para ? "Black" : "Inherit"), "color", col});
+                if (cur || para) f.push_back({"Tint", tint_text(s.color_tint), "color_tint", tint_choices()});   // s021
             }
             if (para) {
                 f.push_back({"Align", align_text(s.align), "align", align_ch});
@@ -354,6 +355,14 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
     return o;
 }
 
+// s021: tints / opacities, 100% down (opacity also 0%).
+std::vector<Choice> tint_choices(int least) {
+    std::vector<Choice> c;
+    for (int t : tint_steps()) c.push_back({std::to_string(t), std::to_string(t) + "%"});
+    if (least == 0) c.push_back({"0", "0%"});
+    return c;
+}
+
 std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids, const std::string& dir) {
     std::vector<Item> out;
     for (const auto& id : ids) {
@@ -373,13 +382,16 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             for (const auto& id : d.ids_of<Swatch>()) sw.push_back({id, d.as<Swatch>(id)->name});
             const auto name = [&](const std::string& id) { const auto* x = d.as<Swatch>(id); return x ? x->name : std::string("None"); };
             fields.push_back({"Fill", name(f->fill), "fill", sw});
+            if (!f->fill.empty()) fields.push_back({"Fill tint", tint_text(f->fill_tint), "fill_tint", tint_choices()});   // s021
             fields.push_back({"Stroke", name(f->stroke), "stroke", sw});
+            if (!f->stroke.empty()) fields.push_back({"Stroke tint", tint_text(f->stroke_tint), "stroke_tint", tint_choices()});
             if (!f->stroke.empty()) {
                 std::vector<Choice> wc;
                 for (double w : {0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0}) wc.push_back({pts(w), pts(w) + " pt"});
                 fields.push_back({"Weight", pts(f->stroke_w) + " pt", "stroke_w", wc});
             }
         }
+        fields.push_back({"Opacity", tint_text(f->opacity), "opacity", tint_choices(0)});   // s021
         {   // s018: text wrap -- how this frame pushes OTHER frames' text aside.
             static const char* names[] = {"None", "Around", "Jump"};
             fields.push_back({"Wrap", names[static_cast<int>(f->wrap)], "wrap", {{"0", "None"}, {"1", "Around"}, {"2", "Jump"}}});

@@ -392,11 +392,12 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
     const Rect r = m_vp.to_screen(Rect{ox + f.x, oy + f.y, f.w, f.h});
     const double s = m_vp.scale();
     const double dim = from_master ? 0.45 : 1.0;
+    const double op = std::clamp(f.opacity, 0.0, 1.0);   // s021: on fill, content and stroke alike
     // s016: the frame's fill, behind its content (and its stroke, after).
     if (const auto* fs = m_doc.as<core::Swatch>(f.fill)) {
+        const auto c = core::tint_rgb(fs->preview, f.fill_tint);   // s021
         cr->save();
-        cr->set_source_rgba(((fs->preview >> 16) & 0xff) / 255.0, ((fs->preview >> 8) & 0xff) / 255.0,
-                            (fs->preview & 0xff) / 255.0, dim);
+        cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0, dim * op);
         cr->rectangle(r.x, r.y, r.w, r.h);
         cr->fill();
         cr->restore();
@@ -406,9 +407,10 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
         ~StrokeLater() {
             const auto* ss = d.as<core::Swatch>(f.stroke);
             if (!ss || f.stroke_w <= 0) return;
+            const auto c = core::tint_rgb(ss->preview, f.stroke_tint);   // s021
             cr->save();
-            cr->set_source_rgba(((ss->preview >> 16) & 0xff) / 255.0, ((ss->preview >> 8) & 0xff) / 255.0,
-                                (ss->preview & 0xff) / 255.0, dim);
+            cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0,
+                                dim * std::clamp(f.opacity, 0.0, 1.0));
             cr->set_line_width(std::max(0.5, f.stroke_w * s));
             cr->rectangle(r.x, r.y, r.w, r.h);   // centred on the frame's edge, as it prints
             cr->stroke();
@@ -427,9 +429,9 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
         cr->clip();
         cr->translate(r.x, r.y);
         cr->scale(s, s);
-        if (from_master) cr->push_group();
+        if (from_master || op < 1) cr->push_group();
         layout::draw_frame_text(cr->cobj(), m_doc, f.story, flow, id, 0, 0);
-        if (from_master) { cr->pop_group_to_source(); cr->paint_with_alpha(dim); }
+        if (from_master || op < 1) { cr->pop_group_to_source(); cr->paint_with_alpha(dim * op); }
         cr->restore();
         cr->set_source_rgba(0.45, 0.55, 0.7, 0.55 * dim);
         cr->set_line_width(1);
@@ -509,7 +511,7 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
                 cr->rectangle(r.x, r.y, r.w, r.h);
                 cr->clip();
                 const Rect ir = core::fit_rect(r, iw, ih, f.fit);
-                images::paint(cr, pic, ir.x, ir.y, ir.w, ir.h, dim);
+                images::paint(cr, pic, ir.x, ir.y, ir.w, ir.h, dim * op);   // s021: its opacity
                 cr->restore();
                 if (status == core::LinkStatus::Modified) {   // a quiet corner flag
                     cr->set_source_rgba(0.85, 0.51, 0.17, 0.95);
@@ -520,11 +522,11 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
                 break;
             }
         }
-        rgb(cr, tint_for(f.asset), 0.55 * dim);
+        rgb(cr, tint_for(f.asset), 0.55 * dim * op);   // s021: the stand-in at its opacity too
         cr->rectangle(r.x, r.y, r.w, r.h);
         cr->fill();
         // The stand-in: a file it can't read here (or the unsaved sample's).
-        cr->set_source_rgba(1, 1, 1, 0.5 * dim);
+        cr->set_source_rgba(1, 1, 1, 0.5 * dim * op);
         cr->move_to(r.x + r.w * 0.1, r.y + r.h * 0.85);
         cr->line_to(r.x + r.w * 0.38, r.y + r.h * 0.45);
         cr->line_to(r.x + r.w * 0.55, r.y + r.h * 0.68);

@@ -88,6 +88,10 @@ public:
     void set_fill(const Color& c);
     void set_stroke(const Color& c);
     void set_line_width(double w);
+    // s021 (Composix): constant opacity for what's filled (and images) and
+    // what's stroked, 0..1 -- an ExtGState (/ca, /CA). Within save() /
+    // restore() to scope it. Below 1 is transparency: PDF/X-1a refuses it.
+    void set_alpha(double fill, double stroke);
     void move_to(double x, double y);
     void line_to(double x, double y);
     void rect(const Rect& r);
@@ -115,6 +119,13 @@ private:
     std::vector<FontId>  m_fonts_used;
     std::vector<ImageId> m_images_used;
     std::vector<int>     m_spots_used;   // s016: indexes into the document's spot list
+    // s021: this page's ExtGStates. A struct, not std::pair<double, double>
+    // (GCC's psabi note on passing that pair by value).
+    struct Alpha {
+        double fill = 1, stroke = 1;
+        bool operator==(const Alpha&) const = default;
+    };
+    std::vector<Alpha> m_alphas;
 };
 
 class Document {
@@ -193,6 +204,7 @@ private:
     long long m_date = 0;
     int       m_flattened = 0;    // images whose alpha X-1a flattened
     bool      m_rgb_written = false;   // an RGB colour reached a content stream
+    int       m_transparent = 0;       // s021: set_alpha calls below 1
 };
 
 // s016: the CMYK output (press) profiles in these folders (searched one level

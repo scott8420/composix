@@ -60,7 +60,7 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
         if (cs->bold) add(pango_attr_weight_new(PANGO_WEIGHT_BOLD));
         if (cs->italic) add(pango_attr_style_new(PANGO_STYLE_ITALIC));
         if (const auto* sw = d.as<core::Swatch>(cs->color)) {   // s015: its colour, as the screen shows it
-            const auto c = sw->preview;
+            const auto c = core::tint_rgb(sw->preview, cs->color_tint);   // s021: at its tint
             add(pango_attr_foreground_new(static_cast<guint16>(((c >> 16) & 0xff) * 257),
                                           static_cast<guint16>(((c >> 8) & 0xff) * 257),
                                           static_cast<guint16>((c & 0xff) * 257)));
@@ -367,11 +367,17 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         // The paragraph style's colour (s015), else the ink.
         const core::Swatch* sw = nullptr;
+        double tint = 1;
         if (st && pl.line->para < static_cast<int>(st->paras.size()))
-            if (const auto* ps = d.as<core::Style>(st->paras[static_cast<std::size_t>(pl.line->para)].style))
+            if (const auto* ps = d.as<core::Style>(st->paras[static_cast<std::size_t>(pl.line->para)].style)) {
                 sw = d.as<core::Swatch>(ps->color);
-        if (sw) cairo_set_source_rgb(cr, ((sw->preview >> 16) & 0xff) / 255.0, ((sw->preview >> 8) & 0xff) / 255.0,
-                                     (sw->preview & 0xff) / 255.0);
+                tint = ps->color_tint;
+            }
+        if (sw) {
+            const auto c = core::tint_rgb(sw->preview, tint);   // s021
+            cairo_set_source_rgb(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
+        }
+        else if (tint < 1) cairo_set_source_rgb(cr, 1 - tint * (1 - ink), 1 - tint * (1 - ink), 1 - tint * (1 - ink));   // black, tinted: grey
         else cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
         cairo_move_to(cr, ox + pl.x, oy + pl.base);
         pango_cairo_show_layout_line(cr, pl.pl);

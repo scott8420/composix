@@ -21,18 +21,22 @@ constexpr double kMarkGap = 3, kMarkLen = 15, kSlug = kMarkGap + kMarkLen + 3;
 
 // A swatch as ink. Process colours stay in their own space; a spot colour is
 // a Separation (s016) -- its own plate.
-plate::Color ink_of(const core::Doc& d, const std::string& swatch) {
+plate::Color ink_of(const core::Doc& d, const std::string& swatch, double tint = 1) {
     const auto* s = d.as<core::Swatch>(swatch);
-    if (!s) return plate::Color::cmyk(0, 0, 0, 1);   // black text is 100 K, not four-colour
+    const double t = std::clamp(tint, 0.0, 1.0);
+    if (!s) return plate::Color::cmyk(0, 0, 0, t);   // black text is 100 K, not four-colour
     switch (s->model) {
-    case core::ColorModel::RGB:  return plate::Color::rgb(s->v[0] / 255, s->v[1] / 255, s->v[2] / 255);
-    case core::ColorModel::Gray: return plate::Color::gray(1 - s->v[0] / 100);
-    case core::ColorModel::CMYK: return plate::Color::cmyk(s->v[0] / 100, s->v[1] / 100, s->v[2] / 100, s->v[3] / 100);
-    case core::ColorModel::Spot:   // s016: its own plate, named for its ink; its CMYK for proofs
-        return plate::Color::spot(s->spot.empty() ? s->name : s->spot, 1.0, s->v[0] / 100, s->v[1] / 100,
+    // s021: a tint is less ink -- process values scaled, RGB toward white.
+    case core::ColorModel::RGB:
+        return plate::Color::rgb(1 - t * (1 - s->v[0] / 255), 1 - t * (1 - s->v[1] / 255), 1 - t * (1 - s->v[2] / 255));
+    case core::ColorModel::Gray: return plate::Color::gray(1 - t * s->v[0] / 100);
+    case core::ColorModel::CMYK:
+        return plate::Color::cmyk(t * s->v[0] / 100, t * s->v[1] / 100, t * s->v[2] / 100, t * s->v[3] / 100);
+    case core::ColorModel::Spot:   // s016: its own plate, named for its ink; its CMYK for proofs. s021: a tint of it
+        return plate::Color::spot(s->spot.empty() ? s->name : s->spot, t, s->v[0] / 100, s->v[1] / 100,
                                   s->v[2] / 100, s->v[3] / 100);
     }
-    return plate::Color::cmyk(0, 0, 0, 1);
+    return plate::Color::cmyk(0, 0, 0, t);
 }
 
 // An image for Plate: a JPEG's own bytes when the source kept them, else
@@ -95,9 +99,12 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
         for (const auto& run : plate::pango::runs(v.line, f.x + v.x, f.y + v.baseline)) {
             // The run's colour: its character style's, else the paragraph's.
             std::string sw = ps ? ps->color : std::string{};
-            if (const auto* cs = c.d.as<core::Style>(core::char_style_at(para, v.from + run.start + 1)); cs && !cs->color.empty())
+            double tint = ps ? ps->color_tint : 1;
+            if (const auto* cs = c.d.as<core::Style>(core::char_style_at(para, v.from + run.start + 1)); cs && !cs->color.empty()) {
                 sw = cs->color;
-            pg.set_fill(ink_of(c.d, sw));
+                tint = cs->color_tint;
+            }
+            pg.set_fill(ink_of(c.d, sw, tint));
             plate::pango::show(c.doc, pg, run);
         }
     });
@@ -136,19 +143,22 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
 void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner) {
     for (const auto& fid : c.d.frames_on(owner)) {
         const auto& f = *c.d.as<core::Frame>(fid);
+        pg.save();
+        if (f.opacity < 1) pg.set_alpha(f.opacity, f.opacity);   // s021: fill, content and stroke alike
         if (c.d.as<core::Swatch>(f.fill)) {   // s016: the frame's background
-            pg.set_fill(ink_of(c.d, f.fill));
+            pg.set_fill(ink_of(c.d, f.fill, f.fill_tint));
             pg.rect({f.x, f.y, f.w, f.h});
             pg.fill();
         }
         if (f.kind == core::FrameKind::Text && !f.story.empty()) draw_text(c, pg, f, fid);
         else if (f.kind == core::FrameKind::Image) draw_image(c, pg, f);
         if (c.d.as<core::Swatch>(f.stroke) && f.stroke_w > 0) {
-            pg.set_stroke(ink_of(c.d, f.stroke));
+            pg.set_stroke(ink_of(c.d, f.stroke, f.stroke_tint));
             pg.set_line_width(f.stroke_w);
             pg.rect({f.x, f.y, f.w, f.h});
             pg.stroke();
         }
+        pg.restore();
     }
 }
 
@@ -183,6 +193,21 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
     // s017: set before anything is drawn (the writer converts as it goes).
     if (opt.standard != plate_standard::None) {
         if (opt.profile.empty()) { if (err) *err = "PDF/X needs an output profile."; return false; }
+        if (opt.standard == plate_standard::X1a) {   // s021: no transparency -- say which frames
+            std::string seen;
+            for (const auto& pid : pages)
+                for (const auto& owner : [&] { auto o = core::master_chain(d, pid); o.push_back(pid); return o; }())
+                    for (const auto& fid : d.frames_on(owner))
+                        if (const auto* f = d.as<core::Frame>(fid); f && f->opacity < 1) {
+                            const std::string where = d.as<core::Page>(owner) ? "page " + d.folio(owner) : "a master";
+                            const std::string line = "\n\u2022 a frame on " + where + " at " + core::tint_text(f->opacity) + " opacity";
+                            if (seen.find(line) == std::string::npos) seen += line;
+                        }
+            if (!seen.empty()) {
+                if (err) *err = "PDF/X-1a allows no transparency:" + seen + "\nSet them to 100% or export PDF/X-4.";
+                return false;
+            }
+        }
         doc.set_standard(opt.standard == plate_standard::X1a ? plate::Standard::X1a_2003 : plate::Standard::X4);
     }
     // s016: the press's profile; RGB converted to its CMYK, or kept (tagged sRGB).

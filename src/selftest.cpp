@@ -1717,6 +1717,57 @@ int main() {
         cairo_surface_destroy(surf);
     }
 
+    {
+        std::cout << "\n-- tints + opacity --\n";
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        check("tint: half of black is mid grey, 100% is itself", core::tint_rgb(0x000000, 0.5) == 0x808080 &&
+                                                                core::tint_rgb(0xb5512b, 1) == 0xb5512b &&
+                                                                core::tint_rgb(0xb5512b, 0) == 0xffffff);
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // A Black box at 40% on page 2, and the caption at half opacity.
+        const auto box = core::doc::add_frame(j, d, "page.6", core::FrameKind::Shape, {54, 54, 100, 50});
+        core::doc::edit_frames(j, d, {box}, "Fill", [](core::Frame& f) { f.fill = "swatch.1"; f.fill_tint = 0.4; f.stroke.clear(); });
+        const auto items = core::frame_items(d, {"frame.6"}, "");
+        bool ft = false, st = false, op = false;
+        for (const auto& f : items.front().fields) {
+            ft = ft || (f.edit == "fill_tint" && f.value == "15%");
+            st = st || (f.edit == "stroke_tint" && f.value == "100%");
+            op = op || (f.edit == "opacity" && f.value == "100%");
+        }
+        check("inspector: Fill tint, Stroke tint, Opacity", ft && st && op);
+        const L::ImageSource none = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+        const auto out = (fs::temp_directory_path() / "composix_selftest_tint.pdf").string();
+        L::PdfOptions opt;
+        opt.compress = false;
+        std::string err;
+        const auto read = [&] { std::ifstream f(out, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); return ss.str(); };
+        check("print: ok", L::export_print_pdf(d, out, opt, none, nullptr, &err), err);
+        auto pdf = read();
+        check("print: a process tint is less ink (40% K)", pdf.find("0 0 0 0.4 k\n") != std::string::npos);
+        check("print: a spot tint prints on the ink's plate (15%)", pdf.find(" cs 0.15 scn") != std::string::npos);
+        check("print: no transparency when nothing is see-through", pdf.find("/ExtGState") == std::string::npos);
+        core::doc::edit_frames(j, d, {"frame.6"}, "Opacity", [](core::Frame& f) { f.opacity = 0.5; });
+        check("print: opacity as an ExtGState", L::export_print_pdf(d, out, opt, none, nullptr, &err) &&
+                                                (pdf = read(), pdf.find("/ca 0.5 /CA 0.5") != std::string::npos));
+        const char* gracol = "/usr/share/color/icc/GRACoL2013_CRPC6.icc";
+        if (fs::exists(gracol)) {
+            opt.profile = gracol;
+            opt.standard = L::plate_standard::X1a;
+            check("x1a: opacity refused, the frame named",
+                  !L::export_print_pdf(d, out, opt, none, nullptr, &err) && err.find("page 7 at 50% opacity") != std::string::npos, err);
+            opt.standard = L::plate_standard::X4;
+            check("x4: opacity kept", L::export_print_pdf(d, out, opt, none, nullptr, &err), err);
+        }
+        std::string json = core::to_json(d);
+        core::Doc e;
+        check("json: tints + opacity round-trip", core::from_json(e, json, &err) && e.records() == d.records() &&
+                                                  e.as<core::Frame>("frame.6")->opacity == 0.5);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

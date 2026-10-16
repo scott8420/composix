@@ -92,6 +92,24 @@ int main(int argc, char** argv) {
     int w = 0, h = 0, c = 0;
     const std::string jpg("\xFF\xD8\xFF\xC0\x00\x11\x08\x00\x20\x00\x40\x03", 12);
     check("jpeg_info reads a frame header", plate::jpeg_info(jpg + std::string(8, '\0'), &w, &h, &c) && w == 64 && h == 32 && c == 3);
+    {   // s021: opacity -- an ExtGState per page, reused
+        plate::Document ad;
+        ad.set_compress(false);
+        auto& pg = ad.add_page(100, 100);
+        pg.save();
+        pg.set_alpha(0.5, 0.25);
+        pg.rect({0, 0, 10, 10});
+        pg.fill();
+        pg.set_alpha(0.5, 0.25);
+        pg.restore();
+        check("alpha: save", ad.save(out + ".alpha.pdf", &err));
+        std::ifstream f(out + ".alpha.pdf", std::ios::binary);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        const auto a = ss.str();
+        check("alpha: one ExtGState, /ca + /CA, used by gs", a.find("/GS0 << /Type /ExtGState /ca 0.5 /CA 0.25 >>") != std::string::npos &&
+                                                            a.find("/GS1") == std::string::npos && a.find("/GS0 gs") != std::string::npos);
+    }
     // ── s016: colour management (needs a CMYK output profile: PLATE_ICC) ─────
     const char* icc = std::getenv("PLATE_ICC");
     if (!icc) {
@@ -193,6 +211,15 @@ int main(int argc, char** argv) {
                                                            pdf.find("/Subtype /OpenType") == std::string::npos);
             hb_face_destroy(face);
             hb_blob_destroy(blob);
+        }
+        {   // X-1a: opacity is transparency -- refused, said why
+            plate::Document td;
+            td.set_standard(plate::Standard::X1a_2003);
+            td.set_output_profile(icc, &err);
+            auto& pg = td.add_page(10, 10);
+            pg.set_trim_box({0, 0, 10, 10});
+            pg.set_alpha(0.5, 1);
+            check("x1a: opacity refused", !td.save(out + ".x1aalpha.pdf", &err) && err.find("opacity") != std::string::npos);
         }
         {   // an RGB colour drawn with no profile to convert it is named
             plate::Document rd;
