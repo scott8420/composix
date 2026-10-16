@@ -1,6 +1,7 @@
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "core/Recents.hpp"
+#include "layout/Flow.hpp"
 #include <tuple>
 
 #include <giomm/simpleactiongroup.h>
@@ -110,6 +111,8 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     // every change to the document re-projects, once, after the writes.
     m_doc.set_door([this] { return m_journal.open(); });
     m_doc.set_on_change([this] { queue_refresh(); });
+    // s048: every step settles what follows from it -- auto-size frames fit their text.
+    m_journal.set_settle([this] { return layout::fit_frames(m_doc); });
     m_journal.set_selection_source([this] { return m_inspected; });
     m_journal.set_on_change([this] { update_undo_ui(); set_dirty(true); });
 

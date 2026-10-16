@@ -154,6 +154,8 @@ struct Frame {
     Sides       wrap_off;                // points beyond the frame's edges
     Sides       inset;                   // s040: text -- held in from the frame's edges (points)
     VAlign      valign = VAlign::Top;    // s042: text -- where it sits in the frame's height
+    bool        autosize = false;        // s048: text -- its height follows its text (top fixed; the
+                                         // last frame of its thread, one column)
     bool operator==(const Frame&) const = default;
 };
 
@@ -181,6 +183,7 @@ struct Para {
     std::string      style;              // a paragraph style id
     std::string      text;
     std::vector<Run> runs;               // s011
+    int              restart = 0;        // s047: a numbered list starts again here, at this number (0: counts on)
     bool operator==(const Para&) const = default;
 };
 
@@ -223,6 +226,10 @@ struct ListSpec {
     Numbering   numbering = Numbering::Arabic;
     std::string after = ".";         // after a number
     double      hang = 18;           // points
+    // s047: numbers carry on past other paragraphs (else another style
+    // restarts them); `level` 2 restarts after each level-1 list paragraph.
+    bool        continues = false;
+    int         level = 1;
     bool operator==(const ListSpec&) const = default;
 };
 
@@ -612,8 +619,15 @@ bool set_style_base(DocJournal& j, Doc& d, const Doc::Id& style, const Doc::Id& 
 bool reset_to_base(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles);
 // s045: a list paragraph's number (1 + the paragraphs of the same style
 // just before it), and its marker ("•", "3.", "iv."; "" not a list).
-int list_number(const Story& s, int para);
+// s047: paragraphs of other styles: with the list's `continues`, the count
+// carries on past them, except a list paragraph of a LOWER level (1 under
+// a level-2 list), which restarts it. A list always counts on past its own
+// sub-items (a higher level). A paragraph's `restart` sets its number.
+int list_number(const Doc& d, const Story& s, int para);
 std::string list_marker(const Doc& d, const Story& s, int para);
+// s047: the paragraphs [a.para .. b.para] restart their list at `n` (0:
+// count on). One step.
+bool set_list_restart(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, int n);
 // The style a new paragraph after one in `style` takes (Enter at its end).
 Doc::Id next_style_of(const Doc& d, const Doc::Id& style);
 // A copy of a style, just after it ("Body copy"). Its id.

@@ -62,6 +62,7 @@ json to(const Record& r) {
                  {"wrap", en(v.wrap)},
                  {"wrap_off", {v.wrap_off.top, v.wrap_off.right, v.wrap_off.bottom, v.wrap_off.left}}};
             if (v.valign != VAlign::Top) j["valign"] = en(v.valign);   // s042
+            if (v.autosize) j["autosize"] = true;                      // s048
             if (!(v.inset == Sides{})) j["inset"] = {v.inset.top, v.inset.right, v.inset.bottom, v.inset.left};   // s040
         } else if constexpr (std::is_same_v<T, Story>) {
             json paras = json::array();
@@ -78,6 +79,7 @@ json to(const Record& r) {
                     }
                     jp["runs"] = runs;
                 }
+                if (p.restart > 0) jp["restart"] = p.restart;   // s047
                 paras.push_back(jp);
             }
             j = {{"kind", "story"}, {"name", v.name}, {"paras", paras}};
@@ -99,7 +101,7 @@ json to(const Record& r) {
             if (!v.based_on.empty()) { j["based_on"] = v.based_on; j["own"] = v.own; }   // s037
             if (v.list.type != ListType::None)   // s045
                 j["list"] = {{"type", en(v.list.type)}, {"bullet", v.list.bullet}, {"numbering", en(v.list.numbering)},
-                             {"after", v.list.after}, {"hang", v.list.hang}};
+                             {"after", v.list.after}, {"hang", v.list.hang}, {"continues", v.list.continues}, {"level", v.list.level}};
             for (const auto& [key, r] : {std::pair{"rule_above", &v.rule_above}, std::pair{"rule_below", &v.rule_below}})   // s044
                 if (r->weight > 0)
                     j[key] = {{"weight", r->weight}, {"color", r->color}, {"tint", r->tint}, {"offset", r->offset}, {"text", r->text_width}};
@@ -203,6 +205,7 @@ std::optional<Record> from(const json& j) {
         v.overrides = val<std::string>(j, "overrides", "");
         v.wrap = de(j, "wrap", Wrap::None);
         v.valign = de(j, "valign", VAlign::Top);   // s042
+        v.autosize = val(j, "autosize", false);    // s048
         if (j.contains("wrap_off") && j["wrap_off"].is_array() && j["wrap_off"].size() == 4) {
             const auto& a = j["wrap_off"];
             v.wrap_off = {a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>()};
@@ -229,6 +232,7 @@ std::optional<Record> from(const json& j) {
                         }
                         para.runs.push_back(run);
                     }
+                para.restart = val(p, "restart", 0);   // s047
                 v.paras.push_back(std::move(para));
             }
         return v;
@@ -270,7 +274,7 @@ std::optional<Record> from(const json& j) {
         if (j.contains("list") && j["list"].is_object()) {   // s045
             const auto& o = j["list"];
             v.list = {de(o, "type", ListType::None), val<std::string>(o, "bullet", "\u2022"), de(o, "numbering", Numbering::Arabic),
-                      val<std::string>(o, "after", "."), val(o, "hang", 18.0)};
+                      val<std::string>(o, "after", "."), val(o, "hang", 18.0), val(o, "continues", false), val(o, "level", 1)};
         }
         v.based_on = val<std::string>(j, "based_on", "");   // s037
         v.next = val<std::string>(j, "next", "");

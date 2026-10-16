@@ -1097,6 +1097,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     const Local local = (b != a && a.byte < static_cast<int>(pa.text.size())) ? local_at(pa, a.byte + 1)
                                                                               : local_at(pa, a.byte);   // s030
     const std::string style = pa.style;
+    const int restart = pa.restart;   // s047: the first paragraph keeps its restart
     std::size_t head_len = 0;
     for (const auto& sp : head) head_len += sp.text.size();
 
@@ -1109,6 +1110,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         // s037: Enter at a paragraph's end starts its Next style.
         const bool next = i > 0 && text == "\n" && tail.empty();
         made.push_back(para_of(next ? next_style_of(d, style) : style, sp));
+        if (i == 0) made.back().restart = restart;
     }
     s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
     s.paras.insert(s.paras.begin() + a.para, made.begin(), made.end());
@@ -1151,7 +1153,9 @@ bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
         for (auto x : spans_of(para, from, to)) { x.style = style; sp.push_back(x); }
         const auto rest = spans_of(para, to, n);
         sp.insert(sp.end(), rest.begin(), rest.end());
+        const int restart = para.restart;   // s047
         para = para_of(para.style, sp);
+        para.restart = restart;
     }
     if (s == *st) return false;
     return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
@@ -1175,7 +1179,9 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
         for (auto x : spans_of(para, from, to)) { f(x.local); sp.push_back(x); }
         const auto rest = spans_of(para, to, n);
         sp.insert(sp.end(), rest.begin(), rest.end());
+        const int restart = para.restart;   // s047
         para = para_of(para.style, sp);
+        para.restart = restart;
     }
     if (s == *st) return false;
     return j.run(label, {story}, [&] { d.put(story, s); });
@@ -1339,12 +1345,38 @@ bool reset_to_base(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     });
 }
 
-int list_number(const Story& s, int para) {
+int list_number(const Doc& d, const Story& s, int para) {
     if (para < 0 || para >= static_cast<int>(s.paras.size())) return 0;
     const auto& style = s.paras[static_cast<std::size_t>(para)].style;
-    int n = 1;
-    for (int p = para - 1; p >= 0 && s.paras[static_cast<std::size_t>(p)].style == style; --p) ++n;
+    const auto* me = d.as<Style>(style);
+    const bool on = me && me->list.continues;
+    const int level = me ? me->list.level : 1;
+    int n = 0;
+    for (int p = para; p >= 0; --p) {
+        const auto& q = s.paras[static_cast<std::size_t>(p)];
+        if (q.style == style) {
+            ++n;
+            if (q.restart > 0) return q.restart + n - 1;
+            continue;
+        }
+        const auto* qs = d.as<Style>(q.style);
+        if (qs && qs->list.type != ListType::None && qs->list.level < level) break;   // a parent item
+        if (qs && qs->list.type != ListType::None && qs->list.level > level) continue;   // its own sub-items: counts on
+        if (!on) break;
+    }
     return n;
+}
+
+bool set_list_restart(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, int n) {
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return false;
+    Story s = *st;
+    a = clamp_pos(s, a);
+    b = clamp_pos(s, b);
+    if (b < a) std::swap(a, b);
+    for (int p = a.para; p <= b.para; ++p) s.paras[static_cast<std::size_t>(p)].restart = std::max(0, n);
+    if (s == *st) return false;
+    return j.run(n > 0 ? "Restart numbering" : "Continue numbering", {story}, [&] { d.put(story, s); });
 }
 
 std::string list_marker(const Doc& d, const Story& s, int para) {
@@ -1354,7 +1386,7 @@ std::string list_marker(const Doc& d, const Story& s, int para) {
     switch (st->list.type) {
     case ListType::None:   return {};
     case ListType::Bullet: return st->list.bullet;
-    case ListType::Number: return format_folio(list_number(s, para), st->list.numbering) + st->list.after;
+    case ListType::Number: return format_folio(list_number(d, s, para), st->list.numbering) + st->list.after;
     }
     return {};
 }
@@ -1814,6 +1846,7 @@ const std::vector<Verb>& verbs() {
         {"next_style", [](DocJournal& j, Doc& d) {
              edit_styles(j, d, {"style.1"}, "Next style", [](Style& s) { s.next = "style.3"; });
          }},
+        {"list_restart", [](DocJournal& j, Doc& d) { set_list_restart(j, d, "story.4", {1, 0}, {1, 0}, 5); }},   // s047
         {"enter_next_style", [](DocJournal& j, Doc& d) {   // Enter at the end of "Chapter One"
              edit_text(j, d, "story.1", {0, 11}, {0, 11}, "\n");
          }},

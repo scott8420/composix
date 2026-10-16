@@ -2110,7 +2110,8 @@ int main() {
         check("drop cap: two letters", two);
         core::doc::edit_styles(j, d, {"style.10"}, "Drop cap", [](core::Style& s) { s.drop_lines = 0; });
         bool none = true;
-        for (const auto& l : L::flow_story(d, "story.1").frames.front().lines) none = none && l.cap <= 0;
+        const auto f0 = L::flow_story(d, "story.1");   // (kept: .front() of a temporary dangles)
+        for (const auto& l : f0.frames.front().lines) none = none && l.cap <= 0;
         check("drop cap: none", none);
         const auto o = core::project(d, "");
         bool field = false;
@@ -2671,7 +2672,8 @@ int main() {
         check("undo: as it was", lines_of("story.1", "frame.1").size() == before.size() &&
                                      std::abs(lines_of("story.1", "frame.1")[0].y - before[0].y) < 1e-9);
         bool row = false;
-        for (const auto& f : core::frame_items(d, {"frame.6"}).at(0).fields) row = row || (f.edit == "inset" && f.value == "6 pt");
+        const auto items1 = core::frame_items(d, {"frame.6"});   // (kept: a range-for over a temporary's member dangles)
+        for (const auto& f : items1.at(0).fields) row = row || (f.edit == "inset" && f.value == "6 pt");
         check("inspector: the caption's Inset", row);
         std::string err;
         core::Doc e;
@@ -2713,7 +2715,8 @@ int main() {
         check("frame inset: typed", field(fr.at(0).fields, "inset") && field(fr.at(0).fields, "inset")->unit == 1);
         const auto two = core::frame_items(d, {"frame.1", "frame.6"});
         std::vector<const core::Item*> sel{&two[0], &two[1]};
-        const auto* sb = field(core::shared_fields(sel), "bounds");
+        const auto shared = core::shared_fields(sel);   // (kept: a pointer into a temporary dangles)
+        const auto* sb = field(shared, "bounds");
         check("two frames: bounds still typed, Mixed where they differ", sb && sb->unit == 72 &&
                                                                               sb->value.find(core::kMixed) != std::string::npos);
         // Every typed field's shown value reads back as a length (or is a word preset: Auto, Inherit, Mixed).
@@ -2786,7 +2789,8 @@ int main() {
         // Text wrap leaves it at the top.
         core::doc::edit_frames(j, d, {"frame.7"}, "Vertical justification", [](core::Frame& f) { f.valign = core::VAlign::Bottom; });
         check("inspector: Vertical", [&] {
-            for (const auto& f : core::frame_items(d, {"frame.7"}).at(0).fields) if (f.edit == "valign" && f.value == "Bottom") return true;
+            const auto items2 = core::frame_items(d, {"frame.7"});   // (kept: a range-for over a temporary's member dangles)
+            for (const auto& f : items2.at(0).fields) if (f.edit == "valign" && f.value == "Bottom") return true;
             return false;
         }());
         std::string err;
@@ -3060,6 +3064,110 @@ int main() {
                 for (const auto& c : f.choices)
                     if (!c.id.empty()) para_only = para_only && d.as<core::Style>(c.id)->kind == core::StyleKind::Character;
         check("inspector: its Based on lists character styles only", para_only);
+    }
+
+    {
+        std::cout << "\n-- list numbering options (s047) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto marks = [&] {
+            std::string out;
+            const auto& st = *d.as<core::Story>("story.4");
+            for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+                const auto m = core::doc::list_marker(d, st, p);
+                out += (p ? " " : "") + (m.empty() ? std::string("-") : m);
+            }
+            return out;
+        };
+        check("sample: 1. 2. 3.", marks() == "1. 2. 3.", marks());
+        // A Body paragraph in the middle.
+        core::doc::set_para_style(j, d, "story.4", {1, 0}, {1, 0}, "style.1");
+        check("other paragraphs restart the count (as s045)", marks() == "1. - 1.", marks());
+        core::doc::edit_styles(j, d, {"style.4"}, "Numbering", [](core::Style& s) { s.list.continues = true; });
+        check("carries on: past the Body paragraph", marks() == "1. - 2.", marks());
+        j.undo(); j.undo();
+        // Five paragraphs, a second level between the first.
+        const auto end2 = static_cast<int>(d.as<core::Story>("story.4")->paras[2].text.size());
+        core::doc::edit_text(j, d, "story.4", {2, end2}, {2, end2}, "\nFour\nFive");
+        const auto sub = core::doc::duplicate_style(j, d, "style.4");
+        core::doc::edit_styles(j, d, {sub}, "Level", [](core::Style& s) {
+            s.list.level = 2;
+            s.list.numbering = core::Numbering::AlphaLower;
+            s.left_indent = 24;
+        });
+        core::doc::set_para_style(j, d, "story.4", {1, 0}, {2, 0}, sub);
+        core::doc::set_para_style(j, d, "story.4", {4, 0}, {4, 0}, sub);
+        check("level 2: a. b. under 1., a. again under 2.", marks() == "1. a. b. 2. a.", marks());
+        core::doc::edit_styles(j, d, {"style.4"}, "Numbering", [](core::Style& s) { s.list.continues = true; });
+        check("level 1 carrying on past its level-2 items", marks() == "1. a. b. 2. a.", marks());
+        // Restart at, by hand.
+        check("restart: one step", core::doc::set_list_restart(j, d, "story.4", {3, 0}, {3, 0}, 7));
+        check("restart at 7: the next level-1 is 7.", marks() == "1. a. b. 7. a.", marks());
+        core::doc::edit_text(j, d, "story.4", {3, 0}, {3, 0}, "The ");
+        check("typing in it keeps the restart", d.as<core::Story>("story.4")->paras[3].restart == 7 && marks() == "1. a. b. 7. a.");
+        const auto e3 = static_cast<int>(d.as<core::Story>("story.4")->paras[3].text.size());
+        core::doc::edit_text(j, d, "story.4", {3, e3}, {3, e3}, "\n");
+        check("Enter after it: the new paragraph counts on (8.)", d.as<core::Story>("story.4")->paras[4].restart == 0 &&
+                                                                 core::doc::list_marker(d, *d.as<core::Story>("story.4"), 4) == "8.",
+              marks());
+        bool row = false;
+        for (const auto& f : core::text_fields(d, "story.4", {3, 0}, {3, 0})) row = row || (f.edit == "list_from" && f.value == "Restart at 7");
+        check("inspector (typing): Number -- Restart at 7", row);
+        std::string err;
+        core::Doc e;
+        check("json: restart, carries on, level kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        core::doc::set_list_restart(j, d, "story.4", {3, 0}, {3, 0}, 0);
+        check("counted again", core::doc::list_marker(d, *d.as<core::Story>("story.4"), 3) == "2.", marks());
+    }
+
+    {
+        std::cout << "\n-- auto-size frames (s048) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        j.set_settle([&d] { return L::fit_frames(d); });   // as the app does
+        core::load_sample(d);
+        const auto bottom = [&](const char* story, const char* frame) {
+            double b = -1;
+            for (const auto& f : L::flow_story(d, story).frames)
+                if (f.frame == frame) for (const auto& l : f.lines) b = std::max(b, l.y + l.h);
+            return b;
+        };
+        const auto F = [&](const char* id) { return *d.as<core::Frame>(id); };
+        const double h0 = F("frame.6").h;
+        check("auto-size on: one step", core::doc::edit_frames(j, d, {"frame.6"}, "Auto-size", [](core::Frame& f) { f.autosize = true; }) &&
+                                            j.size() == 1);
+        check("the caption's height fits its text (+ its 6 pt bottom inset)",
+              std::abs(F("frame.6").h - (bottom("story.2", "frame.6") + 6)) < 0.01, std::to_string(F("frame.6").h));
+        const double fitted = F("frame.6").h;
+        // Typing grows it -- in the same step as the typing.
+        std::string more;
+        for (int k = 0; k < 30; ++k) more += " The routes run east along the coast.";
+        const auto end = static_cast<int>(d.as<core::Story>("story.2")->paras[0].text.size());
+        core::doc::edit_text(j, d, "story.2", {0, end}, {0, end}, more);
+        check("typing: the frame grows with it, one step", F("frame.6").h > fitted + 10 && j.size() == 2 &&
+                                                               std::abs(F("frame.6").h - (bottom("story.2", "frame.6") + 6)) < 0.01);
+        check("typing: nothing overset", !L::flow_story(d, "story.2").overset);
+        j.undo();
+        check("undo the typing: back to its fitted height", std::abs(F("frame.6").h - fitted) < 1e-9);
+        j.undo();
+        check("undo auto-size: its height as it was", std::abs(F("frame.6").h - h0) < 1e-9 && !F("frame.6").autosize);
+        j.redo();
+        check("redo: fitted again", std::abs(F("frame.6").h - fitted) < 1e-9);
+        // A frame that threads on is left alone.
+        const double h1 = F("frame.1").h;
+        core::doc::edit_frames(j, d, {"frame.1"}, "Auto-size", [](core::Frame& f) { f.autosize = true; });
+        check("a threaded frame: not resized", std::abs(F("frame.1").h - h1) < 1e-9);
+        bool row = false;
+        const auto items3 = core::frame_items(d, {"frame.1"});   // (kept: a range-for over a temporary's member dangles)
+        for (const auto& f : items3.at(0).fields) row = row || (f.edit == "autosize" && f.value == "Height (not here)");
+        check("inspector: says when it can't", row);
+        std::string err;
+        core::Doc e;
+        check("json: autosize kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
     }
 
     std::cout << "-----------------------------------------------\n";

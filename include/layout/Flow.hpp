@@ -71,6 +71,10 @@ struct StoryFlow {
 std::vector<std::string> thread_frames(const core::Doc& d, const std::string& story);
 
 StoryFlow flow_story(const core::Doc& d, const std::string& story);
+// s048: auto-size frames -- each (the last of its thread, one column)
+// measured with room to spare and given the height its text needs (top
+// fixed; at least 1 pt). What changes, for DocJournal::set_settle.
+std::vector<core::DocJournal::Settled> fit_frames(const core::Doc& d);
 // s023: flow `text` (a version of the story's words -- markers filled in)
 // through that story's thread.
 StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::Story& text);

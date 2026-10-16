@@ -555,7 +555,41 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
     return flow_text(d, story, *st);
 }
 
+namespace {
+StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::Story& text,
+                    const std::map<std::string, double>* heights);
+}
+
 StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::Story& text) {
+    return flow_impl(d, story, text, nullptr);
+}
+
+std::vector<core::DocJournal::Settled> fit_frames(const core::Doc& d) {
+    std::vector<core::DocJournal::Settled> out;
+    for (const auto& id : d.ids_of<core::Frame>()) {
+        const auto* f = d.as<core::Frame>(id);
+        if (!f->autosize || f->kind != core::FrameKind::Text || !f->next.empty() || core::column_count(*f) != 1) continue;
+        const auto* st = d.as<core::Story>(f->story);
+        if (!st) continue;
+        const std::map<std::string, double> room{{id, 1e6}};
+        const auto flow = flow_impl(d, f->story, *st, &room);
+        double bottom = -1;
+        for (const auto& ft : flow.frames)
+            if (ft.frame == id)
+                for (const auto& l : ft.lines) bottom = std::max(bottom, l.y + l.h);
+        if (bottom < 0) continue;   // no text here: leave it as it is
+        const double h = std::max(1.0, bottom + std::max(0.0, f->inset.bottom));
+        if (std::abs(h - f->h) < 0.01) continue;
+        core::Frame g = *f;
+        g.h = h;
+        out.push_back({id, g});
+    }
+    return out;
+}
+
+namespace {
+StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::Story& text,
+                    const std::map<std::string, double>* heights) {
     StoryFlow out;
     const auto* st = &text;
     const auto chain = thread_frames(d, story);
@@ -577,7 +611,11 @@ StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::St
         }
         const Cursor at = c;
         const auto wraps = core::wrap_rects(d, chain[fi]);
-        const double floor = fr.h - std::max(0.0, fr.inset.bottom);   // s040: above the bottom inset
+        // s048: a frame being measured for its auto-size gets room to spare (and no vertical justification).
+        const auto hit = heights ? heights->find(chain[fi]) : decltype(heights->end()){};
+        const bool measuring = heights && hit != heights->end();
+        const double fh = measuring ? hit->second : fr.h;
+        const double floor = fh - std::max(0.0, fr.inset.bottom);   // s040: above the bottom inset
         done = fill_frame(d, *st, fr, wraps, c, floor, out.frames[fi]);
         if (done && fr.balance && core::column_count(fr) > 1) {
             // The shortest column height that still holds the rest.
@@ -592,13 +630,14 @@ StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::St
             out.frames[fi].lines.clear();
             fill_frame(d, *st, fr, wraps, c, hi, out.frames[fi]);
         }
-        vertical_justify(d, *st, fr, wraps, out.frames[fi]);   // s042
+        if (!measuring) vertical_justify(d, *st, fr, wraps, out.frames[fi]);   // s042
         if (!out.frames[fi].lines.empty()) last_page = fr.owner;
     }
     for (const auto& ft : out.frames) out.lines += static_cast<int>(ft.lines.size());
     out.overset = !done;
     return out;
 }
+}  // namespace
 
 namespace {
 

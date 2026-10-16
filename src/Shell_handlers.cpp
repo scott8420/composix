@@ -595,6 +595,18 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Next style", [&](core::Style& st) {
                 if (st.kind == core::StyleKind::Paragraph) st.next = choice;
             });
+        } else if (key == "list_from") {   // s047: the paragraph(s) being typed in
+            auto& cv = m_canvas_view.canvas();
+            if (!cv.editing()) return;
+            const auto [a, b] = cv.edit_range();
+            did = core::doc::set_list_restart(m_journal, m_doc, cv.edit_story_id(), a, b, std::stoi(choice));
+            cv.grab_focus();
+        } else if (key == "list_cont" || key == "list_level") {   // s047
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "list_cont" ? "Numbering" : "Level", [&](core::Style& st) {
+                if (st.kind != core::StyleKind::Paragraph) return;
+                if (key == "list_cont") st.list.continues = choice == "1";
+                else st.list.level = std::clamp(std::stoi(choice), 1, 2);
+            });
         } else if (key == "list_type" || key == "list_bullet" || key == "list_num" || key == "list_hang") {   // s045
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "list_type" ? "List" : key == "list_bullet" ? "Bullet"
                                                                        : key == "list_num" ? "Numbers" : "Hang",
@@ -679,6 +691,10 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             });
         } else if (key == "override") {   // s025: back to the master's
             did = core::doc::remove_overrides(m_journal, m_doc, m_inspected);
+        } else if (key == "autosize") {   // s048 (the journal's settle fits the height in the same step)
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Auto-size", [&](core::Frame& f) {
+                if (f.kind == core::FrameKind::Text) f.autosize = choice == "1";
+            });
         } else if (key == "valign") {   // s042
             const auto v = static_cast<core::VAlign>(std::clamp(std::stoi(choice), 0, 3));
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Vertical justification", [&](core::Frame& f) {

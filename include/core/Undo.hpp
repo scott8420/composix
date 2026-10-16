@@ -97,6 +97,14 @@ public:
     void set_on_change(std::function<void()> f) { m_changed = std::move(f); }
 
     // ── THE ONE DOOR ────────────────────────────────────────────────────────
+    // s048: SETTLING -- what a step makes follow from it (an auto-size frame's
+    // height, from its text). After every step's own work, still inside the
+    // door, `settle` returns records to write; each joins the step (its
+    // before kept), so undo puts them back with the rest. Undo / redo never
+    // settle: they restore exact values.
+    struct Settled { Id id; std::optional<Value> value; };
+    void set_settle(std::function<std::vector<Settled>()> f) { m_settle = std::move(f); }
+
     // Run `op` as one step. `ids` are the records it will touch; `op` may
     // return the ids it CREATED (std::vector<Id>), or nothing. Returns true if
     // a step was kept (or merged into the last one).
@@ -120,6 +128,7 @@ public:
 
         for (const auto& id : made)
             if (!has(st, id)) st.entries.push_back({id, std::nullopt, std::nullopt});
+        settle(st);   // s048
         for (auto& e : st.entries) e.after = m_store.get(e.id);
         st.sel_after = selection();
         if (unchanged(st)) return false;
@@ -162,6 +171,7 @@ public:
         if (!m_gesture) return false;
         m_gesture = false;
         --m_depth;
+        settle(m_open);   // s048
         for (auto& e : m_open.entries) e.after = m_store.get(e.id);
         m_open.sel_after = selection();
         m_open.at        = now;
@@ -234,7 +244,17 @@ private:
     Step                              m_open;        // the gesture being recorded
     std::function<std::vector<Id>()>  m_sel;
     std::function<void()>             m_changed;
+    std::function<std::vector<Settled>()> m_settle;   // s048
 
+    void settle(Step& st) {
+        if (!m_settle) return;
+        ++m_depth;   // inside the door
+        for (auto& s : m_settle()) {
+            if (!has(st, s.id)) st.entries.push_back({s.id, m_store.get(s.id), std::nullopt});
+            m_store.put(s.id, s.value);
+        }
+        --m_depth;
+    }
     template <class Op>
     std::vector<Id> call(Op& op, const std::vector<Id>&) {
         if constexpr (std::is_void_v<std::invoke_result_t<Op&>>) { op(); return {}; }

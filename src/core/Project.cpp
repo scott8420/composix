@@ -330,6 +330,10 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                     static const std::vector<Choice> nl{{"0", "1. 2. 3."}, {"1", "i. ii. iii."}, {"2", "I. II. III."},
                                                         {"3", "a. b. c."}, {"4", "A. B. C."}};
                     f.push_back({"Numbers", nl[static_cast<std::size_t>(s.list.numbering)].label, "list_num", nl});
+                    // s047: past other paragraphs; a second level.
+                    f.push_back({"Numbering", s.list.continues ? "Carries on" : "Restarts after others", "list_cont",
+                                 {{"0", "Restarts after others"}, {"1", "Carries on"}}});
+                    f.push_back({"Level", std::to_string(s.list.level), "list_level", {{"1", "1"}, {"2", "2"}}});
                 }
                 if (s.list.type != ListType::None) {
                     std::vector<Choice> hc;
@@ -571,6 +575,11 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 fields.push_back({"Widths", shown, "widths", wc});
                 fields.push_back({"Balance", f->balance ? "On" : "Off", "balance", {{"0", "Off"}, {"1", "On"}}});
             }
+            {   // s048: the height follows the text (the last frame of a thread, one column).
+                const bool can = f->next.empty() && column_count(*f) == 1;
+                fields.push_back({"Auto-size", f->autosize ? (can ? "Height" : "Height (not here)") : "Off", "autosize",
+                                  {{"0", "Off"}, {"1", "Height"}}});
+            }
             {   // s042: where the text sits, up and down.
                 static const std::vector<Choice> va{{"0", "Top"}, {"1", "Centre"}, {"2", "Bottom"}, {"3", "Justify"}};
                 fields.push_back({"Vertical", va[static_cast<std::size_t>(f->valign)].label, "valign", va});
@@ -656,6 +665,18 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
         return s ? s->name : std::string(none);
     };
     out.push_back({"Paragraph style", name(ps, "None"), "pstyle", pc});
+    // s047: a numbered paragraph's number -- counted, or set by hand.
+    {
+        const auto& para = st->paras[static_cast<std::size_t>(a.para)];
+        const auto* pst = d.as<Style>(para.style);
+        if (pst && pst->list.type == ListType::Number) {
+            std::vector<Choice> nc{{"0", "Counted"}};
+            for (int k = 1; k <= 20; ++k) nc.push_back({std::to_string(k), "Restart at " + std::to_string(k)});
+            out.push_back({"Number", para.restart > 0 ? "Restart at " + std::to_string(para.restart)
+                                                      : "Counted (" + doc::list_marker(d, *st, a.para) + ")",
+                           "list_from", nc});
+        }
+    }
     out.push_back({"Character style", name(cs, "None"), "cstyle", cc});
     const std::string sel = text_between(*st, a, b);
     std::size_t chars = 0;
