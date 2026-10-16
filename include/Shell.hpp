@@ -227,6 +227,7 @@ private:
     Gtk::ToggleButton*               m_find_word = nullptr;
     Gtk::DropDown*                   m_find_in = nullptr;
     Gtk::DropDown*                   m_find_apply = nullptr;
+    Gtk::DropDown*                   m_find_format = nullptr;   // s051: Any / Bold / Italic / Bold Italic
     Gtk::Label*                      m_find_count = nullptr;
     std::vector<std::string>         m_find_styles;   // the dropdowns' ids after "Any" / "Leave"
     std::vector<core::doc::Hit>      m_hits;

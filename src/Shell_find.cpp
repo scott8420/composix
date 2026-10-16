@@ -86,12 +86,21 @@ void Shell::build_find_bar() {  // zone
     inl->add_css_class("cx-field-label");
     m_find_in = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Any style"}));
     m_find_in->set_name("find.in");
+    // s051: find by formatting -- words set bold / italic, locally or by
+    // their character style.
+    auto fml = Gtk::make_managed<Gtk::Label>("Set");
+    fml->add_css_class("cx-field-label");
+    m_find_format = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Any", "Bold", "Italic", "Bold Italic"}));
+    m_find_format->set_name("find.format");
+    m_find_format->set_tooltip_text("Only words set bold / italic (by hand or by character style)");
     auto apl = Gtk::make_managed<Gtk::Label>("Apply");
     apl->add_css_class("cx-field-label");
     m_find_apply = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"No style change"}));
     m_find_apply->set_name("find.apply");
     r3->append(*inl);
     r3->append(*m_find_in);
+    r3->append(*fml);
+    r3->append(*m_find_format);
     r3->append(*apl);
     r3->append(*m_find_apply);
 
@@ -111,6 +120,8 @@ void Shell::build_find_bar() {  // zone
     m_find_case->signal_toggled().connect(again);
     m_find_word->signal_toggled().connect(again);
     m_find_in->property_selected().signal_changed().connect(again);
+    m_find_format->property_selected().signal_changed().connect(again);
+    m_find_apply->property_selected().signal_changed().connect(again);   // s051: what's already in it drops out
     m_find_what->signal_activate().connect([this] { find_go(+1); });
     m_find_with->signal_activate().connect([this] { find_change(false); });
     next->signal_clicked().connect([this] { find_go(+1); });
@@ -170,6 +181,12 @@ void Shell::find_refresh() {  // helper
         const auto& id = m_find_styles[i - 1];
         (m_doc.as<core::Style>(id)->kind == core::StyleKind::Paragraph ? f.pstyle : f.cstyle) = id;
     }
+    const auto fm = m_find_format->get_selected();   // s051
+    f.bold = fm == 1 || fm == 3;
+    f.italic = fm == 2 || fm == 3;
+    if (f.bold || f.italic)
+        if (const auto i = m_find_apply->get_selected(); i > 0 && i - 1 < m_find_styles.size())
+            if (m_doc.as<core::Style>(m_find_styles[i - 1])->kind == core::StyleKind::Character) f.skip_cstyle = m_find_styles[i - 1];
     m_hits = core::doc::find_all(m_doc, f);
     m_hits_rev = m_doc.revision();
     if (m_hit >= static_cast<int>(m_hits.size())) m_hit = m_hits.empty() ? -1 : 0;
@@ -178,7 +195,7 @@ void Shell::find_refresh() {  // helper
 
 void Shell::find_status(const std::string& extra) {  // helper
     std::string t;
-    if (m_find_what->get_text().empty() && m_find_in->get_selected() == 0) t = "";
+    if (m_find_what->get_text().empty() && m_find_in->get_selected() == 0 && m_find_format->get_selected() == 0) t = "";
     else if (m_hits.empty()) t = "No matches";
     else if (m_hit < 0) t = std::to_string(m_hits.size()) + (m_hits.size() == 1 ? " match" : " matches");
     else t = std::to_string(m_hit + 1) + " of " + std::to_string(m_hits.size());
@@ -230,6 +247,9 @@ void Shell::find_change(bool all) {  // helper
         const auto& id = m_find_styles[i - 1];
         (m_doc.as<core::Style>(id)->kind == core::StyleKind::Paragraph ? c.pstyle : c.cstyle) = id;
     }
+    // s051: an empty "Change to" with a style to apply keeps the words (it
+    // deleted them before -- the style then had nothing to go on).
+    c.set_text = !c.with.empty() || (c.pstyle.empty() && c.cstyle.empty());
     auto& cv = m_canvas_view.canvas();
     if (all) {
         const int n = core::doc::change_hits(m_journal, m_doc, m_hits,
@@ -247,7 +267,7 @@ void Shell::find_change(bool all) {  // helper
     const auto h = m_hits[static_cast<std::size_t>(m_hit)];
     core::doc::change_hits(m_journal, m_doc, {h}, c, "Change");
     // On to the next one after what was put there.
-    const int end = h.a.byte + static_cast<int>(c.with.size());
+    const int end = c.set_text ? h.a.byte + static_cast<int>(c.with.size()) : (h.b.para == h.a.para ? h.b.byte : 0);
     m_hits_rev = ~0ull;
     find_refresh();
     int next = -1, last_of_story = -1;

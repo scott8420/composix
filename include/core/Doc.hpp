@@ -675,6 +675,12 @@ struct FindOpts {
     bool        whole_word = false;
     Doc::Id     pstyle;   // "" = any
     Doc::Id     cstyle;   // "" = any
+    // s051: only words set bold / italic (or both) -- by local formatting
+    // or their character style, not the paragraph style. No text: each
+    // stretch of such words is a hit. `skip_cstyle`: leave out words
+    // already in this character style (what Apply is about to put on).
+    bool        bold = false, italic = false;
+    Doc::Id     skip_cstyle;
 };
 struct Hit {
     Doc::Id story;
@@ -691,6 +697,10 @@ struct ChangeOpts {
     std::string with;
     Doc::Id     pstyle;   // "" = leave
     Doc::Id     cstyle;   // "" = leave
+    // s051: with a character style applied, local bold / italic that says
+    // what the style says goes, so the style alone carries it (a later
+    // change to the style is seen on those words too).
+    bool        fold_local = true;
 };
 // Change the hits -- ONE step ("Change" / "Change All (n)"). The hits are
 // done last to first, so the earlier ones keep their places. Returns how

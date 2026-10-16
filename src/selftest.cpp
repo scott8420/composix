@@ -1840,6 +1840,63 @@ int main() {
     }
 
     {
+        std::cout << "\n-- find by formatting (s051) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        load_plain(d);
+        const std::string S = "story.1";
+        const auto& p1 = [&]() -> const core::Para& { return d.as<core::Story>(S)->paras[1]; };
+        bool ascii = p1().text.size() > 40 && p1().runs.empty();
+        for (int i = 0; ascii && i < 40; ++i) ascii = static_cast<unsigned char>(p1().text[static_cast<std::size_t>(i)]) < 0x80;
+        check("find fmt: fixture -- a plain opening paragraph", ascii);
+        // [0,5) italic by hand, [5,10) bold italic by hand, [20,25) bold by hand, [30,35) in Emphasis.
+        D::set_local(j, d, S, {1, 0}, {1, 5}, "i", [](core::Local& l) { l.italic = 1; });
+        D::set_local(j, d, S, {1, 5}, {1, 10}, "bi", [](core::Local& l) { l.italic = 1; l.bold = 1; });
+        D::set_local(j, d, S, {1, 20}, {1, 25}, "b", [](core::Local& l) { l.bold = 1; });
+        D::set_char_style(j, d, S, {1, 30}, {1, 35}, "style.5");
+        const auto in1 = [&](const std::vector<core::doc::Hit>& hs) {
+            std::vector<std::pair<int, int>> out;
+            for (const auto& h : hs) if (h.story == S && h.a.para == 1) out.push_back({h.a.byte, h.b.byte});
+            return out;
+        };
+        using V = std::vector<std::pair<int, int>>;
+        check("find fmt: italic -- by hand (side by side, joined) and by character style",
+              in1(D::find_all(d, D::FindOpts{.italic = true})) == V{{0, 10}, {30, 35}});
+        check("find fmt: bold", in1(D::find_all(d, D::FindOpts{.bold = true})) == V{{5, 10}, {20, 25}});
+        check("find fmt: bold italic", in1(D::find_all(d, D::FindOpts{.bold = true, .italic = true})) == V{{5, 10}});
+        check("find fmt: words already in the style to apply left out",
+              in1(D::find_all(d, D::FindOpts{.italic = true, .skip_cstyle = "style.5"})) == V{{0, 10}});
+        check("find fmt: in a character style and italic", in1(D::find_all(d, D::FindOpts{.cstyle = "style.5", .italic = true})) == V{{30, 35}});
+        const std::string w1 = p1().text.substr(1, 3), w2 = p1().text.substr(21, 3);
+        {
+            bool at1 = false, at21 = false;
+            for (const auto& [a, b] : in1(D::find_all(d, D::FindOpts{.what = w1, .match_case = true, .italic = true}))) at1 = at1 || a == 1;
+            for (const auto& [a, b] : in1(D::find_all(d, D::FindOpts{.what = w2, .match_case = true, .italic = true}))) at21 = at21 || a == 21;
+            check("find fmt: text only where it is so set", at1 && !at21);
+        }
+        // Change All: the hand-made italics to Emphasis -- one step; the
+        // local italic goes (the style carries it), the local bold stays.
+        const auto before = *d.as<core::Story>(S);
+        const auto steps = j.size();
+        const auto hits = D::find_all(d, D::FindOpts{.italic = true, .skip_cstyle = "style.5"});
+        const int n = D::change_hits(j, d, hits, {false, "", "", "style.5"}, "Change All");
+        check("change fmt: to Emphasis, one step", n == static_cast<int>(hits.size()) && n > 0 && j.size() == steps + 1);
+        check("change fmt: words kept, now Emphasis", p1().text == before.paras[1].text &&
+                                                     core::char_style_at(p1(), 1) == "style.5" && core::char_style_at(p1(), 6) == "style.5");
+        check("change fmt: the hand-made italic folded into the style",
+              core::local_at(p1(), 1).italic == -1 && core::local_at(p1(), 6).italic == -1 && core::local_at(p1(), 6).bold == 1);
+        check("change fmt: nothing left to change", in1(D::find_all(d, D::FindOpts{.italic = true, .skip_cstyle = "style.5"})).empty());
+        j.undo();
+        check("change fmt: undo, all back", *d.as<core::Story>(S) == before);
+        D::ChangeOpts keep{false, "", "", "style.5"};
+        keep.fold_local = false;
+        D::change_hits(j, d, D::find_all(d, D::FindOpts{.italic = true, .skip_cstyle = "style.5"}), keep, "Change All");
+        check("change fmt: fold off keeps the local italic", core::local_at(p1(), 1).italic == 1 && core::char_style_at(p1(), 1) == "style.5");
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;
