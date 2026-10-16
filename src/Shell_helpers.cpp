@@ -112,7 +112,9 @@ void Shell::refresh() {  // helper
     for (const auto& id : m_pick.items)
         if (m_outline.find(id)) still.push_back(id);
     m_pick.items = still;
+    const bool on_start = m_main.get_visible_child_name() == "start";   // s064: a refresh doesn't leave it
     show_pick(m_pick, keep);
+    if (on_start) m_main.set_visible_child("start");
     m_story_ed.model_changed();   // s033
     update_title();
     update_preflight();   // s024

@@ -10,6 +10,8 @@
 
 #include <filesystem>
 #include <fstream>
+#include <ctime>
+#include <chrono>
 #include <sstream>
 
 namespace composix::core {
@@ -422,6 +424,43 @@ bool load_project(Doc& d, const std::string& dir, std::string* err) {
     std::stringstream ss;
     ss << f.rdbuf();
     return from_json(d, ss.str(), err);
+}
+
+ProjectSummary summarize_project(const std::string& dir, Doc* keep) {
+    ProjectSummary out;
+    Doc d;
+    if (!load_project(d, dir)) return out;
+    out.ok = true;
+    out.title = d.settings().title.empty() ? fs::path(dir).filename().string() : d.settings().title;
+    out.trim_w = d.settings().trim_w;
+    out.trim_h = d.settings().trim_h;
+    out.pages = static_cast<int>(d.pages().size());
+    std::error_code ec;
+    const auto t = fs::last_write_time(fs::path(dir) / "document.json", ec);
+    if (!ec) {
+        const auto sys = std::chrono::time_point_cast<std::chrono::seconds>(
+            t - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+        out.saved = sys.time_since_epoch().count();
+    }
+    if (keep) *keep = std::move(d);
+    return out;
+}
+
+std::string ago_text(long long now, long long then) {
+    const long long s = now - then;
+    if (s < 60) return "just now";
+    if (s < 3600) { const long long m = s / 60; return std::to_string(m) + (m == 1 ? " minute ago" : " minutes ago"); }
+    if (s < 86400) { const long long h = s / 3600; return std::to_string(h) + (h == 1 ? " hour ago" : " hours ago"); }
+    if (s < 2 * 86400) return "yesterday";
+    if (s < 7 * 86400) return std::to_string(s / 86400) + " days ago";
+    const std::time_t tt = static_cast<std::time_t>(then);
+    std::tm tm{};
+    localtime_r(&tt, &tm);
+    char b[32];
+    std::strftime(b, sizeof b, "%b %e, %Y", &tm);
+    std::string r = b;
+    if (const auto at = r.find("  "); at != std::string::npos) r.erase(at, 1);   // "Oct  3" -> "Oct 3"
+    return r;
 }
 
 }  // namespace composix::core

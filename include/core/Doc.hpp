@@ -947,6 +947,20 @@ bool new_document(Doc& d, const NewDoc& n);
 bool        save_project(const Doc& d, const std::string& dir, std::string* err = nullptr,
                          const std::string& from_dir = {});
 bool        load_project(Doc& d, const std::string& dir, std::string* err = nullptr);
+// s064: what the start screen says about a project folder -- its title,
+// trim, page count, when document.json was last written (Unix seconds),
+// and its first page (for drawing). ok false: no readable document there.
+struct ProjectSummary {
+    bool        ok = false;
+    std::string title;
+    double      trim_w = 0, trim_h = 0;
+    int         pages = 0;
+    long long   saved = 0;
+};
+ProjectSummary summarize_project(const std::string& dir, Doc* keep = nullptr);
+// "just now", "12 minutes ago", "3 hours ago", "yesterday", "4 days ago",
+// then the date ("Oct 3, 2026"). Local time for the date.
+std::string ago_text(long long now, long long then);
 std::string to_json(const Doc& d);                       // the document.json text
 bool        from_json(Doc& d, const std::string& text, std::string* err = nullptr);
 

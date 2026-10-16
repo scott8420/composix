@@ -64,6 +64,7 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     }
     add_action("open-sample",   sigc::mem_fun(*this, &Shell::on_sample));   // s019
     add_action("open",          sigc::mem_fun(*this, &Shell::on_open));
+    add_action("start",         [this] { show_start(); });   // s064
     add_action("zoom-in",       [this] { m_canvas_view.canvas().zoom_step(+1); });
     add_action("zoom-out",      [this] { m_canvas_view.canvas().zoom_step(-1); });
     add_action("zoom-fit",      [this] { m_canvas_view.canvas().zoom_fit(); });

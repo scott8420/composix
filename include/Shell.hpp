@@ -26,6 +26,9 @@
 #include <gtkmm/drawingarea.h>
 #include <gtkmm/scale.h>
 #include <gtkmm/spinbutton.h>
+#include <gtkmm/flowbox.h>
+#include <gtkmm/flowboxchild.h>
+#include <map>
 #include <plate/plate.hpp>
 #include <giomm/simpleaction.h>
 
@@ -101,6 +104,8 @@ private:
     void on_save_as();                           // category: handler: name a new project folder -> save
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
     void pick_images(std::function<void(std::vector<core::ImageFile>)> then);   // category: helper: s063 -- Place: several files
+    void build_start();                          // category: zone: s064 -- the start screen
+    void show_start();                           // category: helper: s064 -- its recent projects, shown
     void restore_window();                       // category: helper: s057 -- size + panels from settings.json
     void save_window();                          // category: helper: s057 -- and back, at close
     void open_swatch_editor(const std::string& id);   // category: helper: s058 -- edit a swatch ("" = a new one)
@@ -224,6 +229,10 @@ private:
     // s013: the Export PDF sheet, and its choices for the session.
     std::unique_ptr<Gtk::Window>     m_export;
     // s058: the swatch editor -- the swatch being made / changed, its sheet's widgets.
+    // s064: the start screen's recent-project cards and their folders.
+    Gtk::FlowBox*                    m_start_grid = nullptr;
+    Gtk::Label*                      m_start_empty = nullptr;
+    std::map<const Gtk::FlowBoxChild*, std::string> m_start_paths;
     std::unique_ptr<Gtk::Window>     m_swed;
     core::Swatch                     m_sw;
     std::string                      m_sw_id;                 // "" = new

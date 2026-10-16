@@ -65,6 +65,7 @@ void Shell::build_shell() {  // zone: header + panes
     m_main.set_transition_type(Gtk::StackTransitionType::CROSSFADE);
     m_main.set_transition_duration(120);
     build_welcome();
+    build_start();   // s064
     m_main.add(m_welcome, "welcome");
     m_main.add(m_tiles, "tiles");
     m_main.add(m_item, "item");
@@ -162,6 +163,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto file = Gio::Menu::create();
     file->append("New\u2026", "win.new");   // s019
     file->append("Open Project…", "win.open");
+    file->append("Start Screen", "win.start");   // s064
     m_recents_menu = Gio::Menu::create();
     file->append_submenu("Open Recent", m_recents_menu);
     file->append("Save", "win.save");

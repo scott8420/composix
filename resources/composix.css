@@ -284,3 +284,9 @@ list.cx-report-list > row { padding: 8px 6px; border-bottom: 1px solid @cx_hair;
 /* s062: a master dragged over a page (tile or navigator row) */
 flowbox.cx-tile-grid > flowboxchild.cx-drop-on > .cx-tile-card { box-shadow: 0 0 0 3px @cx_ink; }
 row.cx-drop-on { background: alpha(@cx_ink, 0.18); }
+
+/* s064: the start screen */
+.cx-start-title { font-size: 2.4em; font-weight: 800; letter-spacing: -0.02em; }
+.cx-start-sub   { color: @cx_dim; font-size: 1.05em; margin-bottom: 6px; }
+.cx-start flowbox.cx-tile-grid { padding: 4px 0 24px; }
+.cx-start .cx-tile-group { padding-left: 0; }

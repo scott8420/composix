@@ -2585,6 +2585,34 @@ int main() {
     }
 
     {
+        std::cout << "\n-- start screen (s064) --\n";
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::load_sample(d);
+        const auto dir = (fs::temp_directory_path() / "composix_s064" / "Sample Book").string();
+        std::error_code ec;
+        fs::remove_all(fs::path(dir).parent_path(), ec);
+        fs::create_directories(dir, ec);
+        std::string err;
+        check("fixture: the sample saved", core::save_project(d, dir, &err), err);
+        core::Doc kept;
+        const auto sum = core::summarize_project(dir, &kept);
+        const long long now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        check("summary: title, trim, pages", sum.ok && sum.title == d.settings().title && sum.pages == static_cast<int>(d.pages().size()) &&
+                                             sum.trim_w == d.settings().trim_w && sum.trim_h == d.settings().trim_h);
+        check("summary: saved just now, the document kept", std::llabs(now - sum.saved) < 120 && kept.pages().size() == d.pages().size());
+        check("summary: no document there -- not ok", !core::summarize_project((fs::path(dir).parent_path() / "none").string()).ok);
+        fs::remove_all(fs::path(dir).parent_path(), ec);
+        const long long t = 1'760'000'000;
+        check("ago: minutes, hours, yesterday, days", core::ago_text(t + 30, t) == "just now" && core::ago_text(t + 60, t) == "1 minute ago" &&
+                                                     core::ago_text(t + 3 * 3600, t) == "3 hours ago" &&
+                                                     core::ago_text(t + 30 * 3600, t) == "yesterday" &&
+                                                     core::ago_text(t + 4 * 86400, t) == "4 days ago");
+        const auto date = core::ago_text(t + 30 * 86400, t);
+        check("ago: a month on -- the date", date.find("2025") != std::string::npos && date.find("  ") == std::string::npos, date);
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

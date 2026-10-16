@@ -74,6 +74,7 @@ void Shell::build_ui() {
         core::Doc sample;
         core::load_sample(sample);
         adopt(sample, "");
+        show_start();   // s064: nothing to reopen -- start here (the sample is behind it)
     }
 
     if (auto lg = log::get(log::Area::Shell))
