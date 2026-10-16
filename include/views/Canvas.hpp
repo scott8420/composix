@@ -65,6 +65,8 @@ public:
     void set_show_guides(bool on) { m_show_guides = on; queue_draw(); }
     void set_show_grid(bool on) { m_show_grid = on; queue_draw(); }   // s036: baseline grid
     bool show_grid() const { return m_show_grid; }
+    void set_show_hidden(bool on) { m_show_hidden = on; queue_draw(); }   // s059: hidden characters
+    bool show_hidden() const { return m_show_hidden; }
 
     // s009: images. The project folder resolves relative / embedded files.
     void set_project_dir(const std::string& dir) { m_dir = dir; queue_draw(); }
@@ -198,6 +200,7 @@ private:
     // s006
     bool              m_in = false;                // the pointer is over the canvas
     bool              m_snap = true, m_show_guides = true, m_show_grid = false;
+    bool              m_show_hidden = false;   // s059
     core::SnapTargets m_targets;                   // gathered at press
     double            m_snap_x = NAN, m_snap_y = NAN;   // the lines snapped to (layout), drawn mid-drag
     std::string       m_guide;                     // the guide being dragged

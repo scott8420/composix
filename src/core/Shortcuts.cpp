@@ -177,6 +177,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"View", "win.toggle-rulers",    {"<Ctrl>r"}, "", "Show / hide the rulers"},
         {"View", "win.toggle-guides",    {"<Ctrl>apostrophe"}, "", "Show / hide the guides"},
         {"View", "win.toggle-grid",      {"<Ctrl><Alt>apostrophe"}, "", "Show / hide the baseline grid"},
+        {"View", "win.toggle-hidden",    {"<Ctrl><Alt>i"}, "", "Show / hide hidden characters (spaces, tabs, paragraph ends, breaks)"},
         {"View", "win.toggle-snap",      {"<Ctrl>semicolon"}, "", "Snap to guides & edges on / off"},
         {"View", "", {}, "Drag out of a ruler", "Pull a guide onto a page (off the page removes it)"},
         {"View", "win.toggle-nav",       {"<Ctrl><Alt>1"}, "", "Show / hide the navigator"},

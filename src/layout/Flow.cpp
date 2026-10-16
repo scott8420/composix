@@ -827,6 +827,36 @@ std::vector<RuleMark> column_rules(const core::Frame& f) {
     return out;
 }
 
+std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                                     const std::string& frame, const core::Story* text) {
+    std::vector<HiddenMark> out;
+    const auto* st = text ? text : d.as<core::Story>(story);
+    if (!st) return out;
+    const int paras = static_cast<int>(st->paras.size());
+    walk_frame(d, story, flow, frame, [&](const Placed& pl) {
+        const auto& ln = *pl.line;
+        if (ln.para < 0 || ln.para >= paras) return;
+        const auto& para = st->paras[static_cast<std::size_t>(ln.para)];
+        const auto& t = para.text;
+        for (int i = ln.start; i < ln.end && i < static_cast<int>(t.size()); ++i) {
+            const char c = t[static_cast<std::size_t>(i)];
+            if (c != ' ' && c != '\t') continue;
+            out.push_back({c == ' ' ? HiddenMark::Kind::Space : HiddenMark::Kind::Tab, x_of(pl, i), x_of(pl, i + 1), pl.base, ln.h, 0});
+        }
+        if (ln.end < static_cast<int>(t.size())) return;   // not the paragraph's last line
+        // Its end: the story's end, a break before the next, or a plain paragraph end.
+        HiddenMark m{HiddenMark::Kind::Para, x_of(pl, static_cast<int>(t.size())), 0, pl.base, ln.h, 0};
+        if (ln.para + 1 >= paras) m.kind = HiddenMark::Kind::End;
+        else if (const auto b = st->paras[static_cast<std::size_t>(ln.para + 1)].brk; b != core::ParaStart::Anywhere) {
+            m.kind = HiddenMark::Kind::Break;
+            m.brk = static_cast<int>(b);
+        }
+        m.x1 = m.x0;
+        out.push_back(m);
+    }, text);
+    return out;
+}
+
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
                      const std::string& frame, double ox, double oy, double ink, const core::Story* text) {
     cairo_save(cr);

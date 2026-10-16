@@ -479,6 +479,48 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
         const layout::Resolved* rs = live ? nullptr : &m_flows.resolved(m_doc, f.story, ctx);
         if (rs && rs->any) layout::draw_frame_text(cr->cobj(), m_doc, f.story, rs->flow, id, 0, 0, 0.08, &rs->text);
         else layout::draw_frame_text(cr->cobj(), m_doc, f.story, flow, id, 0, 0);
+        // s059: hidden characters, over the words, in the selection's blue (never printed).
+        if (m_show_hidden && !from_master) {
+            const auto marks = (rs && rs->any) ? layout::hidden_marks(m_doc, f.story, rs->flow, id, &rs->text)
+                                               : layout::hidden_marks(m_doc, f.story, flow, id);
+            cr->save();
+            cr->set_source_rgba(0.22, 0.45, 0.85, 0.8);
+            cr->set_line_width(0.6);
+            cr->select_font_face("Sans", Cairo::ToyFontFace::Slant::NORMAL, Cairo::ToyFontFace::Weight::NORMAL);
+            for (const auto& m : marks) {
+                const double mid = m.base - m.h * 0.28;
+                using K = layout::HiddenMark::Kind;
+                if (m.kind == K::Space) {
+                    cr->arc((m.x0 + m.x1) / 2, mid, std::max(0.45, m.h * 0.045), 0, 2 * M_PI);
+                    cr->fill();
+                } else if (m.kind == K::Tab) {   // an arrow across the tab's room
+                    const double a = m.x0 + 1, b = std::max(a + 2, m.x1 - 1), hh = m.h * 0.12;
+                    cr->move_to(a, mid);
+                    cr->line_to(b, mid);
+                    cr->move_to(b - hh, mid - hh);
+                    cr->line_to(b, mid);
+                    cr->line_to(b - hh, mid + hh);
+                    cr->stroke();
+                } else if (m.kind == K::Para || m.kind == K::End) {
+                    cr->set_font_size(m.h * 0.62);
+                    cr->move_to(m.x0 + 1, m.base);
+                    cr->show_text(m.kind == K::Para ? "\u00b6" : "#");
+                } else {   // a break: a down arrow -- a bar under it for a frame, two for a page
+                    const double x = m.x0 + 1 + m.h * 0.2, top = m.base - m.h * 0.62, bot = m.base - m.h * 0.12, w = m.h * 0.18;
+                    cr->move_to(x, top);
+                    cr->line_to(x, bot);
+                    cr->move_to(x - w, bot - w);
+                    cr->line_to(x, bot);
+                    cr->line_to(x + w, bot - w);
+                    for (int k = 1; k < std::min(m.brk, 3); ++k) {
+                        cr->move_to(x - w, bot + k * m.h * 0.08);
+                        cr->line_to(x + w, bot + k * m.h * 0.08);
+                    }
+                    cr->stroke();
+                }
+            }
+            cr->restore();
+        }
         if (from_master || op < 1) { cr->pop_group_to_source(); cr->paint_with_alpha(dim * op); }
         cr->restore();
         cr->set_source_rgba(0.45, 0.55, 0.7, 0.55 * dim);

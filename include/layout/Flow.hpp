@@ -119,6 +119,20 @@ std::vector<RuleMark> paragraph_rules(const core::Doc& d, const std::string& sto
 // the text area's height less the rule's inset (frame coordinates).
 std::vector<RuleMark> column_rules(const core::Frame& f);
 
+// s059: hidden characters -- where the marks that steer the text sit on a
+// frame's lines (frame coordinates): spaces, tabs, paragraph ends, a break
+// typed before the next paragraph (its kind in `brk`), the story's end.
+// For the canvas only: never printed or exported.
+struct HiddenMark {
+    enum class Kind { Space, Tab, Para, Break, End };
+    Kind   kind = Kind::Para;
+    double x0 = 0, x1 = 0;   // the character's span (a paragraph end: x0 only)
+    double base = 0, h = 0;  // its line's baseline and leading
+    int    brk = 0;          // Break: 1 column, 2 frame, 3 page, 4 right-hand page
+};
+std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                                     const std::string& frame, const core::Story* text = nullptr);
+
 struct LineVisit {
     PangoLayoutLine* line = nullptr;
     double           x = 0, baseline = 0;

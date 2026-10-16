@@ -82,6 +82,15 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     toggle("toggle-guides", [this](bool on) { m_canvas_view.canvas().set_show_guides(on); });
     toggle("toggle-snap",   [this](bool on) { m_canvas_view.canvas().set_snap(on); });
     toggle("toggle-grid",   [this](bool on) { m_canvas_view.canvas().set_show_grid(on); }, false);   // s036
+    {   // s059: hidden characters -- kept between runs.
+        const bool on = core::setting_int(m_settings, "view.hidden", 0, 0, 1) == 1;
+        m_canvas_view.canvas().set_show_hidden(on);
+        toggle("toggle-hidden", [this](bool v) {
+            m_canvas_view.canvas().set_show_hidden(v);
+            m_settings["view.hidden"] = v ? "1" : "0";
+            core::save_settings(m_settings_file, m_settings);
+        }, on);
+    }
     add_action("save",          sigc::mem_fun(*this, &Shell::on_save));
     add_action("save-as",       sigc::mem_fun(*this, &Shell::on_save_as));
     add_action("place",         sigc::mem_fun(*this, &Shell::on_place));   // s009

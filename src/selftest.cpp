@@ -2392,6 +2392,41 @@ int main() {
     }
 
     {
+        std::cout << "\n-- hidden characters (s059) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        load_plain(d);
+        {
+            core::Doc::Loading load(d);
+            core::Frame f;
+            f.owner = d.pages().back();
+            f.kind = core::FrameKind::Text;
+            f.x = 36; f.y = 36; f.w = 360; f.h = 300;
+            f.columns = 2;
+            f.story = "story.h";
+            d.put("frame.h", f);
+            core::Story st;
+            st.name = "Hidden";
+            st.paras = {{"style.1", "A b\tc", {}}, {"style.1", "D", {}}, {"style.1", "", {}}};
+            st.paras[1].brk = core::ParaStart::NextColumn;
+            d.put("story.h", st);
+        }
+        const auto flow = L::flow_story(d, "story.h");
+        const auto marks = L::hidden_marks(d, "story.h", flow, "frame.h");
+        using K = L::HiddenMark::Kind;
+        const auto count = [&](K k) { return std::count_if(marks.begin(), marks.end(), [&](const L::HiddenMark& m) { return m.kind == k; }); };
+        check("hidden: a space, a tab, a break, a paragraph end, the story's end",
+              count(K::Space) == 1 && count(K::Tab) == 1 && count(K::Break) == 1 && count(K::Para) == 1 && count(K::End) == 1);
+        const auto first = [&](K k) { return *std::find_if(marks.begin(), marks.end(), [&](const L::HiddenMark& m) { return m.kind == k; }); };
+        check("hidden: each where it is -- the space before the tab, a span each",
+              first(K::Space).x1 > first(K::Space).x0 && first(K::Tab).x1 > first(K::Tab).x0 && first(K::Tab).x0 >= first(K::Space).x1 &&
+              first(K::Break).brk == 1 && first(K::Break).x0 >= first(K::Tab).x1);
+        check("hidden: the break's paragraph in the next column -- its end further right",
+              first(K::Para).x0 > static_cast<double>(core::column_x(*d.as<core::Frame>("frame.h"), 1)));
+        check("hidden: none for a frame that doesn't hold the story", L::hidden_marks(d, "story.h", flow, "frame.11").empty());
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;
