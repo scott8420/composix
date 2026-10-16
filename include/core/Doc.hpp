@@ -461,6 +461,39 @@ struct Verb {
 };
 const std::vector<Verb>& verbs();
 
+// ── Find / Change (s022) ────────────────────────────────────────────────────
+// What to look for: text (in one paragraph), optionally only in a
+// paragraph style and / or wholly in a character style. No text and a
+// style: each paragraph in that style (or each run of that character
+// style) is a hit. Case folding is ASCII (other letters match exactly).
+struct FindOpts {
+    std::string what;
+    bool        match_case = false;
+    bool        whole_word = false;
+    Doc::Id     pstyle;   // "" = any
+    Doc::Id     cstyle;   // "" = any
+};
+struct Hit {
+    Doc::Id story;
+    TextPos a, b;
+    bool operator==(const Hit&) const = default;
+};
+// Every hit, in reading order: stories by the first page their thread
+// starts on (masters', then unplaced, after), then by position.
+std::vector<Hit> find_all(const Doc& d, const FindOpts& f);
+// What to do to a hit: put `with` in its place (when set_text), and / or
+// apply a paragraph or character style to what's there afterwards.
+struct ChangeOpts {
+    bool        set_text = true;
+    std::string with;
+    Doc::Id     pstyle;   // "" = leave
+    Doc::Id     cstyle;   // "" = leave
+};
+// Change the hits -- ONE step ("Change" / "Change All (n)"). The hits are
+// done last to first, so the earlier ones keep their places. Returns how
+// many changed.
+int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& c, const std::string& label);
+
 }  // namespace doc
 
 // ── the canvas's view of the document (s005) ───────────────────────────────

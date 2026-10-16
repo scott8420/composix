@@ -123,6 +123,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"General", "win.save",          {"<Ctrl>s"}, "", "Save"},
         {"General", "win.save-as",       {"<Ctrl><Shift>s"}, "", "Save as a new project folder"},
         {"General", "win.export-pdf",    {"<Ctrl>e"}, "", "Export PDF"},
+        {"General", "win.find",          {"<Ctrl>f"}, "", "Find / Change (across every story)"},
         {"General", "win.place",         {"<Ctrl><Shift>p"}, "", "Place an image (into the picked image frame, or click / drag on a page)"},
         {"General", "win.shortcuts",     {"<Ctrl>question", "<Ctrl>slash"}, "",
          "Keyboard shortcuts (this window)"},

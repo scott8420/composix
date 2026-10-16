@@ -1768,6 +1768,48 @@ int main() {
                                                   e.as<core::Frame>("frame.6")->opacity == 0.5);
     }
 
+    {
+        std::cout << "\n-- find / change --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        load_plain(d);
+        const auto any = D::find_all(d, {"the"});
+        const auto cased = D::find_all(d, {"The", true});
+        check("find: in reading order, the chapter first", !any.empty() && any.front().story == "story.1" &&
+                                                           any.front().a == core::TextPos{1, 0} && any.front().b == core::TextPos{1, 3});
+        check("find: match case finds fewer", !cased.empty() && cased.size() < any.size());
+        check("find: whole word", !D::find_all(d, {"harb"}).empty() && D::find_all(d, {"harb", false, true}).empty() &&
+                                  !D::find_all(d, {"harbor", false, true}).empty());
+        check("find: a paragraph style alone -- each paragraph in it", D::find_all(d, {"", false, false, "style.2"}).size() == 2);
+        check("find: a character style alone -- each run of it", D::find_all(d, {"", false, false, "", "style.5"}).size() == 1);
+        check("find: text wholly in a character style", D::find_all(d, {"almanac", false, false, "", "style.5"}).size() == 1 &&
+                                                      D::find_all(d, {"harbor", false, false, "", "style.5"}).empty());
+        check("find: nothing asked, nothing found", D::find_all(d, {}).empty());
+        // Change All: one step, every one; undo puts them all back.
+        const auto before = *d.as<core::Story>("story.1");
+        const auto steps = j.size();
+        const int n = D::change_hits(j, d, any, {true, "a"}, "Change All");
+        check("change all: every hit, one step", n == static_cast<int>(any.size()) && j.size() == steps + 1 &&
+                                                 D::find_all(d, {"the", false, true}).empty());
+        check("change all: later hits kept their places", d.as<core::Story>("story.1")->paras[1].text.rfind("a harbor smelled", 0) == 0);
+        j.undo();
+        check("change all: undo, all back", *d.as<core::Story>("story.1") == before);
+        // Change one, applying a character style to what's put there.
+        const auto h = D::find_all(d, {"diesel"});
+        check("change: one, styled", D::change_hits(j, d, h, {true, "coal", "", "style.5"}, "Change") == 1 &&
+                                     core::char_style_at(d.as<core::Story>("story.1")->paras[1], h.front().a.byte + 1) == "style.5" &&
+                                     d.as<core::Story>("story.1")->paras[1].text.find("coal") != std::string::npos);
+        // Style only: a paragraph style on every heading's paragraph.
+        check("change: style only, text kept", D::change_hits(j, d, D::find_all(d, {"chapter"}), {false, "", "style.6"}, "Change All") == 2 &&
+                                               d.as<core::Story>("story.1")->paras[0].style == "style.6" &&
+                                               d.as<core::Story>("story.1")->paras[0].text == "Chapter One");
+        const auto at = j.size();
+        check("change: to the same thing, no step", D::change_hits(j, d, D::find_all(d, {"coal"}), {true, "coal"}, "Change") == 0 &&
+                                                    j.size() == at);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

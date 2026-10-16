@@ -12,6 +12,11 @@
 
 #include <gtkmm/applicationwindow.h>
 #include <giomm/menu.h>
+#include <gtkmm/dropdown.h>
+#include <gtkmm/entry.h>
+#include <gtkmm/label.h>
+#include <gtkmm/revealer.h>
+#include <gtkmm/togglebutton.h>
 #include <giomm/simpleaction.h>
 
 #include <functional>
@@ -80,6 +85,7 @@ private:
     void on_open();                              // category: handler: pick a project folder -> load it
     void on_new();                               // category: handler: s019 -- the New sheet -> a blank document
     void on_sample();                            // category: handler: s019 -- open the built-in sample book
+    void on_find();                              // category: handler: s022 -- Ctrl+F: show the find bar
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
@@ -106,6 +112,12 @@ private:
     void adopt(const core::Doc& fresh, const std::string& dir);  // category: helper: s019 -- swap in a whole document
     void confirm_discard(std::function<void()> then);  // category: helper: s019 -- unsaved? ask, then go on
     void show_new_sheet();                        // category: helper: s019 -- the New sheet
+    void build_find_bar();                        // category: zone: s022 -- Find / Change, over the main area
+    void find_refresh();                          // category: helper: s022 -- the hits again, from the bar's settings
+    void find_go(int dir);                        // category: helper: s022 -- next / previous hit, shown on the canvas
+    void find_show(int i, bool focus);            // category: helper: s022 -- one hit, on its page, selected
+    void find_change(bool all);                   // category: helper: s022 -- Change / Change All (one step)
+    void find_status(const std::string& extra = {});  // category: helper: s022 -- "3 of 12"
     bool save_to(const std::string& dir);         // category: helper: write + remember + clean
     void set_dirty(bool d);                       // category: helper
     void update_title();                          // category: helper: the header's two lines
@@ -190,6 +202,21 @@ private:
     std::vector<std::string>         m_profiles;           // the sheet's list, as paths
     std::vector<std::string> profile_dirs() const;          // category: helper: where ICC profiles live
     void export_pdf_to(const std::string& path);  // category: helper: write + report
+
+    // s022: Find / Change -- the bar (an overlay over the main area) and
+    // its hits, recomputed when the document has moved since.
+    Gtk::Revealer*                   m_find_rev = nullptr;
+    Gtk::Entry*                      m_find_what = nullptr;
+    Gtk::Entry*                      m_find_with = nullptr;
+    Gtk::ToggleButton*               m_find_case = nullptr;
+    Gtk::ToggleButton*               m_find_word = nullptr;
+    Gtk::DropDown*                   m_find_in = nullptr;
+    Gtk::DropDown*                   m_find_apply = nullptr;
+    Gtk::Label*                      m_find_count = nullptr;
+    std::vector<std::string>         m_find_styles;   // the dropdowns' ids after "Any" / "Leave"
+    std::vector<core::doc::Hit>      m_hits;
+    int                              m_hit = -1;
+    std::uint64_t                    m_hits_rev = ~0ull;
 
     // s019: the New sheet, and what it was last set to (for the session).
     std::unique_ptr<Gtk::Window>     m_new;

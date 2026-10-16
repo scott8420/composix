@@ -106,6 +106,7 @@ void Shell::build_shell() {  // zone: header + panes
     m_main.set_vexpand(true);
     m_main_over.set_child(m_main);
     m_main_over.add_overlay(m_insp_tab);
+    build_find_bar();   // s022
     m_main_over.set_hexpand(true);
     m_main_over.set_vexpand(true);
     m_right.append(m_main_over);
@@ -172,6 +173,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     m_edit_menu = Gio::Menu::create();
     m_edit_menu->append("Undo", "win.undo");
     m_edit_menu->append("Redo", "win.redo");
+    m_edit_menu->append("Find / Change\u2026", "win.find");   // s022
     menu->append_section(m_edit_menu);
 
     auto view = Gio::Menu::create();

@@ -1342,6 +1342,9 @@ const std::vector<Verb>& verbs() {
         {"set_para_style", [](DocJournal& j, Doc& d) { set_para_style(j, d, "story.1", {1, 0}, {3, 2}, "style.3"); }},
         {"set_char_style", [](DocJournal& j, Doc& d) { set_char_style(j, d, "story.1", {1, 4}, {2, 6}, "style.5"); }},
         {"clear_char_style", [](DocJournal& j, Doc& d) { set_char_style(j, d, "story.4", {0, 5}, {0, 12}, ""); }},
+        {"change_hits", [](DocJournal& j, Doc& d) {   // s022: Change All
+             change_hits(j, d, find_all(d, {"the"}), {true, "THE"}, "Change All");
+         }},
         {"edit_styles", [](DocJournal& j, Doc& d) {
              edit_styles(j, d, {"style.1", "style.4"}, "Size", [](Style& s) { s.size = 12; s.leading = 15; });
          }},

@@ -79,6 +79,9 @@ public:
     // change is core::doc::edit_text -- a burst of typing is one step.
     bool editing() const { return !m_edit_story.empty(); }
     void end_edit();
+    // s022: edit `frame` with a..b selected (a Find hit). `focus`: take the
+    // keyboard (else it stays where it is -- the find bar).
+    void select_text(const std::string& frame, core::TextPos a, core::TextPos b, bool focus);
     const std::string& edit_story_id() const { return m_edit_story; }
     // The selection, in reading order (equal = just the caret).
     std::pair<core::TextPos, core::TextPos> edit_range() const {

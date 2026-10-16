@@ -7,6 +7,7 @@
 #include <gdkmm/cursor.h>
 #include <glibmm/main.h>
 #include <gtkmm/droptarget.h>
+#include <gtkmm/root.h>
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/eventcontrollermotion.h>
 #include <gtkmm/eventcontrollerscroll.h>
@@ -1229,6 +1230,18 @@ void Canvas::begin_edit(const std::string& frame, core::TextPos at) {
     update_cursor();
     m_sig_caret.emit();
     if (auto lg = log::get(log::Area::View)) lg->info("edit: {} in {}", m_edit_story, frame);
+}
+
+void Canvas::select_text(const std::string& frame, core::TextPos a, core::TextPos b, bool focus) {
+    Gtk::Widget* had = nullptr;
+    if (!focus) if (auto* root = get_root()) had = root->get_focus();
+    begin_edit(frame, a);
+    if (!editing()) return;
+    m_anchor = core::clamp_pos(*edit_story(), a);
+    m_caret = core::clamp_pos(*edit_story(), b);
+    if (had) had->grab_focus();
+    queue_draw();
+    m_sig_caret.emit();
 }
 
 void Canvas::end_edit() {

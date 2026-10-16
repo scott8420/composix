@@ -275,6 +275,7 @@ void Shell::update_undo_ui() {  // helper
         m_edit_menu->remove_all();
         m_edit_menu->append(u.empty() ? "Undo" : "Undo " + u, "win.undo");
         m_edit_menu->append(r.empty() ? "Redo" : "Redo " + r, "win.redo");
+        m_edit_menu->append("Find / Change\u2026", "win.find");   // s022
     }
 }
 

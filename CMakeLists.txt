@@ -34,6 +34,7 @@ add_library(composix_core STATIC
     src/core/Doc.cpp
     src/core/Sample.cpp
     src/core/NewDoc.cpp
+    src/core/Find.cpp
     src/core/DocJson.cpp
     src/core/Project.cpp
 )
@@ -109,6 +110,7 @@ add_executable(composix
     src/Shell_bindings.cpp
     src/Shell_handlers.cpp
     src/Shell_new.cpp
+    src/Shell_find.cpp
     src/Shell_helpers.cpp
     # s002: the segmented navigator, tile view, item preview, inspector.
     src/views/Navigator.cpp

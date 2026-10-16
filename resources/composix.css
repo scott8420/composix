@@ -235,3 +235,12 @@ button.cx-insp-action       { border-radius: 8px; padding: 2px 10px; min-height:
 /* ── the Export PDF sheet (s013) ─────────────────────────────────────────── */
 .cx-export-title { font-size: 1.15em; font-weight: 800; }
 .cx-export-note  { color: @cx_dim; font-size: 0.85em; }
+
+/* ── s022: the Find / Change bar, a floating card over the main area ───── */
+.cx-find {
+  background: @cx_card;
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 6px 18px alpha(black, 0.16), 0 0 0 1px @cx_hair;
+}
+.cx-find .cx-field-label { min-width: 0; }
