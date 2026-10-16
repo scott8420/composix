@@ -122,6 +122,8 @@ private:
     void on_dump_registry();                     // category: handler: print the live widget tree
     void on_about();                             // category: handler: the About window
     void on_shortcuts();                         // category: handler: keyboard reference
+    void on_go_up();                             // category: handler: s068 -- Alt+Up / the header's Up: the section's tiles
+    void sync_up();                              // category: helper: s068 -- the Up button: shown, named, enabled
     void on_undo();                              // category: handler: Ctrl+Z / menu
     void on_redo();                              // category: handler: Ctrl+Shift+Z, Ctrl+Y / menu
 
@@ -131,6 +133,7 @@ private:
     core::Outline project_now() const;            // category: helper: the projection, with overset measured
     void refresh();                               // category: helper: re-project; every view repaints, keeping its place
     void show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper
+    void show_pick_now(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper: s068 -- show_pick, before the Up button
     bool open_project(const std::string& dir);    // category: helper: load + reset the journal + views
     void adopt(const core::Doc& fresh, const std::string& dir);  // category: helper: s019 -- swap in a whole document
     void confirm_discard(std::function<void()> then);  // category: helper: s019 -- unsaved? ask, then go on
@@ -163,6 +166,8 @@ private:
     // Header.
     widgets::Button       m_logo_button;
     widgets::ToggleButton m_nav_toggle;
+    std::vector<std::string> m_up_keep;     // s068: the items to select among the tiles, going up
+    Glib::RefPtr<Gio::SimpleAction> m_act_up;
     widgets::Box          m_title_box;
     widgets::Label        m_title;
     widgets::Label        m_subtitle;

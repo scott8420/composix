@@ -16,9 +16,12 @@ class ItemView : public widgets::Box {
 public:
     ItemView();
     void show_items(const std::vector<const core::Item*>& items);
+    // s068: where the back arrow before the title goes ("Document").
+    void set_back(const std::string& to) { if (m_back) m_back->set_tooltip_text("Back to " + to + "  (Alt+Up)"); }
 
 private:
     widgets::Box         m_head;
+    Gtk::Button*         m_back = nullptr;   // s068
     widgets::Label       m_title;
     widgets::Label       m_count;
     widgets::DrawingArea m_area;

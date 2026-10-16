@@ -114,13 +114,33 @@ void Shell::refresh() {  // helper
     m_pick.items = still;
     const bool on_start = m_main.get_visible_child_name() == "start";   // s064: a refresh doesn't leave it
     show_pick(m_pick, keep);
-    if (on_start) m_main.set_visible_child("start");
+    if (on_start) { m_main.set_visible_child("start"); sync_up(); }
     m_story_ed.model_changed();   // s033
     update_title();
     update_preflight();   // s024
 }
 
+// s068: up a level follows what's open -- enabled (and the views' back
+// arrows named for the section above) when items are open.
+void Shell::sync_up() {  // helper
+    std::optional<core::Segment> parent;
+    if (!m_pick.segment && !m_pick.items.empty() && m_main.get_visible_child_name() != "start")
+        parent = core::parent_of(m_outline, m_pick.items);
+    if (m_act_up) m_act_up->set_enabled(parent.has_value());
+    if (parent) {   // the back arrows before the views' titles say where they go
+        const auto& title = core::segment_info(*parent).title;
+        m_canvas_view.set_back(title);
+        m_item.set_back(title);
+        m_story_ed.set_back(title);
+    }
+}
+
 void Shell::show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles) {  // helper
+    show_pick_now(p, keep_tiles);
+    sync_up();
+}
+
+void Shell::show_pick_now(const views::Pick& p, const std::vector<std::string>& keep_tiles) {  // helper
     if (p.segment) {
         m_segment = p.segment;
         m_tiles.show_section(m_outline, *p.segment, keep_tiles);

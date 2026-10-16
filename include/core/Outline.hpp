@@ -110,6 +110,10 @@ private:
     std::vector<Item> m_items;
 };
 
+// s068: one level up from opened items -- the section they belong to (the
+// first one found decides); none when nothing given is in the outline.
+std::optional<Segment> parent_of(const Outline& o, const std::vector<std::string>& ids);
+
 class Doc;
 // The document, as the navigator / tiles / inspector see it. `project_dir`
 // resolves linked assets' relative paths ("" = unsaved: relative links can't

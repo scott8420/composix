@@ -129,6 +129,8 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     // and selection source stay wired from day one (RULES: undo from the first
     // write); s002 writes nothing, so the journal is empty until s003.
     m_act_undo = add_action("undo", sigc::mem_fun(*this, &Shell::on_undo));
+    m_act_up = add_action("go-up", sigc::mem_fun(*this, &Shell::on_go_up));   // s068
+    m_act_up->set_enabled(false);
     m_act_redo = add_action("redo", sigc::mem_fun(*this, &Shell::on_redo));
     // The model <-> journal <-> UI wiring (as Cairn's stone): the document asks
     // the journal whether the door is open; the journal reads the selection

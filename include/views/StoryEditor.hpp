@@ -23,6 +23,8 @@ namespace composix::views {
 
 class StoryEditor : public widgets::Box {
 public:
+    // s068: where the back arrow before the title goes ("Stories").
+    void set_back(const std::string& to) { if (m_back) m_back->set_tooltip_text("Back to " + to + "  (Alt+Up)"); }
     StoryEditor(core::Doc& d, core::DocJournal& j);
     ~StoryEditor() override;
 
@@ -53,6 +55,7 @@ private:
     core::Doc&           m_doc;
     core::DocJournal&    m_journal;
     widgets::Box         m_head;
+    Gtk::Button*         m_back = nullptr;   // s068
     widgets::Label       m_title;
     widgets::Label       m_info;
     widgets::ScrolledWindow m_scroll;

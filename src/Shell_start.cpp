@@ -188,6 +188,7 @@ void Shell::show_start() {  // helper
     m_start_empty->set_visible(n == 0);
     m_start_grid->set_visible(n > 0);
     m_main.set_visible_child("start");
+    sync_up();   // s068
     m_canvas_view.set_title("", 0);
     if (auto lg = log::get(log::Area::Shell)) lg->info("start screen: {} recent project(s)", n);
 }

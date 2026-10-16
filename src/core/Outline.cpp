@@ -32,6 +32,12 @@ std::vector<const Item*> Outline::in(Segment s) const {
     return out;
 }
 
+std::optional<Segment> parent_of(const Outline& o, const std::vector<std::string>& ids) {
+    for (const auto& id : ids)
+        if (const auto* it = o.find(id)) return it->segment;
+    return std::nullopt;
+}
+
 const Item* Outline::find(const std::string& id) const {
     for (const auto& it : m_items)
         if (it.id == id) return &it;

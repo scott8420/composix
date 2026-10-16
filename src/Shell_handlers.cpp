@@ -489,7 +489,20 @@ void Shell::on_about() {  // handler: open the About window (dialog-lifetime exe
 // follows whichever: the category's summary, or the items' shared fields.
 void Shell::on_nav_pick(const views::Pick& p) {  // handler
     m_pick = p;
-    show_pick(p, {});
+    const auto keep = std::move(m_up_keep);   // s068: going up, the items just open stay picked
+    m_up_keep.clear();
+    show_pick(p, keep);
+}
+
+// s068: up a level -- the open items' section, as tiles, with them picked.
+void Shell::on_go_up() {  // handler
+    if (m_pick.segment || m_pick.items.empty()) return;
+    const auto parent = core::parent_of(m_outline, m_pick.items);
+    if (!parent) return;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("up: to {}", core::segment_info(*parent).key);
+    m_up_keep = m_pick.items;
+    m_nav.select_section(*parent);
+    m_up_keep.clear();
 }
 
 void Shell::on_tiles_selection(const std::vector<std::string>& ids) {  // handler

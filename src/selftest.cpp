@@ -2740,6 +2740,26 @@ int main() {
     }
 
     {
+        std::cout << "\n-- up a level (s068) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto o = core::project(d, "");
+        const auto first = [&](core::Segment s) { const auto in = o.in(s); return in.empty() ? std::string{} : in.front()->id; };
+        using S = core::Segment;
+        check("up: a page -> Pages & Spreads", core::parent_of(o, {d.pages().front()}) == S::Pages);
+        check("up: a master -> Masters", core::parent_of(o, {first(S::Masters)}) == S::Masters);
+        check("up: a story -> Stories", core::parent_of(o, {first(S::Stories)}) == S::Stories);
+        check("up: a swatch -> Colors", core::parent_of(o, {first(S::Colors)}) == S::Colors);
+        check("up: the first known item decides", core::parent_of(o, {"nothing.1", first(S::Masters)}) == S::Masters);
+        check("up: nothing known -> no level", !core::parent_of(o, {}) && !core::parent_of(o, {"nothing.1"}));
+        bool reg = false;
+        for (const auto& r : core::shortcut_registry()) reg = reg || (r.action == "win.go-up" && !r.accels.empty());
+        check("up: Alt+Up in the shortcut registry", reg);
+    }
+
+    {
         std::cout << "\n-- per-side insets, wrap offsets, typed column widths (s067) --\n";
         namespace D = core::doc;
         namespace L = composix::layout;
