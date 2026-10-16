@@ -20,6 +20,7 @@
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
 #include "core/Settings.hpp"
+#include "core/PlaceQueue.hpp"
 #include "core/Shortcuts.hpp"
 #include "core/Stones.hpp"
 #include "core/Undo.hpp"
@@ -2559,6 +2560,28 @@ int main() {
         const auto s2 = j.size();
         check("master drop: the pages take it, one step", D::set_master(j, d, {pg, other}, m2) && j.size() == s2 + 1 &&
                                                          d.as<core::Page>(pg)->master == m2 && d.as<core::Page>(other)->master == m2);
+    }
+
+    {
+        std::cout << "\n-- place several (s063) --\n";
+        core::PlaceQueue q;
+        check("queue: empty at first", q.empty() && q.size() == 0);
+        const auto file = [](const char* n) { core::ImageFile f; f.name = n; f.path = std::string("/x/") + n; return f; };
+        q.load({file("a.png"), file("b.png"), file("c.png")});
+        check("queue: the first is the one a click puts down", q.size() == 3 && q.current().name == "a.png" && q.next()->name == "b.png");
+        q.cycle(+1);
+        check("queue: the arrows turn -- next", q.current().name == "b.png" && q.size() == 3);
+        q.cycle(-1);
+        q.cycle(-1);
+        check("queue: and back (the last to the front)", q.current().name == "c.png");
+        q.placed();
+        check("queue: placed -- it goes, the next comes up", q.size() == 2 && q.current().name == "a.png");
+        q.placed();
+        q.placed();
+        check("queue: the last placed -- nothing loaded", q.empty() && !q.next());
+        q.load({file("x.png")});
+        q.cycle(+1);
+        check("queue: one alone doesn't turn; Esc clears", q.current().name == "x.png" && (q.clear(), q.empty()));
     }
 
     {

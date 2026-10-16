@@ -82,20 +82,24 @@ void Shell::on_save_as() {  // handler: name a new project folder -> save
 // Place: one image frame picked -> into it; else the canvas is loaded with the
 // file (click on a page / drag a frame / click an image frame; Esc puts it down).
 void Shell::on_place() {  // handler
-    pick_image([this](const core::ImageFile& f) {
+    // s063: one or several. A picked image frame takes the first; the rest
+    // (or all) ride on the cursor, a click each.
+    pick_images([this](std::vector<core::ImageFile> files) {
+        if (files.empty()) return;
         auto& cv = m_canvas_view.canvas();
         const auto& sel = cv.selection();
         if (sel.size() == 1) {
             if (const auto* fr = m_doc.as<core::Frame>(sel.front()); fr && fr->kind == core::FrameKind::Image) {
-                core::doc::place_image(m_journal, m_doc, sel.front(), f);
-                return;
+                core::doc::place_image(m_journal, m_doc, sel.front(), files.front());
+                files.erase(files.begin());
+                if (files.empty()) return;
             }
         }
         if (m_main.get_visible_child_name() != "canvas") {
-            alert("Open a page to place on", "Pick a page in the navigator, then Place again — or drop the file on it.");
+            alert("Open a page to place on", "Pick a page in the navigator, then Place again — or drop the files on it.");
             return;
         }
-        cv.load_image(f);
+        cv.load_images(std::move(files));
     });
 }
 

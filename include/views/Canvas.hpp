@@ -1,4 +1,5 @@
 #pragma once
+#include "core/PlaceQueue.hpp"
 // views::Canvas -- the page canvas (s005).
 //
 // The opened pages (or masters) at true size, left to right on a pasteboard:
@@ -74,7 +75,8 @@ public:
     // size, a drag draws its frame, a click on an image frame fills that.
     // Esc puts it down. A file dropped from the desktop places the same way.
     void load_image(const core::ImageFile& f);
-    bool loaded() const { return m_loaded.has_value(); }
+    void load_images(std::vector<core::ImageFile> files);   // s063: several, one click each
+    bool loaded() const { return !m_load.empty(); }
 
     // s010: editing text in place. Double-click a text frame (or click one
     // with the Text tool; a new text frame starts editing): a caret, typing
@@ -232,7 +234,7 @@ private:
 
     // s009
     std::string                    m_dir;      // the project folder ("" = unsaved)
-    std::optional<core::ImageFile> m_loaded;   // Place: the file waiting for a click
+    core::PlaceQueue  m_load;   // Place (s063: several): the files waiting for a click each
 
     // s010: editing
     std::string   m_edit_story, m_edit_frame;   // editing when the story is set

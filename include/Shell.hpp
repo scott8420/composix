@@ -100,6 +100,7 @@ private:
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
+    void pick_images(std::function<void(std::vector<core::ImageFile>)> then);   // category: helper: s063 -- Place: several files
     void restore_window();                       // category: helper: s057 -- size + panels from settings.json
     void save_window();                          // category: helper: s057 -- and back, at close
     void open_swatch_editor(const std::string& id);   // category: helper: s058 -- edit a swatch ("" = a new one)

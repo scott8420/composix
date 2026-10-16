@@ -381,6 +381,38 @@ void Shell::pick_image(std::function<void(const core::ImageFile&)> then) {  // h
     });
 }
 
+// s063: Place picks several -- each read; any that isn't a picture is
+// named in one alert, the rest go on.
+void Shell::pick_images(std::function<void(std::vector<core::ImageFile>)> then) {  // helper
+    auto dialog = Gtk::FileDialog::create();
+    dialog->set_title("Place images");
+    auto filter = Gtk::FileFilter::create();
+    filter->set_name("Images");
+    for (const auto& p : views::images::patterns()) filter->add_pattern(p);
+    auto filters = Gio::ListStore<Gtk::FileFilter>::create();
+    filters->append(filter);
+    dialog->set_filters(filters);
+    dialog->set_default_filter(filter);
+    dialog->open_multiple(*this, [this, dialog, then](const Glib::RefPtr<Gio::AsyncResult>& result) {
+        try {
+            const auto chosen = dialog->open_multiple_finish(result);
+            std::vector<core::ImageFile> out;
+            std::string bad;
+            for (const auto& file : chosen) {
+                if (!file || file->get_path().empty()) continue;
+                if (const auto f = views::images::probe(file->get_path())) out.push_back(*f);
+                else bad += (bad.empty() ? "" : ", ") + std::string("\u201c") + file->get_basename() + "\u201d";
+            }
+            if (!bad.empty())
+                alert("Can\u2019t read some of those", bad + " \u2014 not pictures Composix can open (PNG, JPEG, TIFF, GIF, BMP, WebP, SVG).");
+            if (auto lg = log::get(log::Area::Io)) lg->info("place: {} file(s)", out.size());
+            then(std::move(out));
+        } catch (const Glib::Error& e) {
+            if (auto lg = log::get(log::Area::Io)) lg->info("place: dismissed ({})", e.what());
+        }
+    });
+}
+
 // Copy an asset's file into <project>/assets/ under a name not taken there;
 // the project-relative path, or "" (and why).
 std::string Shell::embed_copy(const core::Asset& a, std::string* err) {  // helper

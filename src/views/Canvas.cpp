@@ -786,8 +786,10 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         }
     }
     // Loaded (s009): the file's name beside the pointer.
-    if (m_loaded && m_in) {
-        auto lay = create_pango_layout(m_loaded->name);
+    if (!m_load.empty() && m_in) {
+        // s063: and how many more wait; the next one's picture beside it.
+        const std::string more = m_load.size() > 1 ? "  +" + std::to_string(m_load.size() - 1) + " more" : std::string{};
+        auto lay = create_pango_layout(m_load.current().name + more);
         lay->set_font_description(Pango::FontDescription("Sans 9"));
         int lw, lh;
         lay->get_pixel_size(lw, lh);
@@ -798,6 +800,22 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->set_source_rgb(1, 1, 1);
         cr->move_to(x, y);
         lay->show_in_cairo_context(cr);
+        // s063: a small copy of the picture a click will put down.
+        const auto& cur = m_load.current();
+        if (auto pic = images::get(cur.path, cur.stamp)) {
+            const double pw = pic->get_width(), ph = pic->get_height();
+            if (pw > 0 && ph > 0) {
+                const double k = std::min(64.0 / pw, 48.0 / ph);
+                const double tw = pw * k, th = ph * k, ty = y + lh + 6;
+                cr->set_source_rgba(0, 0, 0, 0.25);
+                cr->rectangle(x - 5 + 1, ty + 1, tw + 4, th + 4);
+                cr->fill();
+                cr->set_source_rgb(1, 1, 1);
+                cr->rectangle(x - 5, ty, tw + 4, th + 4);
+                cr->fill();
+                images::paint(cr, pic, x - 3, ty + 2, tw, th);
+            }
+        }
     }
     if (m_drag == Drag::Marquee) {
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.12);
@@ -885,7 +903,7 @@ void Canvas::on_drag_begin(double x, double y) {
             }
             end_edit();   // a click anywhere else ends editing, then does its own thing
         }
-        if (m_thread_from.empty() && !m_loaded && text_frame && !m_mods_alt && out_port_hit(x, y).empty() &&
+        if (m_thread_from.empty() && m_load.empty() && text_frame && !m_mods_alt && out_port_hit(x, y).empty() &&
             ((m_tool == Tool::Select && m_clicks >= 2) || m_tool == Tool::Text)) {
             begin_edit(under, hit_story(under, px0, py0));
             m_drag = Drag::Text;
@@ -919,7 +937,7 @@ void Canvas::on_drag_begin(double x, double y) {
         return;
     }
     // A drawing tool -- or a loaded image (s009) -- drag out a frame on a page.
-    if (m_tool != Tool::Select || m_loaded) {
+    if (m_tool != Tool::Select || !m_load.empty()) {
         m_draw_page = core::page_at(m_placed, px0, py0);
         m_drag = m_draw_page.empty() ? Drag::None : Drag::Draw;
         m_dx0 = px0;
@@ -1241,7 +1259,7 @@ void Canvas::on_drag_end(double, double) {
         queue_draw();
         return;
     }
-    if (was == Drag::Draw && m_loaded) {   // s009: a click places, a drag draws its frame
+    if (was == Drag::Draw && !m_load.empty()) {   // s009: a click places, a drag draws its frame
         const bool drawn = m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4;
         place_loaded(m_dx0, m_dy0, drawn ? &m_draw : nullptr);
         m_draw = {};
@@ -1343,10 +1361,17 @@ bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
         if (!m_space) { m_space = true; update_cursor(); }
         return true;
     }
+    // s063: loaded with several -- the arrows turn through them.
+    if (m_load.size() > 1 && !editing() &&
+        (kv == GDK_KEY_Left || kv == GDK_KEY_Right || kv == GDK_KEY_Up || kv == GDK_KEY_Down)) {
+        m_load.cycle(kv == GDK_KEY_Right || kv == GDK_KEY_Down ? +1 : -1);
+        queue_draw();
+        return true;
+    }
     if (kv == GDK_KEY_Escape) {
         if (!m_thread_from.empty()) { m_thread_from.clear(); update_cursor(); queue_draw(); return true; }
         if (m_drag != Drag::None) { cancel_drag(); return true; }
-        if (m_loaded) { m_loaded.reset(); update_cursor(); queue_draw(); return true; }
+        if (!m_load.empty()) { m_load.clear(); update_cursor(); queue_draw(); return true; }
         if (!m_sel.empty()) { pick({}); return true; }
         return false;
     }
@@ -1403,7 +1428,7 @@ void Canvas::on_motion(double x, double y) {
     m_my = y;
     m_in = true;
     m_sig_view.emit();
-    if (m_loaded) queue_draw();   // the file's name rides with the pointer
+    if (!m_load.empty()) queue_draw();   // the file's name rides with the pointer
     if (m_drag != Drag::None) return;
     double dx, dy;
     m_vp.to_doc(x, y, dx, dy);
@@ -1419,7 +1444,7 @@ void Canvas::set_tool(Tool t) {
     end_edit();
     m_tool = t;
     m_thread_from.clear();
-    m_loaded.reset();
+    m_load.clear();
     update_cursor();
 }
 
@@ -1795,8 +1820,11 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
 }
 
 // ── s009: placing images ────────────────────────────────────────────────────
-void Canvas::load_image(const core::ImageFile& f) {
-    m_loaded = f;
+void Canvas::load_image(const core::ImageFile& f) { load_images({f}); }
+
+void Canvas::load_images(std::vector<core::ImageFile> files) {
+    m_load.load(std::move(files));
+    if (m_load.empty()) return;
     m_thread_from.clear();
     grab_focus();
     update_cursor();
@@ -1806,8 +1834,8 @@ void Canvas::load_image(const core::ImageFile& f) {
 // Put the loaded file down at (lx, ly) (layout): into the image frame there,
 // or a new frame -- the one drawn, else the file's own size, kept on the page.
 void Canvas::place_loaded(double lx, double ly, const Rect* drawn) {
-    if (!m_loaded) return;
-    const core::ImageFile file = *m_loaded;
+    if (m_load.empty()) return;
+    const core::ImageFile file = m_load.current();
     std::string made;
     if (!drawn) {
         const auto hit = core::hit_frame(m_doc, m_placed, lx, ly, 3 / m_vp.scale());
@@ -1832,7 +1860,7 @@ void Canvas::place_loaded(double lx, double ly, const Rect* drawn) {
         }
     }
     if (made.empty()) return;   // the pasteboard: still loaded, try again
-    m_loaded.reset();
+    m_load.placed();             // s063: the next one comes up (if any)
     relayout();
     pick({made});
     m_sig_edited.emit();
@@ -1846,25 +1874,31 @@ bool Canvas::on_drop(const Glib::ValueBase& v, double x, double y) {
     auto* list = static_cast<GdkFileList*>(g_value_get_boxed(v.gobj()));
     if (!list) return false;
     GSList* files = gdk_file_list_get_files(list);
-    std::optional<core::ImageFile> found;
-    for (GSList* l = files; l && !found; l = l->next) {
+    // s063: every readable picture -- the first placed where it lands, the
+    // rest left on the cursor for a click each.
+    std::vector<core::ImageFile> found;
+    for (GSList* l = files; l; l = l->next) {
         char* path = g_file_get_path(G_FILE(l->data));
-        if (path) found = images::probe(path);
+        if (path) if (auto f = images::probe(path)) found.push_back(*f);
         g_free(path);
     }
     g_slist_free(files);
-    if (!found) return false;
+    if (found.empty()) return false;
     double lx, ly;
     m_vp.to_doc(x, y, lx, ly);
-    m_loaded = found;
+    const std::size_t n = found.size();
+    m_load.load(std::move(found));
     place_loaded(lx, ly, nullptr);
-    if (m_loaded) { m_loaded.reset(); update_cursor(); return false; }   // dropped on the pasteboard
+    if (m_load.size() == n) { m_load.clear(); update_cursor(); return false; }   // dropped on the pasteboard
+    grab_focus();
+    update_cursor();
+    queue_draw();
     return true;
 }
 
 void Canvas::update_cursor() {
     if (m_space) { set_cursor(Gdk::Cursor::create(m_drag == Drag::Pan ? "grabbing" : "grab")); return; }
-    if (!m_thread_from.empty() || m_loaded) { set_cursor(Gdk::Cursor::create("copy")); return; }   // loaded
+    if (!m_thread_from.empty() || !m_load.empty()) { set_cursor(Gdk::Cursor::create("copy")); return; }   // loaded
     if (!out_port_hit(m_mx, m_my).empty() && !editing()) { set_cursor(Gdk::Cursor::create("pointer")); return; }
     if (editing() || m_tool == Tool::Text) {   // s010: the I-beam over text you can type in
         const auto* f = m_doc.as<core::Frame>(m_hover);
