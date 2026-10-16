@@ -538,6 +538,32 @@ std::pair<int, int> thread_place(const Doc& d, const Doc::Id& frame);
 // before a project is opened, and the selftest's fixture. Loaded, not undoable.
 void load_sample(Doc& d);
 
+// ── a new document (s019) ───────────────────────────────────────────────────
+// What File > New asks for. Points throughout.
+struct NewDoc {
+    std::string title   = "Untitled";
+    double      trim_w  = 6 * kPt, trim_h = 9 * kPt;
+    int         pages   = 16;
+    bool        facing  = true;
+    Margins     margins{0.75 * kPt, 0.75 * kPt, 0.75 * kPt, 0.75 * kPt};
+    int         columns = 1;
+    double      gutter  = 12;
+    double      bleed   = 0.125 * kPt;
+    bool        text_frames = true;   // one story threaded through a frame in every page's margins
+    bool operator==(const NewDoc&) const = default;
+};
+// Common book trims (the first is the default).
+struct TrimPreset { std::string label; double w, h; };
+const std::vector<TrimPreset>& trim_presets();
+// "" when `n` makes a usable document, else why not (for the sheet to say).
+std::string check_new(const NewDoc& n);
+// Replace `d` with a blank document (loaded: not a step): settings, one
+// master with the margins and columns, the pages, one section, Black and
+// Paper, Body / Heading / Caption / Emphasis, and -- with text_frames -- an
+// empty story threaded through every page. False (d untouched) if
+// check_new refuses.
+bool new_document(Doc& d, const NewDoc& n);
+
 // ── the project folder: <name>/document.json + assets/ ─────────────────────
 // `from_dir`: the folder it was saved in before (Save As): its embedded files
 // are copied across so the new folder is whole.

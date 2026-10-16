@@ -163,7 +163,15 @@ bool Shell::open_project(const std::string& dir) {  // helper
         if (auto lg = log::get(log::Area::Io)) lg->warn("open '{}': {}", dir, err);
         return false;
     }
-    // Swap the records in under a load: not a user choice, not undoable.
+    adopt(fresh, dir);
+    note_recent(dir);
+    if (auto lg = log::get(log::Area::Io)) lg->info("opened '{}' ({} records)", dir, m_doc.size());
+    return true;
+}
+
+// s019: a whole document in place of this one (opened, new, the sample).
+// Swapped in under a load: not a user choice, not undoable.
+void Shell::adopt(const core::Doc& fresh, const std::string& dir) {  // helper
     {
         m_doc.reset();
         core::Doc::Loading load(m_doc);
@@ -172,8 +180,8 @@ bool Shell::open_project(const std::string& dir) {  // helper
     m_project_dir = dir;
     m_canvas_view.canvas().set_project_dir(dir);
     m_journal.clear();       // no step carries over from another document
+    m_dirty = true;          // (so set_dirty repaints the title)
     set_dirty(false);
-    note_recent(dir);
     m_pick = {};
     m_nav.set_outline(nullptr);
     m_outline = project_now();
@@ -181,8 +189,27 @@ bool Shell::open_project(const std::string& dir) {  // helper
     m_nav.set_open(core::Segment::Pages, true);
     m_nav.select_section(core::Segment::Pages);
     update_title();
-    if (auto lg = log::get(log::Area::Io)) lg->info("opened '{}' ({} records)", dir, m_doc.size());
-    return true;
+}
+
+// s019: before a document is replaced -- unsaved changes? Save / Don't Save /
+// Cancel. Save on a never-saved document opens Save As and stops there (do
+// it again once it's saved), as closing does.
+void Shell::confirm_discard(std::function<void()> then) {  // helper
+    if (!m_dirty) { then(); return; }
+    auto dialog = Gtk::AlertDialog::create("Save changes to \u201c" + m_doc.settings().title + "\u201d?");
+    dialog->set_detail("Your changes will be lost if you don\u2019t save them.");
+    dialog->set_buttons({"Cancel", "Don\u2019t Save", "Save"});
+    dialog->set_cancel_button(0);
+    dialog->set_default_button(2);
+    dialog->choose(*this, [this, dialog, then](const Glib::RefPtr<Gio::AsyncResult>& result) {
+        int choice = 0;
+        try { choice = dialog->choose_finish(result); } catch (const Glib::Error&) { return; }
+        if (choice == 1) Glib::signal_idle().connect_once(then);
+        else if (choice == 2) {
+            if (m_project_dir.empty()) { on_save_as(); return; }
+            if (save_to(m_project_dir)) Glib::signal_idle().connect_once(then);
+        }
+    });
 }
 
 bool Shell::save_to(const std::string& dir) {  // helper
@@ -214,7 +241,7 @@ void Shell::update_title() {  // helper
     const auto& s = m_doc.settings();
     m_title.set_text(s.title + (m_dirty ? "  \u2022" : ""));
     const auto n = m_doc.pages().size();
-    std::string where = m_project_dir.empty() ? "sample \u2014 not saved" : m_project_dir;
+    std::string where = m_project_dir.empty() ? "not saved" : m_project_dir;
     const std::string home = Glib::get_home_dir();
     if (!home.empty() && where.rfind(home, 0) == 0) where = "~" + where.substr(home.size());
     m_subtitle.set_text(core::size_text(s.trim_w, s.trim_h, 0) + " \u00b7 " + std::to_string(n) +

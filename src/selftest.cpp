@@ -1611,6 +1611,65 @@ int main() {
         check("wrap: inspector shows Wrap + offset", wf && of);
     }
 
+    {
+        std::cout << "\n-- new document --\n";
+        namespace L = composix::layout;
+        const double in = core::kPt;
+        check("presets: Trade 6 x 9 first", !core::trim_presets().empty() &&
+                                            core::trim_presets().front().w == 6 * in && core::trim_presets().front().h == 9 * in);
+        core::NewDoc n;
+        check("defaults are usable", core::check_new(n).empty(), core::check_new(n));
+        {
+            auto b = n; b.pages = 0;
+            check("refused: no pages", !core::check_new(b).empty());
+            b = n; b.margins.inside = b.margins.outside = 3 * in;
+            check("refused: margins eat the page", core::check_new(b).find("half an inch") != std::string::npos);
+            b = n; b.columns = 12; b.gutter = 24;
+            check("refused: columns too narrow", core::check_new(b).find("narrower") != std::string::npos);
+            core::Doc keep;
+            core::load_sample(keep);
+            const auto before = keep.size();
+            b = n; b.trim_w = 0.5 * in;
+            check("refused: the document is left alone", !core::new_document(keep, b) && keep.size() == before);
+        }
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        n.title = "Field Notes";
+        n.pages = 8;
+        n.margins = {0.75 * in, 1 * in, 0.875 * in, 0.5 * in};
+        n.columns = 2;
+        n.gutter = 18;
+        check("made", core::new_document(d, n));
+        check("settings: title, trim, bleed, facing", d.settings().title == "Field Notes" && d.settings().trim_w == 6 * in &&
+                                                      d.settings().bleed == 0.125 * in && d.settings().facing);
+        check("eight pages on the master", d.pages().size() == 8 && d.as<core::Page>("page.8")->master == "master.1");
+        const auto* m = d.as<core::Master>("master.1");
+        check("the master carries margins + columns", m && m->margins == n.margins && m->columns == 2 && m->gutter == 18);
+        check("starts on a right-hand page", d.side_of("page.1") == core::Side::Right && d.side_of("page.2") == core::Side::Left);
+        const auto* f1 = d.as<core::Frame>("frame.1");
+        const auto* f2 = d.as<core::Frame>("frame.2");
+        check("a frame in each page's margins (left pages mirrored)",
+              f1 && f2 && f1->x == 0.875 * in && f2->x == 0.5 * in && f1->y == 0.75 * in &&
+                  std::abs(f1->h - (9 * in - 1.75 * in)) < 1e-9 && f1->columns == 2 && f1->gutter == 18);
+        check("threaded page to page", L::thread_frames(d, "story.1").size() == 8 && d.as<core::Frame>("frame.8")->next.empty());
+        check("the story flows, nothing over", !L::flow_story(d, "story.1").overset);
+        check("styles + swatches to start with", d.ids_of<core::Style>().size() == 4 && d.ids_of<core::Swatch>().size() == 2);
+        check("not a step: nothing to undo", !j.can_undo());
+        check("the next frame gets a fresh id", d.fresh_id("frame") == "frame.9");
+        std::string err;
+        core::Doc e;
+        check("round-trips through JSON", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        n.facing = false;
+        n.text_frames = false;
+        core::Doc u;
+        core::new_document(u, n);
+        check("unfaced: no sides, no frames", u.side_of("page.2") != core::Side::Left && u.ids_of<core::Frame>().empty() &&
+                                              !u.as<core::Story>("story.1"));
+        const auto o = core::project(d, "");
+        check("the projection shows it", o.size() > 0);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

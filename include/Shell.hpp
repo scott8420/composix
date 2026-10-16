@@ -77,6 +77,8 @@ private:
     void on_inspector_edit(const std::string& key, const std::string& choice);  // category: handler: -> one verb
     void on_canvas_selection();                  // category: handler: frames picked -> inspector
     void on_open();                              // category: handler: pick a project folder -> load it
+    void on_new();                               // category: handler: s019 -- the New sheet -> a blank document
+    void on_sample();                            // category: handler: s019 -- open the built-in sample book
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
@@ -100,6 +102,9 @@ private:
     void refresh();                               // category: helper: re-project; every view repaints, keeping its place
     void show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper
     bool open_project(const std::string& dir);    // category: helper: load + reset the journal + views
+    void adopt(const core::Doc& fresh, const std::string& dir);  // category: helper: s019 -- swap in a whole document
+    void confirm_discard(std::function<void()> then);  // category: helper: s019 -- unsaved? ask, then go on
+    void show_new_sheet();                        // category: helper: s019 -- the New sheet
     bool save_to(const std::string& dir);         // category: helper: write + remember + clean
     void set_dirty(bool d);                       // category: helper
     void update_title();                          // category: helper: the header's two lines
@@ -181,6 +186,10 @@ private:
     std::vector<std::string>         m_profiles;           // the sheet's list, as paths
     std::vector<std::string> profile_dirs() const;          // category: helper: where ICC profiles live
     void export_pdf_to(const std::string& path);  // category: helper: write + report
+
+    // s019: the New sheet, and what it was last set to (for the session).
+    std::unique_ptr<Gtk::Window>     m_new;
+    core::NewDoc                     m_newdoc;
 
     std::unique_ptr<AboutWindow>     m_about;
     std::unique_ptr<ShortcutsDialog> m_shortcuts;

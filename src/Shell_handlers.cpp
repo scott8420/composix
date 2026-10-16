@@ -40,7 +40,10 @@ void Shell::on_open() {  // handler: pick a project folder -> load it
     dialog->select_folder(*this, [this, dialog](const Glib::RefPtr<Gio::AsyncResult>& result) {
         try {
             auto dir = dialog->select_folder_finish(result);
-            if (dir && !dir->get_path().empty()) open_project(dir->get_path());
+            if (dir && !dir->get_path().empty()) {
+                const std::string path = dir->get_path();
+                confirm_discard([this, path] { open_project(path); });   // s019
+            }
         } catch (const Glib::Error& e) {
             if (auto lg = log::get(log::Area::Io)) lg->info("open: dismissed ({})", e.what());
         }
@@ -398,7 +401,7 @@ void Shell::on_recent_open(const std::string& path) {  // handler: open a recent
         alert("That project is gone", "\u201c" + path + "\u201d no longer exists; it was removed from Open Recent.");
         return;
     }
-    open_project(path);
+    confirm_discard([this, path] { open_project(path); });   // s019
 }
 
 void Shell::on_recent_clear() {  // handler: empty the recents list

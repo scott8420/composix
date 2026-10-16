@@ -118,6 +118,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Edit", "", {}, "Ctrl+Shift+Z  /  Ctrl+Y", "Redo"},
 
         // ── General ───────────────────────────────────────────────────────────
+        {"General", "win.new",           {"<Ctrl>n"}, "", "New document"},
         {"General", "win.open",          {"<Ctrl>o"}, "", "Open a project"},
         {"General", "win.save",          {"<Ctrl>s"}, "", "Save"},
         {"General", "win.save-as",       {"<Ctrl><Shift>s"}, "", "Save as a new project folder"},

@@ -3,6 +3,8 @@
 #include "ShortcutsDialog.hpp"  // ditto
 #include "Log.hpp"
 
+#include <filesystem>
+
 // Shell.cpp -- GLUE. The ctor and the ordered build_ui() pass live here; every
 // other method body lives in a category file (see the index in Shell.hpp).
 
@@ -44,14 +46,25 @@ void Shell::build_ui() {
 
     rebuild_recents_menu();
 
-    // s004: the document. Until a project is opened, the built-in sample
-    // (loaded, not a step). The views see only its projection.
-    core::load_sample(m_doc);
-    m_outline = project_now();
-    m_nav.set_outline(&m_outline);
-    update_title();
-    m_nav.set_open(core::Segment::Pages, true);
-    m_nav.select_section(core::Segment::Pages);   // land on the page tiles
+    // s019: the last project worked on, if it is still there; else the
+    // built-in sample (loaded, not a step). The views see only its projection.
+    bool opened = false;
+    if (!m_recents.empty() && std::filesystem::is_directory(m_recents.front())) {
+        core::Doc last;
+        std::string err;
+        if (core::load_project(last, m_recents.front(), &err)) {
+            adopt(last, m_recents.front());
+            opened = true;
+            if (auto lg = log::get(log::Area::Io)) lg->info("reopened '{}'", m_recents.front());
+        } else if (auto lg = log::get(log::Area::Io)) {
+            lg->warn("reopen '{}': {} -- the sample instead", m_recents.front(), err);
+        }
+    }
+    if (!opened) {
+        core::Doc sample;
+        core::load_sample(sample);
+        adopt(sample, "");
+    }
 
     if (auto lg = log::get(log::Area::Shell))
         lg->info("ready -- {} record(s), {} outline item(s)", m_doc.size(), m_outline.size());

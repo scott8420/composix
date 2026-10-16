@@ -33,6 +33,7 @@ add_library(composix_core STATIC
     # s004: the document model, its verbs, the sample, JSON, the projection.
     src/core/Doc.cpp
     src/core/Sample.cpp
+    src/core/NewDoc.cpp
     src/core/DocJson.cpp
     src/core/Project.cpp
 )
@@ -107,6 +108,7 @@ add_executable(composix
     src/Shell_zones.cpp
     src/Shell_bindings.cpp
     src/Shell_handlers.cpp
+    src/Shell_new.cpp
     src/Shell_helpers.cpp
     # s002: the segmented navigator, tile view, item preview, inspector.
     src/views/Navigator.cpp

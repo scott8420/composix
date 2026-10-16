@@ -156,6 +156,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto menu = Gio::Menu::create();
 
     auto file = Gio::Menu::create();
+    file->append("New\u2026", "win.new");   // s019
     file->append("Open Project…", "win.open");
     m_recents_menu = Gio::Menu::create();
     file->append_submenu("Open Recent", m_recents_menu);
@@ -189,6 +190,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     menu->append_section(diag);
 
     auto app = Gio::Menu::create();
+    app->append("Open Sample Book", "win.open-sample");   // s019
     app->append("About Composix", "win.about");
     app->append("Quit", "win.quit");
     menu->append_section(app);

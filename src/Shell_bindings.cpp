@@ -17,6 +17,8 @@ namespace composix {
 
 void Shell::bind_actions() {  // bindings: actions + recents group
     // Plain win.* actions -> handler bodies (Shell_handlers.cpp).
+    add_action("new",           sigc::mem_fun(*this, &Shell::on_new));      // s019
+    add_action("open-sample",   sigc::mem_fun(*this, &Shell::on_sample));   // s019
     add_action("open",          sigc::mem_fun(*this, &Shell::on_open));
     add_action("zoom-in",       [this] { m_canvas_view.canvas().zoom_step(+1); });
     add_action("zoom-out",      [this] { m_canvas_view.canvas().zoom_step(-1); });
