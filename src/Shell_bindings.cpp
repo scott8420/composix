@@ -157,6 +157,10 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_nav.signal_pick().connect(sigc::mem_fun(*this, &Shell::on_nav_pick));
     m_tiles.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_tiles_selection));
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
+    // s028: facing pages tile by spread.
+    m_tiles.set_grouping([this] {
+        return m_doc.settings().facing ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};
+    });
     m_inspector.signal_edit().connect(sigc::mem_fun(*this, &Shell::on_inspector_edit));
 
     // s005: the canvas. Its picks drive the inspector; a finished drag or a

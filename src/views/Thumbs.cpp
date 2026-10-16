@@ -140,6 +140,41 @@ void page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Thumb& t, double 
 
 void set_page_painter(PagePainter p) { painter() = std::move(p); }
 
+void paint_spread(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W, int H,
+                  const std::vector<core::Thumb>& pages) {
+    if (pages.empty()) return;
+    double tw = 0, th = 0;
+    for (const auto& t : pages) { tw += t.w_in; th = std::max(th, t.h_in); }
+    double w, h;
+    fit(W, H, tw / th, 8, w, h);
+    const double scale = h / th;
+    double x = std::round((W - w) / 2);
+    const double y = std::round((H - h) / 2);
+    shadow(cr, x, y, w, h);
+    for (const auto& t : pages) {
+        const double pw = std::round(t.w_in * scale), ph = std::round(t.h_in * scale);
+        cr->set_source_rgb(1, 1, 1);
+        cr->rectangle(x, y, pw, ph);
+        cr->fill();
+        if (!t.page.empty() && painter()) painter()(cr, t.page, x, y, pw, ph, false);
+        x += pw;
+    }
+    // The outline round the spread, and the spine between.
+    cr->set_source_rgba(0, 0, 0, 0.12);
+    cr->set_line_width(1);
+    cr->rectangle(std::round((W - w) / 2) + 0.5, y + 0.5, w - 1, h - 1);
+    cr->stroke();
+    double sx = std::round((W - w) / 2);
+    for (std::size_t i = 0; i + 1 < pages.size(); ++i) {
+        sx += std::round(pages[i].w_in * scale);
+        cr->set_source_rgba(0, 0, 0, 0.2);
+        cr->move_to(sx + 0.5, y);
+        cr->line_to(sx + 0.5, y + h);
+        cr->stroke();
+    }
+    (void)wd;
+}
+
 void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W, int H,
                  const core::Thumb& t, bool large) {
     using K = core::ThumbKind;

@@ -14,6 +14,7 @@
 
 #include <sigc++/signal.h>
 
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -27,6 +28,9 @@ public:
     // `keep`: tiles to leave selected (a refresh after an edit), silently.
     void show_section(const core::Outline& o, core::Segment s, const std::vector<std::string>& keep = {});
     std::vector<std::string> selected() const;   // grid order
+    // s028: how the Pages section groups into tiles (spreads); empty groups
+    // = a tile per page.
+    void set_grouping(std::function<std::vector<std::vector<std::string>>()> g) { m_grouping = std::move(g); }
 
     sigc::signal<void(const std::vector<std::string>&)>& signal_selection() { return m_sel; }
     sigc::signal<void(const std::vector<std::string>&)>& signal_open()      { return m_open; }
@@ -44,7 +48,8 @@ private:
     widgets::ScrolledWindow m_scroll;
     widgets::FlowBox        m_grid;
 
-    std::map<const Gtk::FlowBoxChild*, std::string> m_id_of;
+    std::map<const Gtk::FlowBoxChild*, std::vector<std::string>> m_id_of;   // s028: a spread tile: its pages
+    std::function<std::vector<std::vector<std::string>>()> m_grouping;
     bool m_quiet = false;
     sigc::signal<void(const std::vector<std::string>&)> m_sel, m_open, m_del;
     sigc::signal<void(const std::vector<std::string>&, const std::string&, bool)> m_move;

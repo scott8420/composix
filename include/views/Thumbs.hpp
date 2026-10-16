@@ -11,6 +11,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace composix::views {
 
@@ -18,6 +19,10 @@ namespace composix::views {
 // for the preview; tiles leave it off.
 void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& w,
                  int width, int height, const core::Thumb& t, bool large = false);
+
+// s028: a spread -- its pages side by side at the spine, fitted together.
+void paint_spread(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& w, int width, int height,
+                  const std::vector<core::Thumb>& pages);
 
 // s020: who draws a page's real contents into its paper (x, y, w, h -- the
 // paper, device units). The shell sets one (PageThumbs); false = not drawn,

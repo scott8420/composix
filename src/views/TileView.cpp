@@ -23,6 +23,7 @@ namespace {
 constexpr int kThumbH = 150;
 constexpr int kCardW  = 176;   // every card the same width: the grid stays a grid
 constexpr int kFieldsOnTile = 3;
+constexpr int kSpreadW = 272;   // s028: two pages a card, and still two cards a row in the usual width
 }
 
 TileView::TileView()
@@ -59,7 +60,7 @@ TileView::TileView()
         auto ids = selected();
         const auto it = m_id_of.find(c);
         if (it == m_id_of.end()) return;
-        if (std::find(ids.begin(), ids.end(), it->second) == ids.end()) ids = {it->second};
+        if (std::find(ids.begin(), ids.end(), it->second.front()) == ids.end()) ids = it->second;
         if (auto lg = log::get(log::Area::View)) lg->info("tiles open: {}", ids.size());
         m_open.emit(ids);
     });
@@ -91,32 +92,64 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
     m_title.set_text(core::segment_info(s).title);
     m_count.set_text(std::to_string(items.size()));
 
-    for (const auto* it : items) {
+    // s028: facing pages -- a tile per SPREAD (its pages side by side); else
+    // a tile per item.
+    std::vector<std::vector<const core::Item*>> tiles;
+    const auto groups = (s == core::Segment::Pages && m_grouping) ? m_grouping() : std::vector<std::vector<std::string>>{};
+    if (!groups.empty()) {
+        for (const auto& g : groups) {
+            std::vector<const core::Item*> t;
+            for (const auto& id : g)
+                for (const auto* it : items) if (it->id == id) t.push_back(it);
+            if (!t.empty()) tiles.push_back(t);
+        }
+    } else {
+        for (const auto* it : items) tiles.push_back({it});
+    }
+    const bool spreads = !groups.empty();
+
+    for (const auto& group : tiles) {
+        const auto* it = group.front();
+        std::vector<std::string> gids;
+        for (const auto* g : group) gids.push_back(g->id);
+        const std::string tile_id = gids.size() == 1 ? it->id : gids.front() + "+" + gids.back();
+        std::string title_text = it->title, badge = it->badge;
+        bool flag = false;
+        std::vector<core::Thumb> thumbs;
+        for (const auto* g : group) {
+            thumbs.push_back(g->thumb);
+            flag = flag || g->thumb.flag;
+            if (badge.empty()) badge = g->badge;
+        }
+        if (group.size() == 2) {   // "Pages 2–3"
+            const auto folio = [](const core::Item* x) { for (const auto& f : x->fields) if (f.label == "Folio") return f.value; return x->title; };
+            title_text = "Pages " + folio(group[0]) + "\u2013" + folio(group[1]);
+        }
         auto child = Gtk::make_managed<Gtk::FlowBoxChild>();
-        child->set_name("tiles.tile." + it->id);
+        child->set_name("tiles.tile." + tile_id);
         child->add_css_class("cx-tile");
-        if (it->thumb.flag) child->add_css_class("cx-flagged");
+        if (flag) child->add_css_class("cx-flagged");
 
         auto card = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
         card->add_css_class("cx-tile-card");
 
         // Thumbnail, with the badge overlaid top-right.
-        const int tw = kCardW;   // the painter fits the thumb inside; a foldout is wide and short
+        const int tw = spreads ? kSpreadW : kCardW;   // a spread's card holds two pages
         auto overlay = Gtk::make_managed<Gtk::Overlay>();
         auto area = Gtk::make_managed<Gtk::DrawingArea>();
-        area->set_name("tiles.tile." + it->id + ".thumb");
+        area->set_name("tiles.tile." + tile_id + ".thumb");
         area->add_css_class("cx-thumb");
         area->set_content_width(tw);
         area->set_content_height(kThumbH);
-        const core::Thumb th = it->thumb;
-        area->set_draw_func([area, th](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
-            paint_thumb(cr, *area, w, h, th);
+        area->set_draw_func([area, thumbs](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+            if (thumbs.size() == 1) paint_thumb(cr, *area, w, h, thumbs.front());
+            else paint_spread(cr, *area, w, h, thumbs);
         });
         overlay->set_child(*area);
-        if (!it->badge.empty()) {
-            auto b = Gtk::make_managed<Gtk::Label>(it->badge);
+        if (!badge.empty()) {
+            auto b = Gtk::make_managed<Gtk::Label>(badge);
             b->add_css_class("cx-badge");
-            if (it->thumb.flag) b->add_css_class("cx-warn");
+            if (flag) b->add_css_class("cx-warn");
             b->set_halign(Gtk::Align::END);
             b->set_valign(Gtk::Align::START);
             b->set_margin(6);
@@ -124,7 +157,7 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
         }
         card->append(*overlay);
 
-        auto title = Gtk::make_managed<Gtk::Label>(it->title);
+        auto title = Gtk::make_managed<Gtk::Label>(title_text);
         title->add_css_class("cx-tile-title");
         title->set_xalign(0.0f);
         title->set_ellipsize(Pango::EllipsizeMode::END);
@@ -138,10 +171,15 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
         int row = 0;
         for (const auto& f : it->fields) {
             if (row == kFieldsOnTile) break;
+            // A spread: each page's value, when they differ ("B-Body / C-Chapter").
+            std::string value = f.value;
+            for (std::size_t k = 1; k < group.size(); ++k)
+                for (const auto& g : group[k]->fields)
+                    if (g.label == f.label && g.value != f.value) value += " / " + g.value;
             auto l = Gtk::make_managed<Gtk::Label>(f.label);
             l->add_css_class("cx-field-label");
             l->set_xalign(0.0f);
-            auto v = Gtk::make_managed<Gtk::Label>(f.value);
+            auto v = Gtk::make_managed<Gtk::Label>(value);
             v->add_css_class("cx-field-value");
             v->set_xalign(0.0f);
             v->set_hexpand(true);
@@ -152,17 +190,17 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
             ++row;
         }
         card->append(*meta);
-        card->set_size_request(kCardW, -1);
+        card->set_size_request(tw, -1);
 
         child->set_child(*card);
         if (m_reorder) {
             // s014: drag pages to reorder -- the selection if this tile is in it.
-            const std::string id = it->id;
+            // s028: a spread tile drags (and takes drops for) both its pages.
             auto src = Gtk::DragSource::create();
             src->set_actions(Gdk::DragAction::MOVE);
-            src->signal_prepare().connect([this, id](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
+            src->signal_prepare().connect([this, gids](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
                 auto ids = selected();
-                if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids = {id};
+                if (std::find(ids.begin(), ids.end(), gids.front()) == ids.end()) ids = gids;
                 m_drag_ids = ids;
                 Glib::Value<Glib::ustring> v;
                 v.init(v.value_type());
@@ -186,22 +224,25 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
                 child->remove_css_class("cx-drop-before");
                 child->remove_css_class("cx-drop-after");
             });
-            drop->signal_drop().connect([this, child, id](const Glib::ValueBase&, double x, double) {
+            drop->signal_drop().connect([this, child, gids](const Glib::ValueBase&, double x, double) {
                 child->remove_css_class("cx-drop-before");
                 child->remove_css_class("cx-drop-after");
                 if (m_drag_ids.empty()) return false;
                 const auto ids = m_drag_ids;
                 m_drag_ids.clear();
                 const bool before = x < child->get_width() / 2.0;
+                const std::string target = before ? gids.front() : gids.back();
                 // After the drop's own handling: the move rebuilds these tiles.
-                Glib::signal_idle().connect_once([this, ids, id, before] { m_move.emit(ids, id, before); });
+                Glib::signal_idle().connect_once([this, ids, target, before] { m_move.emit(ids, target, before); });
                 return true;
             }, false);
             child->add_controller(drop);
         }
         m_grid.append(*child);
-        m_id_of[child] = it->id;
-        if (std::find(keep.begin(), keep.end(), it->id) != keep.end()) m_grid.select_child(*child);
+        m_id_of[child] = gids;
+        bool keep_it = false;
+        for (const auto& g : gids) keep_it = keep_it || std::find(keep.begin(), keep.end(), g) != keep.end();
+        if (keep_it) m_grid.select_child(*child);
     }
     m_quiet = false;
     if (auto lg = log::get(log::Area::View))
@@ -213,7 +254,7 @@ std::vector<std::string> TileView::selected() const {
     for (auto* c = m_grid.get_first_child(); c; c = c->get_next_sibling()) {
         auto* fc = dynamic_cast<const Gtk::FlowBoxChild*>(c);
         if (!fc || !fc->is_selected()) continue;
-        if (auto it = m_id_of.find(fc); it != m_id_of.end()) out.push_back(it->second);
+        if (auto it = m_id_of.find(fc); it != m_id_of.end()) out.insert(out.end(), it->second.begin(), it->second.end());
     }
     return out;
 }
