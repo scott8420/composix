@@ -9,6 +9,7 @@
 //
 // Tiles are rebuilt per section and named tiles.tile.<id> -- named for the
 // Inspector, not registered (transient content: CANON's unregistered_t rule).
+#include "views/BackButton.hpp"
 #include "core/Outline.hpp"
 #include "widgets/Widgets.hpp"
 
@@ -26,6 +27,8 @@ enum class TileSize { Large, Small, List };
 
 class TileView : public widgets::Box {
 public:
+    // s068: where back / forward before the title go.
+    void set_nav(const std::string& back_to, const std::string& fwd_to) { m_nav_btns.set(back_to, fwd_to); }
     TileView();
 
     TileSize tile_size() const { return m_size; }
@@ -53,6 +56,7 @@ public:
 
 private:
     widgets::Box            m_head;
+    NavButtons              m_nav_btns;   // s068
     widgets::Label          m_title;
     widgets::Label          m_count;
     widgets::ScrolledWindow m_scroll;

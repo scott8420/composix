@@ -127,12 +127,22 @@ void Shell::sync_up() {  // helper
     if (!m_pick.segment && !m_pick.items.empty() && m_main.get_visible_child_name() != "start")
         parent = core::parent_of(m_outline, m_pick.items);
     if (m_act_up) m_act_up->set_enabled(parent.has_value());
-    if (parent) {   // the back arrows before the views' titles say where they go
-        const auto& title = core::segment_info(*parent).title;
-        m_canvas_view.set_back(title);
-        m_item.set_back(title);
-        m_story_ed.set_back(title);
+    // Forward: what Back left, while the section it went to is shown.
+    const bool fwd = !m_fwd_items.empty() && m_fwd_from && m_pick.segment == m_fwd_from &&
+                     m_main.get_visible_child_name() != "start";
+    if (m_act_fwd) m_act_fwd->set_enabled(fwd);
+    std::string fwd_to;
+    if (fwd) {
+        std::vector<const core::Item*> its;
+        for (const auto& id : m_fwd_items) if (const auto* it = m_outline.find(id)) its.push_back(it);
+        fwd_to = its.empty() ? std::string{} : core::selection_title(its);
     }
+    const std::string back_to = parent ? core::segment_info(*parent).title : std::string{};
+    // The buttons before every view's title say where they go.
+    m_canvas_view.set_nav(back_to, fwd_to);
+    m_item.set_nav(back_to, fwd_to);
+    m_story_ed.set_nav(back_to, fwd_to);
+    m_tiles.set_nav(back_to, fwd_to);
 }
 
 void Shell::show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles) {  // helper

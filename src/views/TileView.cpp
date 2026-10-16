@@ -51,6 +51,8 @@ TileView::TileView()
     m_title.set_xalign(0.0f);
     m_count.add_css_class("cx-count");
     m_count.set_valign(Gtk::Align::CENTER);
+    m_nav_btns = nav_buttons("tiles");   // s068
+    m_head.append(*m_nav_btns.box);
     m_head.append(m_title);
     m_head.append(m_count);
 

@@ -8,6 +8,7 @@
 // line}) -- one store, so the page follows as you type and undo is the
 // document's. A change made elsewhere (the canvas, undo) reloads the text,
 // keeping the cursor where it was.
+#include "views/BackButton.hpp"
 #include "core/Doc.hpp"
 #include "widgets/Widgets.hpp"
 
@@ -23,8 +24,8 @@ namespace composix::views {
 
 class StoryEditor : public widgets::Box {
 public:
-    // s068: where the back arrow before the title goes ("Stories").
-    void set_back(const std::string& to) { if (m_back) m_back->set_tooltip_text("Back to " + to + "  (Alt+Up)"); }
+    // s068: where back / forward before the title go ("Stories").
+    void set_nav(const std::string& back_to, const std::string& fwd_to) { m_nav_btns.set(back_to, fwd_to); }
     StoryEditor(core::Doc& d, core::DocJournal& j);
     ~StoryEditor() override;
 
@@ -55,7 +56,7 @@ private:
     core::Doc&           m_doc;
     core::DocJournal&    m_journal;
     widgets::Box         m_head;
-    Gtk::Button*         m_back = nullptr;   // s068
+    NavButtons         m_nav_btns;   // s068
     widgets::Label       m_title;
     widgets::Label       m_info;
     widgets::ScrolledWindow m_scroll;

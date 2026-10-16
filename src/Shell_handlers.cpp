@@ -491,6 +491,7 @@ void Shell::on_nav_pick(const views::Pick& p) {  // handler
     m_pick = p;
     const auto keep = std::move(m_up_keep);   // s068: going up, the items just open stay picked
     m_up_keep.clear();
+    if (!m_moving) { m_fwd_items.clear(); m_fwd_from.reset(); }   // s068: a pick of your own ends Forward
     show_pick(p, keep);
 }
 
@@ -501,8 +502,26 @@ void Shell::on_go_up() {  // handler
     if (!parent) return;
     if (auto lg = log::get(log::Area::Shell)) lg->info("up: to {}", core::segment_info(*parent).key);
     m_up_keep = m_pick.items;
+    m_fwd_items = m_pick.items;   // Forward goes back in
+    m_fwd_from = parent;
+    m_moving = true;
     m_nav.select_section(*parent);
+    m_moving = false;
     m_up_keep.clear();
+    sync_up();
+}
+
+// s068: Forward -- back into what Back left, while its section is shown.
+void Shell::on_go_forward() {  // handler
+    if (m_fwd_items.empty() || !m_fwd_from || m_pick.segment != m_fwd_from) return;
+    const auto items = m_fwd_items;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("forward: {} item(s)", items.size());
+    m_fwd_items.clear();
+    m_fwd_from.reset();
+    m_moving = true;
+    m_nav.select_items(items);
+    m_moving = false;
+    sync_up();
 }
 
 void Shell::on_tiles_selection(const std::vector<std::string>& ids) {  // handler

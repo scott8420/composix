@@ -5,6 +5,7 @@
 #include <tuple>
 
 #include <giomm/simpleactiongroup.h>
+#include <gtkmm/gestureclick.h>
 #include <gtkmm/eventcontrollerkey.h>
 #include <glibmm/variant.h>
 
@@ -131,6 +132,20 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     m_act_undo = add_action("undo", sigc::mem_fun(*this, &Shell::on_undo));
     m_act_up = add_action("go-up", sigc::mem_fun(*this, &Shell::on_go_up));   // s068
     m_act_up->set_enabled(false);
+    m_act_fwd = add_action("go-forward", sigc::mem_fun(*this, &Shell::on_go_forward));   // s068
+    m_act_fwd->set_enabled(false);
+    // s068: the mouse's back / forward (thumb) buttons, anywhere in the window.
+    {
+        auto thumbs = Gtk::GestureClick::create();
+        thumbs->set_button(0);
+        thumbs->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+        thumbs->signal_pressed().connect([this, g = thumbs.get()](int, double, double) {
+            const auto b = g->get_current_button();
+            if (b == 8) activate_action("win.go-up");
+            else if (b == 9) activate_action("win.go-forward");
+        });
+        add_controller(thumbs);
+    }
     m_act_redo = add_action("redo", sigc::mem_fun(*this, &Shell::on_redo));
     // The model <-> journal <-> UI wiring (as Cairn's stone): the document asks
     // the journal whether the door is open; the journal reads the selection

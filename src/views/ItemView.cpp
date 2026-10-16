@@ -19,8 +19,8 @@ ItemView::ItemView()
     m_title.set_ellipsize(Pango::EllipsizeMode::END);
     m_count.add_css_class("cx-count");
     m_count.set_valign(Gtk::Align::CENTER);
-    m_back = back_button("item.back");   // s068
-    m_head.append(*m_back);
+    m_nav_btns = nav_buttons("item");   // s068
+    m_head.append(*m_nav_btns.box);
     m_head.append(m_title);
     m_head.append(m_count);
     append(m_head);

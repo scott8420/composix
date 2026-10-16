@@ -123,6 +123,7 @@ private:
     void on_about();                             // category: handler: the About window
     void on_shortcuts();                         // category: handler: keyboard reference
     void on_go_up();                             // category: handler: s068 -- Alt+Up / the header's Up: the section's tiles
+    void on_go_forward();                        // category: handler: s068 -- Alt+Right / Forward: back into what Back left
     void sync_up();                              // category: helper: s068 -- the Up button: shown, named, enabled
     void on_undo();                              // category: handler: Ctrl+Z / menu
     void on_redo();                              // category: handler: Ctrl+Shift+Z, Ctrl+Y / menu
@@ -168,6 +169,12 @@ private:
     widgets::ToggleButton m_nav_toggle;
     std::vector<std::string> m_up_keep;     // s068: the items to select among the tiles, going up
     Glib::RefPtr<Gio::SimpleAction> m_act_up;
+    // s068: Forward -- the items left by going up, and the section it went
+    // to; good while that section is still what's shown.
+    std::vector<std::string>         m_fwd_items;
+    std::optional<core::Segment>     m_fwd_from;
+    bool                             m_moving = false;   // a pick made by Back / Forward
+    Glib::RefPtr<Gio::SimpleAction> m_act_fwd;
     widgets::Box          m_title_box;
     widgets::Label        m_title;
     widgets::Label        m_subtitle;

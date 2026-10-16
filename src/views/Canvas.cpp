@@ -1960,8 +1960,8 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     m_zoom.add_css_class("cx-zoom");
     m_zoom.set_valign(Gtk::Align::CENTER);
     m_zoom.set_tooltip_text("Zoom -- Ctrl+scroll, Ctrl+= / Ctrl+-, Ctrl+1 for 100%");
-    m_back = back_button("canvas_view.back");   // s068
-    m_head.append(*m_back);
+    m_nav_btns = nav_buttons("canvas_view");   // s068
+    m_head.append(*m_nav_btns.box);
     m_head.append(m_title);
     m_head.append(m_count);
     // s008: the tools -- a vertical strip down the canvas's left edge

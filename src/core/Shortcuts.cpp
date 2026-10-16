@@ -181,7 +181,8 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"View", "win.toggle-hidden",    {"<Ctrl><Alt>i"}, "", "Show / hide hidden characters (spaces, tabs, paragraph ends, breaks)"},
         {"View", "win.toggle-snap",      {"<Ctrl>semicolon"}, "", "Snap to guides & edges on / off"},
         {"View", "", {}, "Drag out of a ruler", "Pull a guide onto a page (off the page removes it)"},
-        {"View", "win.go-up",            {"<Alt>Up"}, "", "Up a level -- from an open page, master, story ... back to its section's tiles"},
+        {"View", "win.go-up",            {"<Alt>Left", "<Alt>Up"}, "", "Back -- up a level, from an open page, master, story ... to its section's tiles (mouse: back button)"},
+        {"View", "win.go-forward",       {"<Alt>Right"}, "", "Forward -- back into what you just came up from (mouse: forward button)"},
         {"View", "win.toggle-nav",       {"<Ctrl><Alt>1"}, "", "Show / hide the navigator"},
         {"View", "win.toggle-inspector", {"<Ctrl><Alt>2"}, "", "Show / hide the inspector"},
 

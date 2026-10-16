@@ -2757,6 +2757,14 @@ int main() {
         bool reg = false;
         for (const auto& r : core::shortcut_registry()) reg = reg || (r.action == "win.go-up" && !r.accels.empty());
         check("up: Alt+Up in the shortcut registry", reg);
+        bool back = false, fwd = false;
+        for (const auto& r : core::shortcut_registry()) {
+            for (const auto& a : r.accels) {
+                back = back || (r.action == "win.go-up" && a == "<Alt>Left");
+                fwd = fwd || (r.action == "win.go-forward" && a == "<Alt>Right");
+            }
+        }
+        check("back / forward: Alt+Left and Alt+Right in the registry", back && fwd);
     }
 
     {

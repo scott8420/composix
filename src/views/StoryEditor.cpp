@@ -52,8 +52,8 @@ StoryEditor::StoryEditor(core::Doc& d, core::DocJournal& j)
     m_title.set_hexpand(true);
     m_info.add_css_class("cx-count");
     m_info.set_valign(Gtk::Align::CENTER);
-    m_back = back_button("story.back");   // s068
-    m_head.append(*m_back);
+    m_nav_btns = nav_buttons("story");   // s068
+    m_head.append(*m_nav_btns.box);
     m_head.append(m_title);
     // s050: a character style for the selection (or the word at the cursor).
     m_char_btn.set_name("story.charstyle");

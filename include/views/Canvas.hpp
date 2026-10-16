@@ -1,4 +1,5 @@
 #pragma once
+#include "views/BackButton.hpp"
 #include "core/PlaceQueue.hpp"
 // views::Canvas -- the page canvas (s005).
 //
@@ -267,13 +268,13 @@ public:
     Canvas& canvas() { return m_canvas; }
     void set_rulers(bool on);
     void set_title(const std::string& t, std::size_t n);
-    // s068: where the back arrow before the title goes ("Document").
-    void set_back(const std::string& to) { if (m_back) m_back->set_tooltip_text("Back to " + to + "  (Alt+Up)"); }
+    // s068: where back / forward before the title go ("Document").
+    void set_nav(const std::string& back_to, const std::string& fwd_to) { m_nav_btns.set(back_to, fwd_to); }
 
 private:
     void sync_zoom();
     widgets::Box    m_head;
-    Gtk::Button*    m_back = nullptr;   // s068
+    NavButtons    m_nav_btns;   // s068
     widgets::Label  m_title;
     widgets::Label  m_count;
     widgets::Box    m_tools;    // s008: Select / Text / Image / Shape
