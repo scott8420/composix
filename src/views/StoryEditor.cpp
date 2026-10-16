@@ -325,8 +325,22 @@ void StoryEditor::draw_gutter(const Cairo::RefPtr<Cairo::Context>& cr, int w, in
         if (y + h < vis.get_y() || y > vis.get_y() + vis.get_height()) continue;
         int wx = 0, wy = 0;
         m_view.buffer_to_window_coords(Gtk::TextWindowType::LEFT, 0, y, wx, wy);
-        const auto* s = m_doc.as<core::Style>(st->paras[static_cast<std::size_t>(p)].style);
-        auto lay = m_gutter.create_pango_layout(s ? s->name : "—");
+        const auto& para = st->paras[static_cast<std::size_t>(p)];
+        const auto* s = m_doc.as<core::Style>(para.style);
+        // s055: a break typed before it -- named, with a dashed line over the paragraph.
+        static const char* brk[] = {"", "\u2913 Column \u00b7 ", "\u2913 Frame \u00b7 ", "\u2913 Page \u00b7 ", "\u2913 Right page \u00b7 "};
+        const std::string tag = brk[static_cast<int>(para.brk)];
+        if (!tag.empty()) {
+            cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.45);
+            cr->set_line_width(1);
+            const std::vector<double> dash{3, 3};
+            cr->set_dash(dash, 0);
+            cr->move_to(4, wy + 0.5);
+            cr->line_to(w - 4, wy + 0.5);
+            cr->stroke();
+            cr->unset_dash();
+        }
+        auto lay = m_gutter.create_pango_layout(tag + (s ? s->name : "—"));
         lay->set_font_description(Pango::FontDescription("Sans 8.5"));
         lay->set_width((w - 14) * PANGO_SCALE);
         lay->set_ellipsize(Pango::EllipsizeMode::END);

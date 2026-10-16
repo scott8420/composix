@@ -162,6 +162,9 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Text", "win.insert-section-name", {"<Ctrl><Alt><Shift>e"}, "", "Insert the section name (a running head)"},
         {"Text", "win.insert-next-page",    {"<Ctrl><Alt>bracketright"}, "", "Insert the next frame's page number (\"continued on\")"},
         {"Text", "win.insert-prev-page",    {"<Ctrl><Alt>bracketleft"}, "", "Insert the previous frame's page number (\"continued from\")"},
+        {"Text", "", {}, "Keypad Enter", "Column break -- the text after it starts the next column (s055)"},
+        {"Text", "", {}, "Shift+Keypad Enter", "Frame break -- the text after it starts the next frame"},
+        {"Text", "", {}, "Ctrl+Keypad Enter", "Page break -- the text after it starts the next page"},
 
         // ── View (s002) ───────────────────────────────────────────────────────
         {"View", "", {}, "Page Up / Page Down", "The previous / next spread (pages open with their facing page)"},

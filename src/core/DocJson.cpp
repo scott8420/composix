@@ -64,6 +64,9 @@ json to(const Record& r) {
             if (v.valign != VAlign::Top) j["valign"] = en(v.valign);   // s042
             if (v.autosize) j["autosize"] = true;                      // s048
             if (!(v.inset == Sides{})) j["inset"] = {v.inset.top, v.inset.right, v.inset.bottom, v.inset.left};   // s040
+            if (!(v.col_rule == ColumnRule{}))   // s055
+                j["col_rule"] = {{"weight", v.col_rule.weight}, {"color", v.col_rule.color},
+                                 {"tint", v.col_rule.tint}, {"inset", v.col_rule.inset}};
         } else if constexpr (std::is_same_v<T, Story>) {
             json paras = json::array();
             for (const auto& p : v.paras) {
@@ -80,6 +83,7 @@ json to(const Record& r) {
                     jp["runs"] = runs;
                 }
                 if (p.restart > 0) jp["restart"] = p.restart;   // s047
+                if (p.brk != ParaStart::Anywhere) jp["brk"] = en(p.brk);   // s055
                 paras.push_back(jp);
             }
             j = {{"kind", "story"}, {"name", v.name}, {"paras", paras}};
@@ -214,6 +218,10 @@ std::optional<Record> from(const json& j) {
             const auto& a = j["inset"];
             v.inset = {a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>()};
         }
+        if (j.contains("col_rule") && j["col_rule"].is_object()) {   // s055
+            const auto& r = j["col_rule"];
+            v.col_rule = {val(r, "weight", 0.0), val<std::string>(r, "color", ""), val(r, "tint", 1.0), val(r, "inset", 0.0)};
+        }
         return v;
     }
     if (k == "story") {
@@ -233,6 +241,7 @@ std::optional<Record> from(const json& j) {
                         para.runs.push_back(run);
                     }
                 para.restart = val(p, "restart", 0);   // s047
+                para.brk = de(p, "brk", ParaStart::Anywhere);   // s055
                 v.paras.push_back(std::move(para));
             }
         return v;

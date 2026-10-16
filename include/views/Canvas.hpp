@@ -88,6 +88,7 @@ public:
     // s023: put `text` (a marker) at the caret, replacing the selection --
     // one step. False when not editing.
     bool insert_special(const std::string& text, const std::string& label);
+    bool insert_break(core::ParaStart kind);   // s055: column / frame / page break at the caret
     const std::string& edit_story_id() const { return m_edit_story; }
     // The selection, in reading order (equal = just the caret).
     std::pair<core::TextPos, core::TextPos> edit_range() const {

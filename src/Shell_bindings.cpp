@@ -51,6 +51,17 @@ void Shell::bind_actions() {  // bindings: actions + recents group
                 alert("Click into text first", "Special characters go in at the text cursor: double-click a text frame, then insert.");
         });
     }
+    // s055: breaks (also keypad Enter while typing: column; Shift: frame; Ctrl: page).
+    for (const auto& [name, kind] : std::initializer_list<std::pair<const char*, core::ParaStart>>{
+             {"insert-column-break", core::ParaStart::NextColumn},
+             {"insert-frame-break", core::ParaStart::NextFrame},
+             {"insert-page-break", core::ParaStart::NextPage}}) {
+        const auto k = kind;
+        add_action(name, [this, k] {
+            if (!m_canvas_view.canvas().insert_break(k))
+                alert("Click into text first", "A break goes in at the text cursor: double-click a text frame, then insert.");
+        });
+    }
     add_action("open-sample",   sigc::mem_fun(*this, &Shell::on_sample));   // s019
     add_action("open",          sigc::mem_fun(*this, &Shell::on_open));
     add_action("zoom-in",       [this] { m_canvas_view.canvas().zoom_step(+1); });

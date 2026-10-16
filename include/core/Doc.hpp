@@ -127,6 +127,17 @@ struct Master {
     bool operator==(const Master&) const = default;
 };
 
+// s055: a hairline between a text frame's columns -- `weight` 0 = none --
+// in a swatch's ink ("" black), held `inset` points in from the text
+// area's top and bottom.
+struct ColumnRule {
+    double      weight = 0;
+    std::string color;
+    double      tint = 1;
+    double      inset = 0;
+    bool operator==(const ColumnRule&) const = default;
+};
+
 struct Frame {
     std::string owner;                   // page or master id
     FrameKind   kind = FrameKind::Text;
@@ -156,6 +167,7 @@ struct Frame {
     VAlign      valign = VAlign::Top;    // s042: text -- where it sits in the frame's height
     bool        autosize = false;        // s048: text -- its height follows its text (top fixed; the
                                          // last frame of its thread, one column)
+    ColumnRule  col_rule;                // s055: text -- a rule between its columns
     bool operator==(const Frame&) const = default;
 };
 
@@ -184,6 +196,9 @@ struct Para {
     std::string      text;
     std::vector<Run> runs;               // s011
     int              restart = 0;        // s047: a numbered list starts again here, at this number (0: counts on)
+    // s055: a break typed before it (column / frame / page break): it starts
+    // as a style's Start would -- this paragraph only. Anywhere = none.
+    ParaStart        brk = ParaStart::Anywhere;
     bool operator==(const Para&) const = default;
 };
 
@@ -638,6 +653,14 @@ std::string list_marker(const Doc& d, const Story& s, int para);
 // s047: the paragraphs [a.para .. b.para] restart their list at `n` (0:
 // count on). One step.
 bool set_list_restart(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, int n);
+// s055: a column / frame / page break at `at` -- the paragraph split there
+// (at a paragraph's start: that paragraph), the one after it starting in the
+// next column / frame / page. Anywhere takes a break off the paragraph at
+// `at`. One step; returns where the caret goes (the start of the broken
+// paragraph).
+TextPos insert_break(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, ParaStart kind);
+// The Start a paragraph takes: its own break, else its style's.
+ParaStart start_of(const Doc& d, const Para& p);
 // The style a new paragraph after one in `style` takes (Enter at its end).
 Doc::Id next_style_of(const Doc& d, const Doc::Id& style);
 // A copy of a style, just after it ("Body copy"). Its id.

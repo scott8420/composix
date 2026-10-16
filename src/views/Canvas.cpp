@@ -1423,6 +1423,21 @@ bool Canvas::insert_special(const std::string& text, const std::string& label) {
     return true;
 }
 
+// s055: a column / frame / page break at the caret (what's selected goes first).
+bool Canvas::insert_break(core::ParaStart kind) {
+    if (!editing() || !edit_story()) return false;
+    if (m_anchor != m_caret) edit_insert("", "", "Delete text");
+    m_caret = core::doc::insert_break(m_journal, m_doc, m_edit_story, m_caret, kind);
+    m_anchor = m_caret;
+    m_goal_x = NAN;
+    m_burst_kind.clear();
+    m_sig_edited.emit();
+    blink_restart();
+    m_sig_caret.emit();
+    grab_focus();
+    return true;
+}
+
 void Canvas::end_edit() {
     if (!editing()) return;
     gtk_im_context_focus_out(m_im);
@@ -1502,7 +1517,10 @@ bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {
         if (!sel) m_caret = ctrl ? core::next_word(*story, m_caret) : core::next_char(*story, m_caret);
         if (m_anchor != m_caret) edit_insert("", "erase", "Delete text");
         return true;
-    case GDK_KEY_Return: case GDK_KEY_KP_Enter:
+    case GDK_KEY_KP_Enter:   // s055: keypad Enter breaks -- column; Shift: frame; Ctrl: page
+        insert_break(ctrl ? core::ParaStart::NextPage : shift ? core::ParaStart::NextFrame : core::ParaStart::NextColumn);
+        return true;
+    case GDK_KEY_Return:
         edit_insert("\n", "type", "Typing");
         return true;
     case GDK_KEY_Tab:

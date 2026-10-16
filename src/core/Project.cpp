@@ -65,7 +65,8 @@ void mark_typed(std::vector<Field>& fields) {
         {"mtop", 72, 0, 5000}, {"mbottom", 72, 0, 5000}, {"minside", 72, 0, 5000}, {"moutside", 72, 0, 5000},
         {"mgutter", 1, 0, 500}, {"gutter", 1, 0, 500}, {"inset", 1, 0, 500}, {"wrap_off", 1, 0, 500},
         {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
-        {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500}};
+        {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500},
+        {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500}};   // s055
     for (auto& f : fields)
         for (const auto& t : typed)
             if (f.edit == t.key) { f.unit = t.unit; f.lo = t.lo; f.hi = t.hi; }
@@ -584,6 +585,23 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 }
                 fields.push_back({"Widths", shown, "widths", wc});
                 fields.push_back({"Balance", f->balance ? "On" : "Off", "balance", {{"0", "Off"}, {"1", "On"}}});
+                // s055: a rule between the columns -- its weight, then (when on) its ink and inset.
+                {
+                    const auto& r = f->col_rule;
+                    std::vector<Choice> wc{{"0", "None"}};
+                    for (double v : {0.25, 0.5, 0.75, 1.0, 1.5, 2.0}) wc.push_back({pts(v), pts(v) + " pt"});
+                    fields.push_back({"Column rule", r.weight > 0 ? pts(r.weight) + " pt" : "None", "col_rule", wc});
+                    if (r.weight > 0) {
+                        std::vector<Choice> sw{{"", "Black"}};
+                        for (const auto& sid : d.ids_of<Swatch>()) sw.push_back({sid, d.as<Swatch>(sid)->name});
+                        const auto* cur = d.as<Swatch>(r.color);
+                        fields.push_back({"Rule colour", cur ? cur->name : "Black", "col_rule_color", sw});
+                        fields.push_back({"Rule tint", tint_text(r.tint), "col_rule_tint", tint_choices()});
+                        std::vector<Choice> ic;
+                        for (double v : {0.0, 3.0, 6.0, 9.0, 12.0, 18.0, 24.0}) ic.push_back({pts(v), pts(v) + " pt"});
+                        fields.push_back({"Rule inset", pts(r.inset) + " pt", "col_rule_inset", ic});
+                    }
+                }
             }
             {   // s048: the height follows the text (the last frame of a thread, one column).
                 const bool can = f->next.empty() && column_count(*f) == 1;

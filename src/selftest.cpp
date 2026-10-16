@@ -2149,6 +2149,99 @@ int main() {
     }
 
     {
+        std::cout << "\n-- column rules + breaks (s055) --\n";
+        namespace L = composix::layout;
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        load_plain(d);
+        // A two-column frame of its own, two short paragraphs.
+        {
+            core::Doc::Loading load(d);
+            core::Frame f;
+            f.owner = d.pages().back();
+            f.kind = core::FrameKind::Text;
+            f.x = 36; f.y = 36; f.w = 360; f.h = 300;
+            f.columns = 2;
+            f.gutter = 18;
+            f.story = "story.t";
+            d.put("frame.t", f);
+            core::Frame g = f;
+            g.y = 360; g.h = 200; g.columns = 1; g.story = "story.t";
+            f.next = "frame.t2";
+            d.put("frame.t", f);
+            d.put("frame.t2", g);
+            core::Story st;
+            st.name = "Test";
+            st.paras = {{"style.1", "First paragraph.", {}}, {"style.1", "Second paragraph.", {}}, {"style.1", "Third.", {}}};
+            d.put("story.t", st);
+        }
+        const auto where = [&](int para) {   // {frame, column} of a paragraph's first line
+            const auto fl = L::flow_story(d, "story.t");
+            for (const auto& ft : fl.frames)
+                for (const auto& ln : ft.lines)
+                    if (ln.para == para && ln.start == 0) return ft.frame + ":" + std::to_string(ln.col);
+            return std::string("none");
+        };
+        check("break: none -- all in the first column", where(1) == "frame.t:0" && where(2) == "frame.t:0");
+        const auto before = *d.as<core::Story>("story.t");
+        const auto steps = j.size();
+        const auto c = D::insert_break(j, d, "story.t", {1, 7}, core::ParaStart::NextColumn);   // "Second |paragraph."
+        const auto& st = *d.as<core::Story>("story.t");
+        check("break: splits the paragraph, one step", st.paras.size() == 4 && j.size() == steps + 1 &&
+                                                       st.paras[1].text == "Second " && st.paras[2].text == "paragraph." &&
+                                                       c == core::TextPos{2, 0});
+        check("break: the rest keeps the style, carries the break", st.paras[2].style == "style.1" &&
+                                                                     st.paras[2].brk == core::ParaStart::NextColumn &&
+                                                                     st.paras[1].brk == core::ParaStart::Anywhere);
+        check("break: column -- what follows starts the next column", where(1) == "frame.t:0" && where(2) == "frame.t:1");
+        j.undo();
+        check("break: undo, all back", *d.as<core::Story>("story.t") == before);
+        D::insert_break(j, d, "story.t", {2, 0}, core::ParaStart::NextFrame);
+        check("break: at a paragraph's start -- no split, that one moves on", d.as<core::Story>("story.t")->paras.size() == 3 &&
+                                                                               where(2) == "frame.t2:0" && where(1) == "frame.t:0");
+        D::insert_break(j, d, "story.t", {2, 0}, core::ParaStart::Anywhere);
+        check("break: taken off again", where(2) == "frame.t:0");
+        // Typing keeps a break where it was; Enter's new paragraph has none.
+        D::insert_break(j, d, "story.t", {1, 0}, core::ParaStart::NextColumn);
+        D::edit_text(j, d, "story.t", {1, 6}, {1, 6}, "X");
+        D::edit_text(j, d, "story.t", {1, 18}, {1, 18}, "\n");
+        check("break: survives typing; Enter's paragraph has none", d.as<core::Story>("story.t")->paras[1].brk == core::ParaStart::NextColumn &&
+                                                                    d.as<core::Story>("story.t")->paras[2].brk == core::ParaStart::Anywhere);
+        // Column rules.
+        {
+            core::Doc::Loading load(d);
+            auto f = *d.as<core::Frame>("frame.t");
+            f.columns = 3;
+            f.col_rule = {1, "swatch.3", 0.5, 6};
+            f.inset = {10, 0, 4, 0};
+            d.put("frame.t", f);
+        }
+        const auto& fr = *d.as<core::Frame>("frame.t");
+        const auto rules = L::column_rules(fr);
+        bool mid = rules.size() == 2;
+        for (int k = 0; mid && k < 2; ++k) {
+            const double gap0 = core::column_x(fr, k) + core::column_width(fr, k), gap1 = core::column_x(fr, k + 1);
+            const auto& r = rules[static_cast<std::size_t>(k)].r;
+            mid = std::abs(r.x + r.w / 2 - (gap0 + gap1) / 2) < 1e-6 && r.w == 1 && r.y == 16 && std::abs(r.y + r.h - (300 - 4 - 6)) < 1e-6;
+        }
+        check("rules: one down each gutter, inset top and bottom", mid && rules[0].color == "swatch.3" && rules[0].tint == 0.5);
+        {
+            auto one = fr;
+            one.columns = 1;
+            auto none = fr;
+            none.col_rule.weight = 0;
+            check("rules: none for one column, or no weight", L::column_rules(one).empty() && L::column_rules(none).empty());
+        }
+        // Kept in the file.
+        const auto json = core::to_json(d);
+        core::Doc e;
+        std::string err;
+        check("json: column rule and break round-trip", core::from_json(e, json, &err) && e.records() == d.records(), err);
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

@@ -380,9 +380,10 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             const auto style = style_of(d, para.style);
             const double lead = leading_of(style);
             // s043: a paragraph that starts afresh -- not where something is set already.
-            if (c.start == 0 && style.start != core::ParaStart::Anywhere) {
-                if (style.start == core::ParaStart::NextColumn && y > top) break;
-                if (style.start != core::ParaStart::NextColumn && !ft.lines.empty()) return false;   // flow_text finds the frame
+            // s055: or a break typed before it (its own, over the style's).
+            if (const auto sa = c.start == 0 ? core::doc::start_of(d, para) : core::ParaStart::Anywhere; sa != core::ParaStart::Anywhere) {
+                if (sa == core::ParaStart::NextColumn && y > top) break;
+                if (sa != core::ParaStart::NextColumn && !ft.lines.empty()) return false;   // flow_text finds the frame
             }
             // s011: space before a paragraph -- not at the top of a column.
             const double before = (c.start == 0 && y > top) ? style.space_before : 0;
@@ -604,7 +605,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         // s043: a paragraph to start on a new (right-hand) page passes the
         // frames on the page it would follow on, and left-hand pages.
         if (c.start == 0 && c.p < static_cast<int>(st->paras.size()) && !last_page.empty()) {
-            const auto start = style_of(d, st->paras[static_cast<std::size_t>(c.p)].style).start;
+            const auto start = core::doc::start_of(d, st->paras[static_cast<std::size_t>(c.p)]);   // s055: a break too
             if ((start == core::ParaStart::NextPage || start == core::ParaStart::NextRightPage) &&
                 (fr.owner == last_page || (start == core::ParaStart::NextRightPage && d.side_of(fr.owner) == core::Side::Left)))
                 continue;
@@ -811,12 +812,30 @@ int byte_at_x(const Placed& pl, double x) {
 
 }  // namespace
 
+std::vector<RuleMark> column_rules(const core::Frame& f) {
+    std::vector<RuleMark> out;
+    const int n = core::column_count(f);
+    const auto& r = f.col_rule;
+    if (f.kind != core::FrameKind::Text || n < 2 || r.weight <= 0) return out;
+    const double y0 = std::max(0.0, f.inset.top) + std::max(0.0, r.inset);
+    const double y1 = f.h - std::max(0.0, f.inset.bottom) - std::max(0.0, r.inset);
+    if (y1 <= y0) return out;
+    for (int c = 1; c < n; ++c) {
+        const double x = (core::column_x(f, c - 1) + core::column_width(f, c - 1) + core::column_x(f, c)) / 2;
+        out.push_back({{x - r.weight / 2, y0, r.weight, y1 - y0}, r.color, r.tint});
+    }
+    return out;
+}
+
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
                      const std::string& frame, double ox, double oy, double ink, const core::Story* text) {
     cairo_save(cr);
     const auto* st = text ? text : d.as<core::Story>(story);
-    // s044: paragraph rules, under the words.
-    for (const auto& m : paragraph_rules(d, story, flow, frame, text)) {
+    // s044: paragraph rules, under the words; s055: column rules with them.
+    auto marks = paragraph_rules(d, story, flow, frame, text);
+    if (const auto* fr = d.as<core::Frame>(frame))
+        for (auto& m : column_rules(*fr)) marks.push_back(std::move(m));
+    for (const auto& m : marks) {
         if (const auto* sw = d.as<core::Swatch>(m.color)) {
             const auto c = core::tint_rgb(sw->preview, m.tint);
             cairo_set_source_rgb(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);

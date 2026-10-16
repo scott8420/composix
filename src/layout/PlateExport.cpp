@@ -96,7 +96,9 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
     if (rs.any) st = &rs.text;
     const auto& flow = rs.any ? rs.flow : c.flows.get(c.d, f.story);
     // s044: paragraph rules, under the words -- each in its swatch's ink.
-    for (const auto& m : paragraph_rules(c.d, f.story, flow, fid, rs.any ? &rs.text : nullptr)) {
+    auto marks = paragraph_rules(c.d, f.story, flow, fid, rs.any ? &rs.text : nullptr);
+    for (auto& m : column_rules(f)) marks.push_back(std::move(m));   // s055
+    for (const auto& m : marks) {
         pg.set_fill(ink_of(c.d, m.color, m.tint));
         pg.rect({f.x + m.r.x, f.y + m.r.y, m.r.w, m.r.h});
         pg.fill();

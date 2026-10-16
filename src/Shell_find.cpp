@@ -21,6 +21,11 @@ Glib::RefPtr<Gio::Menu> Shell::special_menu() {  // zone
     m->append("Section Name", "win.insert-section-name");
     m->append("Next Page Number", "win.insert-next-page");
     m->append("Previous Page Number", "win.insert-prev-page");
+    auto breaks = Gio::Menu::create();   // s055
+    breaks->append("Column Break", "win.insert-column-break");
+    breaks->append("Frame Break", "win.insert-frame-break");
+    breaks->append("Page Break", "win.insert-page-break");
+    m->append_section(breaks);
     return m;
 }
 

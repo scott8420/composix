@@ -734,6 +734,16 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Vertical justification", [&](core::Frame& f) {
                 if (f.kind == core::FrameKind::Text) f.valign = v;
             });
+        } else if (key == "col_rule" || key == "col_rule_color" || key == "col_rule_tint" || key == "col_rule_inset") {   // s055
+            static const std::map<std::string, std::string> labels{{"col_rule", "Column rule"}, {"col_rule_color", "Column rule colour"},
+                                                                   {"col_rule_tint", "Column rule tint"}, {"col_rule_inset", "Column rule inset"}};
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Frame& f) {
+                if (f.kind != core::FrameKind::Text) return;
+                if (key == "col_rule") f.col_rule.weight = std::stod(choice);
+                else if (key == "col_rule_color") f.col_rule.color = choice;
+                else if (key == "col_rule_tint") f.col_rule.tint = std::stod(choice) / 100;
+                else f.col_rule.inset = std::stod(choice);
+            });
         } else if (key == "inset") {   // s040
             const double v = std::stod(choice);
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Text inset", [&](core::Frame& f) {

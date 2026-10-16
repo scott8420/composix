@@ -1110,6 +1110,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
                                                                               : local_at(pa, a.byte);   // s030
     const std::string style = pa.style;
     const int restart = pa.restart;   // s047: the first paragraph keeps its restart
+    const ParaStart brk = pa.brk;     // s055: and its break
     std::size_t head_len = 0;
     for (const auto& sp : head) head_len += sp.text.size();
 
@@ -1122,7 +1123,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         // s037: Enter at a paragraph's end starts its Next style.
         const bool next = i > 0 && text == "\n" && tail.empty();
         made.push_back(para_of(next ? next_style_of(d, style) : style, sp));
-        if (i == 0) made.back().restart = restart;
+        if (i == 0) { made.back().restart = restart; made.back().brk = brk; }
     }
     s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
     s.paras.insert(s.paras.begin() + a.para, made.begin(), made.end());
@@ -1166,8 +1167,10 @@ bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
         const auto rest = spans_of(para, to, n);
         sp.insert(sp.end(), rest.begin(), rest.end());
         const int restart = para.restart;   // s047
+        const ParaStart brk = para.brk;     // s055
         para = para_of(para.style, sp);
         para.restart = restart;
+        para.brk = brk;
     }
     if (s == *st) return false;
     return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
@@ -1192,8 +1195,10 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
         const auto rest = spans_of(para, to, n);
         sp.insert(sp.end(), rest.begin(), rest.end());
         const int restart = para.restart;   // s047
+        const ParaStart brk = para.brk;     // s055
         para = para_of(para.style, sp);
         para.restart = restart;
+        para.brk = brk;
     }
     if (s == *st) return false;
     return j.run(label, {story}, [&] { d.put(story, s); });
@@ -1389,6 +1394,38 @@ bool set_list_restart(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Te
     for (int p = a.para; p <= b.para; ++p) s.paras[static_cast<std::size_t>(p)].restart = std::max(0, n);
     if (s == *st) return false;
     return j.run(n > 0 ? "Restart numbering" : "Continue numbering", {story}, [&] { d.put(story, s); });
+}
+
+TextPos insert_break(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, ParaStart kind) {
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return at;
+    at = clamp_pos(*st, at);
+    static const char* labels[] = {"Remove break", "Column break", "Frame break", "Page break", "Right-hand page break"};
+    TextPos caret = at;
+    j.run(labels[static_cast<int>(kind)], {story}, [&] {
+        if (at.byte > 0 && kind != ParaStart::Anywhere) {
+            // Split here, the Enter way -- but the new paragraph keeps this style.
+            Story s = *d.as<Story>(story);
+            const std::string style = s.paras[static_cast<std::size_t>(at.para)].style;
+            caret = edit_text(j, d, story, at, at, "\n");
+            s = *d.as<Story>(story);
+            s.paras[static_cast<std::size_t>(caret.para)].style = style;
+            s.paras[static_cast<std::size_t>(caret.para)].brk = kind;
+            d.put(story, s);
+        } else {
+            Story s = *d.as<Story>(story);
+            s.paras[static_cast<std::size_t>(at.para)].brk = kind;
+            caret = {at.para, 0};
+            if (!(s == *d.as<Story>(story))) d.put(story, s);
+        }
+    });
+    return caret;
+}
+
+ParaStart start_of(const Doc& d, const Para& p) {
+    if (p.brk != ParaStart::Anywhere) return p.brk;
+    const auto* s = d.as<Style>(p.style);
+    return s ? s->start : ParaStart::Anywhere;
 }
 
 std::string list_marker(const Doc& d, const Story& s, int para) {
@@ -1859,6 +1896,7 @@ const std::vector<Verb>& verbs() {
              edit_styles(j, d, {"style.1"}, "Next style", [](Style& s) { s.next = "style.3"; });
          }},
         {"list_restart", [](DocJournal& j, Doc& d) { set_list_restart(j, d, "story.4", {1, 0}, {1, 0}, 5); }},   // s047
+        {"column_break", [](DocJournal& j, Doc& d) { insert_break(j, d, "story.1", {1, 20}, ParaStart::NextColumn); }},   // s055
         {"enter_next_style", [](DocJournal& j, Doc& d) {   // Enter at the end of "Chapter One"
              edit_text(j, d, "story.1", {0, 11}, {0, 11}, "\n");
          }},
