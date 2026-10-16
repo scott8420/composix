@@ -25,6 +25,8 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     // s030: bold / italic on the words being edited (the word at the caret).
     for (const bool bold : {true, false})
         add_action(bold ? "bold" : "italic", [this, bold] {
+            // s049: typing in the story editor -- its words.
+            if (m_story_ed.text_has_focus()) { m_story_ed.toggle_look(bold); return; }
             auto& cv = m_canvas_view.canvas();
             if (!cv.editing()) return;
             auto [a, b] = cv.edit_range();

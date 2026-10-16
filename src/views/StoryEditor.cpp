@@ -2,8 +2,13 @@
 #include "layout/Flow.hpp"
 #include "Log.hpp"
 
+#include <gtkmm/button.h>
 #include <gtkmm/eventcontrollerkey.h>
+#include <gtkmm/gestureclick.h>
+#include <gtkmm/label.h>
+#include <gtkmm/scrolledwindow.h>
 #include <gtkmm/textbuffer.h>
+#include <tuple>
 #include <pangomm/layout.h>
 
 namespace composix::views {
@@ -47,6 +52,14 @@ StoryEditor::StoryEditor(core::Doc& d, core::DocJournal& j)
     m_info.add_css_class("cx-count");
     m_info.set_valign(Gtk::Align::CENTER);
     m_head.append(m_title);
+    // s050: a character style for the selection (or the word at the cursor).
+    m_char_btn.set_name("story.charstyle");
+    m_char_btn.set_label("Character style");
+    m_char_btn.set_tooltip_text("Set a character style on the selected words");
+    m_char_btn.set_valign(Gtk::Align::CENTER);
+    m_char_btn.add_css_class("flat");
+    m_char_btn.set_popover(m_char_pop);
+    m_head.append(m_char_btn);
     m_head.append(m_info);
     append(m_head);
 
@@ -62,11 +75,35 @@ StoryEditor::StoryEditor(core::Doc& d, core::DocJournal& j)
     m_view.set_monospace(false);
     auto buf = m_view.get_buffer();
     buf->create_tag("overset")->property_background() = "rgba(214,69,69,0.16)";
+    // s049: the words' own formatting.
+    buf->create_tag("bold")->property_weight() = Pango::Weight::BOLD;
+    buf->create_tag("italic")->property_style() = Pango::Style::ITALIC;
+    {   // a character style: a faint underline (its name is in the inspector)
+        auto t = buf->create_tag("cstyle");
+        t->property_underline() = Pango::Underline::SINGLE;
+        Gdk::RGBA c("rgba(91,127,166,0.75)");
+        t->property_underline_rgba() = c;
+    }
 
     // The gutter: each paragraph's style, beside its first line.
     m_gutter.set_content_width(kGutterW);
     m_gutter.set_draw_func(sigc::mem_fun(*this, &StoryEditor::draw_gutter));
     gtk_text_view_set_gutter(m_view.gobj(), GTK_TEXT_WINDOW_LEFT, GTK_WIDGET(m_gutter.gobj()));
+    // s050: click a style's name -- a menu of paragraph styles for that paragraph.
+    m_pick.set_parent(m_gutter);
+    m_pick.set_has_arrow(true);
+    m_pick.set_position(Gtk::PositionType::RIGHT);
+    auto click = Gtk::GestureClick::create();
+    click->signal_released().connect([this](int, double x, double y) {
+        int bx = 0, by = 0;
+        m_view.window_to_buffer_coords(Gtk::TextWindowType::LEFT, static_cast<int>(x), static_cast<int>(y), bx, by);
+        Gtk::TextBuffer::iterator it;
+        int top = 0;
+        m_view.get_line_at_y(it, by, top);
+        pick_para_style(it.get_line(), y);
+    });
+    m_gutter.add_controller(click);
+    m_gutter.set_cursor(Gdk::Cursor::create("pointer"));
 
     // Edits go to the document before the buffer takes them (positions as they were).
     buf->signal_insert().connect([this](const Gtk::TextBuffer::iterator& at, const Glib::ustring& text, int) {
@@ -93,6 +130,8 @@ StoryEditor::StoryEditor(core::Doc& d, core::DocJournal& j)
     keys->signal_key_pressed().connect([this](guint kv, guint, Gdk::ModifierType st) {
         const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
         const bool shift = (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
+        // s049: bold / italic on the words here.
+        if (ctrl && !shift && (kv == GDK_KEY_b || kv == GDK_KEY_i)) { toggle_look(kv == GDK_KEY_b); return true; }
         if (!ctrl || (kv != GDK_KEY_z && kv != GDK_KEY_Z && kv != GDK_KEY_y)) return false;
         activate_action((kv == GDK_KEY_y || shift) ? "win.redo" : "win.undo");
         return true;
@@ -103,6 +142,78 @@ StoryEditor::StoryEditor(core::Doc& d, core::DocJournal& j)
     m_scroll.set_vexpand(true);
     m_scroll.set_hexpand(true);
     append(m_scroll);
+}
+
+StoryEditor::~StoryEditor() { m_pick.unparent(); }
+
+void StoryEditor::pick_para_style(int para, double y) {
+    const auto* st = m_doc.as<core::Story>(m_story);
+    if (!st || para < 0 || para >= static_cast<int>(st->paras.size())) return;
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
+    auto head = Gtk::make_managed<Gtk::Label>("Paragraph style");
+    head->add_css_class("dim-label");
+    head->set_xalign(0.0f);
+    head->set_margin(4);
+    box->append(*head);
+    for (const auto& id : m_doc.ids_of<core::Style>()) {
+        const auto* s = m_doc.as<core::Style>(id);
+        if (s->kind != core::StyleKind::Paragraph) continue;
+        auto b = Gtk::make_managed<Gtk::Button>((id == st->paras[static_cast<std::size_t>(para)].style ? "\u2713 " : "    ") + s->name);
+        b->add_css_class("flat");
+        if (auto* l = dynamic_cast<Gtk::Label*>(b->get_child())) l->set_xalign(0.0f);
+        b->set_name("story.pick." + id);
+        b->signal_clicked().connect([this, para, id] { m_pick.popdown(); apply_para_style(para, id); });
+        box->append(*b);
+    }
+    auto sc = Gtk::make_managed<Gtk::ScrolledWindow>();
+    sc->set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
+    sc->set_max_content_height(360);
+    sc->set_propagate_natural_height(true);
+    sc->set_child(*box);
+    m_pick.set_child(*sc);
+    Gdk::Rectangle at(8, static_cast<int>(y), 1, 1);
+    m_pick.set_pointing_to(at);
+    m_pick.popup();
+}
+
+// The paragraph clicked -- or, when the selection takes it in, every
+// paragraph of the selection.
+void StoryEditor::apply_para_style(int para, const std::string& id) {
+    auto buf = m_view.get_buffer();
+    Gtk::TextBuffer::iterator ia, ib;
+    buf->get_selection_bounds(ia, ib);
+    core::TextPos a{para, 0}, b{para, 0};
+    if (ia.get_line() <= para && para <= ib.get_line() && ia != ib) { a = {ia.get_line(), 0}; b = {ib.get_line(), 0}; }
+    if (core::doc::set_para_style(m_journal, m_doc, m_story, a, b, id)) m_edited.emit();
+    m_gutter.queue_draw();
+}
+
+void StoryEditor::fill_char_menu() {
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
+    const auto add = [&](const std::string& id, const std::string& name) {
+        auto b = Gtk::make_managed<Gtk::Button>(name);
+        b->add_css_class("flat");
+        if (auto* l = dynamic_cast<Gtk::Label*>(b->get_child())) l->set_xalign(0.0f);
+        b->set_name("story.char." + (id.empty() ? std::string("none") : id));
+        b->signal_clicked().connect([this, id] { m_char_pop.popdown(); apply_char_style(id); });
+        box->append(*b);
+    };
+    add("", "None");
+    for (const auto& id : m_doc.ids_of<core::Style>())
+        if (const auto* s = m_doc.as<core::Style>(id); s->kind == core::StyleKind::Character) add(id, s->name);
+    m_char_pop.set_child(*box);
+}
+
+void StoryEditor::apply_char_style(const std::string& id) {
+    const auto* st = m_doc.as<core::Story>(m_story);
+    if (!st) return;
+    auto buf = m_view.get_buffer();
+    Gtk::TextBuffer::iterator ia, ib;
+    buf->get_selection_bounds(ia, ib);
+    core::TextPos a{ia.get_line(), ia.get_line_index()}, b{ib.get_line(), ib.get_line_index()};
+    if (a == b) std::tie(a, b) = core::word_at(*st, a);
+    if (a != b && core::doc::set_char_style(m_journal, m_doc, m_story, a, b, id)) m_edited.emit();
+    m_view.grab_focus();
 }
 
 void StoryEditor::show_story(const std::string& story) {
@@ -118,7 +229,40 @@ void StoryEditor::model_changed() {
         if (m_view.get_buffer()->get_text(false).raw() != shown_text(*m_doc.as<core::Story>(m_story))) load();
     }
     mark_overset();
+    show_looks();
+    if (!m_char_pop.get_visible()) fill_char_menu();   // s050: styles added / renamed
     m_gutter.queue_draw();
+}
+
+bool StoryEditor::toggle_look(bool bold) {
+    const auto* st = m_doc.as<core::Story>(m_story);
+    if (!st) return false;
+    auto buf = m_view.get_buffer();
+    Gtk::TextBuffer::iterator ia, ib;
+    buf->get_selection_bounds(ia, ib);
+    core::TextPos a{ia.get_line(), ia.get_line_index()}, b{ib.get_line(), ib.get_line_index()};
+    if (a == b) std::tie(a, b) = core::word_at(*st, a);
+    if (a == b) return false;
+    const bool on = !(bold ? core::all_bold(m_doc, *st, a, b) : core::all_italic(m_doc, *st, a, b));
+    const bool did = core::doc::set_local(m_journal, m_doc, m_story, a, b, bold ? "Bold" : "Italic",
+                                          [&](core::Local& l) { (bold ? l.bold : l.italic) = on ? 1 : 0; });
+    if (did) m_edited.emit();
+    return did;
+}
+
+void StoryEditor::show_looks() {
+    auto buf = m_view.get_buffer();
+    for (const char* t : {"bold", "italic", "cstyle"}) buf->remove_tag_by_name(t, buf->begin(), buf->end());
+    const auto* st = m_doc.as<core::Story>(m_story);
+    if (!st) return;
+    const int lines = buf->get_line_count();
+    for (int p = 0; p < static_cast<int>(st->paras.size()) && p < lines; ++p)
+        for (const auto& w : core::word_looks(m_doc, st->paras[static_cast<std::size_t>(p)])) {
+            const auto a = buf->get_iter_at_line_index(p, w.start), b = buf->get_iter_at_line_index(p, w.end);
+            if (w.bold) buf->apply_tag_by_name("bold", a, b);
+            if (w.italic) buf->apply_tag_by_name("italic", a, b);
+            if (!w.cstyle.empty()) buf->apply_tag_by_name("cstyle", a, b);
+        }
 }
 
 void StoryEditor::load() {
@@ -132,6 +276,8 @@ void StoryEditor::load() {
     m_applying = false;
     m_title.set_text(st ? "Story — " + st->name : "Story");
     mark_overset();
+    show_looks();
+    fill_char_menu();   // s050
     m_gutter.queue_draw();
 }
 

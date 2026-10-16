@@ -3170,6 +3170,30 @@ int main() {
         check("json: autosize kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
     }
 
+    {
+        std::cout << "\n-- story editor formatting (s049) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto looks = [&](const char* story, int p) { return core::word_looks(d, d.as<core::Story>(story)->paras[static_cast<std::size_t>(p)]); };
+        const auto w0 = looks("story.4", 0);
+        check("Sources: the title in Emphasis -- italic, its character style", w0.size() == 1 && w0[0].start == 0 && w0[0].end == 26 &&
+                                                                               w0[0].italic && !w0[0].bold && w0[0].cstyle == "style.5");
+        check("plain words: nothing", looks("story.4", 1).empty() && looks("story.1", 2).empty());
+        check("a bold heading's own weight is the paragraph style's, not shown", looks("story.1", 0).empty());
+        core::doc::set_local(j, d, "story.4", {1, 0}, {1, 6}, "Bold", [](core::Local& l) { l.bold = 1; });
+        const auto w1 = looks("story.4", 1);
+        check("local bold: its span, bold, no character style", w1.size() == 1 && w1[0].start == 0 && w1[0].end == 6 && w1[0].bold &&
+                                                                 w1[0].cstyle.empty());
+        core::doc::set_local(j, d, "story.4", {0, 0}, {0, 7}, "Italic", [](core::Local& l) { l.italic = 0; });
+        const auto w2 = looks("story.4", 0);
+        check("local roman over italic Emphasis: that part not italic, still Emphasis",
+              w2.size() == 2 && !w2[0].italic && w2[0].cstyle == "style.5" && w2[1].italic, std::to_string(w2.size()));
+        j.undo(); j.undo();
+        check("undo: as it was", looks("story.4", 0).size() == 1 && looks("story.4", 1).empty());
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

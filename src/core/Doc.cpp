@@ -459,6 +459,18 @@ template <class F> bool all_chars(const Doc& d, const Story& s, TextPos a, TextP
 }
 }  // namespace
 
+std::vector<WordLook> word_looks(const Doc& d, const Para& p) {
+    std::vector<WordLook> out;
+    for (const auto& r : p.runs) {
+        const auto* cs = d.as<Style>(r.style);
+        WordLook w{r.start, r.end, false, false, cs ? r.style : std::string{}};
+        w.bold = r.local.bold >= 0 ? r.local.bold == 1 : (cs && cs->bold);
+        w.italic = r.local.italic >= 0 ? r.local.italic == 1 : (cs && cs->italic);
+        if (w.bold || w.italic || !w.cstyle.empty()) out.push_back(w);
+    }
+    return out;
+}
+
 bool all_bold(const Doc& d, const Story& s, TextPos a, TextPos b) {
     return all_chars(d, s, a, b, [](const Local& l, const Style* cs, const Style* ps) {
         if (l.bold >= 0) return l.bold == 1;

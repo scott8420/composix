@@ -434,6 +434,16 @@ std::string char_style_at(const Para& p, int byte);
 Local local_at(const Para& p, int byte);
 // Is every character of [a, b) bold / italic, all told (local, then the
 // character style, then the paragraph style)? What Ctrl+B / Ctrl+I toggle.
+// s049: how a paragraph's words are set, apart from its paragraph style --
+// the spans with a character style or local formatting, and whether each
+// reads bold / italic (local over the character style). For the story
+// editor, which shows the words' own formatting, not the paragraph's.
+struct WordLook {
+    int         start = 0, end = 0;   // bytes in the paragraph
+    bool        bold = false, italic = false;
+    std::string cstyle;               // a character style id, or ""
+};
+std::vector<WordLook> word_looks(const Doc& d, const Para& p);
 bool all_bold(const Doc& d, const Story& s, TextPos a, TextPos b);
 bool all_italic(const Doc& d, const Story& s, TextPos a, TextPos b);
 

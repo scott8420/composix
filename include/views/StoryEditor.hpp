@@ -11,6 +11,8 @@
 #include "core/Doc.hpp"
 #include "widgets/Widgets.hpp"
 
+#include <gtkmm/menubutton.h>
+#include <gtkmm/popover.h>
 #include <gtkmm/textview.h>
 
 #include <sigc++/signal.h>
@@ -22,18 +24,30 @@ namespace composix::views {
 class StoryEditor : public widgets::Box {
 public:
     StoryEditor(core::Doc& d, core::DocJournal& j);
+    ~StoryEditor() override;
 
     void show_story(const std::string& story);   // "" = none
     const std::string& story() const { return m_story; }
     // The document changed: reload unless it is our own edit; re-mark overset.
     void model_changed();
     void focus_text() { m_view.grab_focus(); }
+    // s049: is the text being typed in? Ctrl+B / Ctrl+I (and Edit's Bold /
+    // Italic) then act here: the selection, or the word at the cursor.
+    bool text_has_focus() const { return m_view.has_focus(); }
+    bool toggle_look(bool bold);
 
     sigc::signal<void()>& signal_edited() { return m_edited; }
 
 private:
     void load();
     void mark_overset();
+    void show_looks();   // s049: bold / italic / character styles as tags
+    // s050: styles from here -- the gutter's paragraph-style menu, the
+    // header's character-style menu.
+    void pick_para_style(int para, double y);
+    void fill_char_menu();
+    void apply_char_style(const std::string& id);
+    void apply_para_style(int para, const std::string& id);
     void draw_gutter(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
 
     core::Doc&           m_doc;
@@ -44,6 +58,9 @@ private:
     widgets::ScrolledWindow m_scroll;
     Gtk::TextView        m_view;
     widgets::DrawingArea m_gutter;
+    Gtk::Popover         m_pick;        // s050: on the gutter (unparented in the destructor)
+    Gtk::MenuButton      m_char_btn;    // s050: in the header
+    Gtk::Popover         m_char_pop;
     std::string          m_story;
     bool                 m_applying = false;   // our own edit: the reload would undo the cursor
     sigc::signal<void()> m_edited;
