@@ -742,6 +742,29 @@ void frames_set(DocJournal& j, Doc& d, const Doc::Id& id, const Rect& r) {
 
 bool frames_end(DocJournal& j) { return j.commit(); }
 
+int frames_rehome(DocJournal& j, Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& ids) {
+    int n = 0;
+    for (const auto& id : ids) {
+        const auto* f = d.as<Frame>(id);
+        if (!f || !d.as<Page>(f->owner)) continue;
+        const auto from = std::find_if(pl.begin(), pl.end(), [&](const Placed& p) { return p.id == f->owner; });
+        if (from == pl.end()) continue;
+        const double cx = from->r.x + f->x + f->w / 2, cy = from->r.y + f->y + f->h / 2;
+        const auto to = std::find_if(pl.begin(), pl.end(), [&](const Placed& p) {
+            return !p.master && d.as<Page>(p.id) && p.id != f->owner && p.r.contains(cx, cy);
+        });
+        if (to == pl.end()) continue;
+        Frame g = *f;
+        g.owner = to->id;
+        g.x = from->r.x + f->x - to->r.x;
+        g.y = from->r.y + f->y - to->r.y;
+        g.overrides.clear();   // a page's override moved off its page is just a frame
+        j.run("Move to page", {id}, [&] { d.put(id, g); });
+        ++n;
+    }
+    return n;
+}
+
 Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r,
                   int columns, double gutter) {
     if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
@@ -1433,17 +1456,45 @@ const std::vector<Verb>& verbs() {
 
 namespace composix::core {
 
+std::vector<std::vector<Doc::Id>> spreads(const Doc& d) {
+    std::vector<std::vector<Doc::Id>> out;
+    const auto pages = d.pages();
+    for (std::size_t i = 0; i < pages.size(); ++i) {
+        if (d.settings().facing && d.side_of(pages[i]) == Side::Left && i + 1 < pages.size() &&
+            d.side_of(pages[i + 1]) == Side::Right) {
+            out.push_back({pages[i], pages[i + 1]});
+            ++i;
+        } else {
+            out.push_back({pages[i]});
+        }
+    }
+    return out;
+}
+
+std::vector<Doc::Id> spread_of(const Doc& d, const Doc::Id& page) {
+    for (const auto& s : spreads(d))
+        if (std::find(s.begin(), s.end(), page) != s.end()) return s;
+    return {page};
+}
+
 std::vector<Placed> layout_pages(const Doc& d, const std::vector<Doc::Id>& ids, double gap) {
     std::vector<Placed> out;
     double x = 0;
-    for (const auto& id : ids) {
+    // s027: a left page and the right page of its spread meet at the spine.
+    const auto spine = [&](std::size_t i) {
+        if (i + 1 >= ids.size() || !d.as<Page>(ids[i]) || !d.as<Page>(ids[i + 1])) return false;
+        const auto sp = spread_of(d, ids[i]);
+        return sp.size() == 2 && sp[0] == ids[i] && sp[1] == ids[i + 1];
+    };
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        const auto& id = ids[i];
         double w = 0, h = 0;
         bool master = false;
         if (const auto* p = d.as<Page>(id))        { w = p->w; h = p->h; }
         else if (const auto* m = d.as<Master>(id)) { w = m->w; h = m->h; master = true; }
         else continue;
         out.push_back({id, {x, 0, w, h}, master});
-        x += w + gap;
+        x += w + (spine(i) ? 0 : gap);
     }
     return out;
 }

@@ -671,7 +671,9 @@ int main() {
         check("snap: the closer of two wins", core::snap_any({52, 100}, {54, 101}, 5).line == 101);
 
         check("page_at: over a page / the pasteboard",
-              core::page_at(pl, 10, 10) == "page.6" && core::page_at(pl, 440, 10).empty());
+              core::page_at(pl, 10, 10) == "page.6" && core::page_at(pl, 10, 700).empty());
+        check("spread: a left page and its right page meet at the spine (s027)",
+              pl[1].r.x == pl[0].r.w && core::page_at(pl, 440, 10) == "page.7");
         const auto g = core::doc::add_guide(j, d, "page.6", false, 300);
         const auto pl2 = core::layout_pages(d, {"page.6"});
         check("add_guide: one step, on its page", !g.empty() && j.size() == 1 && core::guides_on(d, "page.6").size() == 1);
@@ -2010,6 +2012,48 @@ int main() {
             tb = tb || (f.edit == "indent_after" && f.value == "After the same style");
         }
         check("inspector: First indent and when", fi && tb);
+    }
+
+    {
+        std::cout << "\n-- spreads --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto sp = core::spreads(d);
+        check("spreads: page i alone, then left + right pairs", sp.front() == std::vector<std::string>{"page.1"} &&
+                                                                 sp[1] == (std::vector<std::string>{"page.2", "page.3"}));
+        check("spreads: every page once", [&] {
+            std::size_t n = 0;
+            for (const auto& s : sp) n += s.size();
+            return n == d.pages().size();
+        }());
+        check("spread_of: either page gives the pair", core::spread_of(d, "page.7") == (std::vector<std::string>{"page.6", "page.7"}) &&
+                                                       core::spread_of(d, "page.6") == core::spread_of(d, "page.7"));
+        check("spread_of: page 1 faces page iv (sections don't break spreads)",
+              core::spread_of(d, "page.5") == (std::vector<std::string>{"page.4", "page.5"}));
+        {   // single pages: each its own
+            core::Doc e;
+            core::load_sample(e);
+            core::Doc::Loading load(e);
+            auto st = e.settings();
+            st.facing = false;
+            e.put("doc", st);
+            check("spreads: not facing, one page each", core::spreads(e).size() == e.pages().size());
+        }
+        // A frame dragged across the spine belongs to the other page.
+        const auto pl = core::layout_pages(d, {"page.6", "page.7"});
+        const auto box = core::doc::add_frame(j, d, "page.6", core::FrameKind::Shape, {300, 100, 100, 50});
+        core::doc::frames_begin(j, d, {box}, "Move");
+        core::doc::frames_set(j, d, box, {420, 100, 100, 50});   // centre at 470: page 7 (from 432)
+        const int moved = core::doc::frames_rehome(j, d, pl, {box});
+        core::doc::frames_end(j);
+        const auto* f = d.as<core::Frame>(box);
+        check("across the spine: the right page's now, same place", moved == 1 && f->owner == "page.7" &&
+                                                                     std::abs(f->x - (420 - 432)) < 1e-9 && f->y == 100);
+        j.undo();
+        check("across the spine: one undo puts it back", d.as<core::Frame>(box)->owner == "page.6" &&
+                                                        d.as<core::Frame>(box)->x == 300);
     }
 
     std::cout << "-----------------------------------------------\n";

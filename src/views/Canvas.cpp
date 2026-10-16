@@ -128,6 +128,8 @@ Canvas::~Canvas() {
 // ─────────────────────────────────────────────────────────────────────────────
 // what is shown
 // ─────────────────────────────────────────────────────────────────────────────
+const std::vector<std::string>& Canvas::shown() const { return m_ids; }
+
 void Canvas::show_pages(const std::vector<std::string>& ids) {
     const bool same = ids == m_ids;
     m_ids = ids;
@@ -339,13 +341,30 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
     cr->fill();
 
     // Bleed: a thin red line outside the trim.
+    // s027: in a spread the bleed runs round the spread -- none at the spine.
     const double bleed = m_doc.settings().bleed * s;
     if (bleed > 1) {
+        bool at_left = false, at_right = false;   // a page touching this one at the spine
+        for (const auto& q : m_placed) {
+            if (q.id == p.id || q.master || p.master) continue;
+            at_left = at_left || std::abs(q.r.x + q.r.w - p.r.x) < 0.01;
+            at_right = at_right || std::abs(p.r.x + p.r.w - q.r.x) < 0.01;
+        }
+        const double x0 = std::round(sr.x - (at_left ? 0 : bleed)) + 0.5, x1 = std::round(sr.r() + (at_right ? 0 : bleed)) + 0.5;
+        const double y0 = std::round(sr.y - bleed) + 0.5, y1 = std::round(sr.b() + bleed) + 0.5;
         cr->set_source_rgba(0.85, 0.2, 0.2, 0.55);
         cr->set_line_width(1);
-        cr->rectangle(std::round(sr.x - bleed) + 0.5, std::round(sr.y - bleed) + 0.5,
-                      std::round(sr.w + 2 * bleed), std::round(sr.h + 2 * bleed));
+        cr->move_to(x0, y0); cr->line_to(x1, y0);
+        cr->move_to(x0, y1); cr->line_to(x1, y1);
+        if (!at_left) { cr->move_to(x0, y0); cr->line_to(x0, y1); }
+        if (!at_right) { cr->move_to(x1, y0); cr->line_to(x1, y1); }
         cr->stroke();
+        if (at_right) {   // the spine: a quiet line where the pages meet
+            cr->set_source_rgba(0, 0, 0, 0.18);
+            cr->move_to(std::round(sr.r()) + 0.5, sr.y);
+            cr->line_to(std::round(sr.r()) + 0.5, sr.b());
+            cr->stroke();
+        }
     }
 
     // Folds: dashed, from the page's own fold positions.
@@ -1094,6 +1113,10 @@ void Canvas::on_drag_end(double, double) {
         core::doc::guide_remove_in_gesture(m_journal, m_doc, m_guide);
     if ((was == Drag::Move || was == Drag::Resize || was == Drag::Guide || was == Drag::Gutter) && m_begun) {
         m_begun = false;
+        // s027: dragged across the spine (onto another shown page): that
+        // page's now -- part of the drag's one step.
+        if (was == Drag::Move && core::doc::frames_rehome(m_journal, m_doc, m_placed, m_sel) > 0)
+            if (auto lg = log::get(log::Area::View)) lg->info("move: to another page");
         core::doc::frames_end(m_journal);
         m_sig_edited.emit();
     }

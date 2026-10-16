@@ -136,9 +136,15 @@ void Shell::show_pick(const views::Pick& p, const std::vector<std::string>& keep
         });
         if (pages) {
             auto& cv = m_canvas_view.canvas();
-            cv.show_pages(p.items);
+            // s027: one page of a facing book opens with its spread.
+            auto show = p.items;
+            if (show.size() == 1 && m_doc.as<core::Page>(show.front())) show = core::spread_of(m_doc, show.front());
+            cv.show_pages(show);
             cv.model_changed();
-            m_canvas_view.set_title(core::selection_title(items), items.size());
+            if (show.size() == 2 && p.items.size() == 1)
+                m_canvas_view.set_title("Pages " + m_doc.folio(show[0]) + "\u2013" + m_doc.folio(show[1]), 2);
+            else
+                m_canvas_view.set_title(core::selection_title(items), items.size());
             m_main.set_visible_child("canvas");
             if (!cv.selection().empty()) { on_canvas_selection(); return; }
             m_inspected = p.items;

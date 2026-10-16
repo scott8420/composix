@@ -360,6 +360,8 @@ Size2 natural_size(const ImageFile& f, double max_w, double max_h);
 
 // ── the verbs: every user choice on the document ───────────────────────────
 // Each goes through the journal; the UI calls these and nothing else writes.
+struct Placed;   // s027: frames_rehome takes the canvas layout (below)
+
 namespace doc {
 
 // Size presets the inspector offers for a page: the trim, a 2-panel and a
@@ -394,6 +396,10 @@ bool move_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, doub
 void frames_begin(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, const std::string& label);
 void frames_set(DocJournal& j, Doc& d, const Doc::Id& frame, const Rect& r);   // r in the owner's coords
 bool frames_end(DocJournal& j);
+// s027: frames dragged onto another shown page (their centre over it)
+// belong to that page now -- same place on the spread. Inside the drag's
+// gesture: part of its one step. Returns how many moved page.
+int frames_rehome(DocJournal& j, Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& ids);
 void frames_cancel(DocJournal& j);
 
 // ── frame tools (s008) ──────────────────────────────────────────────────────
@@ -586,6 +592,11 @@ struct WrapRect {
     bool   jump = false;
 };
 std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& text_frame);
+// s027: spreads -- facing pages pair a left page with the right one after
+// it (a book's first page stands alone on the right); without facing
+// pages each page is its own. In page order.
+std::vector<std::vector<Doc::Id>> spreads(const Doc& d);
+std::vector<Doc::Id> spread_of(const Doc& d, const Doc::Id& page);
 // The masters a page shows, most basic first (a master's based-on chain).
 std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& page_or_master);
 // A frame's rect in layout (doc) space; empty if its owner isn't placed.

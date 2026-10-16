@@ -126,6 +126,20 @@ void Shell::bind_actions() {  // bindings: actions + recents group
             if ((keyval == GDK_KEY_z || keyval == GDK_KEY_Z) && mods == CTRL)               act = "win.undo";
             else if ((keyval == GDK_KEY_z || keyval == GDK_KEY_Z) && mods == (CTRL | SHIFT)) act = "win.redo";
             else if ((keyval == GDK_KEY_y || keyval == GDK_KEY_Y) && mods == CTRL)          act = "win.redo";
+            // s027: Page Up / Page Down -- the previous / next spread on the canvas.
+            if (!act && mods == Gdk::ModifierType{} && (keyval == GDK_KEY_Page_Up || keyval == GDK_KEY_Page_Down) &&
+                !focus_is_text() && m_main.get_visible_child_name() == "canvas" && !m_canvas_view.canvas().editing()) {
+                const auto& now = m_canvas_view.canvas().shown();
+                if (now.empty() || !m_doc.as<core::Page>(now.front())) return false;
+                const auto all = core::spreads(m_doc);
+                for (std::size_t i = 0; i < all.size(); ++i)
+                    if (std::find(all[i].begin(), all[i].end(), now.front()) != all[i].end()) {
+                        const std::size_t to = keyval == GDK_KEY_Page_Down ? std::min(i + 1, all.size() - 1) : (i ? i - 1 : 0);
+                        if (to != i) m_nav.select_items({all[to].front()});
+                        return true;
+                    }
+                return false;
+            }
             if (!act || focus_is_text()) return false;
             if (auto lg = log::get(log::Area::Shell)) lg->info("window key -> {}", act);
             activate_action(act);   // the FULL name: "undo" alone would do nothing

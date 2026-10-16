@@ -160,6 +160,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Text", "win.insert-prev-page",    {"<Ctrl><Alt>bracketleft"}, "", "Insert the previous frame's page number (\"continued from\")"},
 
         // ── View (s002) ───────────────────────────────────────────────────────
+        {"View", "", {}, "Page Up / Page Down", "The previous / next spread (pages open with their facing page)"},
         {"View", "win.zoom-in",          {"<Ctrl>equal", "<Ctrl>plus"}, "", "Zoom in"},
         {"View", "win.zoom-out",         {"<Ctrl>minus"}, "", "Zoom out"},
         {"View", "win.zoom-fit",         {"<Ctrl>0"}, "", "Fit the pages"},

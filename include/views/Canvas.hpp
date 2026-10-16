@@ -41,6 +41,7 @@ public:
     // Show these pages / masters. A different set re-fits; the same set (a
     // refresh) keeps the zoom, the scroll and the selection.
     void show_pages(const std::vector<std::string>& ids);
+    const std::vector<std::string>& shown() const;   // s027: the pages / masters on show
     void model_changed();                       // re-layout, drop vanished picks, repaint
 
     const std::vector<std::string>& selection() const { return m_sel; }
