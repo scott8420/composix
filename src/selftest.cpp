@@ -13,6 +13,7 @@
 
 #include "core/Doc.hpp"
 #include "layout/Flow.hpp"
+#include "layout/Preflight.hpp"
 #include "layout/Export.hpp"
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
@@ -1863,6 +1864,53 @@ int main() {
         const auto plain = L::flow_story(d, "story.6");
         check("display: the marker's three bytes on one line", !plain.frames.empty() && !plain.frames[0].lines.empty() &&
                                                                plain.frames[0].lines[0].end == 3);
+    }
+
+    {
+        std::cout << "\n-- preflight --\n";
+        namespace L = composix::layout;
+        using Lv = L::Issue::Level;
+        core::Doc d;
+        load_plain(d);
+        L::FlowCache flows;
+        const auto has = [](const std::vector<L::Issue>& v, const std::string& kind) {
+            return std::any_of(v.begin(), v.end(), [&](const L::Issue& i) { return i.kind == kind; });
+        };
+        auto v = L::preflight_issues(d, flows, {});
+        check("clean sample: no problems, the spot plate noted", L::problem_count(v) == 0 && has(v, "spot"));
+        {   // overset, at its last frame; a low-res picture; links as told
+            core::Doc::Loading load(d);
+            auto f1 = *d.as<core::Frame>("frame.1");
+            f1.h = 40;
+            f1.next.clear();
+            d.put("frame.1", f1);
+            auto a = *d.as<core::Asset>("asset.4");
+            a.px_w = 200; a.px_h = 150;
+            d.put("asset.4", a);
+            auto f = *d.as<core::Frame>("frame.6");
+            f.opacity = 0.5;
+            d.put("frame.6", f);
+        }
+        L::PreflightOpts o;
+        o.link = [](const core::Asset& a) { return a.name == "harbor.psd" ? core::LinkStatus::Missing : core::LinkStatus::OK; };
+        v = L::preflight_issues(d, flows, o);
+        const auto over = std::find_if(v.begin(), v.end(), [](const L::Issue& i) { return i.kind == "overset"; });
+        check("overset: an error at its frame and page", over != v.end() && over->level == Lv::Error &&
+                                                         over->frame == "frame.1" && over->page == "page.5");
+        check("missing picture: an error, named", has(v, "missing"));
+        check("low resolution: a warning", has(v, "lowres"));
+        check("no standard: opacity is fine", !has(v, "transparency"));
+        check("errors first", v.front().level == Lv::Error && v.back().level == Lv::Info);
+        o.standard = 1;
+        v = L::preflight_issues(d, flows, o);
+        check("X-1a, no profile: the profile, RGB, transparency", has(v, "profile") && has(v, "rgb") && has(v, "transparency"));
+        o.profile = true;
+        v = L::preflight_issues(d, flows, o);
+        check("X-1a with a profile: RGB converts (no error), transparency still", !has(v, "rgb") && has(v, "transparency"));
+        L::PdfReport rep;
+        L::preflight(d, {}, 16, &rep);
+        check("export report: the same checks", std::any_of(rep.warnings.begin(), rep.warnings.end(), [](const std::string& w) {
+                  return w.rfind("Overset text: Chapters", 0) == 0; }));
     }
 
     std::cout << "-----------------------------------------------\n";

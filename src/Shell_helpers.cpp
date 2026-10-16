@@ -113,6 +113,7 @@ void Shell::refresh() {  // helper
     m_pick.items = still;
     show_pick(m_pick, keep);
     update_title();
+    update_preflight();   // s024
 }
 
 void Shell::show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles) {  // helper
@@ -190,6 +191,7 @@ void Shell::adopt(const core::Doc& fresh, const std::string& dir) {  // helper
     m_nav.set_open(core::Segment::Pages, true);
     m_nav.select_section(core::Segment::Pages);
     update_title();
+    update_preflight();   // s024
 }
 
 // s019: before a document is replaced -- unsaved changes? Save / Don't Save /

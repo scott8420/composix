@@ -56,6 +56,8 @@ void Shell::build_shell() {  // zone: header + panes
     m_insp_toggle.set_action_name("win.toggle-inspector");
     m_insp_toggle.add_css_class("cx-chrome-button");
     header->pack_end(m_insp_toggle);
+    build_preflight();   // s024
+    header->pack_end(*m_preflight);
     set_titlebar(*header);
 
     // ── body: nav | (main | inspector) ─────────────────────────────────────

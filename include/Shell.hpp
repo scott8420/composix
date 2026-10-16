@@ -16,6 +16,9 @@
 #include <gtkmm/entry.h>
 #include <gtkmm/label.h>
 #include <gtkmm/revealer.h>
+#include <gtkmm/listbox.h>
+#include <gtkmm/menubutton.h>
+#include "layout/Preflight.hpp"
 #include <gtkmm/togglebutton.h>
 #include <giomm/simpleaction.h>
 
@@ -114,6 +117,9 @@ private:
     void show_new_sheet();                        // category: helper: s019 -- the New sheet
     void build_find_bar();                        // category: zone: s022 -- Find / Change, over the main area
     Glib::RefPtr<Gio::Menu> special_menu();       // category: zone: s023 -- Insert Special Character
+    void build_preflight();                       // category: zone: s024 -- the header's Preflight button + list
+    void update_preflight();                      // category: helper: s024 -- the checks again; the count, the list
+    void go_to_issue(const layout::Issue& i);     // category: helper: s024 -- its page, its frame picked
     void find_refresh();                          // category: helper: s022 -- the hits again, from the bar's settings
     void find_go(int dir);                        // category: helper: s022 -- next / previous hit, shown on the canvas
     void find_show(int i, bool focus);            // category: helper: s022 -- one hit, on its page, selected
@@ -218,6 +224,13 @@ private:
     std::vector<core::doc::Hit>      m_hits;
     int                              m_hit = -1;
     std::uint64_t                    m_hits_rev = ~0ull;
+
+    // s024: Preflight -- the header button (a count), its list, the checks' flows.
+    Gtk::MenuButton*                 m_preflight = nullptr;
+    Gtk::Label*                      m_preflight_label = nullptr;
+    Gtk::ListBox*                    m_preflight_list = nullptr;
+    std::vector<layout::Issue>       m_issues;
+    layout::FlowCache                m_pf_flows;
 
     // s019: the New sheet, and what it was last set to (for the session).
     std::unique_ptr<Gtk::Window>     m_new;

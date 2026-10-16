@@ -1,5 +1,6 @@
 #include "layout/Export.hpp"
 #include "layout/Flow.hpp"
+#include "layout/Preflight.hpp"
 
 #include <cairo-pdf.h>
 
@@ -208,25 +209,16 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
     return true;
 }
 
+// s024: the same checks as the Preflight list (errors and warnings), plus
+// the pictures this export couldn't read.
 void preflight(const core::Doc& d, const std::vector<std::string>& missing, int pages, PdfReport* report) {
     if (!report) return;
     report->pages = pages;
     report->warnings.clear();
-    for (const auto& sid : d.ids_of<core::Story>())
-        if (flow_story(d, sid).overset) report->warnings.push_back("Overset text: " + d.as<core::Story>(sid)->name);
+    FlowCache flows;
+    for (const auto& i : preflight_issues(d, flows, {}))
+        if (i.level != Issue::Level::Info) report->warnings.push_back(i.text);
     for (const auto& m : missing) report->warnings.push_back("Missing image: " + m);
-    std::set<std::string> low;
-    for (const auto& fid : d.ids_of<core::Frame>()) {
-        const auto& f = *d.as<core::Frame>(fid);
-        const auto* a = d.as<core::Asset>(f.asset);
-        if (!a || !d.as<core::Page>(f.owner) ||
-            std::find(missing.begin(), missing.end(), a->name) != missing.end())
-            continue;
-        const double ppi = core::effective_ppi(f, *a);
-        if (ppi > 0 && ppi < core::kLowPpi)
-            low.insert(a->name + " (" + std::to_string(static_cast<int>(std::lround(ppi))) + " ppi)");
-    }
-    for (const auto& l : low) report->warnings.push_back("Low resolution: " + l);
 }
 
 }  // namespace composix::layout

@@ -316,6 +316,7 @@ void Shell::on_export_pdf() {  // handler
             m_pdf_profile = (i > 0 && i - 1 < m_profiles.size()) ? m_profiles[i - 1] : std::string{};
             m_pdf_convert = conv->get_active();
             m_pdf_standard = (m_pdf_print && !m_pdf_profile.empty()) ? static_cast<int>(stdd->get_selected()) : 0;
+            update_preflight();   // s024: the standard's checks follow
             m_export->set_visible(false);
             auto dialog = Gtk::FileDialog::create();
             dialog->set_title("Export PDF");
