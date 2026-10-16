@@ -2288,6 +2288,115 @@ int main() {
         check("undo: the flow as it was", tops() == before);
     }
 
+    {
+        std::cout << "\n-- styles on styles (s037) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto S = [&](const char* id) { return *d.as<core::Style>(id); };
+        check("sample: Body First is based on Body, owning its indent and drop cap",
+              S("style.10").based_on == "style.1" &&
+                  S("style.10").own == std::vector<std::string>{"drop_lines", "first_indent"});
+        // A change to Body ripples into Body First (what it doesn't set) -- one step.
+        check("edit base: one step", core::doc::edit_styles(j, d, {"style.1"}, "Size",
+                                                            [](core::Style& s) { s.size = 12; s.leading = 15; }) && j.size() == 1);
+        check("edit base: the based-on style follows", S("style.10").size == 12 && S("style.10").leading == 15);
+        check("edit base: its own settings stay", S("style.10").first_indent == 0 && S("style.10").drop_lines == 3);
+        core::doc::edit_styles(j, d, {"style.1"}, "First indent", [](core::Style& s) { s.first_indent = 24; });
+        check("edit base: an owned setting doesn't follow", S("style.10").first_indent == 0);
+        j.undo();
+        j.undo();
+        check("undo: base and follower as they were", S("style.1").size == 11 && S("style.10").size == 11);
+        // A change on the based-on style becomes its own.
+        core::doc::edit_styles(j, d, {"style.10"}, "Leading", [](core::Style& s) { s.leading = 16; });
+        check("edit follower: the setting is its own now",
+              [&] { const auto own = S("style.10").own; return std::count(own.begin(), own.end(), "leading") == 1; }());
+        core::doc::edit_styles(j, d, {"style.1"}, "Leading", [](core::Style& s) { s.leading = 13; });
+        check("edit follower: then the base's change doesn't override it", S("style.10").leading == 16);
+        check("reset to base: back to Body's", core::doc::reset_to_base(j, d, {"style.10"}) &&
+                                                  S("style.10").leading == 13 && S("style.10").first_indent == 18 &&
+                                                  S("style.10").drop_lines == 0 && S("style.10").own.empty());
+        j.undo(); j.undo(); j.undo();
+        // Chains: Pull Quote on Body First on Body -- Body's change goes two deep.
+        check("base on: the look doesn't change", [&] {
+            const auto before = S("style.6");
+            core::doc::set_style_base(j, d, "style.6", "style.10");
+            auto after = S("style.6");
+            after.based_on.clear();
+            after.own.clear();
+            return after == before && S("style.6").based_on == "style.10" && !S("style.6").own.empty();
+        }());
+        core::doc::edit_styles(j, d, {"style.1"}, "Font", [](core::Style& s) { s.family = "Sans"; });
+        check("chain: a change two levels up reaches the end", S("style.10").family == "Sans" && S("style.6").family == "Sans");
+        check("chain: descendants in order",
+              core::doc::style_descendants(d, "style.1") == std::vector<core::Doc::Id>{"style.10", "style.6"});
+        j.undo();
+        check("no loops: Body can't be based on what's based on it",
+              !core::doc::can_base_on(d, "style.1", "style.6") && !core::doc::can_base_on(d, "style.1", "style.1") &&
+                  !core::doc::set_style_base(j, d, "style.1", "style.10"));
+        check("no character bases", !core::doc::can_base_on(d, "style.1", "style.5"));
+        // Deleting a base: those on it take its base and look the same.
+        {
+            const auto pq = S("style.6");
+            core::doc::set_style_base(j, d, "style.6", "style.3");   // Caption is used; base on Pull Quote instead
+            j.undo();
+            (void)pq;
+            core::doc::set_style_base(j, d, "style.3", "style.6");   // Caption on Pull Quote (unused)
+            const auto cap = S("style.3");
+            check("delete a base: one step", core::doc::delete_styles(j, d, {"style.6"}));
+            auto now = S("style.3");
+            check("delete a base: the style on it moves to its base, unchanged",
+                  now.based_on == "style.10" && now.size == cap.size && now.italic == cap.italic && now.align == cap.align);
+            j.undo();
+            j.undo();
+        }
+        // Next style: Enter at a heading's end starts Body First; Enter mid-paragraph keeps the style.
+        {
+            const auto caret = core::doc::edit_text(j, d, "story.1", {0, 11}, {0, 11}, "\n");
+            const auto& paras = d.as<core::Story>("story.1")->paras;
+            check("next style: Enter after Chapter One starts Body First",
+                  caret.para == 1 && paras[1].style == "style.10" && paras[0].style == "style.2");
+            j.undo();
+            core::doc::edit_text(j, d, "story.1", {0, 4}, {0, 4}, "\n");
+            check("next style: Enter inside a heading splits it as Heading",
+                  d.as<core::Story>("story.1")->paras[1].style == "style.2");
+            j.undo();
+            core::doc::edit_text(j, d, "story.1", {0, 11}, {0, 11}, "a\nb");
+            check("next style: a paste keeps the style", d.as<core::Story>("story.1")->paras[1].style == "style.2");
+            j.undo();
+            const auto& b1 = d.as<core::Story>("story.1")->paras[1];
+            core::doc::edit_text(j, d, "story.1", {1, static_cast<int>(b1.text.size())}, {1, static_cast<int>(b1.text.size())}, "\n");
+            check("next style: Enter after Body First goes on in Body", d.as<core::Story>("story.1")->paras[2].style == "style.1");
+            j.undo();
+        }
+        // Kept in the file; shown in the inspector.
+        {
+            core::doc::set_style_base(j, d, "style.6", "style.10");
+            std::string err;
+            core::Doc e;
+            check("json: based on, own and next kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records() &&
+                                                         e.as<core::Style>("style.6")->based_on == "style.10" &&
+                                                         e.as<core::Style>("style.2")->next == "style.10", err);
+            const auto o = core::project(d, "");
+            bool base = false, own = false, nx = false, kids = false, reset = false;
+            for (const auto& f : o.find("style.10")->fields) {
+                base = base || (f.edit == "based_on" && f.value == "Body");
+                own = own || (f.label == "Own settings" && f.value == "Drop cap, First indent");
+                reset = reset || (f.edit == "style_base" && f.buttons);
+                nx = nx || (f.edit == "next_style" && f.value == "Body");
+                kids = kids || (f.label == "Styles on it" && f.value == "Pull Quote");
+            }
+            check("inspector: Based on, Own settings, Reset, Next style, Styles on it", base && own && reset && nx && kids);
+            bool loopfree = true;
+            for (const auto& f : o.find("style.1")->fields)
+                if (f.edit == "based_on")
+                    for (const auto& c : f.choices) loopfree = loopfree && c.id != "style.10" && c.id != "style.6" && c.id != "style.1";
+            check("inspector: Body's Based on offers no style built on it", loopfree);
+            j.undo();
+        }
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

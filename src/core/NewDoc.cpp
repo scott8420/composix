@@ -80,8 +80,15 @@ bool new_document(Doc& d, const NewDoc& n) {
     d.put("swatch.2", Swatch{"Paper", 2, ColorModel::CMYK, {0, 0, 0, 0}, "", 0xffffff});
 
     d.put("style.1", Style{"Body", StyleKind::Paragraph, 1, "Serif", 11, 14, false, false, Align::Left});
-    d.put("style.2", Style{"Heading 1", StyleKind::Paragraph, 2, "Serif", 20, 24, true, false, Align::Left, 12, 6});
-    d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
+    {   // s037: Enter after a heading goes on in Body; a caption is Body made small and italic.
+        Style h{"Heading 1", StyleKind::Paragraph, 2, "Serif", 20, 24, true, false, Align::Left, 12, 6};
+        h.next = "style.1";
+        d.put("style.2", h);
+        Style c{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left};
+        c.based_on = "style.1";
+        c.own = doc::style_differences(c, *d.as<Style>("style.1"));
+        d.put("style.3", c);
+    }
     d.put("style.4", Style{"Emphasis", StyleKind::Character, 4, "", 0, 0, false, true, Align::Left});
     d.put("style.5", Style{"Folio", StyleKind::Paragraph, 5, "Serif", 9, 11, false, false, Align::Center});
 

@@ -286,6 +286,35 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 f.push_back({"Baseline grid", s.align_grid ? "Align to grid" : "Off", "align_grid",
                              {{"0", "Off"}, {"1", "Align to grid"}}});
             }
+            if (para) {   // s037: built on another style; what Enter starts next
+                std::vector<Choice> base_ch{{"", "None"}}, next_ch{{"", "Same style"}};
+                for (const auto& o : d.ids_of<Style>()) {
+                    const auto* os = d.as<Style>(o);
+                    if (os->kind != StyleKind::Paragraph) continue;
+                    if (doc::can_base_on(d, sid, o)) base_ch.push_back({o, os->name});
+                    if (o != sid) next_ch.push_back({o, os->name});
+                }
+                const auto* base = d.as<Style>(s.based_on);
+                const auto* nx = d.as<Style>(s.next);
+                f.push_back({"Based on", base ? base->name : "None", "based_on", base_ch});
+                if (base) {
+                    std::string mine;
+                    for (const auto& k : s.own) mine += (mine.empty() ? "" : ", ") + doc::style_field_label(k);
+                    f.push_back({"Own settings", mine.empty() ? "None (all from " + base->name + ")" : mine});
+                    if (!s.own.empty()) {
+                        Field back{"", "", "style_base", {{"reset", "Reset to " + base->name}}};
+                        back.buttons = true;
+                        f.push_back(back);
+                    }
+                }
+                f.push_back({"Next style", nx ? nx->name : "Same style", "next_style", next_ch});
+                const auto kids = doc::style_descendants(d, sid);
+                if (!kids.empty()) {
+                    std::string names;
+                    for (const auto& k : kids) names += (names.empty() ? "" : ", ") + d.as<Style>(k)->name;
+                    f.push_back({"Styles on it", names});
+                }
+            }
             f.push_back({"Used", uses ? std::to_string(uses) + "×" : "Not used"});
             Field act{"", "", "style", {{"duplicate", "Duplicate"}}};
             if (!uses) act.choices.push_back({"delete", "Delete"});

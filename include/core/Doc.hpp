@@ -219,6 +219,15 @@ struct Style {
     // s036: each line's baseline on its page's baseline grid (when the
     // page's master has one), the lines moved down to the next grid line.
     bool        align_grid = false;
+    // s037: styles built on styles (paragraph styles). `based_on`: a style
+    // whose settings this one takes, except those it sets itself (`own`,
+    // keys from style_field_keys(), sorted). The inherited values are kept
+    // here too, written through whenever the base changes, so every reader
+    // sees plain settings. `next`: the style Enter at a paragraph's end
+    // starts ("" = this one again).
+    std::string based_on;
+    std::string next;
+    std::vector<std::string> own;
     bool operator==(const Style&) const = default;
 };
 
@@ -525,8 +534,30 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
                const std::function<void(Local&)>& f);
 bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style);
 // Change styles' settings: `f` edits each; one step for all of them.
+// s037: what `f` changes on a based-on style becomes its own, and the
+// styles based on the edited ones follow (in the same step).
 bool edit_styles(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles, const std::string& label,
                  const std::function<void(Style&)>& f);
+// s037: Based on / Next style.
+// The settings a style can take from its base, as keys ("size", "tabs").
+const std::vector<std::string>& style_field_keys();
+std::string style_field_label(const std::string& key);   // "size" -> "Size"
+// The keys where two styles' settings differ.
+std::vector<std::string> style_differences(const Style& a, const Style& b);
+// `child` takes every setting of `base` it doesn't set itself.
+void inherit_from(Style& child, const Style& base);
+// The styles based on this one, and on those, ... (each after its base).
+std::vector<Doc::Id> style_descendants(const Doc& d, const Doc::Id& style);
+// Could `style` be based on `base`? (Both paragraph styles; not itself, not
+// one based on it.) "" (None) always can.
+bool can_base_on(const Doc& d, const Doc::Id& style, const Doc::Id& base);
+// Base a style on another ("" = none). Its look doesn't change: what
+// differs from the new base becomes its own; the rest now follows it. One step.
+bool set_style_base(DocJournal& j, Doc& d, const Doc::Id& style, const Doc::Id& base);
+// Styles' own settings dropped: all of it from the base again. One step.
+bool reset_to_base(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles);
+// The style a new paragraph after one in `style` takes (Enter at its end).
+Doc::Id next_style_of(const Doc& d, const Doc::Id& style);
 // A copy of a style, just after it ("Body copy"). Its id.
 Doc::Id duplicate_style(DocJournal& j, Doc& d, const Doc::Id& style);
 // Delete styles nothing uses (paragraphs, runs, generated lists). One step.

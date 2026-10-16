@@ -72,9 +72,18 @@ void load_sample(Doc& d) {
         first.pos = 10;
         first.first_indent = 0;
         first.drop_lines = 3;
+        // s037: built on Body (it sets only its indent and drop cap), and
+        // Enter after it goes on in Body.
+        first.based_on = "style.1";
+        first.own = doc::style_differences(first, b);
+        first.next = "style.1";
         d.put("style.10", first);
     }
-    d.put("style.2", Style{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6, "swatch.3"});
+    {   // s037: Enter after a chapter heading starts its first paragraph.
+        Style h{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6, "swatch.3"};
+        h.next = "style.10";
+        d.put("style.2", h);
+    }
     d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
     {   // s026: sources hang: the first line out, the rest in.
         Style src{"Source", StyleKind::Paragraph, 4, "Serif", 10, 12, false, false, Align::Left};

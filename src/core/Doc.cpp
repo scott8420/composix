@@ -1057,7 +1057,9 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         if (i == 0) sp = head;
         sp.push_back({pieces[i], cstyle, local});
         if (i + 1 == pieces.size()) sp.insert(sp.end(), tail.begin(), tail.end());
-        made.push_back(para_of(style, sp));
+        // s037: Enter at a paragraph's end starts its Next style.
+        const bool next = i > 0 && text == "\n" && tail.empty();
+        made.push_back(para_of(next ? next_style_of(d, style) : style, sp));
     }
     s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
     s.paras.insert(s.paras.begin() + a.para, made.begin(), made.end());
@@ -1130,17 +1132,178 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
     return j.run(label, {story}, [&] { d.put(story, s); });
 }
 
+// ── Based on / Next style (s037) ────────────────────────────────────────────
+namespace {
+struct StyleField {
+    const char* key;
+    const char* label;
+    void (*copy)(Style&, const Style&);
+    bool (*same)(const Style&, const Style&);
+};
+#define COMPOSIX_SF(k, label, m) \
+    StyleField{k, label, [](Style& t, const Style& f) { t.m = f.m; }, [](const Style& a, const Style& b) { return a.m == b.m; }}
+const std::vector<StyleField>& style_fields() {
+    static const std::vector<StyleField> fs{
+        COMPOSIX_SF("family", "Font", family),
+        COMPOSIX_SF("size", "Size", size),
+        COMPOSIX_SF("leading", "Leading", leading),
+        COMPOSIX_SF("bold", "Weight", bold),
+        COMPOSIX_SF("italic", "Slant", italic),
+        COMPOSIX_SF("color", "Color", color),
+        COMPOSIX_SF("color_tint", "Tint", color_tint),
+        COMPOSIX_SF("align", "Align", align),
+        COMPOSIX_SF("space_before", "Space before", space_before),
+        COMPOSIX_SF("space_after", "Space after", space_after),
+        COMPOSIX_SF("left_indent", "Left indent", left_indent),
+        COMPOSIX_SF("right_indent", "Right indent", right_indent),
+        COMPOSIX_SF("first_indent", "First indent", first_indent),
+        COMPOSIX_SF("skip_after_heading", "Indent when", skip_after_heading),
+        COMPOSIX_SF("tabs", "Tabs", tabs),
+        COMPOSIX_SF("drop_lines", "Drop cap", drop_lines),
+        COMPOSIX_SF("drop_chars", "Drop letters", drop_chars),
+        COMPOSIX_SF("align_grid", "Baseline grid", align_grid),
+    };
+    return fs;
+}
+#undef COMPOSIX_SF
+
+bool owns(const Style& s, const std::string& key) {
+    return std::find(s.own.begin(), s.own.end(), key) != s.own.end();
+}
+void add_own(Style& s, const std::vector<std::string>& keys) {
+    s.own.insert(s.own.end(), keys.begin(), keys.end());
+    std::sort(s.own.begin(), s.own.end());
+    s.own.erase(std::unique(s.own.begin(), s.own.end()), s.own.end());
+}
+// Each descendant of `roots` takes its base's settings again (bases first).
+void write_through(Doc& d, const std::vector<Doc::Id>& roots) {
+    for (const auto& r : roots)
+        for (const auto& id : style_descendants(d, r)) {
+            const auto* cur = d.as<Style>(id);
+            const auto* base = cur ? d.as<Style>(cur->based_on) : nullptr;
+            if (!base) continue;
+            Style t = *cur;
+            inherit_from(t, *base);
+            if (!(t == *cur)) d.put(id, t);
+        }
+}
+// `roots` and every style based on them, once each.
+std::vector<Doc::Id> with_descendants(const Doc& d, const std::vector<Doc::Id>& roots) {
+    std::vector<Doc::Id> out = roots;
+    for (const auto& r : roots) {
+        const auto ds = style_descendants(d, r);
+        out.insert(out.end(), ds.begin(), ds.end());
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+}  // namespace
+
+const std::vector<std::string>& style_field_keys() {
+    static const std::vector<std::string> keys = [] {
+        std::vector<std::string> k;
+        for (const auto& f : style_fields()) k.push_back(f.key);
+        return k;
+    }();
+    return keys;
+}
+
+std::string style_field_label(const std::string& key) {
+    for (const auto& f : style_fields()) if (key == f.key) return f.label;
+    return key;
+}
+
+std::vector<std::string> style_differences(const Style& a, const Style& b) {
+    std::vector<std::string> out;
+    for (const auto& f : style_fields()) if (!f.same(a, b)) out.push_back(f.key);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+void inherit_from(Style& child, const Style& base) {
+    for (const auto& f : style_fields()) if (!owns(child, f.key)) f.copy(child, base);
+}
+
+std::vector<Doc::Id> style_descendants(const Doc& d, const Doc::Id& style) {
+    std::vector<Doc::Id> out;
+    std::vector<Doc::Id> frontier{style};
+    std::set<Doc::Id> seen{style};
+    const auto all = d.ids_of<Style>();
+    while (!frontier.empty()) {
+        std::vector<Doc::Id> next;
+        for (const auto& p : frontier)
+            for (const auto& id : all)
+                if (d.as<Style>(id)->based_on == p && seen.insert(id).second) {
+                    out.push_back(id);
+                    next.push_back(id);
+                }
+        frontier = std::move(next);
+    }
+    return out;
+}
+
+bool can_base_on(const Doc& d, const Doc::Id& style, const Doc::Id& base) {
+    const auto* s = d.as<Style>(style);
+    if (!s || s->kind != StyleKind::Paragraph) return false;
+    if (base.empty()) return true;
+    const auto* b = d.as<Style>(base);
+    if (!b || b->kind != StyleKind::Paragraph || base == style) return false;
+    const auto ds = style_descendants(d, style);
+    return std::find(ds.begin(), ds.end(), base) == ds.end();
+}
+
+bool set_style_base(DocJournal& j, Doc& d, const Doc::Id& style, const Doc::Id& base) {
+    if (!can_base_on(d, style, base)) return false;
+    const auto* s = d.as<Style>(style);
+    if (s->based_on == base) return false;
+    const auto* b = d.as<Style>(base);
+    return j.run(b ? "Based on " + b->name : "Based on None", {style}, [&] {
+        Style t = *d.as<Style>(style);
+        t.based_on = base;
+        t.own = b ? style_differences(t, *b) : std::vector<std::string>{};   // it looks the same as before
+        d.put(style, t);
+    });
+}
+
+bool reset_to_base(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
+    std::vector<Doc::Id> styles;
+    for (const auto& id : ids)
+        if (const auto* s = d.as<Style>(id); s && d.as<Style>(s->based_on) && !s->own.empty()) styles.push_back(id);
+    if (styles.empty()) return false;
+    return j.run("Reset to base", with_descendants(d, styles), [&] {
+        for (const auto& id : styles) {
+            Style t = *d.as<Style>(id);
+            t.own.clear();
+            inherit_from(t, *d.as<Style>(t.based_on));
+            d.put(id, t);
+        }
+        write_through(d, styles);
+    });
+}
+
+Doc::Id next_style_of(const Doc& d, const Doc::Id& style) {
+    const auto* s = d.as<Style>(style);
+    if (!s || s->next.empty()) return style;
+    const auto* n = d.as<Style>(s->next);
+    return n && n->kind == StyleKind::Paragraph ? s->next : style;
+}
+
 bool edit_styles(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const std::string& label,
                  const std::function<void(Style&)>& f) {
     std::vector<Doc::Id> styles;
     for (const auto& id : ids) if (d.as<Style>(id)) styles.push_back(id);
     if (styles.empty()) return false;
-    return j.run(label, styles, [&] {
+    return j.run(label, with_descendants(d, styles), [&] {
         for (const auto& id : styles) {
-            Style st = *d.as<Style>(id);
+            const Style before = *d.as<Style>(id);
+            Style st = before;
             f(st);
+            // s037: a setting changed on a based-on style is its own now.
+            if (d.as<Style>(st.based_on)) add_own(st, style_differences(before, st));
             d.put(id, st);
         }
+        write_through(d, styles);
     });
 }
 
@@ -1175,7 +1338,29 @@ bool delete_styles(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     std::vector<Doc::Id> gone;
     for (const auto& id : ids) if (d.as<Style>(id) && style_uses(d, id) == 0) gone.push_back(id);
     if (gone.empty()) return false;
-    return j.run("Delete " + plural(gone.size(), "style", "styles"), gone, [&] {
+    const auto going = [&](const Doc::Id& id) { return std::find(gone.begin(), gone.end(), id) != gone.end(); };
+    // s037: styles based on one going take its base instead (looking the
+    // same), and a Next style that goes becomes "this one again".
+    std::vector<Doc::Id> touched = gone;
+    for (const auto& id : d.ids_of<Style>()) {
+        const auto* s = d.as<Style>(id);
+        if (!going(id) && (going(s->based_on) || going(s->next))) touched.push_back(id);
+    }
+    return j.run("Delete " + plural(gone.size(), "style", "styles"), touched, [&] {
+        for (const auto& id : touched) {
+            if (going(id)) continue;
+            Style t = *d.as<Style>(id);
+            if (going(t.next)) t.next.clear();
+            if (going(t.based_on)) {
+                Doc::Id base = t.based_on;
+                for (int guard = 0; going(base) && guard < 64; ++guard) base = d.as<Style>(base)->based_on;
+                const auto* b = going(base) ? nullptr : d.as<Style>(base);
+                t.based_on = b ? base : Doc::Id{};
+                if (b) add_own(t, style_differences(t, *b));
+                else t.own.clear();
+            }
+            d.put(id, t);
+        }
         for (const auto& id : gone) d.put(id, std::nullopt);
     });
 }
@@ -1546,6 +1731,15 @@ const std::vector<Verb>& verbs() {
          }},
         {"duplicate_style", [](DocJournal& j, Doc& d) { duplicate_style(j, d, "style.1"); }},
         {"delete_unused_style", [](DocJournal& j, Doc& d) { delete_styles(j, d, {"style.6", "style.1"}); }},  // Body is used: stays
+        // s037: Based on / Next style.
+        {"set_style_base", [](DocJournal& j, Doc& d) { set_style_base(j, d, "style.6", "style.1"); }},
+        {"reset_to_base", [](DocJournal& j, Doc& d) { reset_to_base(j, d, {"style.10"}); }},
+        {"next_style", [](DocJournal& j, Doc& d) {
+             edit_styles(j, d, {"style.1"}, "Next style", [](Style& s) { s.next = "style.3"; });
+         }},
+        {"enter_next_style", [](DocJournal& j, Doc& d) {   // Enter at the end of "Chapter One"
+             edit_text(j, d, "story.1", {0, 11}, {0, 11}, "\n");
+         }},
         // s009: images. The files are made up -- the core never opens them.
         {"place_image", [](DocJournal& j, Doc& d) {   // replaces harbor.psd, which goes
              place_image(j, d, "frame.4", {"/pics/cove.png", "cove.png", 2400, 1600, false, "RGB", 7});

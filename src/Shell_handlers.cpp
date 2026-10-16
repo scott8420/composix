@@ -575,6 +575,14 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             } else if (choice == "delete") {
                 did = core::doc::delete_styles(m_journal, m_doc, m_inspected);
             }
+        } else if (key == "based_on") {   // s037
+            if (m_inspected.size() == 1) did = core::doc::set_style_base(m_journal, m_doc, m_inspected.front(), choice);
+        } else if (key == "style_base") {   // s037: Reset to base
+            did = core::doc::reset_to_base(m_journal, m_doc, m_inspected);
+        } else if (key == "next_style") {   // s037
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Next style", [&](core::Style& st) {
+                if (st.kind == core::StyleKind::Paragraph) st.next = choice;
+            });
         } else if (key == "align_grid") {   // s036
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Align to grid", [&](core::Style& st) {
                 if (st.kind == core::StyleKind::Paragraph) st.align_grid = choice == "1";

@@ -93,6 +93,8 @@ json to(const Record& r) {
                 for (const auto& t : v.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
                 j["tabs"] = tabs;
             }
+            if (!v.based_on.empty()) { j["based_on"] = v.based_on; j["own"] = v.own; }   // s037
+            if (!v.next.empty()) j["next"] = v.next;
         } else if constexpr (std::is_same_v<T, Swatch>) {
             j = {{"kind", "swatch"}, {"name", v.name}, {"pos", v.pos}, {"model", en(v.model)},
                  {"v", v.v}, {"spot", v.spot}, {"preview", v.preview}};
@@ -242,6 +244,11 @@ std::optional<Record> from(const json& j) {
         if (j.contains("tabs") && j["tabs"].is_array())
             for (const auto& t : j["tabs"])
                 v.tabs.push_back({val(t, "pos", 0.0), de(t, "align", TabAlign::Left), val<std::string>(t, "leader", "")});
+        v.based_on = val<std::string>(j, "based_on", "");   // s037
+        v.next = val<std::string>(j, "next", "");
+        if (j.contains("own") && j["own"].is_array())
+            for (const auto& k : j["own"]) if (k.is_string()) v.own.push_back(k.get<std::string>());
+        std::sort(v.own.begin(), v.own.end());
         return v;
     }
     if (k == "swatch") {
