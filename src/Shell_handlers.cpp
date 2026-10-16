@@ -410,6 +410,7 @@ void Shell::on_export_pdf() {  // handler
 // Closing with unsaved changes asks first. "Save" on a never-saved document
 // opens Save As and keeps the window; close again once it is saved.
 bool Shell::on_close_request() {  // handler
+    save_window();   // s057: whether or not the close goes ahead -- it's how the window is now
     if (!m_dirty || m_closing_ok) return Gtk::ApplicationWindow::on_close_request();
     auto dialog = Gtk::AlertDialog::create("Save changes to \u201c" + m_doc.settings().title + "\u201d?");
     dialog->set_detail("Your changes will be lost if you don\u2019t save them.");

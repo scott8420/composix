@@ -48,6 +48,7 @@
 //     the selftest walks every verb and fails on a stray (the gate).
 // ─────────────────────────────────────────────────────────────────────────────
 #include <chrono>
+#include <cstdint>
 #include <cstddef>
 #include <functional>
 #include <optional>
@@ -77,6 +78,7 @@ public:
         std::vector<Id>    sel_after;   // selection when it ended
         std::string        merge_key;   // "" = never merges
         Clock::time_point  at{};        // last time it grew (for merging)
+        std::uint64_t      serial = 0;  // s057: which state this step leaves (a merge makes a new one)
     };
     // What an undo / redo did. `selection` is what the UI should select now.
     struct Result {
@@ -142,6 +144,7 @@ public:
                 top.sel_after = st.sel_after;
                 top.at        = now;
                 top.label     = label;
+                top.serial    = ++m_serial;   // s057: a different state now
                 if (unchanged(top)) { m_steps.pop_back(); m_at = m_steps.size(); }
                 notify();
                 return true;
@@ -227,9 +230,12 @@ public:
     std::string undo_label() const { return can_undo() ? m_steps[m_at - 1].label : std::string{}; }
     std::string redo_label() const { return can_redo() ? m_steps[m_at].label : std::string{}; }
     std::size_t size()       const { return m_steps.size(); }
+    // s057: where the document stands -- the same mark means the same state
+    // (save it at a save; equal again after undoing back = nothing to save).
+    std::uint64_t mark() const { return m_at > 0 ? m_steps[m_at - 1].serial : m_base; }
 
     // A different document / folder: no step carries over.
-    void clear() { m_steps.clear(); m_at = 0; notify(); }
+    void clear() { m_steps.clear(); m_at = 0; m_base = ++m_serial; notify(); }
 
     // True while a write is coming through the door (run, a gesture, undo,
     // redo, cancel). A store's put() asks this to enforce the one-door rule.
@@ -239,6 +245,8 @@ private:
     Store&                            m_store;
     std::vector<Step>                 m_steps;
     std::size_t                       m_at = 0;      // [0, m_at) done; the rest redoable
+    std::uint64_t                     m_serial = 0;  // s057: the last mark handed out
+    std::uint64_t                     m_base = 0;    // s057: the mark with nothing done (the oldest step forgotten moves it)
     int                               m_depth = 0;   // >0: inside the door
     bool                              m_gesture = false;
     Step                              m_open;        // the gesture being recorded
@@ -287,8 +295,9 @@ private:
     }
     void keep(Step&& st) {
         m_steps.resize(m_at);                 // a new step forgets what was undone
+        st.serial = ++m_serial;   // s057
         m_steps.push_back(std::move(st));
-        if (m_steps.size() > kMax) m_steps.erase(m_steps.begin());
+        if (m_steps.size() > kMax) { m_base = m_steps.front().serial; m_steps.erase(m_steps.begin()); }
         m_at = m_steps.size();
         notify();
     }

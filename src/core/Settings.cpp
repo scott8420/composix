@@ -3,6 +3,7 @@
 
 #include "json.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -38,6 +39,19 @@ bool save_settings(const std::string& file, const AppSettings& s) {
     if (!f) return false;
     f << j.dump(2) << "\n";
     return static_cast<bool>(f);
+}
+
+int setting_int(const AppSettings& s, const std::string& key, int fallback, int lo, int hi) {
+    const auto it = s.find(key);
+    if (it == s.end()) return fallback;
+    try {
+        std::size_t used = 0;
+        const int v = std::stoi(it->second, &used);
+        if (used != it->second.size()) return fallback;
+        return std::clamp(v, lo, hi);
+    } catch (const std::exception&) {
+        return fallback;
+    }
 }
 
 }  // namespace composix::core

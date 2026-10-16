@@ -95,6 +95,8 @@ private:
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
+    void restore_window();                       // category: helper: s057 -- size + panels from settings.json
+    void save_window();                          // category: helper: s057 -- and back, at close
     void on_color_report();                      // category: handler: s053 -- the Colour Report window
     void report_refresh();                       // category: helper: s053 -- proof again (profile picked / shown)
     void on_export_pdf();                        // category: handler: the Export PDF sheet -> a file -> the report
@@ -197,6 +199,7 @@ private:
     core::DocJournal   m_journal{m_doc};
     std::string        m_project_dir;    // "" = the unsaved sample / never saved
     bool               m_dirty = false;
+    std::uint64_t      m_saved_mark = 0;   // s057: the journal's mark when last saved / opened
     bool               m_closing_ok = false;   // the user chose; let the close through
 
     // s020: the page / master tiles drawn for real, kept per page.

@@ -2297,6 +2297,38 @@ int main() {
     }
 
     {
+        std::cout << "\n-- saved state (s057) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        load_plain(d);
+        j.clear();
+        const auto saved = j.mark();
+        D::edit_text(j, d, "story.1", {1, 0}, {1, 0}, "A", "Typing", "k");
+        const auto one = j.mark();
+        check("mark: a step moves it", one != saved);
+        j.undo();
+        check("mark: undo back to the save -- the same mark (nothing to save)", j.mark() == saved);
+        j.redo();
+        check("mark: redo -- the step's own mark again", j.mark() == one);
+        D::edit_text(j, d, "story.1", {1, 1}, {1, 1}, "B", "Typing", "k");   // merges into the same step
+        check("mark: a merge into the last step is a new state", j.size() == 1 && j.mark() != one && j.mark() != saved);
+        const auto two = j.mark();
+        j.undo();
+        check("mark: undo of the merged step -- back to the save", j.mark() == saved);
+        j.redo();
+        check("mark: and forward", j.mark() == two);
+        j.clear();
+        check("mark: a cleared journal is a fresh start", j.mark() != saved && j.mark() != two);
+        core::AppSettings st{{"w", "1400"}, {"bad", "12px"}, {"neg", "-5"}};
+        check("settings: a number, clamped; missing or not one -> the fallback",
+              core::setting_int(st, "w", 1, 0, 2000) == 1400 && core::setting_int(st, "w", 1, 0, 1000) == 1000 &&
+              core::setting_int(st, "bad", 7, 0, 99) == 7 && core::setting_int(st, "none", 3, 0, 9) == 3 &&
+              core::setting_int(st, "neg", 3, 0, 9) == 0);
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

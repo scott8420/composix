@@ -128,7 +128,8 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     // s048: every step settles what follows from it -- auto-size frames fit their text.
     m_journal.set_settle([this] { return layout::fit_frames(m_doc); });
     m_journal.set_selection_source([this] { return m_inspected; });
-    m_journal.set_on_change([this] { update_undo_ui(); set_dirty(true); });
+    // s057: unsaved = not where it was saved (undo back there and it's clean).
+    m_journal.set_on_change([this] { update_undo_ui(); set_dirty(m_journal.mark() != m_saved_mark); });
 
     // ── pane toggles: stateful, so the header buttons show the state ────────
     add_action_bool("toggle-nav", [this] {
@@ -193,7 +194,8 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
     // s052: the Colors view's size, kept between runs.
     {
-        const auto v = m_settings["colors.view"];
+        const auto it = m_settings.find("colors.view");   // (find: reading adds no empty key)
+        const std::string v = it == m_settings.end() ? std::string{} : it->second;
         m_tiles.set_tile_size(v == "small" ? views::TileSize::Small : v == "list" ? views::TileSize::List : views::TileSize::Large);
         m_tiles.signal_tile_size().connect([this](views::TileSize z) {
             m_settings["colors.view"] = z == views::TileSize::Small ? "small" : z == views::TileSize::List ? "list" : "large";
@@ -201,7 +203,7 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
         });
     }
     // s033: the story editor's edits refresh the other views.
-    m_story_ed.signal_edited().connect([this] { set_dirty(true); queue_refresh(); });
+    m_story_ed.signal_edited().connect([this] { set_dirty(m_journal.mark() != m_saved_mark); queue_refresh(); });
     // s031: the navigator brackets them too.
     m_nav.set_grouping([this] {
         return m_doc.settings().facing ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};
