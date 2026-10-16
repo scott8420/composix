@@ -72,6 +72,8 @@ add_library(composix_layout STATIC
     # s015: print PDF through Plate (page boxes, CMYK colour, subset fonts).
     src/layout/PlateExport.cpp
     src/layout/Preflight.cpp
+    # s053: the colour report -- RGB proofed through the press profile.
+    src/layout/ColorReport.cpp
 )
 target_include_directories(composix_layout PUBLIC include ${PANGOCAIRO_INCLUDE_DIRS})
 target_link_libraries(composix_layout PUBLIC composix_core plate_pango ${PANGOCAIRO_LIBRARIES})
@@ -125,6 +127,7 @@ add_executable(composix
     src/Shell_handlers.cpp
     src/Shell_new.cpp
     src/Shell_find.cpp
+    src/Shell_colorreport.cpp
     src/Shell_preflight.cpp
     src/Shell_helpers.cpp
     # s002: the segmented navigator, tile view, item preview, inspector.

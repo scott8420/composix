@@ -3,6 +3,7 @@
 #include "internal.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
@@ -133,5 +134,85 @@ std::string pdf_name(const std::string& s) {
     return out == "/" ? "/Spot" : out;
 }
 }  // namespace detail
+
+}  // namespace plate
+
+// ── s053: soft proof ────────────────────────────────────────────────────────
+namespace plate {
+
+struct Proof::Impl {
+    cmsHPROFILE   out = nullptr, srgb = nullptr, lab = nullptr;
+    cmsHTRANSFORM to_cmyk = nullptr, back = nullptr, rgb_lab = nullptr, cmyk_lab = nullptr;
+    std::string   name;
+    ~Impl() {
+        for (auto t : {to_cmyk, back, rgb_lab, cmyk_lab}) if (t) cmsDeleteTransform(t);
+        for (auto p : {out, srgb, lab}) if (p) cmsCloseProfile(p);
+    }
+};
+
+Proof::Proof() = default;
+Proof::~Proof() = default;
+
+bool Proof::load(const std::string& path, bool perceptual, std::string* err) {
+    m.reset();
+    auto i = std::make_unique<Impl>();
+    i->out = cmsOpenProfileFromFile(path.c_str(), "r");
+    if (!i->out) { if (err) *err = "can't read " + path; return false; }
+    if (cmsGetColorSpace(i->out) != cmsSigCmykData || cmsGetDeviceClass(i->out) != cmsSigOutputClass) {
+        if (err) *err = "not a CMYK output (press) profile";
+        return false;
+    }
+    char desc[256] = {0};
+    cmsGetProfileInfoASCII(i->out, cmsInfoDescription, "en", "US", desc, sizeof desc);
+    i->name = desc;
+    i->srgb = cmsCreate_sRGBProfile();
+    i->lab = cmsCreateLab4Profile(nullptr);   // D50
+    const cmsUInt32Number in = perceptual ? INTENT_PERCEPTUAL : INTENT_RELATIVE_COLORIMETRIC;
+    const cmsUInt32Number fl = perceptual ? 0 : cmsFLAGS_BLACKPOINTCOMPENSATION;
+    // As the export converts (see Cms::rebuild), then what that ink looks like.
+    i->to_cmyk = cmsCreateTransform(i->srgb, TYPE_RGB_DBL, i->out, TYPE_CMYK_DBL, in, fl);
+    i->back = cmsCreateTransform(i->out, TYPE_CMYK_DBL, i->srgb, TYPE_RGB_DBL, INTENT_RELATIVE_COLORIMETRIC, 0);
+    i->rgb_lab = cmsCreateTransform(i->srgb, TYPE_RGB_DBL, i->lab, TYPE_Lab_DBL, INTENT_RELATIVE_COLORIMETRIC, 0);
+    i->cmyk_lab = cmsCreateTransform(i->out, TYPE_CMYK_DBL, i->lab, TYPE_Lab_DBL, INTENT_RELATIVE_COLORIMETRIC, 0);
+    if (!i->to_cmyk || !i->back || !i->rgb_lab || !i->cmyk_lab) {
+        if (err) *err = "couldn't build the proofing transforms";
+        return false;
+    }
+    m = std::move(i);
+    return true;
+}
+
+bool Proof::ok() const { return m != nullptr; }
+std::string Proof::name() const { return m ? m->name : std::string{}; }
+
+Proof::Result Proof::check(std::uint8_t r, std::uint8_t g, std::uint8_t b) const {
+    Result res;
+    if (!m) return res;
+    const double rgb[3] = {r / 255.0, g / 255.0, b / 255.0};
+    double cmyk[4] = {0, 0, 0, 0}, back[3] = {0, 0, 0};
+    cmsCIELab l0{}, l1{};
+    cmsDoTransform(m->to_cmyk, rgb, cmyk, 1);   // 0..100
+    cmsDoTransform(m->back, cmyk, back, 1);
+    cmsDoTransform(m->rgb_lab, rgb, &l0, 1);
+    cmsDoTransform(m->cmyk_lab, cmyk, &l1, 1);
+    for (int k = 0; k < 4; ++k) res.cmyk[k] = std::clamp(cmyk[k], 0.0, 100.0);
+    for (int k = 0; k < 3; ++k)
+        res.after[k] = static_cast<std::uint8_t>(std::lround(std::clamp(back[k], 0.0, 1.0) * 255.0));
+    res.delta_e = cmsCIE2000DeltaE(&l0, &l1, 1, 1, 1);
+    return res;
+}
+
+void Proof::proof_pixels(std::uint8_t* rgb, std::size_t n, std::vector<float>* de) const {
+    if (de) de->assign(n, 0.0f);
+    if (!m || !rgb) return;
+    for (std::size_t p = 0; p < n; ++p) {
+        auto* px = rgb + p * 3;
+        const auto r = check(px[0], px[1], px[2]);
+        px[0] = r.after[0];
+        px[1] = r.after[1];
+        px[2] = r.after[2];
+        if (de) (*de)[p] = static_cast<float>(r.delta_e);
+    }
+}
 
 }  // namespace plate

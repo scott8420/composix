@@ -17,7 +17,7 @@ namespace composix::layout {
 struct Issue {
     enum class Level { Error, Warning, Info };
     Level       level = Level::Warning;
-    std::string kind;    // "overset", "missing", "modified", "lowres", "empty", "spot", "rgb", "transparency", "profile"
+    std::string kind;    // "overset", "missing", "modified", "lowres", "empty", "spot", "rgb", "transparency", "profile", "shift"
     std::string text;    // "Overset text: Chapters"
     std::string page;    // where (a page; "" = nowhere in particular)
     std::string frame;
@@ -28,6 +28,10 @@ struct PreflightOpts {
     int  standard = 0;          // 0 none, 1 PDF/X-1a, 2 PDF/X-4 (the export's setting)
     bool profile = false;       // an output profile is chosen
     std::string missing_profile;   // s032: the document's profile, not found on this computer
+    // s053: the profile's file and whether RGB will be converted to it (Convert,
+    // or PDF/X-1a) -- then an RGB colour that shifts noticeably is a warning.
+    std::string profile_path;
+    bool        convert = false;
     // A picture's link (the shell knows the folder); unset: links not checked.
     std::function<core::LinkStatus(const core::Asset&)> link;
 };

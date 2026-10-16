@@ -273,3 +273,10 @@ flowbox.cx-tile-list { padding-top: 2px; padding-bottom: 8px; }
 flowbox.cx-tile-list > flowboxchild { border-radius: 9px; }
 .cx-tile-card.cx-tile-row  { padding: 5px 12px; border-radius: 9px; }
 .cx-tile-row .cx-tile-title { margin-top: 0; }
+
+/* s053: the Colour Report */
+list.cx-report-list { background: none; }
+list.cx-report-list > row { padding: 8px 6px; border-bottom: 1px solid @cx_hair; }
+.cx-badge.cx-good { color: #2f9e5a; background: alpha(#2f9e5a, 0.14); }
+.cx-badge.cx-mild { color: @cx_dim; }
+.cx-badge.cx-bad  { color: @cx_bad; background: alpha(@cx_bad, 0.14); }

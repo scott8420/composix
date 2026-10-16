@@ -212,6 +212,37 @@ private:
 struct ProfileInfo { std::string path, name; };
 std::vector<ProfileInfo> find_cmyk_profiles(const std::vector<std::string>& dirs);
 
+// s053: a soft proof -- what sRGB colours become on the press, through a
+// CMYK output profile, the way the print export converts them (relative
+// colorimetric with black point compensation, or perceptual). For each
+// colour: its CMYK, the colour it will look like (back in sRGB, for the
+// screen), and how far it moves -- CIE Delta E 2000 between the two in Lab.
+// About 2: hard to see; 5: plain side by side; 10 and up: a different colour
+// (out of the press's gamut).
+class Proof {
+public:
+    Proof();
+    ~Proof();
+    Proof(const Proof&) = delete;
+    Proof& operator=(const Proof&) = delete;
+    bool load(const std::string& icc_path, bool perceptual = false, std::string* err = nullptr);
+    bool ok() const;
+    std::string name() const;   // the profile's description
+    struct Result {
+        double        cmyk[4] = {0, 0, 0, 0};   // 0..100
+        std::uint8_t  after[3] = {0, 0, 0};     // sRGB, what it will look like
+        double        delta_e = 0;
+    };
+    Result check(std::uint8_t r, std::uint8_t g, std::uint8_t b) const;
+    // Pixels (RGB, 3 bytes each) proofed in place; the Delta E of each to `de`
+    // when given (n entries).
+    void proof_pixels(std::uint8_t* rgb, std::size_t n, std::vector<float>* de = nullptr) const;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m;
+};
+
 // Parse a JPEG's size and component count from its header (false: not one).
 bool jpeg_info(const std::string& bytes, int* w, int* h, int* components);
 

@@ -14,6 +14,8 @@
 #include "core/Doc.hpp"
 #include "layout/Flow.hpp"
 #include "layout/Preflight.hpp"
+#include "layout/ColorReport.hpp"
+#include <plate/plate.hpp>
 #include "layout/Export.hpp"
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
@@ -1948,6 +1950,102 @@ int main() {
         { std::ofstream bad(file); bad << "{not json"; }
         check("settings: unreadable -> empty, no throw", core::load_settings(file).empty());
         std::filesystem::remove_all(dir, ec);
+    }
+
+    {
+        std::cout << "\n-- colour report (s053) --\n";
+        namespace L = composix::layout;
+        check("shift: words by Delta E", L::shift_of(1) == L::Shift::Holds && L::shift_of(3) == L::Shift::Slight &&
+                                         L::shift_of(7) == L::Shift::Noticeable && L::shift_of(12) == L::Shift::Large);
+        {
+            plate::Proof bad;
+            check("proof: no such file -> not ok", !bad.load("/nonexistent/x.icc") && !bad.ok());
+        }
+        // Any CMYK press profile on this computer (Fedora, Ubuntu, TeX Live's).
+        std::string icc;
+        for (const auto& p : plate::find_cmyk_profiles({"/usr/share/color/icc", "/usr/share/ghostscript/iccprofiles",
+                                                        "/usr/share/texlive/texmf-dist/tex/generic/colorprofiles",
+                                                        "/usr/share/texmf/tex/generic/colorprofiles"}))
+            if (icc.empty()) icc = p.path;
+        if (icc.empty()) {
+            std::cout << "  (skip colour report: no CMYK profile installed)\n";
+        } else {
+            std::cout << "  (profile: " << icc << ")\n";
+            plate::Proof pr;
+            check("proof: a press profile loads, named", pr.load(icc) && pr.ok() && !pr.name().empty());
+            const auto gray = pr.check(128, 128, 128), blue = pr.check(0, 0, 255);
+            check("proof: a mid grey survives (< 5)", gray.delta_e < 5);
+            check("proof: sRGB's pure blue is out of any press's gamut (>= 10)", blue.delta_e >= 10);
+            check("proof: CMYK in range, blue mostly C + M", blue.cmyk[0] > 50 && blue.cmyk[1] > 50 && blue.cmyk[2] < 30 &&
+                                                              blue.cmyk[0] <= 100 && blue.cmyk[3] <= 100);
+            std::vector<std::uint8_t> px{0, 0, 255, 128, 128, 128};
+            std::vector<float> de;
+            pr.proof_pixels(px.data(), 2, &de);
+            check("proof: pixels proofed in place, as check says", de.size() == 2 && px[0] == blue.after[0] &&
+                                                                   px[2] == blue.after[2] && px[3] == gray.after[0] &&
+                                                                   std::abs(de[0] - blue.delta_e) < 0.01);
+
+            core::Doc d;
+            load_plain(d);
+            {   // Sky made pure blue and used; a placed RGB picture.
+                core::Doc::Loading load(d);
+                auto sky = *d.as<core::Swatch>("swatch.4");
+                sky.v = {0, 0, 255, 0};
+                d.put("swatch.4", sky);
+                d.put("asset.t", core::Asset{"blue.png", 99, "/nowhere/blue.png", false, "RGB", 4, 4});
+                core::Frame f;
+                f.owner = d.pages().back();
+                f.kind = core::FrameKind::Image;
+                f.asset = "asset.t";
+                f.w = f.h = 72;
+                d.put("frame.t", f);
+                auto cap = *d.as<core::Frame>("frame.11");
+                cap.fill = "swatch.4";
+                d.put("frame.11", cap);
+            }
+            const auto blue_px = [](const core::Asset&, int& w, int& h, std::vector<std::uint8_t>& rgb) {
+                w = h = 4;
+                rgb.assign(48, 0);
+                for (int i = 0; i < 16; ++i) rgb[static_cast<std::size_t>(i) * 3 + 2] = 255;
+                return true;
+            };
+            const auto rep = L::color_report(d, icc, false, blue_px);
+            const auto row = [&](const std::string& id) -> const L::ColorRow* {
+                for (const auto& r : rep.rows) if (r.id == id) return &r;
+                return nullptr;
+            };
+            check("report: profile read, named", rep.ok && rep.profile_name == pr.name());
+            const auto* sky = row("swatch.4");
+            check("report: the RGB swatch, used, before and after", sky && sky->kind == L::ColorRow::Kind::Swatch && sky->used &&
+                                                                   sky->before == 0x0000ff && sky->after != sky->before &&
+                                                                   sky->shift == L::Shift::Large);
+            check("report: CMYK and spot swatches left out", !row("swatch.1") && !row("swatch.3"));
+            const auto* pic = row("asset.t");
+            check("report: the placed RGB picture, where it is", pic && pic->kind == L::ColorRow::Kind::Image &&
+                                                                 pic->page == d.pages().back() && pic->readable);
+            check("report: the picture judged on its pixels", pic && pic->w == 4 && pic->h == 4 && pic->share == 1 &&
+                                                              pic->shift == L::Shift::Large && pic->px_after.size() == 48 &&
+                                                              pic->px_after != pic->px_before);
+            check("report: the worst counted", rep.worst_count >= 2);
+            const auto unread = L::color_report(d, icc, false, [](const core::Asset&, int&, int&, std::vector<std::uint8_t>&) { return false; });
+            check("report: a picture that can't be read says so", [&] {
+                for (const auto& r : unread.rows) if (r.id == "asset.t") return !r.readable;
+                return false;
+            }());
+            check("report: a bad profile -> not ok, why", !L::color_report(d, "/nonexistent.icc", false, blue_px).ok);
+            // Preflight: converting, the shifting colour is a warning; not converting, nothing.
+            L::FlowCache flows;
+            L::PreflightOpts o;
+            o.profile = true;
+            o.profile_path = icc;
+            const auto has_shift = [&] {
+                for (const auto& i : L::preflight_issues(d, flows, o)) if (i.kind == "shift") return true;
+                return false;
+            };
+            check("preflight: not converting, no shift warning", !has_shift());
+            o.convert = true;
+            check("preflight: converting, the out-of-gamut RGB colour warned", has_shift());
+        }
     }
 
     {

@@ -95,6 +95,8 @@ private:
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
+    void on_color_report();                      // category: handler: s053 -- the Colour Report window
+    void report_refresh();                       // category: helper: s053 -- proof again (profile picked / shown)
     void on_export_pdf();                        // category: handler: the Export PDF sheet -> a file -> the report
     void on_tiles_move(const std::vector<std::string>& ids, const std::string& target, bool before);  // category: handler: pages dragged
     bool page_action(const std::string& act, const std::vector<std::string>& ids);  // category: helper: add / delete / section
@@ -210,6 +212,13 @@ private:
 
     // s013: the Export PDF sheet, and its choices for the session.
     std::unique_ptr<Gtk::Window>     m_export;
+    // s053: the Colour Report -- its window, profile choice, list, and each row's page / frame.
+    std::unique_ptr<Gtk::Window>     m_report;
+    Gtk::DropDown*                   m_report_profile = nullptr;
+    Gtk::Label*                      m_report_note = nullptr;
+    Gtk::ListBox*                    m_report_list = nullptr;
+    std::vector<std::string>         m_report_paths, m_report_pages, m_report_frames;
+    bool                             m_report_quiet = false;
     bool                             m_pdf_bleed = true, m_pdf_marks = false;
     bool                             m_pdf_print = true;   // s015: Plate (print) or cairo (screen)
     std::string                      m_pdf_profile;        // s016: the press's ICC ("" = none)

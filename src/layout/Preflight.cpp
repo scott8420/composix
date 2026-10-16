@@ -5,6 +5,12 @@
 #include <map>
 #include <set>
 
+#include "layout/ColorReport.hpp"
+#include <plate/plate.hpp>
+#include <cmath>
+#include <cstdio>
+#include <memory>
+
 namespace composix::layout {
 
 namespace {
@@ -17,6 +23,19 @@ std::string page_of(const core::Doc& d, const core::Frame& f) {
         if (std::find(chain.begin(), chain.end(), f.owner) != chain.end()) return pid;
     }
     return {};
+}
+
+// s053: one proof kept, rebuilt only when the profile changes (Preflight
+// runs on every edit; reading a press profile is not free).
+const plate::Proof* proof_for(const std::string& path) {
+    static std::unique_ptr<plate::Proof> p;
+    static std::string at;
+    if (!p || at != path) {
+        p = std::make_unique<plate::Proof>();
+        at = path;
+        if (!p->load(path)) p.reset();
+    }
+    return p.get();
 }
 
 bool shown(const core::Doc& d, const core::Frame& f) { return !page_of(d, f).empty(); }
@@ -94,6 +113,18 @@ std::vector<Issue> preflight_issues(const core::Doc& d, FlowCache& flows, const 
         const std::string pg = f ? page_of(d, *f) : std::string{};
         if (s->model == core::ColorModel::Spot)
             out.push_back({L::Info, "spot", "Spot colour " + (s->spot.empty() ? s->name : s->spot) + " \u2014 its own plate", pg, fid});
+        if (s->model == core::ColorModel::RGB && o.convert && !o.profile_path.empty()) {   // s053
+            if (const auto* pf = proof_for(o.profile_path); pf) {
+                const auto c = [](double v) { return static_cast<std::uint8_t>(std::lround(std::clamp(v, 0.0, 255.0))); };
+                const auto r = pf->check(c(s->v[0]), c(s->v[1]), c(s->v[2]));
+                if (shift_of(r.delta_e) >= Shift::Noticeable) {
+                    char de[16];
+                    std::snprintf(de, sizeof de, "%.1f", r.delta_e);
+                    out.push_back({L::Warning, "shift", "RGB colour " + s->name + " \u2014 " + shift_text(shift_of(r.delta_e)) +
+                                                           " in CMYK (\u0394E " + de + "); see Colour Report", pg, fid});
+                }
+            }
+        }
         if (s->model == core::ColorModel::RGB && o.standard == 1 && !o.profile)
             out.push_back({L::Error, "rgb", "RGB colour " + s->name + " \u2014 PDF/X-1a needs a profile to convert it", pg, fid});
     }
