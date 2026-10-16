@@ -63,6 +63,8 @@ public:
     Tool tool() const { return m_tool; }
     void delete_selection();
     void set_show_guides(bool on) { m_show_guides = on; queue_draw(); }
+    void set_show_grid(bool on) { m_show_grid = on; queue_draw(); }   // s036: baseline grid
+    bool show_grid() const { return m_show_grid; }
 
     // s009: images. The project folder resolves relative / embedded files.
     void set_project_dir(const std::string& dir) { m_dir = dir; queue_draw(); }
@@ -100,7 +102,27 @@ public:
     sigc::signal<void()>& signal_tool()      { return m_sig_tool; }   // the tool changed (a key)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture };
+    // s035: Alt+drag a picture inside its frame -- where it started.
+    std::string m_pic_frame;
+    core::Rect  m_pic0;
+
+    // s034: the tab ruler -- a strip over the column being typed in, its
+    // zero at the text's left edge; the stops of the caret's paragraph style.
+    struct TabStrip {
+        bool        ok = false;
+        core::Rect  screen;        // the strip, screen coordinates
+        double      x0 = 0;        // screen x of the text's left edge (tab 0)
+        double      scale = 1;
+        double      width = 0;     // points: the column less the indents
+        std::string style;         // the paragraph style whose tabs these are
+    };
+    TabStrip tab_strip() const;
+    void draw_tab_strip(const Cairo::RefPtr<Cairo::Context>& cr);
+    int  tab_hit(const TabStrip& t, double x) const;   // the stop under screen x, -1 none
+    int    m_tab = -1;        // the stop being dragged (-1: a new one)
+    double m_tab_x = 0;       // where it is now (screen x)
+    bool   m_tab_off = false; // dragged off the strip: let go removes it
 
     void draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
@@ -108,6 +130,7 @@ private:
                     bool from_master, const std::string& id, const std::string& on_page = {});
     void draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr);
     void draw_guides(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
+    void draw_grid(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);   // s036
     void draw_threads(const Cairo::RefPtr<Cairo::Context>& cr);
     std::string out_port_hit(double sx, double sy) const;   // a text frame's out-port under the pointer
     core::Rect port_rect(const std::string& frame, bool out) const;   // screen
@@ -173,7 +196,7 @@ private:
 
     // s006
     bool              m_in = false;                // the pointer is over the canvas
-    bool              m_snap = true, m_show_guides = true;
+    bool              m_snap = true, m_show_guides = true, m_show_grid = false;
     core::SnapTargets m_targets;                   // gathered at press
     double            m_snap_x = NAN, m_snap_y = NAN;   // the lines snapped to (layout), drawn mid-drag
     std::string       m_guide;                     // the guide being dragged

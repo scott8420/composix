@@ -21,10 +21,15 @@ void load_sample(Doc& d) {
 
     // ── masters ─────────────────────────────────────────────────────────────
     d.put("master.1", Master{"A", "Front", 1, s.trim_w, s.trim_h, {}, 1, ""});
-    d.put("master.2", Master{"B", "Body", 2, s.trim_w, s.trim_h, {}, 1, ""});
+    {
+        Master b{"B", "Body", 2, s.trim_w, s.trim_h, {}, 1, ""};
+        b.grid = 14;   // s036: a baseline grid at the body's leading
+        d.put("master.2", b);
+    }
     {   // A chapter opener sinks its text: a deep top margin.
         Master c{"C", "Chapter", 3, s.trim_w, s.trim_h, {}, 1, "master.2"};
         c.margins.top = 2.5 * in;
+        c.grid = 14;   // s036: its grid starts at its own (deep) top margin
         d.put("master.3", c);
     }
     const auto fold3 = doc::size_presets(s)[2];

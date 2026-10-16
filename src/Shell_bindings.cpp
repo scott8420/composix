@@ -55,18 +55,19 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     add_action("zoom-fit",      [this] { m_canvas_view.canvas().zoom_fit(); });
     add_action("zoom-100",      [this] { m_canvas_view.canvas().zoom_to(100); });
     // s006: what the canvas shows / does -- stateful, so the menu shows a check.
-    const auto toggle = [this](const char* name, std::function<void(bool)> apply) {
+    const auto toggle = [this](const char* name, std::function<void(bool)> apply, bool initial = true) {
         add_action_bool(name, [this, name, apply] {
             auto a = std::dynamic_pointer_cast<Gio::SimpleAction>(lookup_action(name));
             bool on = false;
             a->get_state(on);
             a->change_state(!on);
             apply(!on);
-        }, true);
+        }, initial);
     };
     toggle("toggle-rulers", [this](bool on) { m_canvas_view.set_rulers(on); });
     toggle("toggle-guides", [this](bool on) { m_canvas_view.canvas().set_show_guides(on); });
     toggle("toggle-snap",   [this](bool on) { m_canvas_view.canvas().set_snap(on); });
+    toggle("toggle-grid",   [this](bool on) { m_canvas_view.canvas().set_show_grid(on); }, false);   // s036
     add_action("save",          sigc::mem_fun(*this, &Shell::on_save));
     add_action("save-as",       sigc::mem_fun(*this, &Shell::on_save_as));
     add_action("place",         sigc::mem_fun(*this, &Shell::on_place));   // s009

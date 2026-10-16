@@ -2178,6 +2178,116 @@ int main() {
         check("undo: back to the defaults", d.settings().exp == core::ExportPrefs{});
     }
 
+    {
+        std::cout << "\n-- picture placement --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto* f = d.as<core::Frame>("frame.4");   // harbor.psd, 3600 x 2700, filling 324 x 108
+        const auto* a = d.as<core::Asset>("asset.2");
+        const auto fill = core::picture_rect({0, 0, f->w, f->h}, *f, a->px_w, a->px_h);
+        check("fill: as before", std::abs(fill.w - 324) < 1e-6);
+        check("scale: fill is a share of its own size", std::abs(core::picture_scale(*f, *a) - 324 / (3600 * 72.0 / 300) * 100) < 0.01);
+        check("set scale: one step, by hand now", core::doc::set_picture_scale(j, d, {"frame.4"}, 50) && j.size() == 1 &&
+                                                  d.as<core::Frame>("frame.4")->fit == core::ImageFit::Custom);
+        f = d.as<core::Frame>("frame.4");
+        const auto half = core::picture_rect({0, 0, f->w, f->h}, *f, a->px_w, a->px_h);
+        check("set scale: 50% of 12 x 9 in is 6 x 4.5 in, about the old centre",
+              std::abs(half.w - 432) < 1e-6 && std::abs(half.h - 324) < 1e-6 &&
+                  std::abs(half.x + half.w / 2 - (fill.x + fill.w / 2)) < 1e-6);
+        check("effective ppi: 600 at 50%", std::abs(core::effective_ppi(*f, *a) - 600) < 0.5);
+        // A move inside the frame (as Alt+drag does), within a gesture: one step.
+        core::doc::frames_begin(j, d, {"frame.4"}, "Move picture");
+        core::doc::edit_frames(j, d, {"frame.4"}, "Move picture", [](core::Frame& g) { g.pic_x -= 30; g.pic_y += 12; });
+        core::doc::frames_end(j);
+        f = d.as<core::Frame>("frame.4");
+        const auto moved = core::picture_rect({0, 0, f->w, f->h}, *f, a->px_w, a->px_h);
+        check("moved: by the drag, the scale kept", std::abs(moved.x - (half.x - 30)) < 1e-6 && std::abs(moved.w - half.w) < 1e-6 &&
+                                                    j.size() == 2);
+        check("screen units: the same place at a zoom", [&] {
+            const auto z = core::picture_rect({10, 20, f->w * 2, f->h * 2}, *f, a->px_w, a->px_h, 2);
+            return std::abs(z.x - (10 + moved.x * 2)) < 1e-6 && std::abs(z.w - moved.w * 2) < 1e-6;
+        }());
+        std::string err;
+        core::Doc e;
+        check("json: kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        check("fill again: by hand gone", core::doc::set_fit(j, d, {"frame.4"}, core::ImageFit::Fill) &&
+                                          std::abs(core::picture_rect({0, 0, f->w, f->h}, *d.as<core::Frame>("frame.4"), a->px_w, a->px_h).w - 324) < 1e-6);
+    }
+
+    {
+        std::cout << "\n-- baseline grid --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto pages = d.pages();
+        int with = 0;
+        for (const auto& pid : pages) with += core::baseline_grid(d, pid).step == 14;
+        check("sample: the body master has a 14 pt grid from its top margin",
+              with > 0 && core::baseline_grid(d, "master.2").step == 14 &&
+                  std::abs(core::baseline_grid(d, "master.2").start - d.as<core::Master>("master.2")->margins.top) < 1e-9);
+        // Every line's top, story.1, in order.
+        const auto tops = [&] {
+            std::vector<double> out;
+            for (const auto& ft : composix::layout::flow_story(d, "story.1").frames) for (const auto& l : ft.lines) out.push_back(l.y);
+            return out;
+        };
+        const auto before = tops();
+        // The baselines of the Body lines on gridded pages: off the grid by how much (worst).
+        const auto worst = [&](int* counted) {
+            double w = 0;
+            *counted = 0;
+            const auto* st = d.as<core::Story>("story.1");
+            const auto flow = composix::layout::flow_story(d, "story.1");
+            for (const auto& ft : flow.frames) {
+                const auto* fr = d.as<core::Frame>(ft.frame);
+                const auto g = core::baseline_grid(d, fr->owner);
+                if (g.step <= 0) continue;
+                composix::layout::visit_lines(d, "story.1", flow, ft.frame, [&](const composix::layout::LineVisit& v) {
+                    if (v.from < 0) return;
+                    const auto& style = st->paras[static_cast<std::size_t>(v.para)].style;
+                    if (style != "style.1" && style != "style.10") return;
+                    const double r = std::fmod(fr->y + v.baseline - g.start, g.step);
+                    w = std::max(w, std::min(std::abs(r), std::abs(g.step - std::abs(r))));
+                    ++*counted;
+                });
+            }
+            return w;
+        };
+        int n0 = 0;
+        const double off0 = worst(&n0);
+        check("grid off: body baselines are where they were (off the grid)", n0 > 0 && off0 > 0.5, std::to_string(off0));
+        check("align to grid: one step", core::doc::edit_styles(j, d, {"style.1", "style.10"}, "Align to grid",
+                                                                [](core::Style& st) { st.align_grid = true; }) && j.size() == 1);
+        int n1 = 0;
+        const double off1 = worst(&n1);
+        check("aligned: every body baseline on the grid (drop cap's too)", n1 > 0 && off1 < 0.01, std::to_string(off1) + " over " + std::to_string(n1));
+        const auto after = tops();
+        bool down = after.size() >= 1;
+        // Lines only ever move down (never up past where they would be).
+        for (std::size_t i = 0; i < std::min(before.size(), after.size()) && i < 3; ++i) down = down && after[i] >= before[i] - 1e-6;
+        check("aligned: lines moved down, not up", down);
+        check("master without a grid: nothing to align to", [&] {
+            core::doc::edit_masters(j, d, {"master.2", "master.3"}, "Baseline grid", [](core::Master& m) { m.grid = 0; });
+            const bool same = tops() == before;
+            j.undo();
+            return same;
+        }());
+        std::string err;
+        core::Doc e;
+        check("json: grid and align kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records() &&
+                                               e.as<core::Style>("style.1")->align_grid && e.as<core::Master>("master.2")->grid == 14, err);
+        const auto o = core::project(d, "");
+        bool mf = false, sf = false;
+        for (const auto& f : o.find("master.2")->fields) mf = mf || (f.edit == "mgrid" && f.value == "14 pt");
+        for (const auto& f : o.find("style.1")->fields) sf = sf || (f.edit == "align_grid" && f.value == "Align to grid");
+        check("inspector: the master's grid and the style's alignment", mf && sf);
+        j.undo();
+        check("undo: the flow as it was", tops() == before);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

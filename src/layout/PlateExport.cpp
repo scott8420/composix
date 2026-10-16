@@ -145,7 +145,7 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
     }
     cairo_surface_destroy(pic);
     const double iw = a->px_w > 0 ? a->px_w : pw, ih = a->px_h > 0 ? a->px_h : ph;
-    const core::Rect r = core::fit_rect({f.x, f.y, f.w, f.h}, iw, ih, f.fit);
+    const core::Rect r = core::picture_rect({f.x, f.y, f.w, f.h}, f, iw, ih);
     pg.save();
     pg.clip_rect({f.x, f.y, f.w, f.h});
     pg.image(id, {r.x, r.y, r.w, r.h});

@@ -151,6 +151,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Text tool: click inside the margins", "A text frame filling that page column"},
         {"Mouse", "", {}, "Drag a gutter (a picked text frame)", "Make one column wider, its neighbour narrower"},
         {"Mouse", "", {}, "Drop an image file on a page", "Place it there (on an image frame: into it)"},
+        {"Mouse", "", {}, "Tab ruler", "While typing: click the strip over the column to add a tab stop; drag to move, drag off to remove; double-click: left / centre / right / decimal; Shift+double-click: dot leader"},
         {"Mouse", "", {}, "Ctrl+Shift+click", "Override a master item on a page (its own copy; Remove override goes back)"},
         {"Mouse", "", {}, "Esc", "Cancel a drag, put down a loaded image, then clear the picks"},
 
@@ -172,6 +173,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"View", "", {}, "Space+drag  /  middle-drag", "Pan the canvas"},
         {"View", "win.toggle-rulers",    {"<Ctrl>r"}, "", "Show / hide the rulers"},
         {"View", "win.toggle-guides",    {"<Ctrl>apostrophe"}, "", "Show / hide the guides"},
+        {"View", "win.toggle-grid",      {"<Ctrl><Alt>apostrophe"}, "", "Show / hide the baseline grid"},
         {"View", "win.toggle-snap",      {"<Ctrl>semicolon"}, "", "Snap to guides & edges on / off"},
         {"View", "", {}, "Drag out of a ruler", "Pull a guide onto a page (off the page removes it)"},
         {"View", "win.toggle-nav",       {"<Ctrl><Alt>1"}, "", "Show / hide the navigator"},

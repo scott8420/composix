@@ -52,7 +52,7 @@ enum class StyleKind { Paragraph, Character };
 enum class Align     { Left, Center, Right, Justify };
 enum class ColorModel{ CMYK, RGB, Gray, Spot };
 enum class ListKind  { Contents, Bibliography, Index };
-enum class ImageFit  { Fill, Fit };   // s009: cover the frame (cropped) / show it whole
+enum class ImageFit  { Fill, Fit, Custom };   // s009: cover the frame (cropped) / show it whole; s035: placed by hand
 // s018: how a frame pushes text in OTHER frames aside. Around: text runs
 // down both sides of it; Jump: text skips the band it covers, no lines
 // beside it.
@@ -119,6 +119,7 @@ struct Master {
     std::string         based_on;        // another master's id, or ""
     Margins             margins;         // s014
     double              gutter = 12;     // s014: between the page's columns
+    double              grid = 0;        // s036: baseline grid increment (pt) from the top margin; 0 = none
     bool operator==(const Master&) const = default;
 };
 
@@ -131,6 +132,7 @@ struct Frame {
     std::string next;                    // text: the next frame in the thread
     std::string asset;                   // image
     ImageFit    fit = ImageFit::Fill;    // image: how the picture sits in the frame (s009)
+    double      pic_x = 0, pic_y = 0, pic_w = 0;   // s035: Custom -- the picture's left, top (from the frame's) and width, points
     int         columns = 1;             // text (s012): columns inside the frame
     double      gutter  = 12;            // text: points between them
     bool        balance = false;         // text: even out the columns where the story ends
@@ -214,6 +216,9 @@ struct Style {
     // s029: a drop cap -- the first `drop_chars` characters set `drop_lines`
     // lines tall (0 = none), the paragraph's first lines beside them.
     int         drop_lines = 0, drop_chars = 1;
+    // s036: each line's baseline on its page's baseline grid (when the
+    // page's master has one), the lines moved down to the next grid line.
+    bool        align_grid = false;
     bool operator==(const Style&) const = default;
 };
 
@@ -384,6 +389,11 @@ std::string  link_status_text(LinkStatus s);
 // The picture's rect inside a frame (both in the same coordinates): Fill
 // covers the frame (cropped by it), Fit shows it whole. iw / ih: its aspect.
 Rect   fit_rect(const Rect& frame, double iw, double ih, ImageFit fit);
+// s035: its scale now, percent of its own size.
+double picture_scale(const Frame& f, const Asset& a);
+// s035: where a frame's picture (iw x ih) goes in `frame` (any units, `s` of
+// them a point): Fill / Fit as fit_rect, Custom from the frame's own pic_*.
+Rect   picture_rect(const Rect& frame, const Frame& f, double iw, double ih, double s = 1);
 // Pixels per inch as placed (lower = softer); 0 for a vector or unknown.
 double effective_ppi(const Frame& f, const Asset& a);
 inline constexpr double kLowPpi = 150;   // under this, "Low res"
@@ -391,6 +401,8 @@ inline constexpr double kLowPpi = 150;   // under this, "Low res"
 // vector at its own size), shrunk to fit max_w x max_h.
 struct Size2 { double w = 0, h = 0; };   // a plain aggregate: std::pair trips GCC's -Wpsabi note
 Size2 natural_size(const ImageFile& f, double max_w, double max_h);
+// s035: a placed picture's size at its own resolution (300 ppi).
+Size2 picture_natural(const Asset& a);
 
 // ── the verbs: every user choice on the document ───────────────────────────
 // Each goes through the journal; the UI calls these and nothing else writes.
@@ -479,6 +491,9 @@ bool    relink_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id
 // (an embedded asset with no known source can't be). One step each call.
 bool    embed_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id, std::string>>& rels);
 bool    unembed_assets(DocJournal& j, Doc& d, const std::vector<Doc::Id>& assets);
+// s035: a picture at `percent` of its own size (300 ppi), about its centre:
+// the fit becomes Custom. One step.
+bool    set_picture_scale(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, double percent);
 bool    set_fit(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ImageFit fit);
 
 // ── masters (s014) ──────────────────────────────────────────────────────────
@@ -598,6 +613,10 @@ std::vector<double> column_weights(const Frame& f, int n);
 Rect margin_rect(const Doc& d, const Doc::Id& page_or_master);
 struct ColumnSpan { double x0, x1; };
 std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& page_or_master);
+// s036: the baseline grid on a page (or master), its own coordinates:
+// lines at start + k * step (k >= 0). step 0 = none (no master, or none set).
+struct BaselineGrid { double start = 0, step = 0; };
+BaselineGrid baseline_grid(const Doc& d, const Doc::Id& page_or_master);
 // The page's column count and gutter (1 / 12 with no master).
 std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& page_or_master);
 // s023: special characters in text, standing for what each page fills in.

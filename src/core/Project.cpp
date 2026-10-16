@@ -182,6 +182,11 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         std::vector<Field> f{{"Size", size_text(m.w, m.h, m.folds.size())},
                              {"Columns", std::to_string(m.columns), "mcolumns", cc}};
         if (m.columns > 1) f.push_back({"Gutter", pts(m.gutter) + " pt", "mgutter", gc});
+        {   // s036: the baseline grid, from the top margin.
+            std::vector<Choice> grc{{"0", "None"}};
+            for (double g : {9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 18.0, 24.0}) grc.push_back({pts(g), pts(g) + " pt"});
+            f.push_back({"Baseline grid", m.grid >= 1 ? pts(m.grid) + " pt" : "None", "mgrid", grc});
+        }
         f.push_back({"Top", in(m.margins.top), "mtop", mc});
         f.push_back({"Bottom", in(m.margins.bottom), "mbottom", mc});
         f.push_back({"Inside", in(m.margins.inside), "minside", mc});
@@ -277,6 +282,9 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                              {{"0", "None"}, {"2", "2 lines"}, {"3", "3 lines"}, {"4", "4 lines"}, {"5", "5 lines"}}});
                 if (s.drop_lines >= 2)
                     f.push_back({"Drop letters", std::to_string(s.drop_chars), "drop_chars", {{"1", "1"}, {"2", "2"}, {"3", "3"}}});
+                // s036: lines on the page's baseline grid.
+                f.push_back({"Baseline grid", s.align_grid ? "Align to grid" : "Off", "align_grid",
+                             {{"0", "Off"}, {"1", "Align to grid"}}});
             }
             f.push_back({"Used", uses ? std::to_string(uses) + "×" : "Not used"});
             Field act{"", "", "style", {{"duplicate", "Duplicate"}}};
@@ -471,7 +479,11 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             if (a) {
                 title += " \u2014 " + a->name;
                 static const std::vector<Choice> fits{{"0", "Fill frame"}, {"1", "Fit in frame"}};
-                fields.push_back({"Fit", fits[static_cast<int>(f->fit)].label, "fit", fits});
+                fields.push_back({"Fit", f->fit == ImageFit::Custom ? "By hand" : fits[static_cast<int>(f->fit)].label, "fit", fits});
+                // s035: its scale (of its own size at 300 ppi); Alt+drag moves it in the frame.
+                std::vector<Choice> sc;
+                for (int v : {10, 25, 50, 75, 100, 125, 150, 200, 300, 400}) sc.push_back({std::to_string(v), std::to_string(v) + "%"});
+                fields.push_back({"Scale", std::to_string(static_cast<int>(std::lround(picture_scale(*f, *a)))) + "%", "pic_scale", sc});
                 const double p = effective_ppi(*f, *a);
                 fields.push_back({"Effective ppi", a->px_w == 0 ? "Vector"
                                   : std::to_string(static_cast<int>(std::lround(p))) + (p < kLowPpi ? "  (low)" : "")});

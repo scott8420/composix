@@ -35,7 +35,7 @@ void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const Ima
     const int pw = cairo_image_surface_get_width(pic), ph = cairo_image_surface_get_height(pic);
     // The picture's own proportions: the file's pixels (a raster), else the surface.
     const double iw = a->px_w > 0 ? a->px_w : pw, ih = a->px_h > 0 ? a->px_h : ph;
-    const core::Rect r = core::fit_rect({f.x, f.y, f.w, f.h}, iw, ih, f.fit);
+    const core::Rect r = core::picture_rect({f.x, f.y, f.w, f.h}, f, iw, ih);
     cairo_save(cr);
     cairo_rectangle(cr, f.x, f.y, f.w, f.h);
     cairo_clip(cr);

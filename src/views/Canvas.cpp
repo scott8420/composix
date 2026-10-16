@@ -221,6 +221,8 @@ void Canvas::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
         Glib::signal_idle().connect_once([this] { m_sig_zoom.emit(); });
     }
     for (const auto& p : m_placed) draw_page(cr, p);
+    if (m_show_grid)
+        for (const auto& p : m_placed) draw_grid(cr, p);
     if (m_show_guides)
         for (const auto& p : m_placed) draw_guides(cr, p);
 
@@ -299,6 +301,25 @@ void Canvas::draw_guides(const Cairo::RefPtr<Cairo::Context>& cr, const core::Pl
             cr->stroke();
         }
     }
+}
+
+// s036: the baseline grid -- light blue rules across the margins, every
+// step from the top margin to the bottom one (none when too dense to read).
+void Canvas::draw_grid(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p) {
+    const auto g = core::baseline_grid(m_doc, p.id);
+    const Rect mr = core::margin_rect(m_doc, p.id);
+    const double s = m_vp.scale();
+    if (g.step <= 0 || mr.w <= 0 || g.step * s < 4) return;
+    const Rect sr = m_vp.to_screen(p.r);
+    cr->set_line_width(1);
+    cr->set_source_rgba(0.35, 0.6, 0.95, 0.45);
+    const double x0 = std::round(sr.x + mr.x * s), x1 = std::round(sr.x + mr.r() * s);
+    for (double y = g.start; y <= mr.b() + 0.01; y += g.step) {
+        const double sy = std::round(sr.y + y * s) + 0.5;
+        cr->move_to(x0, sy);
+        cr->line_to(x1, sy);
+    }
+    cr->stroke();
 }
 
 void Canvas::preview_guide(bool vertical, double at) {
@@ -537,7 +558,7 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
                 cr->save();
                 cr->rectangle(r.x, r.y, r.w, r.h);
                 cr->clip();
-                const Rect ir = core::fit_rect(r, iw, ih, f.fit);
+                const Rect ir = core::picture_rect(r, f, iw, ih, s);   // s035: Custom placement too
                 images::paint(cr, pic, ir.x, ir.y, ir.w, ir.h, dim * op);   // s021: its opacity
                 cr->restore();
                 if (status == core::LinkStatus::Modified) {   // a quiet corner flag
@@ -669,7 +690,7 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
             cr->unset_dash();
         }
     }
-    if (editing()) draw_edit(cr);
+    if (editing()) { draw_edit(cr); draw_tab_strip(cr); }   // s034
     if (!m_sel.empty() && !editing()) {
         const Rect box = m_vp.to_screen(selection_box());
         if (m_sel.size() > 1) {
@@ -741,6 +762,30 @@ void Canvas::on_drag_begin(double x, double y) {
     m_last_press = now;
     m_last_px = x;
     m_last_py = y;
+    // s034: on the tab ruler -- a stop: drag it (double-click: its kind,
+    // Shift+double-click: its leader); elsewhere: a new one.
+    if (const auto t = tab_strip(); t.ok && t.screen.contains(x, y)) {
+        const int hit = tab_hit(t, x);
+        if (hit >= 0 && m_clicks >= 2) {
+            const bool leader = m_mods_shift;
+            core::doc::edit_styles(m_journal, m_doc, {t.style}, leader ? "Tab leader" : "Tab alignment", [&](core::Style& s) {
+                if (hit >= static_cast<int>(s.tabs.size())) return;
+                auto& stop = s.tabs[static_cast<std::size_t>(hit)];
+                if (leader) stop.leader = stop.leader.empty() ? "." : "";
+                else stop.align = static_cast<core::TabAlign>((static_cast<int>(stop.align) + 1) % 4);
+            });
+            m_sig_edited.emit();
+            m_drag = Drag::None;
+            queue_draw();
+            return;
+        }
+        m_tab = hit;
+        m_tab_x = hit >= 0 ? t.x0 + m_doc.as<core::Style>(t.style)->tabs[static_cast<std::size_t>(hit)].pos * t.scale : x;
+        m_tab_off = false;
+        m_drag = Drag::Tab;
+        queue_draw();
+        return;
+    }
     {
         const auto under = core::hit_frame(m_doc, m_placed, px0, py0, 3 / m_vp.scale());
         const auto* uf = m_doc.as<core::Frame>(under);
@@ -844,6 +889,23 @@ void Canvas::on_drag_begin(double x, double y) {
             return;
         }
     }
+    // s035: Alt+drag on a picture moves it inside its frame (a crop).
+    if (m_mods_alt && !m_mods_ctrl && m_tool == Tool::Select) {
+        const auto hit = core::hit_frame(m_doc, m_placed, dx, dy, 0);
+        const auto* f = m_doc.as<core::Frame>(hit);
+        const auto* a = f ? m_doc.as<core::Asset>(f->asset) : nullptr;
+        if (f && a && f->kind == core::FrameKind::Image) {
+            const auto nat = core::picture_natural(*a);
+            const double iw = a->px_w > 0 ? a->px_w : nat.w, ih = a->px_h > 0 ? a->px_h : nat.h;
+            m_pic0 = core::picture_rect({0, 0, f->w, f->h}, *f, iw, ih);
+            m_pic_frame = hit;
+            pick({hit});
+            core::doc::frames_begin(m_journal, m_doc, {hit}, "Move picture");
+            m_begun = true;
+            m_drag = Drag::Picture;
+            return;
+        }
+    }
     // s025: Ctrl+Shift+click a master's item on a page: override it there --
     // the page's own copy, picked (InDesign's gesture).
     if (m_mods_ctrl && m_mods_shift) {
@@ -901,6 +963,24 @@ void Canvas::on_drag_update(double ox, double oy) {
     switch (m_drag) {
     case Drag::None:
         return;
+    case Drag::Picture: {   // s035: the picture follows inside its frame
+        const Rect p0 = m_pic0;
+        core::doc::edit_frames(m_journal, m_doc, {m_pic_frame}, "Move picture", [&](core::Frame& f) {
+            f.fit = core::ImageFit::Custom;
+            f.pic_w = p0.w;
+            f.pic_x = p0.x + ox / s;
+            f.pic_y = p0.y + oy / s;
+        });
+        queue_draw();
+        return;
+    }
+    case Drag::Tab: {   // s034: the stop follows; well off the strip: it goes
+        const auto t = tab_strip();
+        m_tab_x = std::clamp(m_px + ox, t.x0, t.x0 + t.width * t.scale);
+        m_tab_off = std::abs(oy) > 28;
+        queue_draw();
+        return;
+    }
     case Drag::Gutter: {
         if (!m_begun) {
             if (std::abs(ox) < 2) return;
@@ -1050,6 +1130,38 @@ void Canvas::on_drag_end(double, double) {
     const Drag was = m_drag;
     m_drag = Drag::None;
     if (was == Drag::Text) { queue_draw(); return; }
+    if (was == Drag::Picture) {   // s035: the move, one step
+        m_begun = false;
+        core::doc::frames_end(m_journal);
+        m_sig_edited.emit();
+        m_pic_frame.clear();
+        queue_draw();
+        return;
+    }
+    if (was == Drag::Tab) {   // s034: one step -- added, moved or removed
+        const auto t = tab_strip();
+        if (t.ok) {
+            const double pos = std::max(0.0, std::round((m_tab_x - t.x0) / t.scale));
+            const int k = m_tab;
+            const bool off = m_tab_off;
+            const char* label = off ? "Remove tab" : k >= 0 ? "Move tab" : "Add tab";
+            if (!(off && k < 0))
+                core::doc::edit_styles(m_journal, m_doc, {t.style}, label, [&](core::Style& s) {
+                    if (k >= 0 && k < static_cast<int>(s.tabs.size())) {
+                        if (off) s.tabs.erase(s.tabs.begin() + k);
+                        else s.tabs[static_cast<std::size_t>(k)].pos = pos;
+                    } else if (!off) {
+                        s.tabs.push_back({pos, core::TabAlign::Left, ""});
+                    }
+                    std::sort(s.tabs.begin(), s.tabs.end(), [](const core::TabStop& a, const core::TabStop& b) { return a.pos < b.pos; });
+                });
+            m_sig_edited.emit();
+        }
+        m_tab = -1;
+        m_tab_off = false;
+        queue_draw();
+        return;
+    }
     if (was == Drag::Draw && m_loaded) {   // s009: a click places, a drag draws its frame
         const bool drawn = m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4;
         place_loaded(m_dx0, m_dy0, drawn ? &m_draw : nullptr);
@@ -1430,6 +1542,94 @@ bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {
         }
     }
     return true;   // anything else typed is the input method's (or nothing)
+}
+
+// ── s034: the tab ruler ─────────────────────────────────────────────────────
+Canvas::TabStrip Canvas::tab_strip() const {
+    TabStrip t;
+    if (!editing()) return t;
+    const auto* st = m_doc.as<core::Story>(m_edit_story);
+    if (!st || st->paras.empty()) return t;
+    const auto& para = st->paras[static_cast<std::size_t>(std::min<int>(m_caret.para, static_cast<int>(st->paras.size()) - 1))];
+    const auto* ps = m_doc.as<core::Style>(para.style);
+    if (!ps) return t;
+    const auto& flow = const_cast<layout::FlowCache&>(m_flows).get(m_doc, m_edit_story);
+    const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
+    const auto* f = m_doc.as<core::Frame>(c.ok ? c.frame : m_edit_frame);
+    if (!f) return t;
+    const std::string fid = c.ok ? c.frame : m_edit_frame;
+    const int col = c.ok ? core::column_at(*f, c.x) : 0;
+    const Rect fr = core::frame_in_layout(m_doc, m_placed, fid);
+    if (fr.w <= 0) return t;
+    const double left = fr.x + core::column_x(*f, col) + std::max(0.0, ps->left_indent);
+    const double width = core::column_width(*f, col) - std::max(0.0, ps->left_indent) - std::max(0.0, ps->right_indent);
+    const Rect sr = m_vp.to_screen(Rect{left, fr.y, std::max(1.0, width), 1});
+    t.ok = true;
+    t.scale = m_vp.scale();
+    t.x0 = sr.x;
+    t.width = width;
+    t.screen = {sr.x - 6, sr.y - 30, sr.w + 12, 22};
+    t.style = para.style;
+    return t;
+}
+
+int Canvas::tab_hit(const TabStrip& t, double x) const {
+    const auto* ps = m_doc.as<core::Style>(t.style);
+    if (!ps) return -1;
+    for (int i = 0; i < static_cast<int>(ps->tabs.size()); ++i)
+        if (std::abs(t.x0 + ps->tabs[static_cast<std::size_t>(i)].pos * t.scale - x) <= 6) return i;
+    return -1;
+}
+
+void Canvas::draw_tab_strip(const Cairo::RefPtr<Cairo::Context>& cr) {
+    const auto t = tab_strip();
+    if (!t.ok) return;
+    const auto* ps = m_doc.as<core::Style>(t.style);
+    const auto& r = t.screen;
+    cr->save();
+    // The strip: a card, ticks every 6 pt (longer each half inch), inches marked.
+    cr->set_source_rgba(1, 1, 1, 0.96);
+    cr->rectangle(r.x, r.y, r.w, r.h);
+    cr->fill();
+    cr->set_source_rgba(0.45, 0.55, 0.7, 0.8);
+    cr->set_line_width(1);
+    cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w) - 1, std::round(r.h) - 1);
+    cr->stroke();
+    cr->set_source_rgba(0.2, 0.25, 0.35, 0.55);
+    for (double p = 0; p <= t.width + 0.01; p += 6) {
+        const double x = std::round(t.x0 + p * t.scale) + 0.5;
+        const bool inch = std::fmod(p, 72) < 0.01, half = std::fmod(p, 36) < 0.01;
+        if (6 * t.scale < 3 && !half) continue;
+        cr->move_to(x, r.b() - 1);
+        cr->line_to(x, r.b() - (inch ? 9 : half ? 6 : 3));
+    }
+    cr->stroke();
+    // The stops: a mark at each, its kind in a letter, dots for a leader.
+    std::vector<core::TabStop> tabs = ps ? ps->tabs : std::vector<core::TabStop>{};
+    if (m_drag == Drag::Tab) {   // the one in hand, where it is
+        const double pos = std::max(0.0, std::round((m_tab_x - t.x0) / t.scale));
+        if (m_tab >= 0 && m_tab < static_cast<int>(tabs.size())) {
+            if (m_tab_off) tabs.erase(tabs.begin() + m_tab);
+            else tabs[static_cast<std::size_t>(m_tab)].pos = pos;
+        } else if (!m_tab_off) {
+            tabs.push_back({pos, core::TabAlign::Left, ""});
+        }
+    }
+    static const char* letter[] = {"L", "C", "R", "D"};
+    for (const auto& s : tabs) {
+        const double x = t.x0 + s.pos * t.scale;
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+        cr->move_to(x, r.b() - 1);
+        cr->line_to(x - 5, r.b() - 9);
+        cr->line_to(x + 5, r.b() - 9);
+        cr->close_path();
+        cr->fill();
+        auto lay = create_pango_layout(std::string(letter[static_cast<int>(s.align)]) + (s.leader.empty() ? "" : "…"));
+        lay->set_font_description(Pango::FontDescription("Sans Bold 7"));
+        cr->move_to(x - 3, r.y + 1);
+        lay->show_in_cairo_context(cr);
+    }
+    cr->restore();
 }
 
 void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {

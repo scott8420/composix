@@ -49,11 +49,12 @@ json to(const Record& r) {
             j = {{"kind", "master"}, {"prefix", v.prefix}, {"name", v.name}, {"pos", v.pos}, {"w", v.w},
                  {"h", v.h}, {"folds", v.folds}, {"columns", v.columns}, {"based_on", v.based_on},
                  {"margins", {v.margins.top, v.margins.bottom, v.margins.inside, v.margins.outside}},
-                 {"gutter", v.gutter}};
+                 {"gutter", v.gutter}, {"grid", v.grid}};
         } else if constexpr (std::is_same_v<T, Frame>) {
             j = {{"kind", "frame"}, {"owner", v.owner}, {"type", en(v.kind)}, {"x", v.x}, {"y", v.y},
                  {"w", v.w}, {"h", v.h}, {"rot", v.rot}, {"z", v.z}, {"story", v.story},
                  {"next", v.next}, {"asset", v.asset}, {"fit", en(v.fit)},
+                 {"pic_x", v.pic_x}, {"pic_y", v.pic_y}, {"pic_w", v.pic_w},
                  {"columns", v.columns}, {"gutter", v.gutter}, {"balance", v.balance}, {"widths", v.widths},
                  {"fill", v.fill}, {"stroke", v.stroke}, {"stroke_w", v.stroke_w},
                  {"fill_tint", v.fill_tint}, {"stroke_tint", v.stroke_tint}, {"opacity", v.opacity},
@@ -86,7 +87,7 @@ json to(const Record& r) {
                  {"color_tint", v.color_tint},
                  {"left_indent", v.left_indent}, {"right_indent", v.right_indent}, {"first_indent", v.first_indent},
                  {"skip_after_heading", v.skip_after_heading},
-                 {"drop_lines", v.drop_lines}, {"drop_chars", v.drop_chars}};
+                 {"drop_lines", v.drop_lines}, {"drop_chars", v.drop_chars}, {"align_grid", v.align_grid}};
             if (!v.tabs.empty()) {
                 json tabs = json::array();
                 for (const auto& t : v.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
@@ -160,6 +161,7 @@ std::optional<Record> from(const json& j) {
             v.margins = {m[0].get<double>(), m[1].get<double>(), m[2].get<double>(), m[3].get<double>()};
         }
         v.gutter = val(j, "gutter", 12.0);
+        v.grid = val(j, "grid", 0.0);   // s036
         return v;
     }
     if (k == "frame") {
@@ -173,6 +175,9 @@ std::optional<Record> from(const json& j) {
         v.next = val<std::string>(j, "next", "");
         v.asset = val<std::string>(j, "asset", "");
         v.fit = de(j, "fit", ImageFit::Fill);
+        v.pic_x = val(j, "pic_x", 0.0);
+        v.pic_y = val(j, "pic_y", 0.0);
+        v.pic_w = val(j, "pic_w", 0.0);
         v.columns = val(j, "columns", 1);
         v.gutter = val(j, "gutter", 12.0);
         v.balance = val(j, "balance", false);
@@ -233,6 +238,7 @@ std::optional<Record> from(const json& j) {
         v.skip_after_heading = val(j, "skip_after_heading", val(j, "indent_after_same", false));   // s026 files said indent_after_same
         v.drop_lines = val(j, "drop_lines", 0);
         v.drop_chars = val(j, "drop_chars", 1);
+        v.align_grid = val(j, "align_grid", false);   // s036
         if (j.contains("tabs") && j["tabs"].is_array())
             for (const auto& t : j["tabs"])
                 v.tabs.push_back({val(t, "pos", 0.0), de(t, "align", TabAlign::Left), val<std::string>(t, "leader", "")});

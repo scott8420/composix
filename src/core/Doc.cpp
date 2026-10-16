@@ -511,9 +511,27 @@ Rect fit_rect(const Rect& fr, double iw, double ih, ImageFit fit) {
     return {fr.x + (fr.w - w) / 2, fr.y + (fr.h - h) / 2, w, h};
 }
 
+Rect picture_rect(const Rect& fr, const Frame& f, double iw, double ih, double s) {
+    if (f.fit != ImageFit::Custom || f.pic_w <= 0 || iw <= 0 || ih <= 0) return fit_rect(fr, iw, ih, f.fit == ImageFit::Fit ? ImageFit::Fit : ImageFit::Fill);
+    return {fr.x + f.pic_x * s, fr.y + f.pic_y * s, f.pic_w * s, f.pic_w * ih / iw * s};
+}
+
+Size2 picture_natural(const Asset& a) {
+    if (a.px_w <= 0 || a.px_h <= 0) return {2 * kPt, 2 * kPt};
+    const double per = kPt / 300.0;
+    return {a.px_w * per, a.px_h * per};
+}
+
+double picture_scale(const Frame& f, const Asset& a) {
+    const double iw = a.px_w > 0 ? a.px_w : 1, ih = a.px_h > 0 ? a.px_h : 1;
+    const Rect r = picture_rect({0, 0, f.w, f.h}, f, iw, ih);
+    const auto nat = picture_natural(a);
+    return nat.w > 0 ? r.w / nat.w * 100 : 0;
+}
+
 double effective_ppi(const Frame& f, const Asset& a) {
     if (a.px_w <= 0 || a.px_h <= 0) return 0;
-    const Rect r = fit_rect({0, 0, f.w, f.h}, a.px_w, a.px_h, f.fit);
+    const Rect r = picture_rect({0, 0, f.w, f.h}, f, a.px_w, a.px_h);
     if (r.w <= 0) return 0;
     return a.px_w / (r.w / kPt);
 }
@@ -1311,10 +1329,32 @@ bool set_fit(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, ImageFit fi
     for (const auto& id : ids)
         if (const auto* f = d.as<Frame>(id); f && f->kind == FrameKind::Image && f->fit != fit) frames.push_back(id);
     if (frames.empty()) return false;
-    return j.run(fit == ImageFit::Fill ? "Fill frame" : "Fit in frame", frames, [&] {
+    return j.run(fit == ImageFit::Fill ? "Fill frame" : fit == ImageFit::Fit ? "Fit in frame" : "Place by hand", frames, [&] {
         for (const auto& id : frames) {
             Frame f = *d.as<Frame>(id);
             f.fit = fit;
+            d.put(id, f);
+        }
+    });
+}
+
+bool set_picture_scale(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, double percent) {
+    std::vector<Doc::Id> frames;
+    for (const auto& id : ids)
+        if (const auto* f = d.as<Frame>(id); f && f->kind == FrameKind::Image && d.as<Asset>(f->asset)) frames.push_back(id);
+    if (frames.empty() || percent <= 0) return false;
+    return j.run("Picture scale", frames, [&] {
+        for (const auto& id : frames) {
+            Frame f = *d.as<Frame>(id);
+            const auto& a = *d.as<Asset>(f.asset);
+            const double iw = a.px_w > 0 ? a.px_w : 1, ih = a.px_h > 0 ? a.px_h : 1;
+            const Rect now = picture_rect({0, 0, f.w, f.h}, f, iw, ih);
+            const auto nat = picture_natural(a);
+            const double w = nat.w * percent / 100, h = w * ih / iw;
+            f.fit = ImageFit::Custom;
+            f.pic_w = w;   // about the picture's centre
+            f.pic_x = now.x + now.w / 2 - w / 2;
+            f.pic_y = now.y + now.h / 2 - h / 2;
             d.put(id, f);
         }
     });
@@ -1522,6 +1562,7 @@ const std::vector<Verb>& verbs() {
         {"embed_assets", [](DocJournal& j, Doc& d) { embed_assets(j, d, {{"asset.2", "assets/harbor.psd"}}); }},
         {"unembed_assets", [](DocJournal& j, Doc& d) { unembed_assets(j, d, {"asset.1", "asset.3"}); }},
         {"set_fit", [](DocJournal& j, Doc& d) { set_fit(j, d, {"frame.4", "frame.5", "frame.1"}, ImageFit::Fit); }},
+        {"set_picture_scale", [](DocJournal& j, Doc& d) { set_picture_scale(j, d, {"frame.4"}, 50); }},   // s035
         {"delete_last_frames", [](DocJournal& j, Doc& d) {   // the story and the image go too
              delete_frames(j, d, {"frame.4", "frame.6"});
          }},
@@ -1819,6 +1860,12 @@ Rect margin_rect(const Doc& d, const Doc::Id& id) {
     const double l = left ? mg.outside : mg.inside, r = left ? mg.inside : mg.outside;
     if (w - l - r < 1 || h - mg.top - mg.bottom < 1) return {};
     return {l, mg.top, w - l - r, h - mg.top - mg.bottom};
+}
+
+BaselineGrid baseline_grid(const Doc& d, const Doc::Id& id) {
+    const auto* m = master_of(d, id);
+    if (!m || m->grid < 1) return {};
+    return {m->margins.top, m->grid};
 }
 
 std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& id) {

@@ -224,6 +224,19 @@ std::vector<Span> free_spans(const std::vector<core::WrapRect>& wraps, double x0
     return spans;
 }
 
+// Where a body line's baseline sits in its line box `lead` tall (as
+// walk_frame places it: the line's logical box centred in the leading).
+double baseline_in_box(const core::Style& style, double lead) {
+    auto probe = make_layout(style, "X", 1, 1e6, false);
+    PangoLayoutIter* pit = pango_layout_get_iter(probe.get());
+    PangoRectangle pr;
+    pango_layout_iter_get_line_extents(pit, nullptr, &pr);
+    const double off = (lead - pr.height / static_cast<double>(PANGO_SCALE)) / 2 +
+                       (pango_layout_iter_get_baseline(pit) - pr.y) / static_cast<double>(PANGO_SCALE);
+    pango_layout_iter_free(pit);
+    return off;
+}
+
 bool touches(const std::vector<core::WrapRect>& wraps, double x0, double x1) {
     return std::any_of(wraps.begin(), wraps.end(), [&](const core::WrapRect& r) { return r.x1 > x0 && r.x0 < x1; });
 }
@@ -234,6 +247,8 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 Cursor& c, double hmax, FrameText& ft) {
     const int n = core::column_count(fr);
     const int paras = static_cast<int>(st.paras.size());
+    // s036: the baseline grid of the page (or master) the frame is on.
+    const core::BaselineGrid grid = fr.rot == 0 ? core::baseline_grid(d, fr.owner) : core::BaselineGrid{};
     for (int col = 0; col < n; ++col) {
         const double cw = core::column_width(fr, col), cx = core::column_x(fr, col);
         const bool wrapped = touches(wraps, cx, cx + cw);
@@ -247,6 +262,15 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             const int len = static_cast<int>(para.text.size());
             const Indents ind = indents_of(d, style, st, c.p);   // s026
             double yy = y + before;
+            // s036: a line's top moved down so its baseline lands on the
+            // next grid line (page coords: the frame's y + the line's).
+            const bool on_grid = style.align_grid && grid.step > 0;
+            const double boff = on_grid ? baseline_in_box(style, lead) : 0;
+            const auto snap = [&](double ly) {
+                if (!on_grid) return ly;
+                const double k = std::max(0.0, std::ceil((fr.y + ly + boff - grid.start) / grid.step - 1e-6));
+                return grid.start + k * grid.step - fr.y - boff;
+            };
             // s029: a drop cap -- the first characters `drop_lines` lines tall.
             // Its box joins the wraps for this paragraph, so the lines beside
             // it are set line by line at the width it leaves (as a wrap's).
@@ -255,6 +279,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             double cap_bottom = 0;   // a short paragraph still clears its cap
             if (drop) {
                 const int n = std::min(style.drop_lines, 8);
+                yy = snap(yy);
                 if (yy + n * lead > hmax + 0.01 && y > 0) break;   // no room for it here: the next column
                 const char* t = para.text.c_str();
                 int k = 0;
@@ -269,14 +294,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 PangoRectangle ext;
                 pango_layout_get_extents(cl.get(), nullptr, &ext);
                 const double wc = std::max(1.0, ext.width / static_cast<double>(PANGO_SCALE));
-                // Where a body line's baseline sits in its line box.
-                auto probe = make_layout(style, "X", 1, 1e6, false);
-                PangoLayoutIter* pit = pango_layout_get_iter(probe.get());
-                PangoRectangle pr;
-                pango_layout_iter_get_line_extents(pit, nullptr, &pr);
-                const double off = (lead - pr.height / static_cast<double>(PANGO_SCALE)) / 2 +
-                                   (pango_layout_iter_get_baseline(pit) - pr.y) / static_cast<double>(PANGO_SCALE);
-                pango_layout_iter_free(pit);
+                const double off = baseline_in_box(style, lead);   // where a body line's baseline sits
                 const double capx = cx + ind.left, gap = std::max(3.0, body * 0.3);
                 ft.lines.push_back({c.p, 0, k, yy, n * lead, col, capx, wc, cs.size, yy + (n - 1) * lead + off});
                 local = wraps;
@@ -289,6 +307,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 int pos = c.start;
                 bool ended = false, full = false;
                 while (!ended) {
+                    yy = snap(yy);
                     if (yy + lead > hmax + 0.01) { full = true; break; }
                     double next = 0;
                     const auto spans = free_spans(wraps_here, cx, cx + cw, yy, yy + lead, &next);
@@ -327,6 +346,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             const int nl = pango_layout_get_line_count(lay.get());
             int placed = 0;
             for (int i = 0; i < nl; ++i) {
+                yy = snap(yy);
                 if (yy + lead > hmax + 0.01) break;   // the column is full
                 PangoLayoutLine* line = pango_layout_get_line_readonly(lay.get(), i);
                 const int a = c.start + line->start_index;

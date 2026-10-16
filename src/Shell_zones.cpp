@@ -186,6 +186,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto canvas = Gio::Menu::create();   // s006
     canvas->append("Rulers", "win.toggle-rulers");
     canvas->append("Guides", "win.toggle-guides");
+    canvas->append("Baseline Grid", "win.toggle-grid");   // s036
     canvas->append("Snap to Guides & Edges", "win.toggle-snap");
     view->append_section("", canvas);
     menu->append_section(view);

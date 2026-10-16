@@ -575,15 +575,21 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             } else if (choice == "delete") {
                 did = core::doc::delete_styles(m_journal, m_doc, m_inspected);
             }
+        } else if (key == "align_grid") {   // s036
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Align to grid", [&](core::Style& st) {
+                if (st.kind == core::StyleKind::Paragraph) st.align_grid = choice == "1";
+            });
         } else if (key == "mcolumns" || key == "mgutter" || key == "mtop" || key == "mbottom" ||
-                   key == "minside" || key == "moutside") {   // s014: a master's margins / columns
+                   key == "minside" || key == "moutside" || key == "mgrid") {   // s014: a master's margins / columns
             static const std::map<std::string, std::string> labels{
+                {"mgrid", "Baseline grid"},
                 {"mcolumns", "Page columns"}, {"mgutter", "Page gutter"}, {"mtop", "Top margin"},
                 {"mbottom", "Bottom margin"}, {"minside", "Inside margin"}, {"moutside", "Outside margin"}};
             const double v = std::stod(choice);
             did = core::doc::edit_masters(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Master& m) {
                 if (key == "mcolumns") m.columns = static_cast<int>(v);
                 else if (key == "mgutter") m.gutter = v;
+                else if (key == "mgrid") m.grid = v;
                 else if (key == "mtop") m.margins.top = v;
                 else if (key == "mbottom") m.margins.bottom = v;
                 else if (key == "minside") m.margins.inside = v;
@@ -645,6 +651,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                     f.widths = w;
                 }
             });
+        } else if (key == "pic_scale") {   // s035
+            did = core::doc::set_picture_scale(m_journal, m_doc, m_inspected, std::stod(choice));
         } else if (key == "fit") {   // s009
             did = core::doc::set_fit(m_journal, m_doc, m_inspected, static_cast<core::ImageFit>(std::stoi(choice)));
         } else if (key == "frame_image") {
