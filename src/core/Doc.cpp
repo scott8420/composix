@@ -1941,6 +1941,49 @@ std::vector<Placed> layout_pages(const Doc& d, const std::vector<Doc::Id>& ids, 
     return out;
 }
 
+std::vector<Doc::Id> pages_in_range(const Doc& d, const std::string& text, std::string* err) {
+    const auto pages = d.pages();
+    const auto trim = [](std::string t) {
+        const auto a = t.find_first_not_of(" \t");
+        if (a == std::string::npos) return std::string{};
+        return t.substr(a, t.find_last_not_of(" \t") - a + 1);
+    };
+    std::string all = trim(text);
+    std::string low = all;
+    for (auto& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (all.empty() || low == "all") return pages;
+    // An en dash typed or pasted reads as a hyphen.
+    for (std::size_t at; (at = all.find("\u2013")) != std::string::npos;) all.replace(at, 3, "-");
+    const auto index = [&](const std::string& folio) -> int {
+        for (std::size_t i = 0; i < pages.size(); ++i) if (d.folio(pages[i]) == folio) return static_cast<int>(i);
+        return -1;
+    };
+    std::vector<bool> take(pages.size(), false);
+    std::size_t from = 0;
+    while (from <= all.size()) {
+        const auto comma = all.find(',', from);
+        const std::string part = trim(all.substr(from, comma == std::string::npos ? std::string::npos : comma - from));
+        from = comma == std::string::npos ? all.size() + 1 : comma + 1;
+        if (part.empty()) continue;
+        const auto dash = part.find('-', 1);
+        const std::string a = trim(part.substr(0, dash)), b = dash == std::string::npos ? a : trim(part.substr(dash + 1));
+        const int i = index(a), k = index(b);
+        if (i < 0 || k < 0) {
+            if (err) *err = "No page \u201c" + (i < 0 ? a : b) + "\u201d";
+            return {};
+        }
+        if (k < i) {
+            if (err) *err = "\u201c" + part + "\u201d runs backwards";
+            return {};
+        }
+        for (int j = i; j <= k; ++j) take[static_cast<std::size_t>(j)] = true;
+    }
+    std::vector<Doc::Id> out;
+    for (std::size_t i = 0; i < pages.size(); ++i) if (take[i]) out.push_back(pages[i]);
+    if (out.empty() && err) *err = "No pages";
+    return out;
+}
+
 std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& id) {
     std::vector<Doc::Id> chain;
     Doc::Id m;

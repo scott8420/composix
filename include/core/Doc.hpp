@@ -787,6 +787,11 @@ std::vector<std::vector<Doc::Id>> spreads(const Doc& d);
 std::vector<Doc::Id> spread_of(const Doc& d, const Doc::Id& page);
 // The masters a page shows, most basic first (a master's based-on chain).
 std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& page_or_master);
+// s054: a page range as typed -- folios as the pages show them, commas
+// between, a hyphen (or en dash) for a run: "iii-7, 12". Empty or "all":
+// every page. The pages in document order, each once; an unknown folio or a
+// run that goes backwards is an error (empty result, `err` says which).
+std::vector<Doc::Id> pages_in_range(const Doc& d, const std::string& text, std::string* err = nullptr);
 // A frame's rect in layout (doc) space; empty if its owner isn't placed.
 Rect frame_in_layout(const Doc& d, const std::vector<Placed>& pl, const Doc::Id& frame);
 // The topmost of a placed page's OWN frames under (x, y), within `tol`

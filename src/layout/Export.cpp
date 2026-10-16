@@ -3,6 +3,7 @@
 #include "layout/Preflight.hpp"
 
 #include <cairo-pdf.h>
+#include <cstdio>
 
 #include <algorithm>
 #include <cmath>
@@ -157,9 +158,54 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
     return k;
 }
 
+std::vector<Bookmark> bookmarks(const core::Doc& d, FlowCache& flows) {
+    std::vector<Bookmark> out;
+    const core::GenList* toc = nullptr;
+    for (const auto& lid : d.ids_of<core::GenList>())
+        if (const auto* l = d.as<core::GenList>(lid); l->kind == core::ListKind::Contents && !l->from_styles.empty()) { toc = l; break; }
+    if (!toc) return out;
+    const auto pages = d.pages();
+    struct Keyed { std::size_t page; double y; Bookmark b; };
+    std::vector<Keyed> all;
+    for (const auto& sid : d.ids_of<core::Story>()) {
+        const auto& st = *d.as<core::Story>(sid);
+        const auto& flow = flows.get(d, sid);
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            const auto& para = st.paras[static_cast<std::size_t>(p)];
+            const auto lv = std::find(toc->from_styles.begin(), toc->from_styles.end(), para.style);
+            if (lv == toc->from_styles.end()) continue;
+            std::string title = para.text;
+            for (auto& c : title) if (c == '\t') c = ' ';
+            if (title.find_first_not_of(' ') == std::string::npos) continue;
+            const auto c = caret_at(d, sid, flow, {p, 0});
+            if (!c.ok) continue;
+            const auto* f = d.as<core::Frame>(c.frame);
+            if (!f) continue;
+            const auto at = std::find(pages.begin(), pages.end(), f->owner);
+            if (at == pages.end()) continue;   // on a master: not a place in the book
+            const double y = f->y + c.y;
+            all.push_back({static_cast<std::size_t>(at - pages.begin()), y,
+                           {title, static_cast<int>(lv - toc->from_styles.begin()) + 1, f->owner, y}});
+        }
+    }
+    std::stable_sort(all.begin(), all.end(), [](const Keyed& a, const Keyed& b) { return a.page != b.page ? a.page < b.page : a.y < b.y; });
+    for (auto& k : all) out.push_back(std::move(k.b));
+    return out;
+}
+
+namespace {
+std::vector<std::string> pages_to_export(const core::Doc& d, const PdfOptions& opt) {
+    if (opt.only.empty()) return d.pages();
+    std::vector<std::string> out;
+    for (const auto& p : d.pages())
+        if (std::find(opt.only.begin(), opt.only.end(), p) != opt.only.end()) out.push_back(p);
+    return out;
+}
+}  // namespace
+
 bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& opt, const ImageSource& images,
                 PdfReport* report, std::string* err) {
-    const auto pages = d.pages();
+    const auto pages = pages_to_export(d, opt);
     if (pages.empty()) { if (err) *err = "The document has no pages."; return false; }
     const double bleed = opt.bleed ? std::max(0.0, d.settings().bleed) : 0;
     const double off = bleed + (opt.marks ? kSlug : 0);
@@ -197,6 +243,20 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
         cairo_restore(cr);
         cairo_show_page(cr);
         ++n;
+    }
+    // s054: bookmarks, each nested under the last one a level up.
+    if (opt.bookmarks) {
+        std::vector<int> parent_at{CAIRO_PDF_OUTLINE_ROOT};   // [level-1] -> the id to nest under
+        for (const auto& b : bookmarks(d, flows)) {
+            const auto at = std::find(pages.begin(), pages.end(), b.page);
+            if (at == pages.end()) continue;
+            const int lv = std::clamp(b.level, 1, static_cast<int>(parent_at.size()));
+            parent_at.resize(static_cast<std::size_t>(lv));
+            char dest[96];
+            std::snprintf(dest, sizeof dest, "page=%d pos=[%g %g]", static_cast<int>(at - pages.begin()) + 1, off, off + b.y);
+            parent_at.push_back(cairo_pdf_surface_add_outline(surf, parent_at[static_cast<std::size_t>(lv - 1)], b.title.c_str(), dest,
+                                                              CAIRO_PDF_OUTLINE_FLAG_OPEN));
+        }
     }
     cairo_destroy(cr);
     cairo_surface_finish(surf);

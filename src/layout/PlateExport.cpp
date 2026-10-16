@@ -200,7 +200,9 @@ void crop_marks(plate::Page& pg, double w, double h, double bleed) {
 
 bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOptions& opt, const ImageSource& images,
                       PdfReport* report, std::string* err) {
-    const auto pages = d.pages();
+    auto pages = d.pages();
+    if (!opt.only.empty())   // s054: a page range
+        std::erase_if(pages, [&](const std::string& p) { return std::find(opt.only.begin(), opt.only.end(), p) == opt.only.end(); });
     if (pages.empty()) { if (err) *err = "The document has no pages."; return false; }
     const double bleed = opt.bleed ? std::max(0.0, d.settings().bleed) : 0;
     const double off = bleed + (opt.marks ? kSlug : 0);
@@ -252,6 +254,12 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         pg.restore();
         if (opt.marks) crop_marks(pg, p.w, p.h, bleed);
         pg.restore();
+    }
+    if (opt.bookmarks) {   // s054
+        FlowCache flows;
+        for (const auto& b : bookmarks(d, flows))
+            if (const auto at = std::find(pages.begin(), pages.end(), b.page); at != pages.end())
+                doc.add_bookmark(b.title, b.level, static_cast<std::size_t>(at - pages.begin()), off + b.y);
     }
     if (!doc.save(path, err)) return false;
     preflight(d, std::vector<std::string>(c.missing.begin(), c.missing.end()), static_cast<int>(pages.size()), report);

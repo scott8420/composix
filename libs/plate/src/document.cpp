@@ -254,6 +254,10 @@ std::string to_unicode_cmap(const std::map<std::uint32_t, std::string>& used) {
 
 }  // namespace
 
+void Document::add_bookmark(const std::string& title, int level, std::size_t page, double y) {
+    m_marks.push_back({title, level, page, y});
+}
+
 bool Document::save(const std::string& path, std::string* err) {
     if (m_pages.empty()) { if (err) *err = "no pages"; return false; }
     if (m_standard != Standard::None) {
@@ -396,6 +400,7 @@ bool Document::save(const std::string& path, std::string* err) {
 
     // Pages.
     std::string kids, labels;
+    std::vector<int> page_obj;   // s054: for bookmarks' destinations
     for (std::size_t i = 0; i < m_pages.size(); ++i) {
         const auto& pg = *m_pages[i];
         std::string res = "<< /ProcSet [/PDF /Text /ImageB /ImageC]";
@@ -429,6 +434,7 @@ bool Document::save(const std::string& path, std::string* err) {
         const int id = o.add("<< /Type /Page /Parent " + std::to_string(pages) + " 0 R" + boxes + " /Resources " + res +
                              " /Contents " + std::to_string(content) + " 0 R >>");
         kids += std::to_string(id) + " 0 R ";
+        page_obj.push_back(id);
         if (!pg.m_label.empty()) labels += std::to_string(i) + " << /P " + detail::text_string(pg.m_label) + " >> ";
     }
     o.set(pages, "<< /Type /Pages /Kids [" + kids + "] /Count " + std::to_string(m_pages.size()) + " >>");
@@ -448,6 +454,49 @@ bool Document::save(const std::string& path, std::string* err) {
         const int xmp = o.stream("/Type /Metadata /Subtype /XML",
                                  detail::xmp(m_standard, m_title, m_creator, xmp_date, id), false);
         extra = " /OutputIntents [" + std::to_string(intent) + " 0 R] /Metadata " + std::to_string(xmp) + " 0 R";
+    }
+    // s054: the outline -- a tree from the levels (a level deeper than the one
+    // before nests under it), every item open.
+    std::vector<Mark> marks;
+    for (const auto& m : m_marks) if (m.page < page_obj.size()) marks.push_back(m);
+    if (!marks.empty()) {
+        const int root = o.reserve();
+        const std::size_t n = marks.size();
+        std::vector<int> id(n), parent(n, -1), lvl(n);
+        for (std::size_t k = 0; k < n; ++k) id[k] = o.reserve();
+        std::vector<int> stack;   // indices of the open ancestors
+        for (std::size_t k = 0; k < n; ++k) {
+            const int want = std::max(1, marks[k].level);
+            while (!stack.empty() && lvl[static_cast<std::size_t>(stack.back())] >= want) stack.pop_back();
+            lvl[k] = stack.empty() ? 1 : std::min(want, lvl[static_cast<std::size_t>(stack.back())] + 1);
+            parent[k] = stack.empty() ? -1 : stack.back();
+            stack.push_back(static_cast<int>(k));
+        }
+        const auto kids_of = [&](int p) {
+            std::vector<std::size_t> v;
+            for (std::size_t k = 0; k < n; ++k) if (parent[k] == p) v.push_back(k);
+            return v;
+        };
+        std::vector<int> count(n, 0);   // descendants (all open)
+        for (std::size_t k = n; k-- > 0;) if (parent[k] >= 0) count[static_cast<std::size_t>(parent[k])] += 1 + count[k];
+        const auto ref = [&](int obj) { return std::to_string(obj) + " 0 R"; };
+        for (std::size_t k = 0; k < n; ++k) {
+            const auto sib = kids_of(parent[k]);
+            const auto at = static_cast<std::size_t>(std::find(sib.begin(), sib.end(), k) - sib.begin());
+            const auto ch = kids_of(static_cast<int>(k));
+            const auto& pg = *m_pages[marks[k].page];
+            std::string e = "<< /Title " + detail::text_string(marks[k].title) + " /Parent " +
+                            ref(parent[k] < 0 ? root : id[static_cast<std::size_t>(parent[k])]);
+            if (at > 0) e += " /Prev " + ref(id[sib[at - 1]]);
+            if (at + 1 < sib.size()) e += " /Next " + ref(id[sib[at + 1]]);
+            if (!ch.empty()) e += " /First " + ref(id[ch.front()]) + " /Last " + ref(id[ch.back()]) + " /Count " + std::to_string(count[k]);
+            e += " /Dest [" + ref(page_obj[marks[k].page]) + " /XYZ 0 " + num(std::clamp(pg.m_h - marks[k].y, 0.0, pg.m_h)) + " null] >>";
+            o.set(id[k], e);
+        }
+        const auto top = kids_of(-1);
+        o.set(root, "<< /Type /Outlines /First " + ref(id[top.front()]) + " /Last " + ref(id[top.back()]) +
+                        " /Count " + std::to_string(n) + " >>");
+        extra += " /Outlines " + ref(root) + " /PageMode /UseOutlines";
     }
     o.set(catalog, "<< /Type /Catalog /Pages " + std::to_string(pages) + " 0 R" +
                        (labels.empty() ? "" : " /PageLabels << /Nums [" + labels + "] >>") + extra + " >>");

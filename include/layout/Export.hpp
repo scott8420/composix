@@ -39,7 +39,24 @@ struct PdfOptions {
     // s017: PDF/X conformance (needs a profile). X-1a converts everything to
     // CMYK and flattens transparency; X-4 keeps RGB images ICC-tagged.
     plate_standard standard = plate_standard::None;
+    // s054: just these pages (ids, document order; empty = all), and
+    // bookmarks from the contents list.
+    std::vector<std::string> only;
+    bool bookmarks = true;
 };
+
+// s054: the reader's outline -- each paragraph in a contents list's styles
+// (the first Contents list; its first style level 1, the next level 2 ...),
+// where it lands: its page and how far down (points from the page's top).
+// In reading order; overset or unplaced paragraphs are left out.
+struct Bookmark {
+    std::string title;
+    int         level = 1;
+    std::string page;
+    double      y = 0;
+    bool operator==(const Bookmark&) const = default;
+};
+std::vector<Bookmark> bookmarks(const core::Doc& d, FlowCache& flows);
 
 struct PdfReport {
     int                      pages = 0;

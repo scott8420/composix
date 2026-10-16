@@ -179,6 +179,12 @@ public:
     Page& add_page(double w, double h);
     std::size_t page_count() const { return m_pages.size(); }
 
+    // s054: a bookmark (the reader's outline): its title, its level (1 = top;
+    // a deeper level nests under the bookmark before it), and where it goes --
+    // a page (0-based, as added) and a height on it (points from the top).
+    // Written as the document's /Outlines, the reader opening with them shown.
+    void add_bookmark(const std::string& title, int level, std::size_t page, double y);
+
     bool save(const std::string& path, std::string* err = nullptr);
 
 private:
@@ -189,6 +195,8 @@ private:
     std::vector<std::unique_ptr<Font>>  m_fonts;
     std::vector<std::unique_ptr<Image>> m_images;
     std::string m_title, m_creator = "Plate", m_author;
+    struct Mark { std::string title; int level; std::size_t page; double y; };
+    std::vector<Mark> m_marks;   // s054
     bool m_compress = true;
 
     // s016

@@ -2049,6 +2049,106 @@ int main() {
     }
 
     {
+        std::cout << "\n-- page range + bookmarks (s054) --\n";
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::load_sample(d);
+        const auto pages = d.pages();
+        const auto folios = [&](const std::vector<std::string>& v) {
+            std::string out;
+            for (const auto& p : v) out += (out.empty() ? "" : ",") + d.folio(p);
+            return out;
+        };
+        std::string why;
+        check("range: empty or All -- every page", core::pages_in_range(d, "").size() == pages.size() &&
+                                                   core::pages_in_range(d, " all ").size() == pages.size());
+        check("range: a run across the sections", folios(core::pages_in_range(d, "iii-1")) == "iii,iv,1");
+        check("range: in document order, each once", folios(core::pages_in_range(d, "2, ii, 2")) == "ii,2");
+        check("range: an en dash reads as a hyphen", folios(core::pages_in_range(d, "1\u20133")) == "1,2,3");
+        check("range: unknown folio refused, named", core::pages_in_range(d, "99", &why).empty() && why.find("99") != std::string::npos);
+        check("range: backwards refused", core::pages_in_range(d, "7-2", &why).empty() && why.find("backwards") != std::string::npos);
+
+        L::FlowCache flows;
+        const auto bm = L::bookmarks(d, flows);
+        const auto find_bm = [&](const std::string& t) -> const L::Bookmark* {
+            for (const auto& b : bm) if (b.title.find(t) != std::string::npos) return &b;
+            return nullptr;
+        };
+        const auto* one = find_bm("Chapter One");
+        const auto* two = find_bm("Chapter Two");
+        check("bookmarks: the chapters, from the contents list's styles", one && two && one->level == 1 && two->level == 1);
+        check("bookmarks: where they land, in reading order", one && two && d.folio(one->page) == "1" &&
+                                                              d.folio(two->page) == "3" && one < two &&
+                                                              one->y > 0 && one->y < d.as<core::Page>(one->page)->h);
+
+        const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+        const auto base = fs::temp_directory_path() / "composix_selftest_s054";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        const auto slurp = [](const std::string& f) {
+            std::ifstream in(f, std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            return ss.str();
+        };
+        const auto count = [](const std::string& hay, const std::string& n) {
+            int k = 0;
+            for (auto at = hay.find(n); at != std::string::npos; at = hay.find(n, at + 1)) ++k;
+            return k;
+        };
+        L::PdfOptions opt;
+        opt.compress = false;
+        L::PdfReport rep;
+        std::string err;
+        const auto out = (base / "marks.pdf").string();
+        check("print: exports with bookmarks", L::export_print_pdf(d, out, opt, src, &rep, &err), err);
+        auto pdf = slurp(out);
+        check("print: an outline, opened with it shown", pdf.find("/Outlines") != std::string::npos &&
+                                                        pdf.find("/PageMode /UseOutlines") != std::string::npos &&
+                                                        pdf.find("/Type /Outlines") != std::string::npos);
+        check("print: the chapters in it, each going to its page", pdf.find("(Chapter One)") != std::string::npos &&
+                                                                   pdf.find("(Chapter Two)") != std::string::npos &&
+                                                                   count(pdf, "/XYZ 0 ") == static_cast<int>(bm.size()));
+        opt.only = core::pages_in_range(d, "1-3");
+        check("print: a range -- just those pages", L::export_print_pdf(d, out, opt, src, &rep, &err) && rep.pages == 3 &&
+                                                    count(slurp(out), "/Type /Page /Parent") == 3, err);
+        opt.only = core::pages_in_range(d, "iv");
+        L::export_print_pdf(d, out, opt, src, &rep, &err);
+        check("print: no chapter in the range, no outline", slurp(out).find("/Outlines") == std::string::npos);
+        opt.only.clear();
+        opt.bookmarks = false;
+        L::export_print_pdf(d, out, opt, src, &rep, &err);
+        check("print: bookmarks off, no outline", slurp(out).find("/Outlines") == std::string::npos);
+        // Nesting: level 2 under the level 1 before it.
+        {
+            plate::Document pd;
+            pd.set_compress(false);
+            pd.add_page(100, 100);
+            pd.add_page(100, 100);
+            pd.add_bookmark("A", 1, 0, 10);
+            pd.add_bookmark("A1", 2, 0, 50);
+            pd.add_bookmark("A2", 2, 1, 0);
+            pd.add_bookmark("B", 1, 1, 60);
+            pd.add_bookmark("Gone", 1, 9, 0);   // no such page: left out
+            const auto f = (base / "nest.pdf").string();
+            const bool ok = pd.save(f, &err);
+            const auto p2 = slurp(f);
+            check("plate: bookmarks nest by level, a missing page dropped",
+                  ok && p2.find("/Count 4") != std::string::npos && p2.find("/Count 2") != std::string::npos &&
+                  p2.find("(Gone)") == std::string::npos && p2.find("/XYZ 0 90 null") != std::string::npos, err);
+        }
+        // Screen (cairo): the outline too.
+        L::PdfOptions so;
+        const auto sout = (base / "screen.pdf").string();
+        check("screen: exports with bookmarks", L::export_pdf(d, sout, so, src, &rep, &err), err);
+        check("screen: an outline in it", slurp(sout).find("/Outlines") != std::string::npos);
+        so.only = core::pages_in_range(d, "ii-iii");
+        check("screen: a range -- just those pages", L::export_pdf(d, sout, so, src, &rep, &err) && rep.pages == 2, err);
+        fs::remove_all(base, ec);
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

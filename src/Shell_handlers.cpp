@@ -285,6 +285,25 @@ void Shell::on_export_pdf() {  // handler
         print->signal_toggled().connect(sync);
         prof->property_selected().signal_changed().connect(sync);
         stdd->property_selected().signal_changed().connect(sync);
+        // s054: which pages, and bookmarks from the contents list.
+        auto rrow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+        rrow->set_name("export.range.row");
+        auto rlab = Gtk::make_managed<Gtk::Label>("Pages");
+        rlab->add_css_class("cx-field-label");
+        auto range = Gtk::make_managed<Gtk::Entry>();
+        range->set_name("export.range");
+        range->set_hexpand(true);
+        range->set_placeholder_text("All \u2014 or as they're numbered: iii-7, 12");
+        range->set_tooltip_text("Folios as the pages show them; commas between, a hyphen for a run");
+        range->signal_changed().connect([range] { range->remove_css_class("error"); });
+        rrow->append(*rlab);
+        rrow->append(*range);
+        box->append(*rrow);
+        auto marksb = Gtk::make_managed<Gtk::CheckButton>("Bookmarks from the contents");
+        marksb->set_name("export.bookmarks");
+        marksb->set_tooltip_text("The headings the Contents list gathers, as the PDF's outline");
+        marksb->set_active(true);
+        box->append(*marksb);
         auto note = Gtk::make_managed<Gtk::Label>("Every page at its own size, fonts embedded,\nimages at full resolution.");
         note->set_name("export.note");
         note->add_css_class("cx-export-note");
@@ -310,7 +329,20 @@ void Shell::on_export_pdf() {  // handler
         }, false);
         w.add_controller(keys);
         w.set_default_widget(*go);
-        go->signal_clicked().connect([this, bleed, marks, print, prof, conv, stdd] {
+        go->signal_clicked().connect([this, bleed, marks, print, prof, conv, stdd, range, marksb, note] {
+            // s054: the range first -- a bad one keeps the sheet open, saying why.
+            {
+                std::string why;
+                const auto text = std::string(range->get_text());
+                auto only = core::pages_in_range(m_doc, text, &why);
+                if (only.empty()) {
+                    range->add_css_class("error");
+                    note->set_text(why.empty() ? "No pages" : why);
+                    return;
+                }
+                m_pdf_only = only.size() == m_doc.pages().size() ? std::vector<std::string>{} : only;
+                m_pdf_bookmarks = marksb->get_active();
+            }
             m_pdf_bleed = bleed->get_active();
             m_pdf_marks = marks->get_active();
             m_pdf_print = print->get_active();
@@ -344,7 +376,9 @@ void Shell::on_export_pdf() {  // handler
     // Refresh the sheet's state each time (the bleed comes from the document).
     auto* box = static_cast<Gtk::Box*>(m_export->get_child());
     for (auto* c = box->get_first_child(); c; c = c->get_next_sibling()) {
-        if (c->get_name() == "export.bleed") {
+        if (c->get_name() == "export.note") {   // s054: back from a range's complaint
+            static_cast<Gtk::Label*>(c)->set_text("Every page at its own size, fonts embedded,\nimages at full resolution.");
+        } else if (c->get_name() == "export.bleed") {
             auto* b = static_cast<Gtk::CheckButton*>(c);
             b->set_label("Bleed (" + core::inches(m_doc.settings().bleed) + " in)");
             b->set_active(m_pdf_bleed);
