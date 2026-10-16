@@ -1,14 +1,56 @@
 #include "views/Inspector.hpp"
+#include "core/Doc.hpp"
+
+#include <memory>
 
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
 #include <gtkmm/dropdown.h>
+#include <gtkmm/entry.h>
+#include <gtkmm/eventcontrollerfocus.h>
+#include <gtkmm/menubutton.h>
+#include <gtkmm/popover.h>
 #include <gtkmm/grid.h>
 #include <gtkmm/label.h>
 #include <gtkmm/stringlist.h>
 #include <gtkmm/separator.h>
 
 namespace composix::views {
+
+// s041: an entry for a typed value. Enter (or leaving it) sends what was
+// typed, in points, through `send`; what doesn't read as a length in
+// [lo, hi] is marked and not sent.
+Gtk::Entry* Inspector::typed_entry(const std::string& name, const std::string& value, double unit, double lo, double hi,
+                                   std::function<void(const std::string&)> send) {
+    auto en = Gtk::make_managed<Gtk::Entry>();
+    en->set_name(name);
+    en->add_css_class("cx-field-typed");
+    en->set_hexpand(true);
+    en->set_width_chars(5);
+    if (value == core::kMixed) { en->set_placeholder_text(core::kMixed); en->add_css_class("cx-mixed"); }
+    else en->set_text(value);
+    // What it last showed or sent: Enter, then leaving, sends once.
+    auto shown = std::make_shared<std::string>(value == core::kMixed ? std::string{} : value);
+    auto commit = [this, en, shown, unit, lo, hi, send] {
+        if (m_painting) return;
+        const std::string text = en->get_text();
+        if (text == *shown || text.empty()) { en->remove_css_class("error"); return; }
+        const auto v = core::parse_length(text, unit);
+        if (!v || *v < lo - 1e-9 || *v > hi + 1e-9) {
+            en->add_css_class("error");
+            en->set_tooltip_text("Type a length -- 12, 12 pt, 1.5 in, 3p6, 10 mm");
+            return;
+        }
+        en->remove_css_class("error");
+        *shown = text;
+        send(core::num_text(*v));
+    };
+    en->signal_activate().connect(commit);
+    auto focus = Gtk::EventControllerFocus::create();
+    focus->signal_leave().connect(commit);
+    en->add_controller(focus);
+    return en;
+}
 
 Inspector::Inspector()
     : widgets::Box("inspector", Gtk::Orientation::VERTICAL),
@@ -57,6 +99,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
     m_shown_title = title;
     m_shown_sub = sub;
     m_shown = fields;
+    m_painting = true;   // s041: a typed entry losing focus as it goes is not an edit
     while (auto* c = m_fields.get_first_child()) m_fields.remove(*c);
     m_title.set_text(title);
     m_sub.set_text(sub);
@@ -101,6 +144,14 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                 h->add_css_class("cx-col-head");
                 h->set_xalign(0.0f);
                 g->attach(*h, static_cast<int>(k), 0);
+                if (!f.edit.empty() && f.unit > 0) {   // s041: each column typed
+                    const std::string key = f.edit, idx = std::to_string(k);
+                    auto en = typed_entry("inspector.edit." + key + "." + idx, k < vals.size() ? vals[k] : "", f.unit, f.lo, f.hi,
+                                          [this, key, idx](const std::string& v) { m_edit.emit(key, idx + ":" + v); });
+                    en->set_width_chars(4);
+                    g->attach(*en, static_cast<int>(k), 1);
+                    continue;
+                }
                 auto v = Gtk::make_managed<Gtk::Label>(k < vals.size() ? vals[k] : "");
                 v->add_css_class("cx-field-value");
                 if (k < vals.size() && vals[k] == core::kMixed) v->add_css_class("cx-mixed");
@@ -118,7 +169,35 @@ void Inspector::fill(const std::string& title, const std::string& sub,
         l->set_valign(f.edit.empty() ? Gtk::Align::START : Gtk::Align::CENTER);
         m_fields.attach(*l, 0, row);
 
-        if (!f.edit.empty()) {
+        if (!f.edit.empty() && f.unit > 0) {
+            // s041: a typed value, its presets in a menu beside it.
+            auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+            box->add_css_class("linked");
+            box->set_hexpand(true);
+            const std::string key = f.edit;
+            box->append(*typed_entry("inspector.edit." + key, f.value, f.unit, f.lo, f.hi,
+                                     [this, key](const std::string& v) { m_edit.emit(key, v); }));
+            if (!f.choices.empty()) {
+                auto mb = Gtk::make_managed<Gtk::MenuButton>();
+                mb->set_name("inspector.presets." + key);
+                mb->set_icon_name("pan-down-symbolic");
+                mb->set_tooltip_text("Presets");
+                auto pop = Gtk::make_managed<Gtk::Popover>();
+                auto list = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
+                for (const auto& c : f.choices) {
+                    auto b = Gtk::make_managed<Gtk::Button>(c.label);
+                    b->add_css_class("flat");
+                    if (auto* lab = dynamic_cast<Gtk::Label*>(b->get_child())) lab->set_xalign(0.0f);
+                    const std::string id = c.id;
+                    b->signal_clicked().connect([this, pop, key, id] { pop->popdown(); m_edit.emit(key, id); });
+                    list->append(*b);
+                }
+                pop->set_child(*list);
+                mb->set_popover(*pop);
+                box->append(*mb);
+            }
+            m_fields.attach(*box, 1, row);
+        } else if (!f.edit.empty()) {
             // An editable field: a dropdown of its choices.
             std::vector<Glib::ustring> labels;
             guint at = GTK_INVALID_LIST_POSITION;
@@ -194,7 +273,9 @@ void Inspector::show_section(const core::Outline& o, core::Segment s) {
 
 void Inspector::clear() {
     m_has_shown = false;
+    m_painting = true;
     while (auto* c = m_fields.get_first_child()) m_fields.remove(*c);
+    m_painting = false;
     m_title.set_visible(false);
     m_sub.set_visible(false);
     m_scroll.set_visible(false);

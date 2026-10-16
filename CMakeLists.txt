@@ -16,6 +16,15 @@ find_package(spdlog REQUIRED)
 # No gtkmm on this library's link line, BY DESIGN: a stray UI include under
 # core/ fails to compile, so the seam is enforced by the build graph and the
 # core stays headless-testable. (docs/two-layer-seam.md.)
+# s038: the hyphenation patterns (third_party/hyphen) become a source file, so
+# the app needs no hyphenation package at run time.
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-en-us.pat.txt CX_HYPH_PATTERNS)
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-en-us.hyp.txt CX_HYPH_EXCEPTIONS)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-en-us.pat.txt
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-en-us.hyp.txt)
+configure_file(src/core/HyphenData.cpp.in ${CMAKE_CURRENT_BINARY_DIR}/HyphenData.cpp @ONLY)
+
 add_library(composix_core STATIC
     src/core/Recents.cpp
     src/core/TextMap.cpp
@@ -37,6 +46,9 @@ add_library(composix_core STATIC
     src/core/Find.cpp
     src/core/DocJson.cpp
     src/core/Project.cpp
+    # s038: hyphenation -- Liang's algorithm; the TeX patterns embedded below.
+    src/core/Hyphen.cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/HyphenData.cpp
 )
 target_include_directories(composix_core PUBLIC include)
 # Vendored nlohmann/json (header-only, MIT), PRIVATE -- an implementation detail

@@ -21,6 +21,7 @@
 #include "core/Stones.hpp"
 #include "core/Undo.hpp"
 #include "core/TextMap.hpp"
+#include "core/Hyphen.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1617,8 +1618,10 @@ int main() {
                                                   [](core::Frame& f) { f.wrap = core::Wrap::None; }));
         bool plain = true;
         for (const auto& f : L::flow_story(d, "story.1").frames)
-            for (const auto& l : f.lines)   // (a drop cap's lines are set on their own too -- s029)
-                plain = plain && (l.w <= 0 || d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(l.para)].style == "style.10");
+            for (const auto& l : f.lines) {   // (a drop cap's lines are set on their own too -- s029; a hyphenating style's, s038)
+                const auto& ps = d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(l.para)].style;
+                plain = plain && (l.w <= 0 || ps == "style.10" || d.as<core::Style>(ps)->hyphenate);
+            }
         check("wrap: none sets every line with its paragraph", plain);
         // The inspector: Wrap on every frame, Offset when it wraps.
         j.undo();
@@ -2395,6 +2398,396 @@ int main() {
             check("inspector: Body's Based on offers no style built on it", loopfree);
             j.undo();
         }
+    }
+
+    {
+        std::cout << "\n-- hyphenation (s038) --\n";
+        check("patterns: hy-phen-ation", core::hyphenated("hyphenation") == "hy-phen-ation", core::hyphenated("hyphenation"));
+        check("patterns: an exception (ta-ble)", core::hyphenated("table") == "ta-ble", core::hyphenated("table"));
+        check("patterns: equinox, cargo", core::hyphenated("equinox") == "equinox" || core::hyphenated("equinox") == "equi-nox",
+              core::hyphenated("equinox"));
+        check("patterns: capitals fold", core::hyphenated("Hyphenation") == "Hy-phen-ation");
+        check("patterns: 2 before, 3 after", core::hyphen_points("oranges").empty() || core::hyphen_points("oranges").front() >= 2,
+              core::hyphenated("oranges"));
+        check("patterns: short words and non-letters don't break",
+              core::hyphen_points("ship").empty() && core::hyphen_points("caf\xC3\xA9s").empty() && core::hyphen_points("x86-64").empty());
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // A narrow justified frame of long words: hyphens are certain.
+        std::string words;
+        for (int k = 0; k < 12; ++k) words += "Uncharacteristically representational communication institutionalization ";
+        words.pop_back();
+        core::doc::edit_text(j, d, "story.1", {2, 0}, {2, static_cast<int>(d.as<core::Story>("story.1")->paras[2].text.size())}, words);
+        const auto count = [&](int* lines = nullptr) {
+            int h = 0, n = 0;
+            for (const auto& f : L::flow_story(d, "story.1").frames)
+                for (const auto& l : f.lines)
+                    if (l.para == 2) { h += l.hyphen; ++n; }
+            if (lines) *lines = n;
+            return h;
+        };
+        int n_on = 0, n_off = 0;
+        const int h = count(&n_on);
+        check("flow: Body hyphenates the long words", h > 0, std::to_string(h) + " of " + std::to_string(n_on));
+        bool mid = false, between = true;
+        const auto& txt = d.as<core::Story>("story.1")->paras[2].text;
+        for (const auto& f : L::flow_story(d, "story.1").frames)
+            for (const auto& l : f.lines)
+                if (l.para == 2 && l.hyphen) {
+                    mid = mid || std::isalpha(static_cast<unsigned char>(txt[static_cast<std::size_t>(l.end)]));
+                    between = between && std::isalpha(static_cast<unsigned char>(txt[static_cast<std::size_t>(l.end - 1)]));
+                }
+        check("flow: a hyphenated line ends inside a word", mid && between);
+        // Drawn: the hyphen is on the page (the line's glyphs end in '-'), the text unchanged.
+        {
+            const auto flow = L::flow_story(d, "story.1");
+            int dashed = 0;
+            for (const auto& f : flow.frames)
+                L::visit_lines(d, "story.1", flow, f.frame, [&](const L::LineVisit& v) {
+                    if (v.from < 0 || !v.line) return;
+                    const char* t = pango_layout_get_text(v.line->layout);
+                    const int e = v.line->start_index + v.line->length;
+                    if (e > 0 && t[e - 1] == '-') ++dashed;
+                });
+            check("draw: the hyphenated lines end in a hyphen", dashed >= h, std::to_string(dashed) + " / " + std::to_string(h));
+            check("text: no hyphen in the words", d.as<core::Story>("story.1")->paras[2].text == words);
+        }
+        // Caret at a hyphenated line's end belongs to the next line, as at any soft wrap.
+        {
+            const auto flow = L::flow_story(d, "story.1");
+            const L::Line* hl = nullptr;
+            for (const auto& f : flow.frames) for (const auto& l : f.lines) if (!hl && l.para == 2 && l.hyphen) hl = &l;
+            const auto c1 = L::caret_at(d, "story.1", flow, {2, hl->end - 1});
+            const auto c2 = L::caret_at(d, "story.1", flow, {2, hl->end});
+            check("caret: before the break on the line, at it on the next", c1.ok && c2.ok && std::abs(c1.y - hl->y) < 0.5 && c2.y > c1.y + 1,
+                  std::to_string(c1.y) + " " + std::to_string(c2.y));
+        }
+        check("style off: one step", core::doc::edit_styles(j, d, {"style.1"}, "Hyphenate",
+                                                            [](core::Style& s) { s.hyphenate = false; }));
+        check("style off: no hyphens (and Body First follows Body)", count(&n_off) == 0 && !d.as<core::Style>("style.10")->hyphenate);
+        check("style off: hyphens save lines", n_off >= n_on, std::to_string(n_on) + " vs " + std::to_string(n_off));
+        j.undo();
+        check("undo: hyphens back", count() == h);
+        const auto o = core::project(d, "");
+        bool row = false;
+        for (const auto& f : o.find("style.1")->fields) row = row || (f.edit == "hyphenate" && f.value == "On");
+        check("inspector: Hyphenate On", row);
+        std::string err;
+        core::Doc e;
+        check("json: hyphenate kept", core::from_json(e, core::to_json(d), &err) && e.as<core::Style>("style.1")->hyphenate, err);
+    }
+
+    {
+        std::cout << "\n-- keeps (s039) --\n";
+        namespace L = composix::layout;
+        // Breaches of the keeps at every column break of story.1: a heading
+        // left at a column's foot, a paragraph's first line alone at a foot
+        // (orphan), its last alone at a head (widow). `checked`: column breaks seen.
+        const auto breaches = [](const core::Doc& d, int* checked, int* splits) {
+            const auto& st = *d.as<core::Story>("story.1");
+            std::vector<std::vector<L::Line>> cols;
+            for (const auto& f : L::flow_story(d, "story.1").frames) {
+                int last = -1;
+                for (const auto& l : f.lines) {
+                    if (l.col != last) { cols.emplace_back(); last = l.col; }
+                    cols.back().push_back(l);
+                }
+            }
+            int bad = 0;
+            for (std::size_t k = 0; k + 1 < cols.size(); ++k) {
+                const auto& A = cols[k];
+                const auto& B = cols[k + 1];
+                if (A.empty() || B.empty()) continue;
+                ++*checked;
+                const auto& last = A.back();
+                const auto& first = B.front();
+                const auto sty = [&](int p) { return d.as<core::Style>(st.paras[static_cast<std::size_t>(p)].style); };
+                const int plen = static_cast<int>(st.paras[static_cast<std::size_t>(last.para)].text.size());
+                if (last.para == first.para) {   // split
+                    ++*splits;
+                    int na = 0, nb = 0;
+                    bool starts = false, others = false;
+                    for (const auto& l : A) if (l.para == last.para) { na += l.cap <= 0; starts = starts || l.start == 0; } else others = true;
+                    bool ends = false;
+                    for (const auto& l : B) if (l.para == last.para) { nb += l.cap <= 0; ends = ends || l.end == plen; }
+                    if (starts && others && na < 2) ++bad;
+                    if (ends && nb < 2 && na - (2 - nb) >= 2) ++bad;
+                } else if (sty(last.para)->keep_next && first.start == 0) {
+                    bool others = false;
+                    for (const auto& l : A) others = others || l.para != last.para;
+                    if (others) ++bad;
+                }
+            }
+            return bad;
+        };
+        // Many layouts: n Body paragraphs of different lengths before the
+        // second chapter's heading.
+        const auto with_filler = [](core::Doc& d, int n, int words) {
+            auto s = *d.as<core::Story>("story.1");
+            std::vector<core::Para> extra;
+            for (int k = 0; k < n; ++k) {
+                std::string t;
+                for (int w = 0; w < words + (k * 7) % 23; ++w) t += (w ? " " : "") + std::string(w % 3 ? "harbor" : "lanterns");
+                extra.push_back({"style.1", t + "."});
+            }
+            s.paras.insert(s.paras.begin() + 4, extra.begin(), extra.end());
+            d.put("story.1", s);
+        };
+        int bad_on = 0, bad_off = 0, seen = 0, splits = 0, seen_off = 0, splits_off = 0;
+        // Wide enough that any fonts meet a breach with keeps off (Fedora's
+        // found none in the first, 36-layout sweep).
+        for (int n : {1, 3, 5})
+            for (int words = 5; words <= 120; words += 3) {
+                core::Doc d;
+                core::load_sample(d);
+                with_filler(d, n, words);
+                bad_on += breaches(d, &seen, &splits);
+                core::Doc e;
+                core::load_sample(e);
+                for (const char* id : {"style.1", "style.2", "style.10"}) {
+                    auto s = *e.as<core::Style>(id);
+                    s.keep_next = false;
+                    s.keep_lines = 0;
+                    e.put(id, s);
+                }
+                with_filler(e, n, words);
+                bad_off += breaches(e, &seen_off, &splits_off);
+            }
+        check("keeps off: the sweep meets widows, orphans or stranded headings", bad_off > 0,
+              std::to_string(bad_off) + " in " + std::to_string(seen_off) + " breaks");
+        check("keeps on: none, across the sweep", bad_on == 0 && seen > 60 && splits > 20,
+              std::to_string(bad_on) + " in " + std::to_string(seen) + " breaks, " + std::to_string(splits) + " splits");
+        {   // The text is all still there (nothing lost to the moves).
+            core::Doc d;
+            core::load_sample(d);
+            with_filler(d, 6, 41);
+            const auto& st = *d.as<core::Story>("story.1");
+            const auto flow = L::flow_story(d, "story.1");
+            int next_para = 0, next_byte = 0;
+            bool contiguous = true;
+            for (const auto& f : flow.frames)
+                for (const auto& l : f.lines) {   // (a drop cap's line holds the first letters)
+                    if (l.para != next_para) {
+                        contiguous = contiguous && l.para == next_para + 1 && l.start == 0 &&
+                                     next_byte == static_cast<int>(st.paras[static_cast<std::size_t>(next_para)].text.size());
+                        next_para = l.para;
+                    } else {
+                        contiguous = contiguous && l.start == next_byte;
+                    }
+                    next_byte = l.end;
+                }
+            check("moves lose nothing: lines run on, paragraph after paragraph", contiguous);
+        }
+        {   // All together: a paragraph that starts in a column is never split from there.
+            core::Doc d;
+            core::DocJournal j{d};
+            d.set_door([&j] { return j.open(); });
+            core::load_sample(d);
+            with_filler(d, 7, 41);
+            check("all together: one step", core::doc::edit_styles(j, d, {"style.1"}, "Keep lines",
+                                                                   [](core::Style& s) { s.keep_lines = -1; }));
+            check("all together: Body First follows Body", d.as<core::Style>("style.10")->keep_lines == -1);
+            int split_starts = 0, n = 0;
+            std::vector<std::vector<L::Line>> cols;
+            for (const auto& f : L::flow_story(d, "story.1").frames) {
+                int last = -1;
+                for (const auto& l : f.lines) { if (l.col != last) { cols.emplace_back(); last = l.col; } cols.back().push_back(l); }
+            }
+            for (std::size_t k = 0; k + 1 < cols.size(); ++k) {
+                if (cols[k].empty() || cols[k + 1].empty()) continue;
+                ++n;
+                bool others = false, starts = false;
+                for (const auto& l : cols[k]) {
+                    if (l.para == cols[k].back().para) starts = starts || l.start == 0;
+                    else others = true;
+                }
+                split_starts += cols[k].back().para == cols[k + 1].front().para && starts && others;
+            }
+            check("all together: no paragraph starts and splits in one column", split_starts == 0 && n > 0,
+                  std::to_string(split_starts) + " of " + std::to_string(n));
+            const auto o = core::project(d, "");
+            bool kl = false, kn = false;
+            for (const auto& f : o.find("style.1")->fields) kl = kl || (f.edit == "keep_lines" && f.value == "All together");
+            for (const auto& f : o.find("style.2")->fields) kn = kn || (f.edit == "keep_next" && f.value == "On");
+            check("inspector: Keep lines, Keep with next", kl && kn);
+            std::string err;
+            core::Doc e;
+            check("json: keeps kept", core::from_json(e, core::to_json(d), &err) && e.as<core::Style>("style.1")->keep_lines == -1 &&
+                                          e.as<core::Style>("style.2")->keep_next, err);
+        }
+    }
+
+    {
+        std::cout << "\n-- text insets (s040) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto lines_of = [&](const std::string& story, const std::string& frame) {
+            for (const auto& f : L::flow_story(d, story).frames) if (f.frame == frame) return f.lines;
+            return std::vector<L::Line>{};
+        };
+        const auto cap = lines_of("story.2", "frame.6");
+        check("sample: the map caption is inset 6 pt", d.as<core::Frame>("frame.6")->inset == core::Sides{6, 6, 6, 6} &&
+                                                           !cap.empty() && std::abs(cap[0].y - 6) < 0.01 && std::abs(cap[0].x - 6) < 0.01,
+              cap.empty() ? "no lines" : std::to_string(cap[0].x) + "," + std::to_string(cap[0].y));
+        check("columns: inside the insets", std::abs(core::column_x(*d.as<core::Frame>("frame.6"), 0) - 6) < 1e-9 &&
+                                                std::abs(core::column_width(*d.as<core::Frame>("frame.6"), 0) - (d.as<core::Frame>("frame.6")->w - 12)) < 1e-9);
+        // The opening text: an inset of 18 pt moves its first line in and down, and the
+        // bottom inset ends the column sooner (more text left over).
+        const auto& tf = *d.as<core::Frame>("frame.1");
+        const auto before = lines_of("story.1", "frame.1");
+        check("inset: one step", core::doc::edit_frames(j, d, {"frame.1"}, "Text inset",
+                                                        [](core::Frame& f) { f.inset = {18, 18, 18, 18}; }) && j.size() == 1);
+        const auto after = lines_of("story.1", "frame.1");
+        check("inset: the first line starts 18 pt down", !after.empty() && std::abs(after[0].y - (before[0].y + 18)) < 0.01,
+              std::to_string(before[0].y) + " -> " + std::to_string(after.empty() ? -1 : after[0].y));
+        double maxb = 0;
+        for (const auto& l : after) maxb = std::max(maxb, l.y + l.h);
+        check("inset: no line below the bottom inset", maxb <= tf.h - 18 + 0.01, std::to_string(maxb));
+        bool inside = true;
+        for (const auto& l : after) inside = inside && l.x >= 18 - 0.01 && (l.w <= 0 || l.x + l.w <= tf.w - 18 + 0.01);
+        check("inset: every line inside the left / right insets", inside);
+        // Columns split what is left inside the insets.
+        core::doc::edit_frames(j, d, {"frame.1"}, "Columns", [](core::Frame& f) { f.columns = 2; });
+        const auto& f2 = *d.as<core::Frame>("frame.1");
+        check("inset + columns: the second column ends at the right inset",
+              std::abs(core::column_x(f2, 1) + core::column_width(f2, 1) - (f2.w - 18)) < 1e-6 && std::abs(core::column_x(f2, 0) - 18) < 1e-9);
+        j.undo();
+        j.undo();
+        check("undo: as it was", lines_of("story.1", "frame.1").size() == before.size() &&
+                                     std::abs(lines_of("story.1", "frame.1")[0].y - before[0].y) < 1e-9);
+        bool row = false;
+        for (const auto& f : core::frame_items(d, {"frame.6"}).at(0).fields) row = row || (f.edit == "inset" && f.value == "6 pt");
+        check("inspector: the caption's Inset", row);
+        std::string err;
+        core::Doc e;
+        check("json: inset kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records() &&
+                                      e.as<core::Frame>("frame.6")->inset == core::Sides{6, 6, 6, 6}, err);
+    }
+
+    {
+        std::cout << "\n-- typed fields (s041) --\n";
+        const auto is = [](const char* t, double unit, double want) {
+            const auto v = core::parse_length(t, unit);
+            return v && std::abs(*v - want) < 1e-9;
+        };
+        check("parse: points", is("12", 1, 12) && is("12.5 pt", 1, 12.5) && is(" 9PT ", 1, 9) && is("-12", 1, -12) && is(".5", 1, 0.5));
+        check("parse: inches", is("1in", 1, 72) && is("1.5 inches", 1, 108) && is("2\"", 1, 144) && is("0.75", 72, 54));
+        check("parse: picas", is("3p6", 1, 42) && is("6p", 1, 72) && is("p6", 1, 6) && is("2pc", 1, 24) && is("-1p6", 1, -18));
+        check("parse: metric", is("25.4mm", 1, 72) && is("2.54 cm", 1, 72));
+        check("parse: not lengths", !core::parse_length("", 1) && !core::parse_length("abc", 1) && !core::parse_length("12 furlongs", 1) &&
+                                        !core::parse_length("1.2.3", 1) && !core::parse_length("Auto", 1) && !core::parse_length("p", 1));
+        check("num_text: trims", core::num_text(12) == "12" && core::num_text(12.5) == "12.5" && core::num_text(1.0 / 3) == "0.333" &&
+                                     core::num_text(-0.0001) == "0");
+        core::Doc d;
+        core::load_sample(d);
+        const auto o = core::project(d, "");
+        const auto field = [](const std::vector<core::Field>& fs, const std::string& key) -> const core::Field* {
+            for (const auto& f : fs) if (f.edit == key) return &f;
+            return nullptr;
+        };
+        const auto* ss = field(o.find("style.1")->fields, "ssize");
+        check("style Size: typed in points, its own key (not the page's \"size\")",
+              ss && ss->unit == 1 && ss->hi > 100 && !field(o.find("style.1")->fields, "size"));
+        const auto* fi = field(o.find("style.1")->fields, "findent");
+        check("First indent: typed, may hang (negative)", fi && fi->unit == 1 && fi->lo < 0);
+        const auto* mt = field(o.find("master.2")->fields, "mtop");
+        check("master margins: typed, a bare number in inches", mt && mt->unit == 72 && core::parse_length(mt->value, mt->unit));
+        const auto fr = core::frame_items(d, {"frame.6"});
+        const auto* b = field(fr.at(0).fields, "bounds");
+        check("frame bounds: X Y W H typed, inches", b && b->unit == 72 && b->cols.size() == 4);
+        check("frame inset: typed", field(fr.at(0).fields, "inset") && field(fr.at(0).fields, "inset")->unit == 1);
+        const auto two = core::frame_items(d, {"frame.1", "frame.6"});
+        std::vector<const core::Item*> sel{&two[0], &two[1]};
+        const auto* sb = field(core::shared_fields(sel), "bounds");
+        check("two frames: bounds still typed, Mixed where they differ", sb && sb->unit == 72 &&
+                                                                              sb->value.find(core::kMixed) != std::string::npos);
+        // Every typed field's shown value reads back as a length (or is a word preset: Auto, Inherit, Mixed).
+        bool reads = true;
+        std::string bad;
+        for (const auto& it : o.items())
+            for (const auto& f : it.fields)
+                if (f.unit > 0 && f.cols.empty() && f.value != "Auto" && f.value != "Inherit" && f.value != core::kMixed &&
+                    !core::parse_length(f.value, f.unit)) { reads = false; bad = f.label + "=" + f.value; }
+        check("typed values read back as lengths", reads, bad);
+    }
+
+    {
+        std::cout << "\n-- vertical justification (s042) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // The dedication's box, made tall (room to spare on any machine), three paragraphs.
+        core::doc::edit_frames(j, d, {"frame.7"}, "Resize", [](core::Frame& f) { f.h = 400; f.inset = {10, 0, 20, 0}; });
+        core::doc::edit_text(j, d, "story.3", {0, 3}, {0, 3}, "\n");
+        core::doc::edit_text(j, d, "story.3", {1, 6}, {1, 6}, "\n");
+        const auto lines = [&] {
+            for (const auto& f : L::flow_story(d, "story.3").frames) if (f.frame == "frame.7") return f.lines;
+            return std::vector<L::Line>{};
+        };
+        const auto span = [](const std::vector<L::Line>& ls) {
+            double a = 1e9, b = -1e9;
+            for (const auto& l : ls) { a = std::min(a, l.y); b = std::max(b, l.y + l.h); }
+            return std::pair{a, b};
+        };
+        check("sample: the dedication is centred", d.as<core::Frame>("frame.7")->valign == core::VAlign::Center);
+        const auto set = [&](core::VAlign v) {
+            core::doc::edit_frames(j, d, {"frame.7"}, "Vertical justification", [&](core::Frame& f) { f.valign = v; });
+            return lines();
+        };
+        const auto top = set(core::VAlign::Top);
+        const auto [t0, t1] = span(top);
+        check("top: from the top inset", top.size() >= 3 && std::abs(t0 - 10) < 0.01, std::to_string(t0));
+        const auto mid = set(core::VAlign::Center);
+        const auto [c0, c1] = span(mid);
+        check("centre: equal room above and below (inside the insets)", std::abs((c0 - 10) - (380 - c1)) < 0.01 && c0 > t0 + 1,
+              std::to_string(c0) + " / " + std::to_string(c1));
+        const auto low = set(core::VAlign::Bottom);
+        const auto [b0, b1] = span(low);
+        check("bottom: the last line ends at the bottom inset", std::abs(b1 - 380) < 0.01 && std::abs((b1 - b0) - (t1 - t0)) < 0.01);
+        const auto just = set(core::VAlign::Justify);
+        const auto [j0, j1] = span(just);
+        bool kept = just.size() == top.size();
+        for (std::size_t i = 0; kept && i < just.size(); ++i)
+            kept = just[i].para == top[i].para && just[i].start == top[i].start && just[i].y >= top[i].y - 0.01;
+        check("justify: fills from the top inset to the bottom one, the same lines", std::abs(j0 - 10) < 0.01 && std::abs(j1 - 380) < 0.01 && kept,
+              std::to_string(j0) + " / " + std::to_string(j1));
+        bool para_gaps = true;   // lines of one paragraph keep their spacing; the room goes between paragraphs
+        for (std::size_t i = 1; i < just.size(); ++i)
+            if (just[i].para == just[i - 1].para)
+                para_gaps = para_gaps && std::abs((just[i].y - just[i - 1].y) - (top[i].y - top[i - 1].y)) < 0.01;
+        check("justify: the room goes between paragraphs", para_gaps);
+        // Caret follows the moved lines.
+        const auto flow = L::flow_story(d, "story.3");
+        const auto cr = L::caret_at(d, "story.3", flow, {2, 0});
+        const L::Line* l2 = nullptr;
+        for (const auto& l : just) if (!l2 && l.para == 2) l2 = &l;
+        check("caret: on the moved line", cr.ok && l2 && std::abs(cr.y - l2->y) < l2->h, std::to_string(cr.y));
+        // Text wrap leaves it at the top.
+        core::doc::edit_frames(j, d, {"frame.7"}, "Vertical justification", [](core::Frame& f) { f.valign = core::VAlign::Bottom; });
+        check("inspector: Vertical", [&] {
+            for (const auto& f : core::frame_items(d, {"frame.7"}).at(0).fields) if (f.edit == "valign" && f.value == "Bottom") return true;
+            return false;
+        }());
+        std::string err;
+        core::Doc e;
+        check("json: valign kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        const auto opening = [&](core::Doc& doc) {
+            for (const auto& f : L::flow_story(doc, "story.1").frames) if (f.frame == "frame.1") return f.lines;
+            return std::vector<L::Line>{};
+        };
+        const auto before = opening(d);
+        core::doc::edit_frames(j, d, {"frame.1"}, "Vertical justification", [](core::Frame& f) { f.valign = core::VAlign::Bottom; });
+        const auto after = opening(d);
+        check("text wrap: the opening text (round a picture) stays at the top",
+              !before.empty() && after.size() == before.size() && std::abs(after[0].y - before[0].y) < 1e-9);
     }
 
     std::cout << "-----------------------------------------------\n";

@@ -71,6 +71,11 @@ struct Field {
     // H" over four numbers). `value` holds the values tab-separated; a
     // multi-selection says Mixed per column, not for the whole row.
     std::vector<std::string> cols;
+    // s041: a value that can be TYPED (the choices stay as presets): a
+    // length, read by parse_length with a bare number in `unit` points (1 =
+    // pt, 72 = in); 0 = not typed. What it sends is points, in [lo, hi].
+    // A compact row typed: each column edits on its own ("k:points").
+    double unit = 0, lo = 0, hi = 0;
     bool operator==(const Field&) const = default;
 };
 

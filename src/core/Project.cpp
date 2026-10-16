@@ -55,6 +55,21 @@ std::string folios(const Doc& d, const std::vector<Doc::Id>& pages) {
     return s;
 }
 
+// s041: the fields whose values can be typed -- by key: the unit a bare
+// number is in (points: 1, inches: 72) and the range it must fall in.
+void mark_typed(std::vector<Field>& fields) {
+    struct T { const char* key; double unit, lo, hi; };
+    static const T typed[] = {
+        {"ssize", 1, 0, 1296}, {"leading", 1, 0, 1296}, {"before", 1, 0, 1000}, {"after", 1, 0, 1000},
+        {"lindent", 1, 0, 1000}, {"rindent", 1, 0, 1000}, {"findent", 1, -1000, 1000},
+        {"mtop", 72, 0, 5000}, {"mbottom", 72, 0, 5000}, {"minside", 72, 0, 5000}, {"moutside", 72, 0, 5000},
+        {"mgutter", 1, 0, 500}, {"gutter", 1, 0, 500}, {"inset", 1, 0, 500}, {"wrap_off", 1, 0, 500},
+        {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000}};
+    for (auto& f : fields)
+        for (const auto& t : typed)
+            if (f.edit == t.key) { f.unit = t.unit; f.lo = t.lo; f.hi = t.hi; }
+}
+
 std::string style_name(const Doc& d, const Doc::Id& id) {
     const auto* s = d.as<Style>(id);
     return s ? s->name : "—";
@@ -193,6 +208,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         f.push_back({"Outside", in(m.margins.outside), "moutside", mc});
         f.push_back({"Based on", m.based_on.empty() ? "—" : master_label(d, m.based_on)});
         f.push_back({"Used by", n == 1 ? "1 page" : std::to_string(n) + " pages"});
+        mark_typed(f);   // s041
         o.add({mid, G::Masters, master_label(d, mid), m.folds.empty() ? "" : "Foldout", th, f});
     }
 
@@ -248,7 +264,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             if (!para) { fc.insert(fc.begin(), {"", "Inherit"}); sc.insert(sc.begin(), {"0", "Inherit"}); }
             if (!fonts) fc.clear();
             f.push_back({"Font", s.family.empty() ? "Inherit" : s.family, fc.empty() ? "" : "font", fc});
-            f.push_back({"Size", s.size > 0 ? pt(s.size) : "Inherit", "size", sc});
+            // s041: "ssize" -- "size" is the page's (its handler took this one too).
+            f.push_back({"Size", s.size > 0 ? pt(s.size) : "Inherit", "ssize", sc});
             if (para) f.push_back({"Leading", s.leading > 0 ? pt(s.leading) : "Auto", "leading", lead_ch});
             f.push_back({"Weight", s.bold ? "Bold" : "Regular", "bold", {{"0", "Regular"}, {"1", "Bold"}}});
             f.push_back({"Slant", s.italic ? "Italic" : "Roman", "italic", {{"0", "Roman"}, {"1", "Italic"}}});
@@ -285,6 +302,15 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 // s036: lines on the page's baseline grid.
                 f.push_back({"Baseline grid", s.align_grid ? "Align to grid" : "Off", "align_grid",
                              {{"0", "Off"}, {"1", "Align to grid"}}});
+                // s038: hyphenation.
+                f.push_back({"Hyphenate", s.hyphenate ? "On" : "Off", "hyphenate", {{"0", "Off"}, {"1", "On"}}});
+                // s039: keeps.
+                f.push_back({"Keep with next", s.keep_next ? "On" : "Off", "keep_next", {{"0", "Off"}, {"1", "On"}}});
+                static const std::vector<Choice> keeps{{"0", "Off"}, {"2", "2 at start and end"}, {"3", "3 at start and end"},
+                                                       {"-1", "All together"}};
+                std::string kl = "Off";
+                for (const auto& k : keeps) if (k.id == std::to_string(s.keep_lines)) kl = k.label;
+                f.push_back({"Keep lines", kl, "keep_lines", keeps});
             }
             if (para) {   // s037: built on another style; what Enter starts next
                 std::vector<Choice> base_ch{{"", "None"}}, next_ch{{"", "Same style"}};
@@ -320,6 +346,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             if (!uses) act.choices.push_back({"delete", "Delete"});
             act.buttons = true;
             f.push_back(act);
+            mark_typed(f);   // s041
             o.add({sid, G::Styles, s.name, uses ? "" : "Unused", th, f});
         }
     }
@@ -429,6 +456,7 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         // One compact row (Scott): X Y W H over their values, inches.
         Field box{"Bounds (in)", inches(f->x) + "\t" + inches(f->y) + "\t" + inches(f->w) + "\t" + inches(f->h)};
         box.cols = {"X", "Y", "W", "H"};
+        box.edit = "bounds";   // s041: each typed
         fields.push_back(box);
         std::string title = std::string(kind) + " frame";
         // s016: fill and stroke, from the swatches.
@@ -501,6 +529,19 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 fields.push_back({"Widths", shown, "widths", wc});
                 fields.push_back({"Balance", f->balance ? "On" : "Off", "balance", {{"0", "Off"}, {"1", "On"}}});
             }
+            {   // s042: where the text sits, up and down.
+                static const std::vector<Choice> va{{"0", "Top"}, {"1", "Centre"}, {"2", "Bottom"}, {"3", "Justify"}};
+                fields.push_back({"Vertical", va[static_cast<std::size_t>(f->valign)].label, "valign", va});
+            }
+            {   // s040: the text held in from the frame's edges.
+                const auto& o = f->inset;
+                const bool even = o.top == o.right && o.top == o.bottom && o.top == o.left;
+                std::vector<Choice> ic;
+                for (double v : {0.0, 3.0, 4.0, 6.0, 9.0, 12.0, 18.0, 24.0}) ic.push_back({pts(v), pts(v) + " pt"});
+                fields.push_back({"Inset", even ? pts(o.top) + " pt"
+                                                : pts(o.top) + " / " + pts(o.right) + " / " + pts(o.bottom) + " / " + pts(o.left),
+                                  "inset", ic});
+            }
             if (st) title += " \u2014 " + st->name;
         } else if (f->kind == FrameKind::Image) {
             const auto* a = d.as<Asset>(f->asset);
@@ -531,6 +572,7 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             back.buttons = true;
             fields.push_back(back);
         }
+        mark_typed(fields);   // s041
         out.push_back({id, Segment::Pages, title, "", {}, fields});
     }
     return out;
@@ -589,6 +631,7 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
         const auto* sw = d.as<Swatch>(l.color);
         out.push_back({"Size", l.size > 0 ? pt(l.size) : "Style's", "lsize", sz});
         out.push_back({"Colour", sw ? sw->name : "Style's", "lcolor", co});
+        mark_typed(out);   // s041: Size typed
         Field fx{"", "", "local", {{"bold", "Bold"}, {"italic", "Italic"}, {"clear", "Clear overrides"}}};
         fx.buttons = true;
         out.push_back(fx);

@@ -11,7 +11,9 @@
 #include "core/Outline.hpp"
 #include "widgets/Widgets.hpp"
 
+#include <gtkmm/entry.h>
 #include <sigc++/signal.h>
+#include <functional>
 
 #include <string>
 #include <vector>
@@ -34,6 +36,8 @@ public:
 
 private:
     void fill(const std::string& title, const std::string& sub, const std::vector<core::Field>& fields);
+    Gtk::Entry* typed_entry(const std::string& name, const std::string& value, double unit, double lo, double hi,
+                            std::function<void(const std::string&)> send);
 
     widgets::Label          m_title;
     widgets::Label          m_sub;

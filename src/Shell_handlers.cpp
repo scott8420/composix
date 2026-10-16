@@ -547,15 +547,27 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "color") {   // s015: a style's swatch
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Color",
                                          [&](core::Style& st) { st.color = choice; });
-        } else if (key == "font" || key == "size" || key == "leading" || key == "bold" || key == "italic" ||
+        } else if (key == "bounds") {   // s041: a frame's X / Y / W / H typed ("k:points")
+            const auto colon = choice.find(':');
+            const int k = std::stoi(choice.substr(0, colon));
+            const double v = std::stod(choice.substr(colon + 1));
+            static const char* labels[] = {"Move", "Move", "Resize", "Resize"};
+            if (k >= 0 && k < 4)
+                did = core::doc::edit_frames(m_journal, m_doc, m_inspected, labels[k], [&](core::Frame& f) {
+                    if (k == 0) f.x = v;
+                    else if (k == 1) f.y = v;
+                    else if (k == 2) f.w = std::max(1.0, v);
+                    else f.h = std::max(1.0, v);
+                });
+        } else if (key == "font" || key == "ssize" || key == "leading" || key == "bold" || key == "italic" ||
                    key == "align" || key == "before" || key == "after") {   // s011: style settings
             static const std::map<std::string, std::string> labels{
-                {"font", "Font"}, {"size", "Size"}, {"leading", "Leading"}, {"bold", "Weight"},
+                {"font", "Font"}, {"ssize", "Size"}, {"leading", "Leading"}, {"bold", "Weight"},
                 {"italic", "Slant"}, {"align", "Align"}, {"before", "Space before"}, {"after", "Space after"}};
             const double v = (key == "font") ? 0 : std::stod(choice);
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Style& s) {
                 if (key == "font") s.family = choice;
-                else if (key == "size") {
+                else if (key == "ssize") {
                     // Leading follows the size when it was the usual ratio (or auto).
                     if (s.size > 0 && s.leading > 0 && std::abs(s.leading - s.size * 1.2) < 1.5) s.leading = std::round(v * 1.2 * 2) / 2;
                     s.size = v;
@@ -582,6 +594,18 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "next_style") {   // s037
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Next style", [&](core::Style& st) {
                 if (st.kind == core::StyleKind::Paragraph) st.next = choice;
+            });
+        } else if (key == "keep_next" || key == "keep_lines") {   // s039
+            const int v = std::stoi(choice);
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "keep_next" ? "Keep with next" : "Keep lines",
+                                         [&](core::Style& st) {
+                if (st.kind != core::StyleKind::Paragraph) return;
+                if (key == "keep_next") st.keep_next = v != 0;
+                else st.keep_lines = v;
+            });
+        } else if (key == "hyphenate") {   // s038
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Hyphenate", [&](core::Style& st) {
+                if (st.kind == core::StyleKind::Paragraph) st.hyphenate = choice == "1";
             });
         } else if (key == "align_grid") {   // s036
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Align to grid", [&](core::Style& st) {
@@ -619,6 +643,16 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             });
         } else if (key == "override") {   // s025: back to the master's
             did = core::doc::remove_overrides(m_journal, m_doc, m_inspected);
+        } else if (key == "valign") {   // s042
+            const auto v = static_cast<core::VAlign>(std::clamp(std::stoi(choice), 0, 3));
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Vertical justification", [&](core::Frame& f) {
+                if (f.kind == core::FrameKind::Text) f.valign = v;
+            });
+        } else if (key == "inset") {   // s040
+            const double v = std::stod(choice);
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Text inset", [&](core::Frame& f) {
+                if (f.kind == core::FrameKind::Text) f.inset = {v, v, v, v};
+            });
         } else if (key == "wrap" || key == "wrap_off") {   // s018: text wrap
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, key == "wrap" ? "Text wrap" : "Wrap offset",
                                          [&](core::Frame& f) {

@@ -65,6 +65,8 @@ void load_sample(Doc& d) {
         Style b{"Body", StyleKind::Paragraph, 1, "Serif", 11, 14, false, false, Align::Justify};
         b.first_indent = 18;
         b.skip_after_heading = true;
+        b.hyphenate = true;   // s038: justified text hyphenates (Body First too)
+        b.keep_lines = 2;     // s039: no widows or orphans
         d.put("style.1", b);
         // s029: a chapter's first paragraph opens with a three-line drop cap.
         Style first = b;
@@ -82,6 +84,7 @@ void load_sample(Doc& d) {
     {   // s037: Enter after a chapter heading starts its first paragraph.
         Style h{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6, "swatch.3"};
         h.next = "style.10";
+        h.keep_next = true;   // s039: never alone at a column's foot
         d.put("style.2", h);
     }
     d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
@@ -146,10 +149,15 @@ void load_sample(Doc& d) {
         cap.stroke_w = 0.5;
         cap.fill = "swatch.3";     // s021: a 15% tint of the spot ink behind it
         cap.fill_tint = 0.15;
+        cap.inset = {6, 6, 6, 6};  // s040: the words clear of the rule
         d.put("frame.6", cap);
     }
     // Dedication, ornaments, sources.
-    d.put("frame.7", Frame{pg[1], FrameKind::Text, m, 3 * in, tw, 1 * in, 0, 1, "story.3", "", ""});
+    {   // The dedication, centred in its box (s042).
+        Frame ded{pg[1], FrameKind::Text, m, 3 * in, tw, 1 * in, 0, 1, "story.3", "", ""};
+        ded.valign = VAlign::Center;
+        d.put("frame.7", ded);
+    }
     d.put("frame.8", Frame{pg[1], FrameKind::Image, 2.75 * in, 4.25 * in, 0.5 * in, 0.5 * in, 0, 2, "", "", "asset.3"});
     d.put("frame.9", Frame{pg[15], FrameKind::Image, 2.75 * in, 7.5 * in, 0.5 * in, 0.5 * in, 0, 2, "", "", "asset.3"});
     {   // Sources in two balanced columns (s012).

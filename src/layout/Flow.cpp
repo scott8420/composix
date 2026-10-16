@@ -1,8 +1,10 @@
 #include "layout/Flow.hpp"
+#include "core/Hyphen.hpp"
 
 #include <pango/pangocairo.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <memory>
 
@@ -226,6 +228,33 @@ std::vector<Span> free_spans(const std::vector<core::WrapRect>& wraps, double x0
 
 // Where a body line's baseline sits in its line box `lead` tall (as
 // walk_frame places it: the line's logical box centred in the leading).
+// s038: a line set alone from `pos` took `took` bytes and stopped before a
+// word that didn't fit. The most of that word that does fit with a hyphen,
+// at one of its hyphenation points: the line's new length (0: none fits,
+// or the line didn't stop at a word).
+int hyphen_cut(const core::Doc& d, const core::Para& para, const core::Style& style, int pos, int took, double w,
+               double indent) {
+    const std::string& t = para.text;
+    const int n = static_cast<int>(t.size());
+    const int a = pos + took;   // where the next line would start
+    if (took <= 0 || a >= n || a <= pos) return 0;
+    const auto letter = [&](int i) { return i >= 0 && i < n && std::isalpha(static_cast<unsigned char>(t[static_cast<std::size_t>(i)])); };
+    if (!letter(a) || t[static_cast<std::size_t>(a - 1)] != ' ') return 0;   // not a break before a word
+    int b = a;
+    while (letter(b)) ++b;
+    if (b < n && static_cast<unsigned char>(t[static_cast<std::size_t>(b)]) >= 0x80) return 0;   // a word going on in other letters
+    const auto at = core::hyphen_points(std::string_view(t).substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)));
+    for (auto k = at.rbegin(); k != at.rend(); ++k) {
+        std::string s = t.substr(static_cast<std::size_t>(pos), static_cast<std::size_t>(a + *k - pos)) + "-";
+        auto lay = make_layout(style, s.c_str(), static_cast<int>(s.size()), 1e6, false, indent);
+        apply_runs(lay.get(), d, para, pos);
+        PangoRectangle ext;
+        pango_layout_line_get_extents(pango_layout_get_line_readonly(lay.get(), 0), nullptr, &ext);
+        if ((ext.x + ext.width) / static_cast<double>(PANGO_SCALE) + indent <= w + 0.01) return a + *k - pos;
+    }
+    return 0;
+}
+
 double baseline_in_box(const core::Style& style, double lead) {
     auto probe = make_layout(style, "X", 1, 1e6, false);
     PangoLayoutIter* pit = pango_layout_get_iter(probe.get());
@@ -241,6 +270,97 @@ bool touches(const std::vector<core::WrapRect>& wraps, double x0, double x1) {
     return std::any_of(wraps.begin(), wraps.end(), [&](const core::WrapRect& r) { return r.x1 > x0 && r.x0 < x1; });
 }
 
+// s039: how many lines the rest of a paragraph (from byte `from`, not its
+// first line) takes at width `w` -- as the flow would set it.
+int lines_left(const core::Doc& d, const core::Para& para, const core::Style& style, int from, double w) {
+    const int len = static_cast<int>(para.text.size());
+    if (from >= len) return 0;
+    if (!style.hyphenate) {
+        auto lay = make_layout(style, para.text.c_str() + from, len - from, w, false);
+        apply_runs(lay.get(), d, para, from);
+        return pango_layout_get_line_count(lay.get());
+    }
+    int n = 0;
+    for (int pos = from; pos < len && n < 1000; ++n) {
+        auto lay = make_layout(style, para.text.c_str() + pos, len - pos, w, false);
+        apply_runs(lay.get(), d, para, pos);
+        int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
+        if (const int cut = hyphen_cut(d, para, style, pos, took, w, 0); cut > 0) took = cut;
+        pos += std::max(1, took);
+    }
+    return n;
+}
+
+// s039: keeps, applied where column `col` broke before paragraph `c.p`
+// (byte `c.start`). Lines are sent on to the next column -- never all of
+// a column's lines (a rule that can't be kept here is let go).
+//   * Keep lines N at a paragraph's start: fewer than N of a paragraph that
+//     starts here (or fewer than its drop cap's lines) -> the whole of it
+//     goes on. -1 (All together): any split of one that starts here.
+//   * N at its end: fewer than N lines left for the next column -> lines go
+//     on with them, if N stay here at its start (else the whole of it).
+//   * Keep with next: a paragraph ending here whose next starts in the next
+//     column goes on with it (and one before it that keeps with it, too).
+void apply_keeps(const core::Doc& d, const core::Story& st, const core::Frame& fr, int col, Cursor& c, FrameText& ft) {
+    const int paras = static_cast<int>(st.paras.size());
+    if (c.p >= paras) return;
+    auto& L = ft.lines;
+    std::size_t begin = L.size();
+    while (begin > 0 && L[begin - 1].col == col) --begin;
+    const auto here_of = [&](int p) {   // the column's lines of paragraph p: [first, end)
+        std::size_t a = L.size();
+        while (a > begin && L[a - 1].para == p) --a;
+        return a;
+    };
+    const auto send_on = [&](std::size_t from_line, int p, int start) {
+        L.erase(L.begin() + static_cast<std::ptrdiff_t>(from_line), L.end());
+        c.p = p;
+        c.start = start;
+    };
+    // The paragraph split here.
+    if (c.start > 0) {
+        const int q = c.p;
+        const auto style = style_of(d, st.paras[static_cast<std::size_t>(q)].style);
+        const std::size_t a = here_of(q);
+        if (style.keep_lines != 0 && a < L.size()) {
+            const bool starts_here = L[a].start == 0;
+            int here = 0;
+            for (std::size_t i = a; i < L.size(); ++i) here += L[i].cap <= 0;
+            const int need = std::max(style.keep_lines < 0 ? here + 1 : style.keep_lines,
+                                      starts_here && style.drop_lines >= 2 ? style.drop_lines : 0);
+            const bool others = a > begin;
+            if (starts_here && here < need) {
+                if (others) send_on(a, q, 0);
+            } else if (style.keep_lines > 0) {
+                const Indents ind = indents_of(d, style, st, q);
+                const double w = std::max(1.0, core::column_width(fr, col) - ind.left - ind.right);
+                const int rest = lines_left(d, st.paras[static_cast<std::size_t>(q)], style, c.start, w);
+                if (rest < style.keep_lines) {
+                    const int pull = style.keep_lines - rest;
+                    const int floor = starts_here ? need : 1;
+                    if (here - pull >= floor) {
+                        std::size_t cut = L.size();
+                        for (int k = 0; k < pull; ++k) {
+                            do --cut; while (cut > a && L[cut].cap > 0);
+                        }
+                        send_on(cut, q, L[cut].start);
+                    } else if (starts_here && others) {
+                        send_on(a, q, 0);
+                    }
+                }
+            }
+        }
+    }
+    // Keep with next: the paragraph before one that starts in the next column.
+    while (c.start == 0 && c.p > 0) {
+        const int prev = c.p - 1;
+        const std::size_t a = here_of(prev);
+        if (a == L.size() || L[a].start != 0 || a == begin) break;   // not wholly here, or all the column holds
+        if (!style_of(d, st.paras[static_cast<std::size_t>(prev)].style).keep_next) break;
+        send_on(a, prev, 0);
+    }
+}
+
 // Fill one frame's columns from `c`, each column at most `hmax` tall. True
 // when the story ended inside this frame.
 bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr, const std::vector<core::WrapRect>& wraps,
@@ -252,13 +372,14 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
     for (int col = 0; col < n; ++col) {
         const double cw = core::column_width(fr, col), cx = core::column_x(fr, col);
         const bool wrapped = touches(wraps, cx, cx + cw);
-        double y = 0;
+        const double top = std::max(0.0, fr.inset.top);   // s040: the text starts below the top inset
+        double y = top;
         while (c.p < paras) {
             const auto& para = st.paras[static_cast<std::size_t>(c.p)];
             const auto style = style_of(d, para.style);
             const double lead = leading_of(style);
             // s011: space before a paragraph -- not at the top of a column.
-            const double before = (c.start == 0 && y > 0) ? style.space_before : 0;
+            const double before = (c.start == 0 && y > top) ? style.space_before : 0;
             const int len = static_cast<int>(para.text.size());
             const Indents ind = indents_of(d, style, st, c.p);   // s026
             double yy = y + before;
@@ -280,7 +401,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             if (drop) {
                 const int n = std::min(style.drop_lines, 8);
                 yy = snap(yy);
-                if (yy + n * lead > hmax + 0.01 && y > 0) break;   // no room for it here: the next column
+                if (yy + n * lead > hmax + 0.01 && y > top) break;   // no room for it here: the next column
                 const char* t = para.text.c_str();
                 int k = 0;
                 for (int ch = 0; ch < std::max(1, style.drop_chars) && k < len; ++ch)
@@ -302,7 +423,9 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 cap_bottom = yy + n * lead;
                 c.start = k;
             }
-            if (wrapped || drop) {   // s018: line by line, each at the width the wraps leave
+            // s038: a hyphenating paragraph is set line by line too (each
+            // line may end inside a word).
+            if (wrapped || drop || style.hyphenate) {   // s018: line by line, each at the width the wraps leave
                 const auto& wraps_here = drop ? local : wraps;
                 int pos = c.start;
                 bool ended = false, full = false;
@@ -323,8 +446,12 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                         auto lay = make_layout(style, para.text.c_str() + pos, len - pos, w, false,
                                                pos == 0 ? std::max(0.0, ind.first) : 0);
                         apply_runs(lay.get(), d, para, pos);
-                        const int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
+                        int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
+                        const int cut = style.hyphenate ? hyphen_cut(d, para, style, pos, took, w,
+                                                                     pos == 0 ? std::max(0.0, ind.first) : 0) : 0;
+                        if (cut > 0) took = cut;
                         ft.lines.push_back({c.p, pos, pos + took, yy, lead, col, x0, w});
+                        ft.lines.back().hyphen = cut > 0;
                         pos += took;
                         if (pos >= len) { ended = true; break; }
                     }
@@ -365,8 +492,54 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             break;
         }
         if (c.p >= paras) return true;
+        apply_keeps(d, st, fr, col, c, ft);   // s039
     }
     return false;
+}
+}  // namespace
+
+namespace {
+// s042: a frame's lines moved down its height, column by column: Centre
+// and Bottom by the room left below them; Justify shares that room out
+// between paragraphs (between lines, with one paragraph). Not where it
+// would undo what placed them: text wrap, balanced columns, baseline grid.
+void vertical_justify(const core::Doc& d, const core::Story& st, const core::Frame& fr,
+                      const std::vector<core::WrapRect>& wraps, FrameText& ft) {
+    if (fr.valign == core::VAlign::Top || ft.lines.empty() || fr.kind != core::FrameKind::Text) return;
+    if (!wraps.empty() || (fr.balance && core::column_count(fr) > 1)) return;
+    if (fr.rot == 0 && core::baseline_grid(d, fr.owner).step > 0)
+        for (const auto& l : ft.lines)
+            if (l.para < static_cast<int>(st.paras.size()) &&
+                style_of(d, st.paras[static_cast<std::size_t>(l.para)].style).align_grid) return;
+    const double bottom = fr.h - std::max(0.0, fr.inset.bottom);
+    for (int col = 0; col < core::column_count(fr); ++col) {
+        std::vector<Line*> ls;
+        double last = 0;
+        bool cap = false;
+        for (auto& l : ft.lines)
+            if (l.col == col) { ls.push_back(&l); last = std::max(last, l.y + l.h); cap = cap || l.cap > 0; }
+        const double room = bottom - last;
+        if (ls.empty() || room <= 0.01) continue;
+        const auto shift = [](Line* l, double dy) { l->y += dy; if (l->cap > 0) l->base += dy; };
+        if (fr.valign != core::VAlign::Justify) {
+            const double dy = fr.valign == core::VAlign::Center ? room / 2 : room;
+            for (auto* l : ls) shift(l, dy);
+            continue;
+        }
+        // Justify: the gaps -- before each paragraph that starts after the
+        // column's first line; else (one paragraph) before each line.
+        int gaps = 0;
+        for (std::size_t i = 1; i < ls.size(); ++i) gaps += ls[i]->para != ls[i - 1]->para;
+        if (gaps > 0) {
+            int k = 0;
+            for (std::size_t i = 0; i < ls.size(); ++i) {
+                if (i > 0 && ls[i]->para != ls[i - 1]->para) ++k;
+                shift(ls[i], room * k / gaps);
+            }
+        } else if (!cap && ls.size() > 1) {
+            for (std::size_t i = 0; i < ls.size(); ++i) shift(ls[i], room * static_cast<double>(i) / static_cast<double>(ls.size() - 1));
+        }
+    }
 }
 }  // namespace
 
@@ -389,10 +562,11 @@ StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::St
         const auto& fr = *d.as<core::Frame>(chain[fi]);
         const Cursor at = c;
         const auto wraps = core::wrap_rects(d, chain[fi]);
-        done = fill_frame(d, *st, fr, wraps, c, fr.h, out.frames[fi]);
+        const double floor = fr.h - std::max(0.0, fr.inset.bottom);   // s040: above the bottom inset
+        done = fill_frame(d, *st, fr, wraps, c, floor, out.frames[fi]);
         if (done && fr.balance && core::column_count(fr) > 1) {
             // The shortest column height that still holds the rest.
-            double lo = 0, hi = fr.h;
+            double lo = std::max(0.0, fr.inset.top), hi = floor;
             for (int k = 0; k < 24 && hi - lo > 0.25; ++k) {
                 const double mid = (lo + hi) / 2;
                 Cursor t = at;
@@ -403,6 +577,7 @@ StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::St
             out.frames[fi].lines.clear();
             fill_frame(d, *st, fr, wraps, c, hi, out.frames[fi]);
         }
+        vertical_justify(d, *st, fr, wraps, out.frames[fi]);   // s042
     }
     for (const auto& ft : out.frames) out.lines += static_cast<int>(ft.lines.size());
     out.overset = !done;
@@ -506,7 +681,14 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
         const double cap = ft->lines[i].cap;
         core::Style cs = style;
         if (cap > 0) { cs.size = cap; cs.leading = 0; cs.tabs.clear(); }
+        // s038: a hyphenated line: its words to the break, then the hyphen
+        // (justified: it is not the paragraph's last line).
+        const std::string hy = ft->lines[i].hyphen ? text.substr(static_cast<std::size_t>(from),
+                                                                 static_cast<std::size_t>(ft->lines[i].end - from)) + "-"
+                                                   : std::string{};
         auto lay = cap > 0 ? make_layout(cs, text.c_str() + from, ft->lines[i].end - from, 1e6, false)
+                 : !hy.empty() ? make_layout(style, hy.c_str(), static_cast<int>(hy.size()), ft->lines[i].w, true,
+                                             from == 0 ? std::max(0.0, ind.first) : 0)
                            : make_layout(style, text.c_str() + from, static_cast<int>(text.size()) - from,
                                          solo ? ft->lines[i].w : g.width, continues,
                                          solo ? (from == 0 ? std::max(0.0, ind.first) : 0) : g.indent);

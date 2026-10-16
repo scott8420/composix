@@ -501,6 +501,18 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
             cr->stroke();
             cr->restore();
         }
+        // s040: the inset -- where the text area sits inside the frame.
+        if (const auto& in = f.inset; !(in == core::Sides{})) {
+            cr->save();
+            std::vector<double> dash{2, 3};
+            cr->set_dash(dash, 0);
+            cr->set_source_rgba(0.45, 0.55, 0.7, 0.4 * dim);
+            const double x0 = std::round(r.x + std::max(0.0, in.left) * s) + 0.5, y0 = std::round(r.y + std::max(0.0, in.top) * s) + 0.5;
+            const double x1 = std::round(r.x + (f.w - std::max(0.0, in.right)) * s) + 0.5;
+            const double y1 = std::round(r.y + (f.h - std::max(0.0, in.bottom)) * s) + 0.5;
+            if (x1 > x0 && y1 > y0) { cr->rectangle(x0, y0, x1 - x0, y1 - y0); cr->stroke(); }
+            cr->restore();
+        }
         // Thread ports: in (top-left), out (bottom-right); filled = linked.
         // The last frame of an overset story shows the red + instead.
         const auto [at, total] = core::thread_place(m_doc, id);

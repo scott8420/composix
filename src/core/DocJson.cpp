@@ -61,6 +61,8 @@ json to(const Record& r) {
                  {"side", en(v.side)}, {"overrides", v.overrides},
                  {"wrap", en(v.wrap)},
                  {"wrap_off", {v.wrap_off.top, v.wrap_off.right, v.wrap_off.bottom, v.wrap_off.left}}};
+            if (v.valign != VAlign::Top) j["valign"] = en(v.valign);   // s042
+            if (!(v.inset == Sides{})) j["inset"] = {v.inset.top, v.inset.right, v.inset.bottom, v.inset.left};   // s040
         } else if constexpr (std::is_same_v<T, Story>) {
             json paras = json::array();
             for (const auto& p : v.paras) {
@@ -87,7 +89,8 @@ json to(const Record& r) {
                  {"color_tint", v.color_tint},
                  {"left_indent", v.left_indent}, {"right_indent", v.right_indent}, {"first_indent", v.first_indent},
                  {"skip_after_heading", v.skip_after_heading},
-                 {"drop_lines", v.drop_lines}, {"drop_chars", v.drop_chars}, {"align_grid", v.align_grid}};
+                 {"drop_lines", v.drop_lines}, {"drop_chars", v.drop_chars}, {"align_grid", v.align_grid}, {"hyphenate", v.hyphenate},
+                 {"keep_next", v.keep_next}, {"keep_lines", v.keep_lines}};
             if (!v.tabs.empty()) {
                 json tabs = json::array();
                 for (const auto& t : v.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
@@ -193,9 +196,14 @@ std::optional<Record> from(const json& j) {
         v.side = de(j, "side", Side::Any);
         v.overrides = val<std::string>(j, "overrides", "");
         v.wrap = de(j, "wrap", Wrap::None);
+        v.valign = de(j, "valign", VAlign::Top);   // s042
         if (j.contains("wrap_off") && j["wrap_off"].is_array() && j["wrap_off"].size() == 4) {
             const auto& a = j["wrap_off"];
             v.wrap_off = {a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>()};
+        }
+        if (j.contains("inset") && j["inset"].is_array() && j["inset"].size() == 4) {   // s040
+            const auto& a = j["inset"];
+            v.inset = {a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>()};
         }
         return v;
     }
@@ -241,6 +249,9 @@ std::optional<Record> from(const json& j) {
         v.drop_lines = val(j, "drop_lines", 0);
         v.drop_chars = val(j, "drop_chars", 1);
         v.align_grid = val(j, "align_grid", false);   // s036
+        v.hyphenate = val(j, "hyphenate", false);     // s038
+        v.keep_next = val(j, "keep_next", false);     // s039
+        v.keep_lines = val(j, "keep_lines", 0);
         if (j.contains("tabs") && j["tabs"].is_array())
             for (const auto& t : j["tabs"])
                 v.tabs.push_back({val(t, "pos", 0.0), de(t, "align", TabAlign::Left), val<std::string>(t, "leader", "")});

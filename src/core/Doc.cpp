@@ -192,6 +192,54 @@ std::string format_folio(int n, Numbering how) {
     return std::to_string(n);
 }
 
+std::optional<double> parse_length(std::string_view text, double unit) {
+    std::string t;
+    for (char c : text) if (!std::isspace(static_cast<unsigned char>(c))) t += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (t.empty()) return std::nullopt;
+    std::size_t i = 0;
+    const auto number = [&](double& out) {
+        const std::size_t a = i;
+        if (i < t.size() && (t[i] == '-' || t[i] == '+')) ++i;
+        bool digits = false;
+        while (i < t.size() && std::isdigit(static_cast<unsigned char>(t[i]))) { ++i; digits = true; }
+        if (i < t.size() && t[i] == '.') {
+            ++i;
+            while (i < t.size() && std::isdigit(static_cast<unsigned char>(t[i]))) { ++i; digits = true; }
+        }
+        if (!digits) { i = a; return false; }
+        out = std::stod(t.substr(a, i - a));
+        return true;
+    };
+    double v = 0;
+    const bool lead = number(v);
+    std::string rest = t.substr(i);
+    // Picas: "3p6", "3p", "p6".
+    if (!rest.empty() && rest[0] == 'p' && rest.rfind("pt", 0) != 0 && rest.rfind("pc", 0) != 0 && rest.rfind("pica", 0) != 0) {
+        ++i;
+        double pts = 0;
+        const bool tail = number(pts);
+        if (i != t.size() || (!lead && !tail)) return std::nullopt;
+        if (lead && v < 0) pts = -pts;
+        return (lead ? v : 0) * 12 + pts;
+    }
+    if (!lead) return std::nullopt;
+    static const std::pair<const char*, double> units[] = {
+        {"", -1}, {"pt", 1}, {"pts", 1}, {"point", 1}, {"points", 1}, {"in", 72}, {"inch", 72}, {"inches", 72},
+        {"\"", 72}, {"mm", 72 / 25.4}, {"cm", 72 / 2.54}, {"pc", 12}, {"pica", 12}, {"picas", 12}};
+    for (const auto& [name, k] : units)
+        if (rest == name) return v * (k < 0 ? unit : k);
+    return std::nullopt;
+}
+
+std::string num_text(double v) {
+    char buf[48];
+    std::snprintf(buf, sizeof buf, "%.3f", std::round(v * 1000) / 1000);
+    std::string s = buf;
+    while (!s.empty() && s.back() == '0') s.pop_back();
+    if (!s.empty() && s.back() == '.') s.pop_back();
+    return s == "-0" ? "0" : s;
+}
+
 std::string inches(double pt) {
     char buf[32];
     std::snprintf(buf, sizeof buf, "%.3f", pt / kPt);
@@ -251,13 +299,14 @@ double column_width(const Frame& f, int col) {
     const auto w = column_weights(f, n);
     double sum = 0;
     for (double v : w) sum += v;
-    const double room = std::max(1.0 * n, f.w - g * (n - 1));
+    // s040: inside the frame's left / right insets.
+    const double room = std::max(1.0 * n, f.w - std::max(0.0, f.inset.left) - std::max(0.0, f.inset.right) - g * (n - 1));
     return std::max(1.0, room * w[static_cast<std::size_t>(std::clamp(col, 0, n - 1))] / sum);
 }
 double column_x(const Frame& f, int col) {
     const int n = column_count(f);
     const double g = n > 1 ? std::max(0.0, f.gutter) : 0;
-    double x = 0;
+    double x = std::max(0.0, f.inset.left);   // s040
     for (int c = 0; c < std::clamp(col, 0, n - 1); ++c) x += column_width(f, c) + g;
     return x;
 }
@@ -1162,6 +1211,9 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("drop_lines", "Drop cap", drop_lines),
         COMPOSIX_SF("drop_chars", "Drop letters", drop_chars),
         COMPOSIX_SF("align_grid", "Baseline grid", align_grid),
+        COMPOSIX_SF("hyphenate", "Hyphenate", hyphenate),
+        COMPOSIX_SF("keep_next", "Keep with next", keep_next),
+        COMPOSIX_SF("keep_lines", "Keep lines", keep_lines),
     };
     return fs;
 }

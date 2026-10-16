@@ -37,6 +37,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <string_view>
 #include <string>
 #include <variant>
 #include <vector>
@@ -57,6 +58,7 @@ enum class ImageFit  { Fill, Fit, Custom };   // s009: cover the frame (cropped)
 // down both sides of it; Jump: text skips the band it covers, no lines
 // beside it.
 enum class Wrap      { None, Around, Jump };
+enum class VAlign    { Top, Center, Bottom, Justify };   // s042: a text frame's text, up and down
 
 // Four distances, one per side (s018: a frame's text-wrap offset).
 struct Sides {
@@ -148,6 +150,8 @@ struct Frame {
     std::string overrides;
     Wrap        wrap = Wrap::None;       // s018: pushes text in other frames aside
     Sides       wrap_off;                // points beyond the frame's edges
+    Sides       inset;                   // s040: text -- held in from the frame's edges (points)
+    VAlign      valign = VAlign::Top;    // s042: text -- where it sits in the frame's height
     bool operator==(const Frame&) const = default;
 };
 
@@ -219,6 +223,16 @@ struct Style {
     // s036: each line's baseline on its page's baseline grid (when the
     // page's master has one), the lines moved down to the next grid line.
     bool        align_grid = false;
+    // s038: break words at the line's end (TeX US English patterns), so
+    // justified lines space evenly. Words of 5+ letters, 2 before and 3 after.
+    bool        hyphenate = false;
+    // s039: keeps, where a column breaks. `keep_next`: this paragraph's
+    // last line stays in the same column as the next paragraph's first
+    // (headings). `keep_lines`: 0 none; N (2, 3): at least N lines at a
+    // paragraph's start and at its end (no orphans / widows); -1 the whole
+    // paragraph together.
+    bool        keep_next = false;
+    int         keep_lines = 0;
     // s037: styles built on styles (paragraph styles). `based_on`: a style
     // whose settings this one takes, except those it sets itself (`own`,
     // keys from style_field_keys(), sorted). The inherited values are kept
@@ -343,6 +357,12 @@ using DocJournal = Journal<Doc>;
 // Display helpers.
 std::string format_folio(int n, Numbering how);
 std::string inches(double pt);                          // 432 -> "6", 423 -> "5.875"
+// s041: a typed length in points: "12", "12.5 pt", "1in", "1\"", "3p6" (3
+// picas 6 points), "6p", "10 mm", "1.5cm". A bare number is in `unit`
+// points (1: points, 72: inches). Nothing (nullopt) if it isn't a length.
+std::optional<double> parse_length(std::string_view text, double unit = 1);
+// A number for a verb: 12 -> "12", 12.5 -> "12.5" (to 1/1000).
+std::string num_text(double v);
 std::string size_text(double w, double h, std::size_t folds);   // "17.75 × 9 in (3-panel)"
 std::string numbering_text(Numbering n);
 std::string side_text(Side s);

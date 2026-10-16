@@ -51,6 +51,9 @@ struct Line {
     // its baseline (frame coordinates: the Nth line's).
     double cap   = 0;
     double base  = 0;
+    // s038: the line ends inside a word, at a hyphenation point: a hyphen
+    // is drawn after it (not in the text). Always a line set on its own.
+    bool   hyphen = false;
 };
 
 struct FrameText {
