@@ -85,6 +85,7 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
 struct Indents { double left = 0, right = 0, first = 0; };
 Indents indents_of(const core::Doc& d, const core::Style& st, const core::Story& s, int p) {
     Indents in{std::max(0.0, st.left_indent), std::max(0.0, st.right_indent), st.first_indent};
+    if (st.list.type != core::ListType::None) in.first = 0;   // s045: a list's first line starts with the rest (its marker hangs)
     if (st.skip_after_heading) {
         bool heading = p == 0;   // the story's start counts as one
         if (p > 0) {
@@ -617,6 +618,8 @@ struct Placed {
     double           base;     // its baseline, frame coords
     std::vector<LeaderGap> leaders = {};
     const core::Style*     style = nullptr;
+    std::string            marker = {};    // s045: a list's bullet / number, before this (first) line
+    double                 marker_x = 0;   // its left, frame coords
 };
 
 // s026: the tabs on a placed line whose stop has a leader: their gaps.
@@ -718,8 +721,16 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
             const double x = logical.x / static_cast<double>(PANGO_SCALE);
             const auto& ln = ft->lines[k];
             PangoLayoutLine* pll = pango_layout_iter_get_line_readonly(it);
+            // s045: a list paragraph's first line carries its marker, hung left of
+            // the text (not past the column's edge).
+            std::string mk;
+            double mx = 0;
+            if (ln.start == 0 && ln.cap <= 0 && style.list.type != core::ListType::None) {
+                mk = core::doc::list_marker(d, *st, p);
+                mx = std::max(ln.x - std::max(0.0, style.list.hang), ln.x - std::max(0.0, ind.left));
+            }
             f(Placed{&ln, lay.get(), pll, from, ln.x + x, ln.cap > 0 ? ln.base : ln.y + (ln.h - h) / 2 + (bl - top),
-                     leader_gaps(lay.get(), pll, style, ln.x), &style});
+                     leader_gaps(lay.get(), pll, style, ln.x), &style, mk, mx});
             if (!pango_layout_iter_next_line(it)) break;
         }
         pango_layout_iter_free(it);
@@ -799,6 +810,11 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
                 cairo_move_to(cr, ox + x, oy + pl.base);
                 pango_cairo_show_layout_line(cr, l);
             });
+        if (!pl.marker.empty()) {   // s045: the bullet / number, in the paragraph's colour
+            auto ml = make_layout(*pl.style, pl.marker.c_str(), static_cast<int>(pl.marker.size()), 1e6, false);
+            cairo_move_to(cr, ox + pl.marker_x, oy + pl.base);
+            pango_cairo_show_layout_line(cr, pango_layout_get_line_readonly(ml.get(), 0));
+        }
     }, text);
     cairo_restore(cr);
 }
@@ -852,6 +868,10 @@ void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& 
             leader_lines(*pl.style, g, [&](PangoLayoutLine* l, double x) {
                 f(LineVisit{l, x, pl.base, pl.line->para, -1});
             });
+        if (!pl.marker.empty()) {   // s045: a list's marker (from = -2)
+            auto ml = make_layout(*pl.style, pl.marker.c_str(), static_cast<int>(pl.marker.size()), 1e6, false);
+            f(LineVisit{pango_layout_get_line_readonly(ml.get(), 0), pl.marker_x, pl.base, pl.line->para, -2});
+        }
     }, text);
 }
 

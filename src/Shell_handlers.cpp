@@ -595,6 +595,19 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Next style", [&](core::Style& st) {
                 if (st.kind == core::StyleKind::Paragraph) st.next = choice;
             });
+        } else if (key == "list_type" || key == "list_bullet" || key == "list_num" || key == "list_hang") {   // s045
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "list_type" ? "List" : key == "list_bullet" ? "Bullet"
+                                                                       : key == "list_num" ? "Numbers" : "Hang",
+                                         [&](core::Style& st) {
+                if (st.kind != core::StyleKind::Paragraph) return;
+                if (key == "list_type") {
+                    st.list.type = static_cast<core::ListType>(std::clamp(std::stoi(choice), 0, 2));
+                    // Room for the marker: the text in from the column by the hang.
+                    if (st.list.type != core::ListType::None && st.left_indent < st.list.hang) st.left_indent = st.list.hang;
+                } else if (key == "list_bullet") st.list.bullet = choice;
+                else if (key == "list_num") st.list.numbering = static_cast<core::Numbering>(std::clamp(std::stoi(choice), 0, 4));
+                else st.list.hang = std::stod(choice);
+            });
         } else if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {   // s044: paragraph rules
             const bool above = key[5] == 'a';
             const char what = key.back();

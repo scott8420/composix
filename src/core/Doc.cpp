@@ -1217,6 +1217,7 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("start", "Start", start),
         COMPOSIX_SF("rule_above", "Rule above", rule_above),
         COMPOSIX_SF("rule_below", "Rule below", rule_below),
+        COMPOSIX_SF("list", "List", list),
     };
     return fs;
 }
@@ -1300,10 +1301,11 @@ std::vector<Doc::Id> style_descendants(const Doc& d, const Doc::Id& style) {
 
 bool can_base_on(const Doc& d, const Doc::Id& style, const Doc::Id& base) {
     const auto* s = d.as<Style>(style);
-    if (!s || s->kind != StyleKind::Paragraph) return false;
+    if (!s) return false;
     if (base.empty()) return true;
     const auto* b = d.as<Style>(base);
-    if (!b || b->kind != StyleKind::Paragraph || base == style) return false;
+    // s046: a character style on a character style, a paragraph style on a paragraph style.
+    if (!b || b->kind != s->kind || base == style) return false;
     const auto ds = style_descendants(d, style);
     return std::find(ds.begin(), ds.end(), base) == ds.end();
 }
@@ -1335,6 +1337,26 @@ bool reset_to_base(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
         }
         write_through(d, styles);
     });
+}
+
+int list_number(const Story& s, int para) {
+    if (para < 0 || para >= static_cast<int>(s.paras.size())) return 0;
+    const auto& style = s.paras[static_cast<std::size_t>(para)].style;
+    int n = 1;
+    for (int p = para - 1; p >= 0 && s.paras[static_cast<std::size_t>(p)].style == style; --p) ++n;
+    return n;
+}
+
+std::string list_marker(const Doc& d, const Story& s, int para) {
+    if (para < 0 || para >= static_cast<int>(s.paras.size())) return {};
+    const auto* st = d.as<Style>(s.paras[static_cast<std::size_t>(para)].style);
+    if (!st || st->kind != StyleKind::Paragraph) return {};
+    switch (st->list.type) {
+    case ListType::None:   return {};
+    case ListType::Bullet: return st->list.bullet;
+    case ListType::Number: return format_folio(list_number(s, para), st->list.numbering) + st->list.after;
+    }
+    return {};
 }
 
 Doc::Id next_style_of(const Doc& d, const Doc::Id& style) {

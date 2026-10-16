@@ -65,7 +65,7 @@ void mark_typed(std::vector<Field>& fields) {
         {"mtop", 72, 0, 5000}, {"mbottom", 72, 0, 5000}, {"minside", 72, 0, 5000}, {"moutside", 72, 0, 5000},
         {"mgutter", 1, 0, 500}, {"gutter", 1, 0, 500}, {"inset", 1, 0, 500}, {"wrap_off", 1, 0, 500},
         {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
-        {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500}};
+        {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500}};
     for (auto& f : fields)
         for (const auto& t : typed)
             if (f.edit == t.key) { f.unit = t.unit; f.lo = t.lo; f.hi = t.hi; }
@@ -316,6 +316,26 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 static const std::vector<Choice> starts{{"0", "Anywhere"}, {"1", "Next column"}, {"2", "Next frame"},
                                                         {"3", "Next page"}, {"4", "Next right-hand page"}};
                 f.push_back({"Start", starts[static_cast<std::size_t>(s.start)].label, "pstart", starts});
+                // s045: bullets and numbering.
+                static const std::vector<Choice> lt{{"0", "None"}, {"1", "Bullets"}, {"2", "Numbers"}};
+                f.push_back({"List", lt[static_cast<std::size_t>(s.list.type)].label, "list_type", lt});
+                if (s.list.type == ListType::Bullet) {
+                    static const std::vector<Choice> bl{{"\u2022", "\u2022  Bullet"}, {"\u2013", "\u2013  Dash"}, {"\u25AA", "\u25AA  Square"},
+                                                        {"\u25E6", "\u25E6  Circle"}, {"\u2713", "\u2713  Check"}, {"\u2605", "\u2605  Star"}};
+                    std::string shown = s.list.bullet;
+                    for (const auto& c : bl) if (c.id == s.list.bullet) shown = c.label;
+                    f.push_back({"Bullet", shown, "list_bullet", bl});
+                }
+                if (s.list.type == ListType::Number) {
+                    static const std::vector<Choice> nl{{"0", "1. 2. 3."}, {"1", "i. ii. iii."}, {"2", "I. II. III."},
+                                                        {"3", "a. b. c."}, {"4", "A. B. C."}};
+                    f.push_back({"Numbers", nl[static_cast<std::size_t>(s.list.numbering)].label, "list_num", nl});
+                }
+                if (s.list.type != ListType::None) {
+                    std::vector<Choice> hc;
+                    for (double v : {9.0, 12.0, 14.0, 18.0, 24.0, 36.0}) hc.push_back({pts(v), pt(v)});
+                    f.push_back({"Hang", pt(s.list.hang), "list_hang", hc});
+                }
                 // s044: rules above / below.
                 for (const auto& [name, r, k] : {std::tuple{"above", &s.rule_above, "rule_a"}, std::tuple{"below", &s.rule_below, "rule_b"}}) {
                     const std::string key = k, label = std::string(name) == "above" ? "Rule above" : "Rule below";
@@ -335,13 +355,12 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                     f.push_back({cap + " width", r->text_width ? "Text" : "Column", key + "_x", {{"0", "Column"}, {"1", "Text"}}});
                 }
             }
-            if (para) {   // s037: built on another style; what Enter starts next
+            {   // s037 / s046: built on another style (of its kind); what Enter starts next (paragraphs)
                 std::vector<Choice> base_ch{{"", "None"}}, next_ch{{"", "Same style"}};
                 for (const auto& o : d.ids_of<Style>()) {
                     const auto* os = d.as<Style>(o);
-                    if (os->kind != StyleKind::Paragraph) continue;
                     if (doc::can_base_on(d, sid, o)) base_ch.push_back({o, os->name});
-                    if (o != sid) next_ch.push_back({o, os->name});
+                    if (para && os->kind == StyleKind::Paragraph && o != sid) next_ch.push_back({o, os->name});
                 }
                 const auto* base = d.as<Style>(s.based_on);
                 const auto* nx = d.as<Style>(s.next);
@@ -356,7 +375,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                         f.push_back(back);
                     }
                 }
-                f.push_back({"Next style", nx ? nx->name : "Same style", "next_style", next_ch});
+                if (para) f.push_back({"Next style", nx ? nx->name : "Same style", "next_style", next_ch});
                 const auto kids = doc::style_descendants(d, sid);
                 if (!kids.empty()) {
                     std::string names;

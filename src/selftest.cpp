@@ -2000,6 +2000,12 @@ int main() {
                     if (l.para == 2 && l.start > 0) return std::abs(L::caret_at(d, "story.1", fl, {2, l.start}).x) < 0.5;
             return false;
         }());
+        {   // s045: the sample's Sources are a numbered list now (their first line in line
+            // with the rest, the number hung); without it, the negative first indent hangs.
+            auto s4 = *d.as<core::Style>("style.4");
+            s4.list = {};
+            d.put("style.4", s4);
+        }
         const auto src = L::flow_story(d, "story.4");
         bool hang = false;
         for (const auto& ft : src.frames)
@@ -2936,6 +2942,124 @@ int main() {
         core::Doc e;
         check("json: rules kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records() &&
                                       e.as<core::Style>("style.2")->rule_below.weight == 1, err);
+    }
+
+    {
+        std::cout << "\n-- bullets and numbering (s045) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto& sources = *d.as<core::Story>("story.4");
+        check("sample: the Sources are numbered 1. 2. 3.",
+              core::doc::list_marker(d, sources, 0) == "1." && core::doc::list_marker(d, sources, 1) == "2." &&
+                  core::doc::list_marker(d, sources, 2) == "3.");
+        check("not a list: no marker", core::doc::list_marker(d, *d.as<core::Story>("story.1"), 2).empty());
+        // The markers as drawn: one per paragraph, left of its first line, on its baseline.
+        const auto marks = [&](const std::string& story) {
+            std::vector<std::pair<std::string, int>> out;
+            const auto flow = L::flow_story(d, story);
+            for (const auto& f : flow.frames) {
+                std::map<int, double> first_x, first_base, mark_x, mark_base;
+                L::visit_lines(d, story, flow, f.frame, [&](const L::LineVisit& v) {
+                    if (v.from == -2) {
+                        out.push_back({pango_layout_get_text(v.line->layout), v.para});
+                        mark_x[v.para] = v.x;
+                        mark_base[v.para] = v.baseline;
+                    } else if (v.from == 0 && !first_x.count(v.para)) {
+                        first_x[v.para] = v.x;
+                        first_base[v.para] = v.baseline;
+                    }
+                });
+                for (const auto& [p, x] : mark_x)
+                    if (!(x < first_x[p] && std::abs(mark_base[p] - first_base[p]) < 1e-9)) out.push_back({"BAD", p});
+            }
+            return out;
+        };
+        const auto m = marks("story.4");
+        check("drawn: 1. 2. 3., each left of its text, on its first baseline",
+              m.size() == 3 && m[0].first == "1." && m[1].first == "2." && m[2].first == "3.",
+              std::to_string(m.size()) + (m.empty() ? "" : " first " + m[0].first));
+        // Another style between restarts the count.
+        core::doc::set_para_style(j, d, "story.4", {1, 0}, {1, 0}, "style.1");
+        check("an interruption restarts: 1. (Body) 1.", core::doc::list_marker(d, *d.as<core::Story>("story.4"), 2) == "1.");
+        j.undo();
+        // Bullets, letters, romans.
+        core::doc::edit_styles(j, d, {"style.4"}, "Numbers", [](core::Style& s) { s.list.numbering = core::Numbering::RomanLower; });
+        check("roman: i. ii. iii.", core::doc::list_marker(d, *d.as<core::Story>("story.4"), 2) == "iii.");
+        core::doc::edit_styles(j, d, {"style.4"}, "Numbers", [](core::Style& s) { s.list.numbering = core::Numbering::AlphaUpper; });
+        check("letters: A. B. C.", core::doc::list_marker(d, *d.as<core::Story>("story.4"), 1) == "B.");
+        core::doc::edit_styles(j, d, {"style.4"}, "List", [](core::Style& s) { s.list.type = core::ListType::Bullet; });
+        check("bullets: every paragraph a bullet", core::doc::list_marker(d, *d.as<core::Story>("story.4"), 2) == "•");
+        // The text's first line lines up with the rest (the marker hangs, not the words).
+        {
+            const auto flow = L::flow_story(d, "story.4");
+            double x0 = -1, x1 = -1;
+            for (const auto& f : flow.frames)
+                for (const auto& l : f.lines)
+                    if (l.para == 0) { if (l.start == 0) x0 = l.x; else if (x1 < 0) x1 = l.x; }
+            check("a list's first line starts with the rest", x0 >= 0 && (x1 < 0 || std::abs(x0 - x1) < 0.01));
+        }
+        // Off: no markers drawn.
+        core::doc::edit_styles(j, d, {"style.4"}, "List", [](core::Style& s) { s.list.type = core::ListType::None; });
+        check("off: no markers", marks("story.4").empty());
+        j.undo(); j.undo(); j.undo(); j.undo();
+        const auto o = core::project(d, "");
+        bool lt = false, nm = false, hg = false;
+        for (const auto& f : o.find("style.4")->fields) {
+            lt = lt || (f.edit == "list_type" && f.value == "Numbers");
+            nm = nm || (f.edit == "list_num" && f.value == "1. 2. 3.");
+            hg = hg || (f.edit == "list_hang" && f.value == "12 pt" && f.unit == 1);
+        }
+        check("inspector: List, Numbers, Hang (typed)", lt && nm && hg);
+        std::string err;
+        core::Doc e;
+        check("json: list kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records() &&
+                                     e.as<core::Style>("style.4")->list.type == core::ListType::Number, err);
+    }
+
+    {
+        std::cout << "\n-- character styles on character styles (s046) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto S = [&](const char* id) { return *d.as<core::Style>(id); };
+        check("sample: Strong Emphasis on Emphasis, owning only its weight",
+              S("style.11").based_on == "style.5" && S("style.11").own == std::vector<std::string>{"bold"} &&
+                  S("style.11").bold && S("style.11").italic);
+        check("kinds don't mix", !core::doc::can_base_on(d, "style.11", "style.1") && !core::doc::can_base_on(d, "style.1", "style.5") &&
+                                     core::doc::can_base_on(d, "style.5", "style.11") == false);   // (a loop)
+        core::doc::edit_styles(j, d, {"style.5"}, "Font", [](core::Style& s) { s.family = "Sans"; s.color = "swatch.3"; });
+        check("edit the base: the font and colour follow", S("style.11").family == "Sans" && S("style.11").color == "swatch.3");
+        core::doc::edit_styles(j, d, {"style.5"}, "Slant", [](core::Style& s) { s.italic = false; });
+        check("edit the base: roman now, still bold (its own)", !S("style.11").italic && S("style.11").bold);
+        j.undo(); j.undo();
+        check("undo: as it was", S("style.11").family.empty() && S("style.11").italic);
+        // Rebased onto None: it keeps its look.
+        const auto before = S("style.11");
+        check("based on None: one step, the look kept", core::doc::set_style_base(j, d, "style.11", "") && [&] {
+            auto now = S("style.11");
+            now.based_on = before.based_on;
+            now.own = before.own;
+            return now == before;
+        }());
+        j.undo();
+        const auto o = core::project(d, "");
+        bool base = false, next = false, own = false;
+        for (const auto& f : o.find("style.11")->fields) {
+            base = base || (f.edit == "based_on" && f.value == "Emphasis");
+            next = next || f.edit == "next_style";
+            own = own || (f.label == "Own settings" && f.value == "Weight");
+        }
+        check("inspector: Based on and Own settings for a character style (no Next style)", base && own && !next);
+        bool para_only = true;   // a character style's Based on offers character styles only
+        for (const auto& f : o.find("style.11")->fields)
+            if (f.edit == "based_on")
+                for (const auto& c : f.choices)
+                    if (!c.id.empty()) para_only = para_only && d.as<core::Style>(c.id)->kind == core::StyleKind::Character;
+        check("inspector: its Based on lists character styles only", para_only);
     }
 
     std::cout << "-----------------------------------------------\n";

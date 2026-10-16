@@ -97,6 +97,9 @@ json to(const Record& r) {
                 j["tabs"] = tabs;
             }
             if (!v.based_on.empty()) { j["based_on"] = v.based_on; j["own"] = v.own; }   // s037
+            if (v.list.type != ListType::None)   // s045
+                j["list"] = {{"type", en(v.list.type)}, {"bullet", v.list.bullet}, {"numbering", en(v.list.numbering)},
+                             {"after", v.list.after}, {"hang", v.list.hang}};
             for (const auto& [key, r] : {std::pair{"rule_above", &v.rule_above}, std::pair{"rule_below", &v.rule_below}})   // s044
                 if (r->weight > 0)
                     j[key] = {{"weight", r->weight}, {"color", r->color}, {"tint", r->tint}, {"offset", r->offset}, {"text", r->text_width}};
@@ -264,6 +267,11 @@ std::optional<Record> from(const json& j) {
                 const auto& o = j[key];
                 *r = {val(o, "weight", 0.0), val<std::string>(o, "color", ""), val(o, "tint", 1.0), val(o, "offset", 0.0), val(o, "text", false)};
             }
+        if (j.contains("list") && j["list"].is_object()) {   // s045
+            const auto& o = j["list"];
+            v.list = {de(o, "type", ListType::None), val<std::string>(o, "bullet", "\u2022"), de(o, "numbering", Numbering::Arabic),
+                      val<std::string>(o, "after", "."), val(o, "hang", 18.0)};
+        }
         v.based_on = val<std::string>(j, "based_on", "");   // s037
         v.next = val<std::string>(j, "next", "");
         if (j.contains("own") && j["own"].is_array())

@@ -94,11 +94,18 @@ void load_sample(Doc& d) {
         Style src{"Source", StyleKind::Paragraph, 4, "Serif", 10, 12, false, false, Align::Left};
         src.left_indent = 12;
         src.first_indent = -12;
+        src.list = {ListType::Number, "\u2022", Numbering::Arabic, ".", 12};   // s045: numbered, in the hang
         d.put("style.4", src);
     }
     // Not used yet: a style a designer keeps ready (and the one Delete is offered on).
     d.put("style.6", Style{"Pull Quote", StyleKind::Paragraph, 6, "Serif", 14, 18, false, true, Align::Center, 6, 6});
     d.put("style.5", Style{"Emphasis", StyleKind::Character, 5, "", 0, 0, false, true, Align::Left});
+    {   // s046: a character style built on Emphasis -- bold too (unused: ready to apply).
+        Style strong{"Strong Emphasis", StyleKind::Character, 5.5, "", 0, 0, true, true, Align::Left};
+        strong.based_on = "style.5";
+        strong.own = doc::style_differences(strong, *d.as<Style>("style.5"));
+        d.put("style.11", strong);
+    }
 
     // ── stories ─────────────────────────────────────────────────────────────
     Story ch;

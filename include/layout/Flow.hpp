@@ -115,7 +115,7 @@ std::vector<RuleMark> paragraph_rules(const core::Doc& d, const std::string& sto
 struct LineVisit {
     PangoLayoutLine* line = nullptr;
     double           x = 0, baseline = 0;
-    int              para = 0, from = 0;   // s026: from -1 = a tab's leader (dots), not the paragraph's words
+    int              para = 0, from = 0;   // s026: from -1 = a tab's leader (dots), not the paragraph's words; s045: -2 a list's marker
 };
 void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
                  const std::function<void(const LineVisit&)>& f, const core::Story* text = nullptr);

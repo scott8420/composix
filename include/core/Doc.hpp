@@ -213,6 +213,19 @@ struct ParaRule {
     bool operator==(const ParaRule&) const = default;
 };
 
+// s045: bullets and numbering. A marker set before a paragraph's first
+// line, `hang` points left of its text (in the left indent); drawn, not
+// stored. Numbers count on through consecutive paragraphs of the style.
+enum class ListType { None, Bullet, Number };
+struct ListSpec {
+    ListType    type = ListType::None;
+    std::string bullet = "\u2022";   // •
+    Numbering   numbering = Numbering::Arabic;
+    std::string after = ".";         // after a number
+    double      hang = 18;           // points
+    bool operator==(const ListSpec&) const = default;
+};
+
 struct Style {
     std::string name;
     StyleKind   kind   = StyleKind::Paragraph;
@@ -252,6 +265,7 @@ struct Style {
     // something is already set there (a chapter's opening heading).
     ParaStart   start = ParaStart::Anywhere;
     ParaRule    rule_above, rule_below;   // s044
+    ListSpec    list;                     // s045
     // s037: styles built on styles (paragraph styles). `based_on`: a style
     // whose settings this one takes, except those it sets itself (`own`,
     // keys from style_field_keys(), sorted). The inherited values are kept
@@ -587,14 +601,19 @@ std::vector<std::string> style_differences(const Style& a, const Style& b);
 void inherit_from(Style& child, const Style& base);
 // The styles based on this one, and on those, ... (each after its base).
 std::vector<Doc::Id> style_descendants(const Doc& d, const Doc::Id& style);
-// Could `style` be based on `base`? (Both paragraph styles; not itself, not
-// one based on it.) "" (None) always can.
+// Could `style` be based on `base`? (Both paragraph styles or both
+// character styles (s046); not itself, not one based on it.) "" (None)
+// always can.
 bool can_base_on(const Doc& d, const Doc::Id& style, const Doc::Id& base);
 // Base a style on another ("" = none). Its look doesn't change: what
 // differs from the new base becomes its own; the rest now follows it. One step.
 bool set_style_base(DocJournal& j, Doc& d, const Doc::Id& style, const Doc::Id& base);
 // Styles' own settings dropped: all of it from the base again. One step.
 bool reset_to_base(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles);
+// s045: a list paragraph's number (1 + the paragraphs of the same style
+// just before it), and its marker ("•", "3.", "iv."; "" not a list).
+int list_number(const Story& s, int para);
+std::string list_marker(const Doc& d, const Story& s, int para);
 // The style a new paragraph after one in `style` takes (Enter at its end).
 Doc::Id next_style_of(const Doc& d, const Doc::Id& style);
 // A copy of a style, just after it ("Body copy"). Its id.
