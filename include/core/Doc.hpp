@@ -526,6 +526,14 @@ std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int 
 bool remove_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages);
 bool move_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const Doc::Id& after);
 bool set_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const Doc::Id& master);
+// s066: the document's own settings, one step each. The title (trimmed,
+// not empty); the trim -- every page and master at the old trim height
+// follows, its width (and a foldout's folds) in proportion; the bleed
+// (points, >= 0); facing pages on / off.
+bool set_title(DocJournal& j, Doc& d, const std::string& title);
+bool set_trim(DocJournal& j, Doc& d, double w, double h);
+bool set_bleed(DocJournal& j, Doc& d, double bleed);
+bool set_facing(DocJournal& j, Doc& d, bool facing);
 // s062: pages' own margins -- `f` edits them (starting from what they use
 // now); `reset` drops them (back to the master's). One step.
 bool edit_page_margins(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const std::string& label,

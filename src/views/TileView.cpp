@@ -359,6 +359,7 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
                 if (row == kFieldsOnTile) break;
                 // A spread: each page's value, when they differ ("B-Body / C-Chapter").
                 std::string value = f.value;
+                for (std::size_t at; (at = value.find('\t')) != std::string::npos;) value.replace(at, 1, " \u00d7 ");   // s066: a compact row ("6 x 9")
                 for (std::size_t k = 1; k < group.size(); ++k)
                     for (const auto& g : group[k]->fields)
                         if (g.label == f.label && g.value != f.value) value += " / " + g.value;

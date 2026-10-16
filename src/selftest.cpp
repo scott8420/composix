@@ -2700,6 +2700,46 @@ int main() {
     }
 
     {
+        std::cout << "\n-- document settings (s066) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto st0 = d.settings();
+        check("title: trimmed, one step; empty refused", D::set_title(j, d, "  The Outer Ports ") && d.settings().title == "The Outer Ports" &&
+                                                         !D::set_title(j, d, "  "));
+        // Trim: pages at the trim follow, a foldout in proportion; one undo.
+        std::string plain, fold;
+        for (const auto& p : d.pages()) {
+            const auto* pg = d.as<core::Page>(p);
+            if (pg->folds.empty() && plain.empty()) plain = p;
+            if (!pg->folds.empty() && fold.empty()) fold = p;
+        }
+        const auto fold0 = *d.as<core::Page>(fold);
+        const auto steps = j.size();
+        const double W = 5.5 * core::kPt, H = 8.5 * core::kPt;
+        check("trim: one step", D::set_trim(j, d, W, H) && j.size() == steps + 1);
+        check("trim: a page takes it", std::abs(d.as<core::Page>(plain)->w - W) < 1e-6 && std::abs(d.as<core::Page>(plain)->h - H) < 1e-6);
+        const auto* f1 = d.as<core::Page>(fold);
+        check("trim: a foldout keeps its panels, in proportion",
+              std::abs(f1->w - fold0.w * W / st0.trim_w) < 1e-6 && f1->folds.size() == fold0.folds.size() &&
+              std::abs(f1->folds[0] - fold0.folds[0] * W / st0.trim_w) < 1e-6 && std::abs(f1->h - H) < 1e-6);
+        bool masters = true;
+        for (const auto& m : d.ids_of<core::Master>()) masters = masters && std::abs(d.as<core::Master>(m)->h - H) < 1e-6;
+        check("trim: the masters too", masters);
+        check("trim: too small refused", !D::set_trim(j, d, 10, 10));
+        j.undo();
+        check("trim: undo, every page back", d.as<core::Page>(fold)->w == fold0.w && d.settings().trim_w == st0.trim_w);
+        check("bleed and facing", D::set_bleed(j, d, 18) && d.settings().bleed == 18 && !D::set_bleed(j, d, -1) &&
+                                  D::set_facing(j, d, !st0.facing) && d.settings().facing == !st0.facing);
+        const auto o = core::project(d, "");
+        const auto* it = o.find("doc");
+        check("inspector: the document's settings in Document", it && it->segment == core::Segment::Document && !it->fields.empty() &&
+                                                               it->fields[0].text && it->fields[0].value == "The Outer Ports");
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

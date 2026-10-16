@@ -522,6 +522,18 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "numbering") {
             did = core::doc::set_numbering(m_journal, m_doc, m_inspected,
                                            static_cast<core::Numbering>(std::stoi(choice)));
+        } else if (key == "dtitle") {   // s066: the document's settings
+            did = core::doc::set_title(m_journal, m_doc, choice);
+        } else if (key == "dtrim") {   // "0:<points>" (W) or "1:<points>" (H)
+            const auto colon = choice.find(':');
+            const int k = std::stoi(choice.substr(0, colon));
+            const double v = std::stod(choice.substr(colon + 1));
+            const auto& st = m_doc.settings();
+            did = core::doc::set_trim(m_journal, m_doc, k == 0 ? v : st.trim_w, k == 1 ? v : st.trim_h);
+        } else if (key == "dbleed") {
+            did = core::doc::set_bleed(m_journal, m_doc, std::stod(choice));
+        } else if (key == "dfacing") {
+            did = core::doc::set_facing(m_journal, m_doc, choice == "1");
         } else if (key == "pmargins") {   // s062: a page's own margins, or back to the master's
             if (choice == "own") did = core::doc::edit_page_margins(m_journal, m_doc, m_inspected, "Page's own margins", [](core::Margins&) {});
             else did = core::doc::reset_page_margins(m_journal, m_doc, m_inspected);

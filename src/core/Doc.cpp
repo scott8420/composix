@@ -1033,6 +1033,68 @@ bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     });
 }
 
+bool set_title(DocJournal& j, Doc& d, const std::string& title) {
+    std::string t = title;
+    while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) t.pop_back();
+    while (!t.empty() && (t.front() == ' ' || t.front() == '\t')) t.erase(t.begin());
+    if (t.empty() || t == d.settings().title) return false;
+    return j.run("Title \u201c" + t + "\u201d", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.title = t;
+        d.put("doc", s);
+    });
+}
+
+bool set_trim(DocJournal& j, Doc& d, double w, double h) {
+    const Settings old = d.settings();
+    if (w < 36 || h < 36 || w > 5000 || h > 5000) return false;
+    if (std::abs(w - old.trim_w) < 1e-9 && std::abs(h - old.trim_h) < 1e-9) return false;
+    std::vector<Doc::Id> ids{"doc"};
+    const auto at_trim = [&](double ph) { return std::abs(ph - old.trim_h) < 0.01; };
+    for (const auto& p : d.pages()) if (at_trim(d.as<Page>(p)->h)) ids.push_back(p);
+    for (const auto& m : d.ids_of<Master>()) if (at_trim(d.as<Master>(m)->h)) ids.push_back(m);
+    const double kx = w / old.trim_w;
+    return j.run("Trim size " + inches(w) + " \u00d7 " + inches(h) + " in", ids, [&] {
+        Settings s = old;
+        s.trim_w = w;
+        s.trim_h = h;
+        d.put("doc", s);
+        for (const auto& id : ids) {
+            if (auto* p = d.as<Page>(id)) {
+                Page pg = *p;
+                pg.w *= kx;
+                pg.h = h;
+                for (auto& f : pg.folds) f *= kx;
+                d.put(id, pg);
+            } else if (auto* m = d.as<Master>(id)) {
+                Master ms = *m;
+                ms.w *= kx;
+                ms.h = h;
+                for (auto& f : ms.folds) f *= kx;
+                d.put(id, ms);
+            }
+        }
+    });
+}
+
+bool set_bleed(DocJournal& j, Doc& d, double bleed) {
+    if (bleed < 0 || bleed > 72 || std::abs(bleed - d.settings().bleed) < 1e-9) return false;
+    return j.run("Bleed " + inches(bleed) + " in", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.bleed = bleed;
+        d.put("doc", s);
+    });
+}
+
+bool set_facing(DocJournal& j, Doc& d, bool facing) {
+    if (facing == d.settings().facing) return false;
+    return j.run(facing ? "Facing pages" : "Single pages", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.facing = facing;
+        d.put("doc", s);
+    });
+}
+
 bool set_export(DocJournal& j, Doc& d, const ExportPrefs& e) {
     if (d.settings().exp == e) return false;
     return j.run("Export settings", {"doc"}, [&] {
@@ -1969,6 +2031,10 @@ const std::vector<Verb>& verbs() {
              edit_page_margins(j, d, {d.pages().back()}, "Top margin", [](Margins& m) { m.top = 90; });
          }},
         {"rename_section", [](DocJournal& j, Doc& d) { rename_section(j, d, d.ids_of<Section>().back(), "Part One"); }},   // s060
+        {"set_title", [](DocJournal& j, Doc& d) { set_title(j, d, "The Outer Ports"); }},   // s066
+        {"set_trim", [](DocJournal& j, Doc& d) { set_trim(j, d, 5.5 * kPt, 8.5 * kPt); }},
+        {"set_bleed", [](DocJournal& j, Doc& d) { set_bleed(j, d, d.settings().bleed + 9); }},
+        {"set_facing", [](DocJournal& j, Doc& d) { set_facing(j, d, !d.settings().facing); }},
         {"section_start_at", [](DocJournal& j, Doc& d) { set_section_start_at(j, d, {d.ids_of<Section>().back()}, 5); }},
         {"section_master", [](DocJournal& j, Doc& d) {
              const auto sec = d.ids_of<Section>().back();

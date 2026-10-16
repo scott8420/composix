@@ -67,6 +67,7 @@ void mark_typed(std::vector<Field>& fields) {
         {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
         {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500},
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
+        {"dtrim", 72, 36, 5000}, {"dbleed", 72, 0, 72},   // s066
         {"ptop", 72, 0, 5000}, {"pbottom", 72, 0, 5000}, {"pinside", 72, 0, 5000}, {"poutside", 72, 0, 5000}};   // s062
     for (auto& f : fields)
         for (const auto& t : typed)
@@ -146,7 +147,23 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
     for (const auto& sid : d.ids_of<Story>())
         for (const auto& p : d.as<Story>(sid)->paras) ++used[p.style];
 
-    // ── Document: the sections ──────────────────────────────────────────────
+    // ── Document: its settings (s066), then the sections ────────────────────
+    {
+        const auto& st = d.settings();
+        Field title{"Title", st.title, "dtitle"};
+        title.text = true;
+        Field trim{"Trim (in)", inches(st.trim_w) + "\t" + inches(st.trim_h)};
+        trim.cols = {"W", "H"};
+        trim.edit = "dtrim";
+        std::vector<Choice> bc;
+        for (double v : {0.0, 0.0625, 0.125, 0.25}) bc.push_back({pts(v * kPt), inches(v * kPt) + " in"});
+        std::vector<Field> f{title, trim,
+                             {"Bleed", inches(st.bleed) + " in", "dbleed", bc},
+                             {"Pages", st.facing ? "Facing" : "Single", "dfacing", {{"1", "Facing"}, {"0", "Single"}}},
+                             {"Length", std::to_string(d.pages().size()) + (d.pages().size() == 1 ? " page" : " pages")}};
+        mark_typed(f);
+        o.add({"doc", G::Document, "Document settings", "", {K::Section, 6, 9, 0x9a8f88}, f});
+    }
     {
         std::size_t i = 0;
         for (const auto& sid : d.ids_of<Section>()) {
