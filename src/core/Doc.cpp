@@ -1291,6 +1291,9 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("drop_chars", "Drop letters", drop_chars),
         COMPOSIX_SF("align_grid", "Baseline grid", align_grid),
         COMPOSIX_SF("hyphenate", "Hyphenate", hyphenate),
+        COMPOSIX_SF("hyph_limit", "Hyphens in a row", hyph_limit),         // s065
+        COMPOSIX_SF("hyph_shortest", "Shortest word", hyph_shortest),
+        COMPOSIX_SF("hyph_last_word", "Hyphenate last word", hyph_last_word),
         COMPOSIX_SF("keep_next", "Keep with next", keep_next),
         COMPOSIX_SF("keep_lines", "Keep lines", keep_lines),
         COMPOSIX_SF("start", "Start", start),

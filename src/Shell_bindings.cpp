@@ -44,7 +44,8 @@ void Shell::bind_actions() {  // bindings: actions + recents group
              {"insert-page-number", core::kMarkPage, "Insert page number"},
              {"insert-section-name", core::kMarkSection, "Insert section name"},
              {"insert-next-page", core::kMarkNext, "Insert next page number"},
-             {"insert-prev-page", core::kMarkPrev, "Insert previous page number"}}) {
+             {"insert-prev-page", core::kMarkPrev, "Insert previous page number"},
+             {"insert-shy", "\u00AD", "Discretionary hyphen"}}) {   // s065
         const std::string m = mark, l = label;
         add_action(name, [this, m, l] {
             if (!m_canvas_view.canvas().insert_special(m, l))

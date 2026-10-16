@@ -727,6 +727,16 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 if (key == "keep_next") st.keep_next = v != 0;
                 else st.keep_lines = v;
             });
+        } else if (key == "hyph_limit" || key == "hyph_shortest" || key == "hyph_last_word") {   // s065
+            static const std::map<std::string, std::string> labels{{"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"},
+                                                                   {"hyph_last_word", "Hyphenate last word"}};
+            const int v = std::stoi(choice);
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Style& st) {
+                if (st.kind != core::StyleKind::Paragraph) return;
+                if (key == "hyph_limit") st.hyph_limit = std::max(0, v);
+                else if (key == "hyph_shortest") st.hyph_shortest = std::clamp(v, 4, 20);
+                else st.hyph_last_word = v != 0;
+            });
         } else if (key == "hyphenate") {   // s038
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Hyphenate", [&](core::Style& st) {
                 if (st.kind == core::StyleKind::Paragraph) st.hyphenate = choice == "1";

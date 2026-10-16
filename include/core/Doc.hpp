@@ -278,6 +278,12 @@ struct Style {
     // s038: break words at the line's end (TeX US English patterns), so
     // justified lines space evenly. Words of 5+ letters, 2 before and 3 after.
     bool        hyphenate = false;
+    // s065: steering it -- at most `hyph_limit` hyphenated lines in a row
+    // (0: no limit), words of at least `hyph_shortest` letters, and the
+    // paragraph's last word left whole unless `hyph_last_word`.
+    int         hyph_limit = 2;
+    int         hyph_shortest = 5;
+    bool        hyph_last_word = false;
     // s039: keeps, where a column breaks. `keep_next`: this paragraph's
     // last line stays in the same column as the next paragraph's first
     // (headings). `keep_lines`: 0 none; N (2, 3): at least N lines at a

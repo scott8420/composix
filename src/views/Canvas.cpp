@@ -517,6 +517,10 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
                     cr->line_to(b, mid);
                     cr->line_to(b - hh, mid + hh);
                     cr->stroke();
+                } else if (m.kind == K::Hyphen) {   // s065: a typed hyphen -- a short dash, raised
+                    cr->move_to(m.x0 - m.h * 0.1, mid - m.h * 0.12);
+                    cr->line_to(m.x0 + m.h * 0.1, mid - m.h * 0.12);
+                    cr->stroke();
                 } else if (m.kind == K::Para || m.kind == K::End) {
                     cr->set_font_size(m.h * 0.62);
                     cr->move_to(m.x0 + 1, m.base);
@@ -1638,6 +1642,10 @@ bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {
     case GDK_KEY_Delete: case GDK_KEY_KP_Delete:
         if (!sel) m_caret = ctrl ? core::next_word(*story, m_caret) : core::next_char(*story, m_caret);
         if (m_anchor != m_caret) edit_insert("", "erase", "Delete text");
+        return true;
+    case GDK_KEY_underscore: case GDK_KEY_minus:   // s065: Ctrl+Shift+- -- a discretionary hyphen
+        if (!ctrl || (kv == GDK_KEY_minus && !shift)) return false;
+        edit_insert("\u00AD", "", "Discretionary hyphen");
         return true;
     case GDK_KEY_KP_Enter:   // s055: keypad Enter breaks -- column; Shift: frame; Ctrl: page
         insert_break(ctrl ? core::ParaStart::NextPage : shift ? core::ParaStart::NextFrame : core::ParaStart::NextColumn);

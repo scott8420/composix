@@ -2613,6 +2613,93 @@ int main() {
     }
 
     {
+        std::cout << "\n-- hyphen control (s065) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        load_plain(d);
+        const std::string text =
+            "Considerable international correspondence concerning extraordinary navigational responsibilities "
+            "overwhelmed administrative establishments, notwithstanding unquestionably comprehensive "
+            "documentation characterizing transcontinental shipping circumstances, unconditionally.";
+        const auto setup = [&](int limit, int shortest, bool last, const std::string& body, double width = 110) {
+            core::Doc::Loading load(d);
+            auto st = *d.as<core::Style>("style.1");
+            st.hyphenate = true;
+            st.align = core::Align::Justify;
+            st.hyph_limit = limit;
+            st.hyph_shortest = shortest;
+            st.hyph_last_word = last;
+            st.drop_lines = 0;
+            d.put("style.h", st);
+            core::Frame f;
+            f.owner = d.pages().back();
+            f.kind = core::FrameKind::Text;
+            f.x = 36; f.y = 36; f.w = width; f.h = 2000;
+            f.story = "story.y";
+            d.put("frame.y", f);
+            core::Story sy;
+            sy.name = "Hy";
+            sy.paras = {{"style.h", body, {}}};
+            d.put("story.y", sy);
+        };
+        const auto lines = [&] {
+            const auto fl = L::flow_story(d, "story.y");
+            return fl.frames.empty() ? std::vector<L::Line>{} : fl.frames.front().lines;
+        };
+        const auto max_run = [&] {
+            int run = 0, best = 0, total = 0;
+            for (const auto& l : lines()) { run = l.hyphen ? run + 1 : 0; best = std::max(best, run); total += l.hyphen; }
+            return std::pair{best, total};
+        };
+        setup(0, 5, true, text);
+        const auto [free_run, free_total] = max_run();
+        // (How many it hyphenates is the fonts' business -- a note, not a test.)
+        std::cout << "  (narrow column: " << free_total << " hyphenated lines, at most " << free_run << " in a row)\n";
+        setup(2, 5, true, text);
+        check("limit 2: never more than two in a row", max_run().first <= 2);
+        setup(1, 5, true, text);
+        check("limit 1: never two in a row", max_run().first <= 1);
+        setup(0, 30, true, text);
+        check("shortest word 30 letters: nothing hyphenates", max_run().second == 0);
+        // The last word stays whole.
+        setup(0, 5, false, text);
+        const auto last_at = static_cast<int>(text.rfind(' ')) + 1;
+        bool whole = true;
+        for (const auto& l : lines()) whole = whole && !(l.hyphen && l.end > last_at);
+        check("last word: never broken (unless asked)", whole);
+        // Typed hyphens: the word breaks only there; one at its start -- never.
+        const std::string shy = "\u00AD";
+        const std::string word = "trans" + shy + "continental" + shy + "ism";
+        setup(0, 5, true, "Unquestionably " + word + " " + word + " " + word + " notwithstanding.");
+        const auto& tx = d.as<core::Story>("story.y")->paras[0].text;
+        bool only_typed = true;
+        int at_typed = 0;
+        for (const auto& l : lines()) {
+            if (!l.hyphen) continue;
+            const bool after_shy = l.end >= 2 && static_cast<unsigned char>(tx[static_cast<std::size_t>(l.end - 2)]) == 0xC2;
+            const bool in_word = tx.substr(0, static_cast<std::size_t>(l.end)).rfind("trans") != std::string::npos &&
+                                 static_cast<int>(tx.substr(0, static_cast<std::size_t>(l.end)).rfind(' ')) <
+                                     static_cast<int>(tx.substr(0, static_cast<std::size_t>(l.end)).rfind("trans"));
+            if (in_word && !after_shy) only_typed = false;
+            at_typed += after_shy;
+        }
+        // The rule, not the layout: wherever a marked word breaks, it's at a
+        // typed hyphen (whether one lands at a line's end is the fonts' doing).
+        check("typed hyphens: a marked word breaks only at them", only_typed, std::to_string(at_typed));
+        // (a column the words fit across: too narrow and Pango breaks a word anywhere)
+        setup(0, 5, true, "Unquestionably " + shy + "transcontinentalism " + shy + "transcontinentalism notwithstanding.", 240);
+        const auto& tx2 = d.as<core::Story>("story.y")->paras[0].text;
+        std::vector<std::pair<int, int>> spans;   // each marked word, its typed hyphen to its end
+        for (std::size_t at = tx2.find(shy); at != std::string::npos; at = tx2.find(shy, at + 1))
+            spans.push_back({static_cast<int>(at) + 2, static_cast<int>(tx2.find(' ', at))});
+        bool never = spans.size() == 2;
+        for (const auto& l : lines())
+            for (const auto& [s0, s1] : spans) never = never && !(l.end > s0 && l.end < s1);
+        if (!never) for (const auto& l : lines()) std::cout << "    line " << l.start << ".." << l.end << (l.hyphen ? " -" : "") << "\n";
+        check("typed hyphen at a word's start: that word never breaks", never);
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

@@ -240,11 +240,32 @@ int hyphen_cut(const core::Doc& d, const core::Para& para, const core::Style& st
     const int a = pos + took;   // where the next line would start
     if (took <= 0 || a >= n || a <= pos) return 0;
     const auto letter = [&](int i) { return i >= 0 && i < n && std::isalpha(static_cast<unsigned char>(t[static_cast<std::size_t>(i)])); };
-    if (!letter(a) || t[static_cast<std::size_t>(a - 1)] != ' ') return 0;   // not a break before a word
-    int b = a;
-    while (letter(b)) ++b;
+    // s065: a discretionary hyphen (U+00AD, typed) is part of the word.
+    const auto shy = [&](int i) { return i >= 0 && i + 1 < n && static_cast<unsigned char>(t[static_cast<std::size_t>(i)]) == 0xC2 &&
+                                         static_cast<unsigned char>(t[static_cast<std::size_t>(i + 1)]) == 0xAD; };
+    if (!(letter(a) || shy(a)) || t[static_cast<std::size_t>(a - 1)] != ' ') return 0;   // not a break before a word
+    int b = a, letters = 0;
+    std::vector<int> typed;   // after each discretionary hyphen (offsets in the word)
+    while (letter(b) || shy(b)) {
+        if (shy(b)) { b += 2; typed.push_back(b - a); }
+        else { ++b; ++letters; }
+    }
     if (b < n && static_cast<unsigned char>(t[static_cast<std::size_t>(b)]) >= 0x80) return 0;   // a word going on in other letters
-    const auto at = core::hyphen_points(std::string_view(t).substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)));
+    std::vector<int> at;
+    if (!typed.empty()) {
+        // Typed hyphens are the only places it breaks; one at its start: never.
+        if (typed.front() == 2) return 0;
+        at = typed;
+        at.erase(std::remove_if(at.begin(), at.end(), [&](int k) { return a + k >= b; }), at.end());   // not after its last letter
+    } else {
+        if (letters < std::max(1, style.hyph_shortest)) return 0;
+        if (!style.hyph_last_word) {   // the paragraph's last word stays whole
+            int e = b;
+            while (e < n && !std::isalnum(static_cast<unsigned char>(t[static_cast<std::size_t>(e)]))) ++e;
+            if (e >= n) return 0;
+        }
+        at = core::hyphen_points(std::string_view(t).substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)));
+    }
     for (auto k = at.rbegin(); k != at.rend(); ++k) {
         std::string s = t.substr(static_cast<std::size_t>(pos), static_cast<std::size_t>(a + *k - pos)) + "-";
         auto lay = make_layout(style, s.c_str(), static_cast<int>(s.size()), 1e6, false, indent);
@@ -281,12 +302,15 @@ int lines_left(const core::Doc& d, const core::Para& para, const core::Style& st
         apply_runs(lay.get(), d, para, from);
         return pango_layout_get_line_count(lay.get());
     }
-    int n = 0;
+    int n = 0, run = 0;   // s065: hyphens in a row
     for (int pos = from; pos < len && n < 1000; ++n) {
         auto lay = make_layout(style, para.text.c_str() + pos, len - pos, w, false);
         apply_runs(lay.get(), d, para, pos);
         int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
-        if (const int cut = hyphen_cut(d, para, style, pos, took, w, 0); cut > 0) took = cut;
+        const bool may = style.hyph_limit <= 0 || run < style.hyph_limit;
+        const int cut = may ? hyphen_cut(d, para, style, pos, took, w, 0) : 0;
+        if (cut > 0) took = cut;
+        run = cut > 0 ? run + 1 : 0;
         pos += std::max(1, took);
     }
     return n;
@@ -436,6 +460,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 const auto& wraps_here = drop ? local : wraps;
                 int pos = c.start;
                 bool ended = false, full = false;
+                int hy_run = 0;   // s065: hyphenated lines in a row
                 while (!ended) {
                     yy = snap(yy);
                     if (yy + lead > hmax + 0.01) { full = true; break; }
@@ -454,11 +479,18 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                                                pos == 0 ? std::max(0.0, ind.first) : 0);
                         apply_runs(lay.get(), d, para, pos);
                         int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
-                        const int cut = style.hyphenate ? hyphen_cut(d, para, style, pos, took, w,
-                                                                     pos == 0 ? std::max(0.0, ind.first) : 0) : 0;
+                        const bool may = style.hyph_limit <= 0 || hy_run < style.hyph_limit;
+                        const int cut = style.hyphenate && may ? hyphen_cut(d, para, style, pos, took, w,
+                                                                            pos == 0 ? std::max(0.0, ind.first) : 0) : 0;
                         if (cut > 0) took = cut;
+                        // s065: Pango broke at a typed hyphen -- draw it as a hyphen too.
+                        const bool at_shy = took >= 3 && pos + took < len &&   // (after a letter: one at a word's start isn't a break)
+                                            std::isalpha(static_cast<unsigned char>(para.text[static_cast<std::size_t>(pos + took - 3)])) &&
+                                            static_cast<unsigned char>(para.text[static_cast<std::size_t>(pos + took - 2)]) == 0xC2 &&
+                                            static_cast<unsigned char>(para.text[static_cast<std::size_t>(pos + took - 1)]) == 0xAD;
+                        hy_run = cut > 0 || at_shy ? hy_run + 1 : 0;
                         ft.lines.push_back({c.p, pos, pos + took, yy, lead, col, x0, w});
-                        ft.lines.back().hyphen = cut > 0;
+                        ft.lines.back().hyphen = cut > 0 || at_shy;
                         pos += took;
                         if (pos >= len) { ended = true; break; }
                     }
@@ -855,6 +887,11 @@ std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& stor
         const auto& t = para.text;
         for (int i = ln.start; i < ln.end && i < static_cast<int>(t.size()); ++i) {
             const char c = t[static_cast<std::size_t>(i)];
+            if (static_cast<unsigned char>(c) == 0xC2 && i + 1 < static_cast<int>(t.size()) &&
+                static_cast<unsigned char>(t[static_cast<std::size_t>(i + 1)]) == 0xAD) {   // s065
+                out.push_back({HiddenMark::Kind::Hyphen, x_of(pl, i), x_of(pl, i), pl.base, ln.h, 0});
+                continue;
+            }
             if (c != ' ' && c != '\t') continue;
             out.push_back({c == ' ' ? HiddenMark::Kind::Space : HiddenMark::Kind::Tab, x_of(pl, i), x_end_of(pl, i + 1), pl.base, ln.h, 0});
         }

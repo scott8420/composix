@@ -336,6 +336,16 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                              {{"0", "Off"}, {"1", "Align to grid"}}});
                 // s038: hyphenation.
                 f.push_back({"Hyphenate", s.hyphenate ? "On" : "Off", "hyphenate", {{"0", "Off"}, {"1", "On"}}});
+                if (s.hyphenate) {   // s065: how
+                    std::vector<Choice> lim{{"0", "No limit"}};
+                    for (int k = 1; k <= 5; ++k) lim.push_back({std::to_string(k), std::to_string(k)});
+                    f.push_back({"Hyphens in a row", s.hyph_limit > 0 ? std::to_string(s.hyph_limit) : "No limit", "hyph_limit", lim});
+                    std::vector<Choice> sh;
+                    for (int k = 5; k <= 10; ++k) sh.push_back({std::to_string(k), std::to_string(k) + " letters"});
+                    f.push_back({"Shortest word", std::to_string(s.hyph_shortest) + " letters", "hyph_shortest", sh});
+                    f.push_back({"Last word", s.hyph_last_word ? "May break" : "Whole", "hyph_last_word",
+                                 {{"0", "Whole"}, {"1", "May break"}}});
+                }
                 // s039: keeps.
                 f.push_back({"Keep with next", s.keep_next ? "On" : "Off", "keep_next", {{"0", "Off"}, {"1", "On"}}});
                 static const std::vector<Choice> keeps{{"0", "Off"}, {"2", "2 at start and end"}, {"3", "3 at start and end"},

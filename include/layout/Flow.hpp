@@ -124,7 +124,7 @@ std::vector<RuleMark> column_rules(const core::Frame& f);
 // typed before the next paragraph (its kind in `brk`), the story's end.
 // For the canvas only: never printed or exported.
 struct HiddenMark {
-    enum class Kind { Space, Tab, Para, Break, End };
+    enum class Kind { Space, Tab, Para, Break, End, Hyphen };   // s065: Hyphen -- a typed (discretionary) one
     Kind   kind = Kind::Para;
     double x0 = 0, x1 = 0;   // the character's span (a paragraph end: x0 only)
     double base = 0, h = 0;  // its line's baseline and leading

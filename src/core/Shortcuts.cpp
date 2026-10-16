@@ -163,6 +163,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Text", "win.insert-next-page",    {"<Ctrl><Alt>bracketright"}, "", "Insert the next frame's page number (\"continued on\")"},
         {"Text", "win.insert-prev-page",    {"<Ctrl><Alt>bracketleft"}, "", "Insert the previous frame's page number (\"continued from\")"},
         {"Text", "", {}, "Keypad Enter", "Column break -- the text after it starts the next column (s055)"},
+        {"Text", "", {}, "Ctrl+Shift+-", "Discretionary hyphen -- the word may break only there (one at its start: never)"},
         {"Text", "", {}, "Shift+Keypad Enter", "Frame break -- the text after it starts the next frame"},
         {"Text", "", {}, "Ctrl+Keypad Enter", "Page break -- the text after it starts the next page"},
 

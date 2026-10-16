@@ -100,6 +100,7 @@ json to(const Record& r) {
                  {"left_indent", v.left_indent}, {"right_indent", v.right_indent}, {"first_indent", v.first_indent},
                  {"skip_after_heading", v.skip_after_heading},
                  {"drop_lines", v.drop_lines}, {"drop_chars", v.drop_chars}, {"align_grid", v.align_grid}, {"hyphenate", v.hyphenate},
+                 {"hyph_limit", v.hyph_limit}, {"hyph_shortest", v.hyph_shortest}, {"hyph_last_word", v.hyph_last_word},
                  {"keep_next", v.keep_next}, {"keep_lines", v.keep_lines}, {"start", en(v.start)}};
             if (!v.tabs.empty()) {
                 json tabs = json::array();
@@ -277,6 +278,9 @@ std::optional<Record> from(const json& j) {
         v.drop_chars = val(j, "drop_chars", 1);
         v.align_grid = val(j, "align_grid", false);   // s036
         v.hyphenate = val(j, "hyphenate", false);     // s038
+        v.hyph_limit = val(j, "hyph_limit", 2);        // s065
+        v.hyph_shortest = val(j, "hyph_shortest", 5);
+        v.hyph_last_word = val(j, "hyph_last_word", false);
         v.keep_next = val(j, "keep_next", false);     // s039
         v.keep_lines = val(j, "keep_lines", 0);
         v.start = de(j, "start", ParaStart::Anywhere);   // s043
