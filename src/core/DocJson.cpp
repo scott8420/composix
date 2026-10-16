@@ -53,7 +53,9 @@ json to(const Record& r) {
                  {"w", v.w}, {"h", v.h}, {"rot", v.rot}, {"z", v.z}, {"story", v.story},
                  {"next", v.next}, {"asset", v.asset}, {"fit", en(v.fit)},
                  {"columns", v.columns}, {"gutter", v.gutter}, {"balance", v.balance}, {"widths", v.widths},
-                 {"fill", v.fill}, {"stroke", v.stroke}, {"stroke_w", v.stroke_w}};
+                 {"fill", v.fill}, {"stroke", v.stroke}, {"stroke_w", v.stroke_w},
+                 {"wrap", en(v.wrap)},
+                 {"wrap_off", {v.wrap_off.top, v.wrap_off.right, v.wrap_off.bottom, v.wrap_off.left}}};
         } else if constexpr (std::is_same_v<T, Story>) {
             json paras = json::array();
             for (const auto& p : v.paras) {
@@ -154,6 +156,11 @@ std::optional<Record> from(const json& j) {
         v.fill = val<std::string>(j, "fill", "");
         v.stroke = val<std::string>(j, "stroke", "");
         v.stroke_w = val(j, "stroke_w", 1.0);
+        v.wrap = de(j, "wrap", Wrap::None);
+        if (j.contains("wrap_off") && j["wrap_off"].is_array() && j["wrap_off"].size() == 4) {
+            const auto& a = j["wrap_off"];
+            v.wrap_off = {a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>()};
+        }
         return v;
     }
     if (k == "story") {

@@ -626,6 +626,19 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
         cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
         cr->stroke();
+        // s018: a wrapping frame shows its wrap edge (the offsets), dotted.
+        const auto* f = m_doc.as<core::Frame>(id);
+        if (f && f->wrap != core::Wrap::None) {
+            const Rect fr = core::frame_in_layout(m_doc, m_placed, id);
+            const auto& o = f->wrap_off;
+            const Rect w = m_vp.to_screen({fr.x - o.left, fr.y - o.top, fr.w + o.left + o.right, fr.h + o.top + o.bottom});
+            std::vector<double> dash{2, 3};
+            cr->set_dash(dash, 0);
+            cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.7);
+            cr->rectangle(std::round(w.x) + 0.5, std::round(w.y) + 0.5, std::round(w.w), std::round(w.h));
+            cr->stroke();
+            cr->unset_dash();
+        }
     }
     if (editing()) draw_edit(cr);
     if (!m_sel.empty() && !editing()) {

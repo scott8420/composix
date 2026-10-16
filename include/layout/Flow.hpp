@@ -19,6 +19,10 @@
 //   * s012: a frame is filled column by column (each at its own width); a
 //     BALANCED frame where the story ends gets the shortest column height
 //     that still holds the rest, so its columns come out even.
+//   * s018: frames with a text wrap push lines aside. Where a column meets
+//     one, each line is set on its own at the width left free (both sides of
+//     an Around frame, left to right; nothing beside a Jump frame); a band
+//     with no room drops to below what covers it.
 #include "core/Doc.hpp"
 
 #include <cairo.h>
@@ -40,6 +44,9 @@ struct Line {
     double h     = 0;    // its leading (s010: the caret's height)
     int    col   = 0;    // s012: the column it is in
     double x     = 0;    // that column's left edge, frame coordinates
+    // s018: a line set on its own (text wrap): its width, from x. 0 = the
+    // column's, set with the rest of its paragraph in the column.
+    double w     = 0;
 };
 
 struct FrameText {

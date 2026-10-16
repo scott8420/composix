@@ -537,6 +537,19 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 else if (key == "stroke") f.stroke = choice;
                 else f.stroke_w = std::stod(choice);
             });
+        } else if (key == "wrap" || key == "wrap_off") {   // s018: text wrap
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, key == "wrap" ? "Text wrap" : "Wrap offset",
+                                         [&](core::Frame& f) {
+                if (key == "wrap") {
+                    const auto w = static_cast<core::Wrap>(std::stoi(choice));
+                    // Turned on with no offset: a little air (9 pt) to start.
+                    if (f.wrap == core::Wrap::None && w != core::Wrap::None && f.wrap_off == core::Sides{}) f.wrap_off = {9, 9, 9, 9};
+                    f.wrap = w;
+                } else {
+                    const double v = std::stod(choice);
+                    f.wrap_off = {v, v, v, v};
+                }
+            });
         } else if (key == "columns" || key == "gutter" || key == "widths" || key == "balance") {   // s012
             static const std::map<std::string, std::string> labels{
                 {"columns", "Columns"}, {"gutter", "Gutter"}, {"widths", "Column widths"}, {"balance", "Balance columns"}};

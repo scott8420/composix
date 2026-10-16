@@ -1410,6 +1410,26 @@ std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& id) {
     return chain;
 }
 
+std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
+    std::vector<WrapRect> out;
+    const auto* t = d.as<Frame>(id);
+    if (!t) return out;
+    auto owners = master_chain(d, t->owner);
+    owners.push_back(t->owner);
+    for (const auto& o : owners)
+        for (const auto& fid : d.frames_on(o)) {
+            const auto* f = d.as<Frame>(fid);
+            if (fid == id || !f || f->wrap == Wrap::None) continue;
+            WrapRect r{f->x - f->wrap_off.left - t->x, f->y - f->wrap_off.top - t->y,
+                       f->x + f->w + f->wrap_off.right - t->x, f->y + f->h + f->wrap_off.bottom - t->y,
+                       f->wrap == Wrap::Jump};
+            // Only what overlaps the text frame matters.
+            if (r.x1 <= 0 || r.y1 <= 0 || r.x0 >= t->w || r.y0 >= t->h) continue;
+            out.push_back(r);
+        }
+    return out;
+}
+
 Rect frame_in_layout(const Doc& d, const std::vector<Placed>& pl, const Doc::Id& id) {
     const auto* f = d.as<Frame>(id);
     if (!f) return {};

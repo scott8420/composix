@@ -127,14 +127,45 @@ std::vector<std::string> thread_frames(const core::Doc& d, const std::string& st
 namespace {
 struct Cursor { int p = 0; int start = 0; };
 
+// s018: the free spans of [x0, x1) across the band [y0, y1) -- what the
+// wraps leave, narrow scraps dropped. `blocked` gets the lowest bottom of
+// what covers the band (where to look next) when nothing is left.
+struct Span { double x0, x1; };
+std::vector<Span> free_spans(const std::vector<core::WrapRect>& wraps, double x0, double x1, double y0, double y1,
+                             double* next_y) {
+    std::vector<Span> spans{{x0, x1}};
+    double lowest = 0;
+    for (const auto& r : wraps) {
+        if (r.y1 <= y0 || r.y0 >= y1 || r.x1 <= x0 || r.x0 >= x1) continue;
+        lowest = lowest == 0 ? r.y1 : std::min(lowest, r.y1);
+        const double cx0 = r.jump ? x0 : r.x0, cx1 = r.jump ? x1 : r.x1;
+        std::vector<Span> cut;
+        for (const auto& s : spans) {
+            if (cx1 <= s.x0 || cx0 >= s.x1) { cut.push_back(s); continue; }
+            if (cx0 > s.x0) cut.push_back({s.x0, cx0});
+            if (cx1 < s.x1) cut.push_back({cx1, s.x1});
+        }
+        spans = std::move(cut);
+    }
+    const double least = std::min(x1 - x0, 18.0);   // a scrap narrower than this takes no text
+    std::erase_if(spans, [&](const Span& s) { return s.x1 - s.x0 < least - 0.01; });
+    if (spans.empty()) *next_y = std::max(lowest, y0 + 1);
+    return spans;
+}
+
+bool touches(const std::vector<core::WrapRect>& wraps, double x0, double x1) {
+    return std::any_of(wraps.begin(), wraps.end(), [&](const core::WrapRect& r) { return r.x1 > x0 && r.x0 < x1; });
+}
+
 // Fill one frame's columns from `c`, each column at most `hmax` tall. True
 // when the story ended inside this frame.
-bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr, Cursor& c, double hmax,
-                FrameText& ft) {
+bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr, const std::vector<core::WrapRect>& wraps,
+                Cursor& c, double hmax, FrameText& ft) {
     const int n = core::column_count(fr);
     const int paras = static_cast<int>(st.paras.size());
     for (int col = 0; col < n; ++col) {
         const double cw = core::column_width(fr, col), cx = core::column_x(fr, col);
+        const bool wrapped = touches(wraps, cx, cx + cw);
         double y = 0;
         while (c.p < paras) {
             const auto& para = st.paras[static_cast<std::size_t>(c.p)];
@@ -142,11 +173,40 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             const double lead = leading_of(style);
             // s011: space before a paragraph -- not at the top of a column.
             const double before = (c.start == 0 && y > 0) ? style.space_before : 0;
-            auto lay = make_layout(style, para.text.c_str() + c.start, static_cast<int>(para.text.size()) - c.start, cw, false);
+            const int len = static_cast<int>(para.text.size());
+            double yy = y + before;
+            if (wrapped) {   // s018: line by line, each at the width the wraps leave
+                int pos = c.start;
+                bool ended = false, full = false;
+                while (!ended) {
+                    if (yy + lead > hmax + 0.01) { full = true; break; }
+                    double next = 0;
+                    const auto spans = free_spans(wraps, cx, cx + cw, yy, yy + lead, &next);
+                    if (spans.empty()) { yy = next; continue; }
+                    for (const auto& sp : spans) {
+                        auto lay = make_layout(style, para.text.c_str() + pos, len - pos, sp.x1 - sp.x0, false);
+                        apply_runs(lay.get(), d, para, pos);
+                        const int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
+                        ft.lines.push_back({c.p, pos, pos + took, yy, lead, col, sp.x0, sp.x1 - sp.x0});
+                        pos += took;
+                        if (pos >= len) { ended = true; break; }
+                    }
+                    yy += lead;
+                }
+                if (ended) {
+                    y = yy + style.space_after;
+                    ++c.p;
+                    c.start = 0;
+                    continue;
+                }
+                (void)full;
+                c.start = pos;
+                break;
+            }
+            auto lay = make_layout(style, para.text.c_str() + c.start, len - c.start, cw, false);
             apply_runs(lay.get(), d, para, c.start);
             const int nl = pango_layout_get_line_count(lay.get());
             int placed = 0;
-            double yy = y + before;
             for (int i = 0; i < nl; ++i) {
                 if (yy + lead > hmax + 0.01) break;   // the column is full
                 PangoLayoutLine* line = pango_layout_get_line_readonly(lay.get(), i);
@@ -184,7 +244,8 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
     for (std::size_t fi = 0; fi < chain.size() && !done; ++fi) {
         const auto& fr = *d.as<core::Frame>(chain[fi]);
         const Cursor at = c;
-        done = fill_frame(d, *st, fr, c, fr.h, out.frames[fi]);
+        const auto wraps = core::wrap_rects(d, chain[fi]);
+        done = fill_frame(d, *st, fr, wraps, c, fr.h, out.frames[fi]);
         if (done && fr.balance && core::column_count(fr) > 1) {
             // The shortest column height that still holds the rest.
             double lo = 0, hi = fr.h;
@@ -192,11 +253,11 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
                 const double mid = (lo + hi) / 2;
                 Cursor t = at;
                 FrameText tmp{chain[fi], {}};
-                if (fill_frame(d, *st, fr, t, mid, tmp)) hi = mid; else lo = mid;
+                if (fill_frame(d, *st, fr, wraps, t, mid, tmp)) hi = mid; else lo = mid;
             }
             c = at;
             out.frames[fi].lines.clear();
-            fill_frame(d, *st, fr, c, hi, out.frames[fi]);
+            fill_frame(d, *st, fr, wraps, c, hi, out.frames[fi]);
         }
     }
     for (const auto& ft : out.frames) out.lines += static_cast<int>(ft.lines.size());
@@ -234,15 +295,18 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
     while (i < ft->lines.size()) {
         const int p = ft->lines[i].para;
         const int col = ft->lines[i].col;
-        std::size_t j = i;
-        while (j < ft->lines.size() && ft->lines[j].para == p && ft->lines[j].col == col) ++j;
+        std::size_t j = i + 1;
+        // s018: a line set on its own (w > 0) is laid out alone, as the flow set it.
+        if (ft->lines[i].w <= 0)
+            while (j < ft->lines.size() && ft->lines[j].para == p && ft->lines[j].col == col && ft->lines[j].w <= 0) ++j;
         if (p >= static_cast<int>(st->paras.size())) break;
         const auto& text = st->paras[static_cast<std::size_t>(p)].text;
         const auto style = style_of(d, st->paras[static_cast<std::size_t>(p)].style);
         const int from = std::min(ft->lines[i].start, static_cast<int>(text.size()));
-        const bool continues = ft->lines[j - 1].end < static_cast<int>(text.size());
+        const bool solo = ft->lines[i].w > 0;
+        const bool continues = !solo && ft->lines[j - 1].end < static_cast<int>(text.size());
         auto lay = make_layout(style, text.c_str() + from, static_cast<int>(text.size()) - from,
-                               core::column_width(*fr, col), continues);
+                               solo ? ft->lines[i].w : core::column_width(*fr, col), continues);
         apply_runs(lay.get(), d, st->paras[static_cast<std::size_t>(p)], from);
         PangoLayoutIter* it = pango_layout_get_iter(lay.get());
         for (std::size_t k = i; k < j; ++k) {
@@ -356,6 +420,19 @@ core::TextPos hit_text(const core::Doc& d, const std::string& story, const Story
     for (const auto& l : ft->lines)
         if (l.col == col && (!want || y >= l.y)) want = &l;
     if (!want) want = &ft->lines.front();
+    // s018: lines side by side (a wrap between them): the rightmost that
+    // starts left of x, else the leftmost.
+    if (want->w > 0) {
+        const double row = want->y;
+        const Line* left = nullptr;
+        const Line* best = nullptr;
+        for (const auto& l : ft->lines) {
+            if (l.col != col || l.y != row || l.w <= 0) continue;
+            if (!left || l.x < left->x) left = &l;
+            if (l.x <= x && (!best || l.x > best->x)) best = &l;
+        }
+        want = best ? best : left ? left : want;
+    }
     core::TextPos out{want->para, want->start};
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         if (pl.line == want) out = {want->para, byte_at_x(pl, x)};
@@ -374,9 +451,26 @@ core::TextPos line_move(const core::Doc& d, const std::string& story, const Stor
     for (int i = 0; i < static_cast<int>(all.size()); ++i)
         if (on_line(*st, *all[static_cast<std::size_t>(i)].second, p)) { cur = i; break; }
     if (cur < 0) return p;
-    const int to = cur + dir;
+    // s018: a ROW is the lines side by side (same frame, column and y); move
+    // to the next row, then to the line in it under goal_x.
+    const auto same_row = [&](int a, int b) {
+        const auto& [fa, la] = all[static_cast<std::size_t>(a)];
+        const auto& [fb, lb] = all[static_cast<std::size_t>(b)];
+        return fa == fb && la->col == lb->col && la->y == lb->y;
+    };
+    int to = cur;
+    while (to >= 0 && to < static_cast<int>(all.size()) && same_row(to, cur)) to += dir;
     if (to < 0) return {0, 0};                                                  // above the first line: the start
     if (to >= static_cast<int>(all.size())) return {all.back().second->para, all.back().second->end};   // the end
+    {
+        int a = to, b = to;
+        while (a > 0 && same_row(a - 1, to)) --a;
+        while (b + 1 < static_cast<int>(all.size()) && same_row(b + 1, to)) ++b;
+        int pick = a;
+        for (int k = a; k <= b; ++k)
+            if (all[static_cast<std::size_t>(k)].second->x <= goal_x) pick = k;
+        to = pick;
+    }
     const auto [ft, line] = all[static_cast<std::size_t>(to)];
     core::TextPos out{line->para, line->start};
     walk_frame(d, story, flow, ft->frame, [&](const Placed& pl) {

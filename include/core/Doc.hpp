@@ -53,6 +53,16 @@ enum class Align     { Left, Center, Right, Justify };
 enum class ColorModel{ CMYK, RGB, Gray, Spot };
 enum class ListKind  { Contents, Bibliography, Index };
 enum class ImageFit  { Fill, Fit };   // s009: cover the frame (cropped) / show it whole
+// s018: how a frame pushes text in OTHER frames aside. Around: text runs
+// down both sides of it; Jump: text skips the band it covers, no lines
+// beside it.
+enum class Wrap      { None, Around, Jump };
+
+// Four distances, one per side (s018: a frame's text-wrap offset).
+struct Sides {
+    double top = 0, right = 0, bottom = 0, left = 0;
+    bool operator==(const Sides&) const = default;
+};
 
 struct Settings {
     std::string title  = "Untitled";
@@ -114,6 +124,8 @@ struct Frame {
     std::vector<double> widths;          // text: each column's relative weight (empty = equal)
     std::string fill, stroke;            // s016: swatch ids ("" = none) -- a frame's background / outline
     double      stroke_w = 1;            // points
+    Wrap        wrap = Wrap::None;       // s018: pushes text in other frames aside
+    Sides       wrap_off;                // points beyond the frame's edges
     bool operator==(const Frame&) const = default;
 };
 
@@ -477,6 +489,14 @@ struct ColumnSpan { double x0, x1; };
 std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& page_or_master);
 // The page's column count and gutter (1 / 12 with no master).
 std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& page_or_master);
+// s018: what pushes a text frame's lines aside -- every OTHER frame with a
+// wrap on its owner and on the owner's masters, grown by its offsets, in the
+// text frame's coordinates. (Stacking doesn't matter, as InDesign's default.)
+struct WrapRect {
+    double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    bool   jump = false;
+};
+std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& text_frame);
 // The masters a page shows, most basic first (a master's based-on chain).
 std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& page_or_master);
 // A frame's rect in layout (doc) space; empty if its owner isn't placed.

@@ -97,6 +97,7 @@ void load_sample(Doc& d) {
     d.put("asset.1", Asset{"guild-map.tif", 1, "assets/guild-map.tif", true, "CMYK", 7300, 3700, "Maps/guild-map.tif"});
     d.put("asset.2", Asset{"harbor.psd", 2, "Pictures/harbor.psd", false, "RGB", 3600, 2700});
     d.put("asset.3", Asset{"fleuron.svg", 3, "assets/fleuron.svg", true, "Gray", 0, 0});
+    d.put("asset.4", Asset{"lighthouse.jpg", 4, "Pictures/lighthouse.jpg", false, "RGB", 2400, 1800});
 
     // ── frames ──────────────────────────────────────────────────────────────
     const double m = 0.75 * in, tw = s.trim_w - 2 * m, th = s.trim_h - 2 * m;
@@ -123,6 +124,13 @@ void load_sample(Doc& d) {
         src.columns = 2;
         src.balance = true;
         d.put("frame.10", src);
+    }
+    {   // s018: a lighthouse set into the chapter's opening text, wrapped (both sides).
+        Frame pic{pg[4], FrameKind::Image, m + tw / 2 - 0.8 * in, 3.4 * in, 1.6 * in, 1.1 * in, 0, 3, "", "", "asset.4"};
+        pic.fit = ImageFit::Fit;
+        pic.wrap = Wrap::Around;
+        pic.wrap_off = {9, 9, 9, 9};
+        d.put("frame.11", pic);
     }
 
     // ── guides on the body master: the margins (s006) ──────────────────────

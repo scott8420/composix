@@ -37,6 +37,16 @@ namespace core = composix::core;
 
 namespace {
 int g_pass = 0, g_fail = 0;
+// The sample without s018's wrapped picture: the text tests written before
+// wraps measure the chapter's opening text set plain.
+void load_plain(composix::core::Doc& d) {
+    composix::core::load_sample(d);
+    composix::core::Doc::Loading load(d);
+    auto f = *d.as<composix::core::Frame>("frame.11");
+    f.wrap = composix::core::Wrap::None;
+    d.put("frame.11", f);
+}
+
 void check(const std::string& name, bool ok, const std::string& detail = "") {
     if (ok) { ++g_pass; std::cout << "  PASS  " << name; }
     else    { ++g_fail; std::cout << "  FAIL  " << name; }
@@ -677,7 +687,7 @@ int main() {
         std::cout << "\n-- text flow --\n";
         namespace L = composix::layout;
         core::Doc d;
-        core::load_sample(d);
+        load_plain(d);
         check("thread order", L::thread_frames(d, "story.1") ==
                               std::vector<std::string>({"frame.1", "frame.2", "frame.3"}));
         const auto f = L::flow_story(d, "story.1");
@@ -706,7 +716,7 @@ int main() {
 
         {   // A short first frame: the text continues in the next, re-broken at its width.
             core::Doc e;
-            core::load_sample(e);
+            load_plain(e);
             core::Doc::Loading load(e);
             auto f1 = *e.as<core::Frame>("frame.1");
             f1.h = 62;
@@ -726,7 +736,7 @@ int main() {
         }
         {   // Too little room anywhere: overset.
             core::Doc e;
-            core::load_sample(e);
+            load_plain(e);
             core::Doc::Loading load(e);
             for (const char* id : {"frame.1", "frame.2", "frame.3"}) {
                 auto fr = *e.as<core::Frame>(id);
@@ -737,7 +747,7 @@ int main() {
         }
         {   // A looping thread does not hang.
             core::Doc e;
-            core::load_sample(e);
+            load_plain(e);
             core::Doc::Loading load(e);
             auto f3 = *e.as<core::Frame>("frame.3");
             f3.next = "frame.1";
@@ -818,7 +828,7 @@ int main() {
         core::Doc d;
         core::DocJournal j{d};
         d.set_door([&j] { return j.open(); });
-        core::load_sample(d);
+        load_plain(d);
         using P = core::TextPos;
         const auto para = [&](int i) { return d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(i)].text; };
         const auto n0 = d.as<core::Story>("story.1")->paras.size();
@@ -933,7 +943,7 @@ int main() {
         check("print: folio page labels", has("/P (iv)"));
         check("print: one embedding per image file",
               [&] { int n = 0; for (std::size_t at = 0; (at = pdf.find("/Subtype /Image /Width 8", at)) != std::string::npos; ++at) ++n;
-                    return n == 4; }());   // guild-map + fleuron (placed twice): 2 images + their 2 soft masks
+                    return n == 6; }());   // guild-map, lighthouse, fleuron (placed twice): 3 images + their 3 soft masks
         bool miss = false;
         for (const auto& w : rep.warnings) miss = miss || w == "Missing image: harbor.psd";
         check("print: the missing image reported", miss);
@@ -1101,7 +1111,7 @@ int main() {
         core::Doc d;
         core::DocJournal j{d};
         d.set_door([&j] { return j.open(); });
-        core::load_sample(d);
+        load_plain(d);
         const auto one = L::flow_story(d, "story.1");
         check("columns: one step", core::doc::edit_frames(j, d, {"frame.1"}, "Columns", [](core::Frame& fr) {
                                        fr.columns = 2; fr.gutter = 18; fr.h = 140; }) && j.size() == 1);
@@ -1154,7 +1164,7 @@ int main() {
         core::Doc d;
         core::DocJournal j{d};
         d.set_door([&j] { return j.open(); });
-        core::load_sample(d);
+        load_plain(d);
         using P = core::TextPos;
         const auto runs = [&](const char* story, int p) { return d.as<core::Story>(story)->paras[static_cast<std::size_t>(p)].runs; };
         const auto text = [&](const char* story, int p) { return d.as<core::Story>(story)->paras[static_cast<std::size_t>(p)].text; };
@@ -1210,7 +1220,7 @@ int main() {
 
         // The flow: spacing and a bold run.
         core::Doc e;
-        core::load_sample(e);
+        load_plain(e);
         const auto f0 = L::flow_story(e, "story.1");
         check("space after a heading (6 pt)", f0.frames[0].lines[1].y == 28 + 6);
         int n_before = 0;
@@ -1517,6 +1527,89 @@ int main() {
     }
 
 
+
+    {
+        std::cout << "\n-- text wrap --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto* pic = d.as<core::Frame>("frame.11");
+        const auto* txt = d.as<core::Frame>("frame.1");
+        // The wrap edge, in frame.2's coordinates: the picture plus 9 pt a side.
+        const auto wr = core::wrap_rects(d, "frame.1");
+        check("wrap: the picture pushes the opening text", wr.size() == 1 && !wr[0].jump &&
+                                                          std::abs(wr[0].x0 - (pic->x - 9 - txt->x)) < 1e-9 &&
+                                                          std::abs(wr[0].y1 - (pic->y + pic->h + 9 - txt->y)) < 1e-9);
+        check("wrap: not its own frame, not other pages", core::wrap_rects(d, "frame.11").empty() &&
+                                                             core::wrap_rects(d, "frame.2").empty());
+        const auto flow = L::flow_story(d, "story.1");
+        const L::FrameText* ft = nullptr;
+        for (const auto& f : flow.frames) if (f.frame == "frame.1") ft = &f;
+        bool clear = ft != nullptr, both = false;
+        int beside = 0;
+        if (ft && !wr.empty())
+            for (const auto& l : ft->lines) {
+                const double right = l.x + (l.w > 0 ? l.w : txt->w);
+                const bool in_band = l.y + l.h > wr[0].y0 && l.y < wr[0].y1;
+                if (in_band) {
+                    ++beside;
+                    clear = clear && (right <= wr[0].x0 + 0.01 || l.x >= wr[0].x1 - 0.01);
+                    both = both || l.x >= wr[0].x1 - 0.01;
+                }
+            }
+        check("wrap: lines beside it keep clear of the edge", clear && beside > 0);
+        check("wrap: Around sets text on both sides", both);
+        // A row of two: the click picks the side, arrows move by rows.
+        if (ft) {
+            const L::Line* left = nullptr;
+            const L::Line* right = nullptr;
+            for (std::size_t k = 0; k + 1 < ft->lines.size() && !right; ++k)
+                if (ft->lines[k + 1].y == ft->lines[k].y && ft->lines[k + 1].x > ft->lines[k].x) {
+                    left = &ft->lines[k];
+                    right = &ft->lines[k + 1];
+                }
+            check("wrap: two lines side by side", left && right);
+            if (left && right) {
+                const auto hl = L::hit_text(d, "story.1", flow, "frame.1", left->x + 5, left->y + 2);
+                const auto hr = L::hit_text(d, "story.1", flow, "frame.1", right->x + 5, right->y + 2);
+                check("wrap: a click on each side lands on its line",
+                      hl.byte >= left->start && hl.byte <= left->end && hr.byte >= right->start && hr.byte <= right->end);
+                const auto down = L::line_move(d, "story.1", flow, {left->para, left->start + 1}, 1, left->x + 5);
+                const auto cd = L::caret_at(d, "story.1", flow, down);
+                check("wrap: down from the left goes down, not across", cd.ok && cd.y > left->y && cd.x < right->x);
+            }
+        }
+        // Jump: nothing beside it.
+        check("wrap: set to Jump", core::doc::edit_frames(j, d, {"frame.11"}, "Text wrap",
+                                                          [](core::Frame& f) { f.wrap = core::Wrap::Jump; }));
+        const auto jf = L::flow_story(d, "story.1");
+        bool none = true;
+        const auto jr = core::wrap_rects(d, "frame.1");
+        for (const auto& f : jf.frames)
+            if (f.frame == "frame.1" && !jr.empty())
+                for (const auto& l : f.lines) none = none && !(l.y + l.h > jr[0].y0 && l.y < jr[0].y1);
+        check("wrap: Jump leaves its band empty", none && !jr.empty() && jr[0].jump);
+        j.undo();
+        check("wrap: undo", d.as<core::Frame>("frame.11")->wrap == core::Wrap::Around);
+        // None: the opening text as before s018 (no line set on its own).
+        check("wrap: off", core::doc::edit_frames(j, d, {"frame.11"}, "Text wrap",
+                                                  [](core::Frame& f) { f.wrap = core::Wrap::None; }));
+        bool plain = true;
+        for (const auto& f : L::flow_story(d, "story.1").frames)
+            for (const auto& l : f.lines) plain = plain && l.w <= 0;
+        check("wrap: none sets every line with its paragraph", plain);
+        // The inspector: Wrap on every frame, Offset when it wraps.
+        j.undo();
+        const auto items = core::frame_items(d, {"frame.11"}, "");
+        bool wf = false, of = false;
+        for (const auto& f : items.front().fields) {
+            wf = wf || (f.edit == "wrap" && f.value == "Around");
+            of = of || (f.edit == "wrap_off" && f.value == "9 pt");
+        }
+        check("wrap: inspector shows Wrap + offset", wf && of);
+    }
 
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";

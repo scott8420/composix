@@ -378,6 +378,19 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 fields.push_back({"Weight", pts(f->stroke_w) + " pt", "stroke_w", wc});
             }
         }
+        {   // s018: text wrap -- how this frame pushes OTHER frames' text aside.
+            static const char* names[] = {"None", "Around", "Jump"};
+            fields.push_back({"Wrap", names[static_cast<int>(f->wrap)], "wrap", {{"0", "None"}, {"1", "Around"}, {"2", "Jump"}}});
+            if (f->wrap != Wrap::None) {
+                const auto& o = f->wrap_off;
+                const bool even = o.top == o.right && o.top == o.bottom && o.top == o.left;
+                std::vector<Choice> oc;
+                for (double v : {0.0, 3.0, 6.0, 9.0, 12.0, 18.0, 24.0, 36.0}) oc.push_back({pts(v), pts(v) + " pt"});
+                fields.push_back({"Wrap offset", even ? pts(o.top) + " pt"
+                                                      : pts(o.top) + " / " + pts(o.right) + " / " + pts(o.bottom) + " / " + pts(o.left),
+                                  "wrap_off", oc});
+            }
+        }
         if (f->kind == FrameKind::Text) {
             const auto* st = d.as<Story>(f->story);
             fields.push_back({"Story", st ? st->name : "\u2014"});
