@@ -104,6 +104,13 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             std::string sw = ps ? ps->color : std::string{};
             double tint = ps ? ps->color_tint : 1;
             // (A tab's leader -- from -1 -- takes the paragraph's colour.)
+            // s030: local colour over everything.
+            if (v.from >= 0)
+                if (const auto lc = core::local_at(para, v.from + run.start + 1).color; c.d.as<core::Swatch>(lc)) {
+                    pg.set_fill(ink_of(c.d, lc, 1));
+                    plate::pango::show(c.doc, pg, run);
+                    continue;
+                }
             if (const auto* cs = v.from < 0 ? nullptr : c.d.as<core::Style>(core::char_style_at(para, v.from + run.start + 1));
                 cs && !cs->color.empty()) {
                 sw = cs->color;

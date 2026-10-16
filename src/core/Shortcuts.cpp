@@ -123,6 +123,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"General", "win.save",          {"<Ctrl>s"}, "", "Save"},
         {"General", "win.save-as",       {"<Ctrl><Shift>s"}, "", "Save as a new project folder"},
         {"General", "win.export-pdf",    {"<Ctrl>e"}, "", "Export PDF"},
+        {"General", "win.story-editor",  {"<Ctrl><Shift>y"}, "", "Story editor: the story being edited / picked, as running text"},
         {"General", "win.find",          {"<Ctrl>f"}, "", "Find / Change (across every story)"},
         {"General", "win.place",         {"<Ctrl><Shift>p"}, "", "Place an image (into the picked image frame, or click / drag on a page)"},
         {"General", "win.shortcuts",     {"<Ctrl>question", "<Ctrl>slash"}, "",
@@ -154,6 +155,8 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Esc", "Cancel a drag, put down a loaded image, then clear the picks"},
 
         // ── Text (s023: special characters, while editing) ─────────────────
+        {"Text", "win.bold",                {"<Ctrl>b"}, "", "Bold the selected words (or the word at the caret) -- again: off"},
+        {"Text", "win.italic",              {"<Ctrl>i"}, "", "Italic the selected words (or the word at the caret) -- again: off"},
         {"Text", "win.insert-page-number",  {"<Ctrl><Alt><Shift>n"}, "", "Insert the page number (each page shows its own)"},
         {"Text", "win.insert-section-name", {"<Ctrl><Alt><Shift>e"}, "", "Insert the section name (a running head)"},
         {"Text", "win.insert-next-page",    {"<Ctrl><Alt>bracketright"}, "", "Insert the next frame's page number (\"continued on\")"},

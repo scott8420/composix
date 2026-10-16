@@ -254,3 +254,8 @@ menubutton.cx-preflight.cx-bad  > button { color: @cx_bad; }
 .cx-dot-warn { color: @cx_warn; }
 .cx-dot-info { color: @cx_dim; }
 .cx-preflight-list row { border-radius: 6px; }
+
+/* ── s031: spreads in the navigator -- a pair's rows bracketed on the left ─ */
+row.cx-item-row.cx-spread-top    { box-shadow: inset 3px 0 0 alpha(@cx_ink, 0.45); border-bottom-left-radius: 0; }
+row.cx-item-row.cx-spread-bottom { box-shadow: inset 3px 0 0 alpha(@cx_ink, 0.45); border-top-left-radius: 0; }
+row.cx-item-row.cx-spread-gap    { margin-top: 5px; }

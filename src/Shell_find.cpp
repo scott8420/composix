@@ -263,3 +263,29 @@ void Shell::find_change(bool all) {  // helper
 }
 
 }  // namespace composix
+
+namespace composix {
+
+// s033: the story editor -- the story being typed in, else the picked text
+// frame's, else the inspected story (navigator / tiles).
+void Shell::on_story_editor() {  // handler
+    std::string story;
+    auto& cv = m_canvas_view.canvas();
+    if (cv.editing()) story = cv.edit_story_id();
+    if (story.empty())
+        for (const auto& id : cv.selection())
+            if (const auto* f = m_doc.as<core::Frame>(id); f && !f->story.empty()) { story = f->story; break; }
+    if (story.empty())
+        for (const auto& id : m_inspected)
+            if (m_doc.as<core::Story>(id)) { story = id; break; }
+    if (story.empty()) {
+        alert("No story to open", "Pick a text frame (or a story in the navigator), then open the story editor.");
+        return;
+    }
+    cv.end_edit();
+    m_nav.set_open(core::Segment::Stories, true);
+    m_nav.select_items({story});
+    m_story_ed.focus_text();
+}
+
+}  // namespace composix

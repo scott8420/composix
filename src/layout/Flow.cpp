@@ -49,22 +49,30 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
         const int a = std::max(r.start, from), b = std::min(r.end, n);
         if (b <= a) continue;
         const auto* cs = d.as<core::Style>(r.style);
-        if (!cs) continue;
         const auto add = [&](PangoAttribute* at) {
             at->start_index = static_cast<guint>(a - from);
             at->end_index = static_cast<guint>(b - from);
             pango_attr_list_insert(attrs, at);
         };
-        if (!cs->family.empty()) add(pango_attr_family_new(cs->family.c_str()));
-        if (cs->size > 0) add(pango_attr_size_new(static_cast<int>(std::lround(cs->size * PANGO_SCALE))));
-        if (cs->bold) add(pango_attr_weight_new(PANGO_WEIGHT_BOLD));
-        if (cs->italic) add(pango_attr_style_new(PANGO_STYLE_ITALIC));
-        if (const auto* sw = d.as<core::Swatch>(cs->color)) {   // s015: its colour, as the screen shows it
-            const auto c = core::tint_rgb(sw->preview, cs->color_tint);   // s021: at its tint
+        const auto colour = [&](const core::Swatch* sw, double tint) {
+            const auto c = core::tint_rgb(sw->preview, tint);   // s021: at its tint
             add(pango_attr_foreground_new(static_cast<guint16>(((c >> 16) & 0xff) * 257),
                                           static_cast<guint16>(((c >> 8) & 0xff) * 257),
                                           static_cast<guint16>((c & 0xff) * 257)));
+        };
+        if (cs) {
+            if (!cs->family.empty()) add(pango_attr_family_new(cs->family.c_str()));
+            if (cs->size > 0) add(pango_attr_size_new(static_cast<int>(std::lround(cs->size * PANGO_SCALE))));
+            if (cs->bold) add(pango_attr_weight_new(PANGO_WEIGHT_BOLD));
+            if (cs->italic) add(pango_attr_style_new(PANGO_STYLE_ITALIC));
+            if (const auto* sw = d.as<core::Swatch>(cs->color)) colour(sw, cs->color_tint);   // s015: its colour
         }
+        // s030: local formatting, over the styles (later attributes win).
+        const auto& l = r.local;
+        if (l.bold >= 0) add(pango_attr_weight_new(l.bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL));
+        if (l.italic >= 0) add(pango_attr_style_new(l.italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL));
+        if (l.size > 0) add(pango_attr_size_new(static_cast<int>(std::lround(l.size * PANGO_SCALE))));
+        if (const auto* sw = d.as<core::Swatch>(l.color)) colour(sw, 1);
     }
     pango_layout_set_attributes(l, attrs);
     pango_attr_list_unref(attrs);

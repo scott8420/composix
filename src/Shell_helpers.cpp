@@ -1,4 +1,5 @@
 #include "Shell.hpp"
+#include "plate/plate.hpp"
 #include "views/Images.hpp"
 #include "core/Recents.hpp"
 #include "layout/Flow.hpp"
@@ -112,6 +113,7 @@ void Shell::refresh() {  // helper
         if (m_outline.find(id)) still.push_back(id);
     m_pick.items = still;
     show_pick(m_pick, keep);
+    m_story_ed.model_changed();   // s033
     update_title();
     update_preflight();   // s024
 }
@@ -147,6 +149,14 @@ void Shell::show_pick(const views::Pick& p, const std::vector<std::string>& keep
                 m_canvas_view.set_title(core::selection_title(items), items.size());
             m_main.set_visible_child("canvas");
             if (!cv.selection().empty()) { on_canvas_selection(); return; }
+            m_inspected = p.items;
+            m_inspector.show_items(items);
+            return;
+        }
+        // s033: a story opens in the story editor.
+        if (p.items.size() == 1 && m_doc.as<core::Story>(p.items.front())) {
+            if (m_story_ed.story() != p.items.front()) m_story_ed.show_story(p.items.front());
+            m_main.set_visible_child("story");
             m_inspected = p.items;
             m_inspector.show_items(items);
             return;
@@ -196,8 +206,27 @@ void Shell::adopt(const core::Doc& fresh, const std::string& dir) {  // helper
     m_nav.set_outline(&m_outline);
     m_nav.set_open(core::Segment::Pages, true);
     m_nav.select_section(core::Segment::Pages);
+    load_export_prefs();   // s032
     update_title();
     update_preflight();   // s024
+}
+
+// s032: the document's export settings become the sheet's; its profile is
+// looked for by name among this computer's.
+void Shell::load_export_prefs() {  // helper
+    const auto& e = m_doc.settings().exp;
+    m_pdf_print = e.print;
+    m_pdf_bleed = e.bleed;
+    m_pdf_marks = e.marks;
+    m_pdf_convert = e.convert;
+    m_pdf_profile.clear();
+    m_profile_missing.clear();
+    if (!e.profile.empty()) {
+        for (const auto& p : plate::find_cmyk_profiles(profile_dirs()))
+            if (p.name == e.profile) { m_pdf_profile = p.path; break; }
+        if (m_pdf_profile.empty()) m_profile_missing = e.profile;
+    }
+    m_pdf_standard = m_pdf_profile.empty() ? 0 : e.standard;
 }
 
 // s019: before a document is replaced -- unsaved changes? Save / Don't Save /

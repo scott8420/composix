@@ -20,6 +20,22 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     // Plain win.* actions -> handler bodies (Shell_handlers.cpp).
     add_action("new",           sigc::mem_fun(*this, &Shell::on_new));      // s019
     add_action("find",          sigc::mem_fun(*this, &Shell::on_find));     // s022
+    add_action("story-editor",  sigc::mem_fun(*this, &Shell::on_story_editor));   // s033
+    // s030: bold / italic on the words being edited (the word at the caret).
+    for (const bool bold : {true, false})
+        add_action(bold ? "bold" : "italic", [this, bold] {
+            auto& cv = m_canvas_view.canvas();
+            if (!cv.editing()) return;
+            auto [a, b] = cv.edit_range();
+            const auto story = cv.edit_story_id();
+            const auto* st = m_doc.as<core::Story>(story);
+            if (!st) return;
+            if (a == b) std::tie(a, b) = core::word_at(*st, a);
+            const bool on = !(bold ? core::all_bold(m_doc, *st, a, b) : core::all_italic(m_doc, *st, a, b));
+            core::doc::set_local(m_journal, m_doc, story, a, b, bold ? "Bold" : "Italic",
+                                 [&](core::Local& l) { (bold ? l.bold : l.italic) = on ? 1 : 0; });
+            cv.grab_focus();
+        });
     // s023: special characters, at the caret while editing text.
     for (const auto& [name, mark, label] : std::initializer_list<std::tuple<const char*, const char*, const char*>>{
              {"insert-page-number", core::kMarkPage, "Insert page number"},
@@ -157,6 +173,12 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_nav.signal_pick().connect(sigc::mem_fun(*this, &Shell::on_nav_pick));
     m_tiles.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_tiles_selection));
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
+    // s033: the story editor's edits refresh the other views.
+    m_story_ed.signal_edited().connect([this] { set_dirty(true); queue_refresh(); });
+    // s031: the navigator brackets them too.
+    m_nav.set_grouping([this] {
+        return m_doc.settings().facing ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};
+    });
     // s028: facing pages tile by spread.
     m_tiles.set_grouping([this] {
         return m_doc.settings().facing ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};

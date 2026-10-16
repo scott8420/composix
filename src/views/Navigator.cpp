@@ -120,6 +120,27 @@ void Navigator::set_outline(const core::Outline* o) {
         }
     }
     m_quiet = false;
+    mark_spreads();
+}
+
+// s031: the rows of a two-page spread bracketed together (a line down their
+// left, the pair's ends rounded), and air before each spread.
+void Navigator::mark_spreads() {
+    const auto* r = sec(core::Segment::Pages);
+    if (!r) return;
+    const auto groups = m_grouping ? m_grouping() : std::vector<std::vector<std::string>>{};
+    std::map<std::string, std::pair<std::size_t, std::size_t>> where;   // page -> (index in its spread, spread size)
+    for (const auto& g : groups)
+        for (std::size_t i = 0; i < g.size(); ++i) where[g[i]] = {i, g.size()};
+    for (std::size_t k = 0; k < r->items.size(); ++k) {
+        auto* row = r->items[k];
+        for (const char* c : {"cx-spread-top", "cx-spread-bottom", "cx-spread-gap"}) row->remove_css_class(c);
+        const auto it = where.find(m_item_of[row]);
+        if (it == where.end()) continue;
+        const auto [i, n] = it->second;
+        if (n == 2) row->add_css_class(i == 0 ? "cx-spread-top" : "cx-spread-bottom");
+        if (i == 0 && k > 0) row->add_css_class("cx-spread-gap");
+    }
 }
 
 // The document changed. Most changes keep the same items in the same order
@@ -153,6 +174,7 @@ void Navigator::refresh(const core::Outline* o) {
                 else                      badge->remove_css_class("cx-warn");
             }
         }
+        mark_spreads();   // sides may have moved (a page added, a section)
         return;
     }
 

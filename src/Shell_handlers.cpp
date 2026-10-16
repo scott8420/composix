@@ -236,8 +236,10 @@ void Shell::on_export_pdf() {  // handler
         plab->add_css_class("cx-field-label");
         std::vector<Glib::ustring> names{"None (device CMYK)"};
         m_profiles.clear();
+        m_profile_names.clear();
         for (const auto& p : plate::find_cmyk_profiles(profile_dirs())) {
             m_profiles.push_back(p.path);
+            m_profile_names.push_back(p.name);
             names.push_back(p.name);
         }
         auto prof = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(names));
@@ -316,6 +318,14 @@ void Shell::on_export_pdf() {  // handler
             m_pdf_profile = (i > 0 && i - 1 < m_profiles.size()) ? m_profiles[i - 1] : std::string{};
             m_pdf_convert = conv->get_active();
             m_pdf_standard = (m_pdf_print && !m_pdf_profile.empty()) ? static_cast<int>(stdd->get_selected()) : 0;
+            // s032: kept with the document, the profile by its name.
+            {
+                core::ExportPrefs e{m_pdf_print, m_pdf_bleed, m_pdf_marks, {}, m_pdf_convert, m_pdf_standard};
+                for (std::size_t k = 0; k < m_profiles.size(); ++k)
+                    if (m_profiles[k] == m_pdf_profile) e.profile = m_profile_names[k];
+                m_profile_missing.clear();
+                core::doc::set_export(m_journal, m_doc, e);
+            }
             update_preflight();   // s024: the standard's checks follow
             m_export->set_visible(false);
             auto dialog = Gtk::FileDialog::create();
@@ -474,6 +484,20 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "starts") {
             did = core::doc::set_starts(m_journal, m_doc, m_inspected,
                                         static_cast<core::Side>(std::stoi(choice)));
+        } else if (key == "local" || key == "lsize" || key == "lcolor") {   // s030: formatting on the words
+            if (key == "local" && (choice == "bold" || choice == "italic")) { activate_action(choice == "bold" ? "win.bold" : "win.italic"); return; }
+            auto& cv = m_canvas_view.canvas();
+            if (!cv.editing()) return;
+            auto [a, b] = cv.edit_range();
+            const auto story = cv.edit_story_id();
+            if (a == b) if (const auto* st = m_doc.as<core::Story>(story)) std::tie(a, b) = core::word_at(*st, a);
+            if (key == "local")
+                did = core::doc::set_local(m_journal, m_doc, story, a, b, "Clear overrides", [](core::Local& l) { l = {}; });
+            else if (key == "lsize")
+                did = core::doc::set_local(m_journal, m_doc, story, a, b, "Size", [&](core::Local& l) { l.size = std::stod(choice); });
+            else
+                did = core::doc::set_local(m_journal, m_doc, story, a, b, "Colour", [&](core::Local& l) { l.color = choice; });
+            cv.grab_focus();
         } else if (key == "pstyle" || key == "cstyle") {   // s011: the text being edited
             auto& cv = m_canvas_view.canvas();
             if (!cv.editing()) return;

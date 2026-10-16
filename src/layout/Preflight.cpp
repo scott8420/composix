@@ -97,7 +97,9 @@ std::vector<Issue> preflight_issues(const core::Doc& d, FlowCache& flows, const 
         if (s->model == core::ColorModel::RGB && o.standard == 1 && !o.profile)
             out.push_back({L::Error, "rgb", "RGB colour " + s->name + " \u2014 PDF/X-1a needs a profile to convert it", pg, fid});
     }
-    if (o.standard != 0 && !o.profile)
+    if (!o.missing_profile.empty())
+        out.push_back({L::Error, "profile", "Output profile \u201c" + o.missing_profile + "\u201d is not on this computer (Export PDF)", {}, {}});
+    if (o.standard != 0 && !o.profile && o.missing_profile.empty())
         out.push_back({L::Error, "profile", "PDF/X needs an output profile (Export PDF)", {}, {}});
     // Errors first, then warnings, then info; each in page order.
     std::map<std::string, int> at;

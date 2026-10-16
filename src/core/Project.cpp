@@ -536,6 +536,22 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
     std::size_t chars = 0;
     for (unsigned char c : sel) chars += (c & 0xC0) != 0x80;
     out.push_back({"Selection", a == b ? "Caret" : std::to_string(chars) + (chars == 1 ? " character" : " characters")});
+    // s030: formatting on the words themselves (over the styles).
+    {
+        const auto& para = st->paras[static_cast<std::size_t>(a.para)];
+        const Local l = local_at(para, a == b ? a.byte : a.byte + 1);
+        const auto pt = [](double v) { return pts(v) + " pt"; };
+        std::vector<Choice> sz{{"0", "Style's"}};
+        for (double v : {8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 18.0, 24.0, 36.0}) sz.push_back({pts(v), pt(v)});
+        std::vector<Choice> co{{"", "Style's"}};
+        for (const auto& id : d.ids_of<Swatch>()) co.push_back({id, d.as<Swatch>(id)->name});
+        const auto* sw = d.as<Swatch>(l.color);
+        out.push_back({"Size", l.size > 0 ? pt(l.size) : "Style's", "lsize", sz});
+        out.push_back({"Colour", sw ? sw->name : "Style's", "lcolor", co});
+        Field fx{"", "", "local", {{"bold", "Bold"}, {"italic", "Italic"}, {"clear", "Clear overrides"}}};
+        fx.buttons = true;
+        out.push_back(fx);
+    }
     return out;
 }
 

@@ -386,9 +386,50 @@ std::string char_style_at(const Para& p, int byte) {
     return {};
 }
 
+Local local_at(const Para& p, int byte) {
+    const int at = byte > 0 ? byte - 1 : 0;
+    for (const auto& r : p.runs)
+        if (at >= r.start && at < r.end) return r.local;
+    return {};
+}
+
+namespace {
+template <class F> bool all_chars(const Doc& d, const Story& s, TextPos a, TextPos b, F&& on) {
+    if (b < a) std::swap(a, b);
+    bool any = false;
+    for (TextPos q = a; q < b; q = next_char(s, q)) {
+        const auto& para = s.paras[static_cast<std::size_t>(q.para)];
+        if (q.byte >= static_cast<int>(para.text.size())) continue;
+        any = true;
+        const Local l = local_at(para, q.byte + 1);
+        const auto* cs = d.as<Style>(char_style_at(para, q.byte + 1));
+        const auto* ps = d.as<Style>(para.style);
+        if (!on(l, cs, ps)) return false;
+    }
+    return any;
+}
+}  // namespace
+
+bool all_bold(const Doc& d, const Story& s, TextPos a, TextPos b) {
+    return all_chars(d, s, a, b, [](const Local& l, const Style* cs, const Style* ps) {
+        if (l.bold >= 0) return l.bold == 1;
+        if (cs && cs->bold) return true;
+        return ps && ps->bold;
+    });
+}
+
+bool all_italic(const Doc& d, const Story& s, TextPos a, TextPos b) {
+    return all_chars(d, s, a, b, [](const Local& l, const Style* cs, const Style* ps) {
+        if (l.italic >= 0) return l.italic == 1;
+        if (cs && cs->italic) return true;
+        return ps && ps->italic;
+    });
+}
+
 namespace {
 // Text with its character style, piece by piece (s011): how edits keep runs.
-struct Span { std::string text, style; };
+// s030: and its local formatting.
+struct Span { std::string text, style; Local local = {}; };
 std::vector<Span> spans_of(const Para& p, int from, int to) {
     std::vector<Span> out;
     int at = from;
@@ -396,7 +437,7 @@ std::vector<Span> spans_of(const Para& p, int from, int to) {
         if (r.end <= from || r.start >= to) continue;
         const int a = std::max(r.start, from), b = std::min(r.end, to);
         if (a > at) out.push_back({p.text.substr(static_cast<std::size_t>(at), static_cast<std::size_t>(a - at)), {}});
-        out.push_back({p.text.substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)), r.style});
+        out.push_back({p.text.substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)), r.style, r.local});
         at = b;
     }
     if (to > at) out.push_back({p.text.substr(static_cast<std::size_t>(at), static_cast<std::size_t>(to - at)), {}});
@@ -409,9 +450,10 @@ Para para_of(const std::string& style, const std::vector<Span>& spans) {
         const int a = static_cast<int>(p.text.size());
         p.text += sp.text;
         const int b = static_cast<int>(p.text.size());
-        if (sp.style.empty()) continue;
-        if (!p.runs.empty() && p.runs.back().end == a && p.runs.back().style == sp.style) p.runs.back().end = b;
-        else p.runs.push_back({a, b, sp.style});
+        if (sp.style.empty() && sp.local.empty()) continue;
+        if (!p.runs.empty() && p.runs.back().end == a && p.runs.back().style == sp.style && p.runs.back().local == sp.local)
+            p.runs.back().end = b;
+        else p.runs.push_back({a, b, sp.style, sp.local});
     }
     return p;
 }
@@ -856,6 +898,15 @@ bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     });
 }
 
+bool set_export(DocJournal& j, Doc& d, const ExportPrefs& e) {
+    if (d.settings().exp == e) return false;
+    return j.run("Export settings", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.exp = e;
+        d.put("doc", s);
+    });
+}
+
 Doc::Id override_master_item(DocJournal& j, Doc& d, const Doc::Id& page, const Doc::Id& mf) {
     const auto* f = d.as<Frame>(mf);
     if (!f || !d.as<Page>(page) || !d.as<Master>(f->owner)) return {};
@@ -976,6 +1027,8 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     // character's style (as InDesign); typing at a caret, the one before it.
     const std::string cstyle = (b != a && a.byte < static_cast<int>(pa.text.size())) ? char_style_at(pa, a.byte + 1)
                                                                                      : char_style_at(pa, a.byte);
+    const Local local = (b != a && a.byte < static_cast<int>(pa.text.size())) ? local_at(pa, a.byte + 1)
+                                                                              : local_at(pa, a.byte);   // s030
     const std::string style = pa.style;
     std::size_t head_len = 0;
     for (const auto& sp : head) head_len += sp.text.size();
@@ -984,7 +1037,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     for (std::size_t i = 0; i < pieces.size(); ++i) {
         std::vector<Span> sp;
         if (i == 0) sp = head;
-        sp.push_back({pieces[i], cstyle});
+        sp.push_back({pieces[i], cstyle, local});
         if (i + 1 == pieces.size()) sp.insert(sp.end(), tail.begin(), tail.end());
         made.push_back(para_of(style, sp));
     }
@@ -1034,6 +1087,29 @@ bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
     if (s == *st) return false;
     return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
                  [&] { d.put(story, s); });
+}
+
+bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
+               const std::function<void(Local&)>& f) {
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return false;
+    a = clamp_pos(*st, a);
+    b = clamp_pos(*st, b);
+    if (b < a) std::swap(a, b);
+    if (a == b) return false;
+    Story s = *st;
+    for (int p = a.para; p <= b.para; ++p) {
+        auto& para = s.paras[static_cast<std::size_t>(p)];
+        const int n = static_cast<int>(para.text.size());
+        const int from = p == a.para ? a.byte : 0, to = p == b.para ? b.byte : n;
+        auto sp = spans_of(para, 0, from);
+        for (auto x : spans_of(para, from, to)) { f(x.local); sp.push_back(x); }
+        const auto rest = spans_of(para, to, n);
+        sp.insert(sp.end(), rest.begin(), rest.end());
+        para = para_of(para.style, sp);
+    }
+    if (s == *st) return false;
+    return j.run(label, {story}, [&] { d.put(story, s); });
 }
 
 bool edit_styles(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const std::string& label,
@@ -1381,6 +1457,12 @@ const std::vector<Verb>& verbs() {
         {"delete_frames", [](DocJournal& j, Doc& d) { delete_frames(j, d, {"frame.2", "frame.4"}); }},  // mid-thread
         {"override_master_item", [](DocJournal& j, Doc& d) { override_master_item(j, d, "page.7", "frame.13"); }},   // s025
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
+        {"set_export", [](DocJournal& j, Doc& d) {   // s032
+             auto e = d.settings().exp;
+             e.marks = true;
+             e.standard = 2;
+             set_export(j, d, e);
+         }},
         {"thread_frames", [](DocJournal& j, Doc& d) { thread_frames(j, d, "frame.3", "frame.7"); }},   // merges a story
         {"unthread_after", [](DocJournal& j, Doc& d) { unthread_after(j, d, "frame.1"); }},
         {"drag_guide", [](DocJournal& j, Doc& d) {
@@ -1413,6 +1495,9 @@ const std::vector<Verb>& verbs() {
         {"set_para_style", [](DocJournal& j, Doc& d) { set_para_style(j, d, "story.1", {1, 0}, {3, 2}, "style.3"); }},
         {"set_char_style", [](DocJournal& j, Doc& d) { set_char_style(j, d, "story.1", {1, 4}, {2, 6}, "style.5"); }},
         {"clear_char_style", [](DocJournal& j, Doc& d) { set_char_style(j, d, "story.4", {0, 5}, {0, 12}, ""); }},
+        {"set_local", [](DocJournal& j, Doc& d) {   // s030: bold words, directly
+             set_local(j, d, "story.1", {1, 4}, {1, 10}, "Bold", [](Local& l) { l.bold = 1; });
+         }},
         {"change_hits", [](DocJournal& j, Doc& d) {   // s022: Change All
              change_hits(j, d, find_all(d, {"the"}), {true, "THE"}, "Change All");
          }},

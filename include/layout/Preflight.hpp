@@ -27,6 +27,7 @@ struct Issue {
 struct PreflightOpts {
     int  standard = 0;          // 0 none, 1 PDF/X-1a, 2 PDF/X-4 (the export's setting)
     bool profile = false;       // an output profile is chosen
+    std::string missing_profile;   // s032: the document's profile, not found on this computer
     // A picture's link (the shell knows the folder); unset: links not checked.
     std::function<core::LinkStatus(const core::Asset&)> link;
 };

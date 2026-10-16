@@ -7,6 +7,7 @@
 #include "views/ItemView.hpp"
 #include "views/Navigator.hpp"
 #include "views/PageThumbs.hpp"
+#include "views/StoryEditor.hpp"
 #include "views/PanelHandle.hpp"
 #include "views/TileView.hpp"
 
@@ -89,6 +90,7 @@ private:
     void on_new();                               // category: handler: s019 -- the New sheet -> a blank document
     void on_sample();                            // category: handler: s019 -- open the built-in sample book
     void on_find();                              // category: handler: s022 -- Ctrl+F: show the find bar
+    void on_story_editor();                      // category: handler: s033 -- Ctrl+Y: the story being edited / picked
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
@@ -194,6 +196,9 @@ private:
     // s020: the page / master tiles drawn for real, kept per page.
     views::PageThumbs  m_page_thumbs{m_doc, [this](const core::Asset& a) { return core::resolve_asset(a, m_project_dir); }};
 
+    // s033: the story editor -- words without the page.
+    views::StoryEditor m_story_ed{m_doc, m_journal};
+
     // s005: the page canvas -- after the document and journal it edits.
     views::CanvasView  m_canvas_view{m_doc, m_journal};
     Glib::RefPtr<Gio::Menu>         m_edit_menu;
@@ -207,6 +212,9 @@ private:
     bool                             m_pdf_convert = false;
     int                              m_pdf_standard = 0;   // s017: 0 none, 1 PDF/X-1a, 2 PDF/X-4
     std::vector<std::string>         m_profiles;           // the sheet's list, as paths
+    std::vector<std::string>         m_profile_names;      // s032: ... and their names (what the document keeps)
+    std::string                      m_profile_missing;    // s032: the document's profile, not on this computer
+    void load_export_prefs();                     // category: helper: s032 -- the document's export settings -> the sheet's
     std::vector<std::string> profile_dirs() const;          // category: helper: where ICC profiles live
     void export_pdf_to(const std::string& path);  // category: helper: write + report
 

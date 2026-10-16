@@ -15,6 +15,7 @@
 
 #include <sigc++/signal.h>
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -48,6 +49,10 @@ public:
 
     sigc::signal<void(const Pick&)>& signal_pick() { return m_pick; }
 
+    // s031: how the pages group into spreads -- their rows are bracketed
+    // together, with a little air between spreads. Empty groups: none.
+    void set_grouping(std::function<std::vector<std::vector<std::string>>()> g) { m_grouping = std::move(g); }
+
 private:
     struct SecRow {
         core::Segment                 segment;
@@ -58,6 +63,7 @@ private:
     };
 
     void on_selection_changed();
+    void mark_spreads();   // s031
     SecRow* sec(core::Segment s);
 
     widgets::ScrolledWindow m_scroll;
@@ -72,6 +78,7 @@ private:
     std::map<const Gtk::ListBoxRow*, std::pair<Gtk::Label*, Gtk::Label*>> m_labels;   // item row -> title, badge
     std::map<const Gtk::ListBoxRow*, Gtk::Label*>                         m_counts;   // segment row -> count
     sigc::signal<void(const Pick&)>         m_pick;
+    std::function<std::vector<std::vector<std::string>>()> m_grouping;
 };
 
 }  // namespace composix::views

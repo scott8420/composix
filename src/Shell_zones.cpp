@@ -69,6 +69,7 @@ void Shell::build_shell() {  // zone: header + panes
     m_main.add(m_tiles, "tiles");
     m_main.add(m_item, "item");
     m_main.add(m_canvas_view, "canvas");   // s005: pages and masters open here
+    m_main.add(m_story_ed, "story");       // s033: a story opens as running text
     m_main.set_visible_child("welcome");
 
     // ── the inspector: a sliding panel, its handle, and the pull tab ───────

@@ -2106,6 +2106,78 @@ int main() {
         check("inspector: Drop cap", field);
     }
 
+    {
+        std::cout << "\n-- local formatting --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        load_plain(d);
+        const core::TextPos a{1, 4}, b{1, 10};   // "harbor"
+        const auto story = [&] { return *d.as<core::Story>("story.1"); };
+        check("bold: not yet", !core::all_bold(d, story(), a, b));
+        check("bold: one step", D::set_local(j, d, "story.1", a, b, "Bold", [](core::Local& l) { l.bold = 1; }) &&
+                                core::all_bold(d, story(), a, b) && !core::all_bold(d, story(), {1, 0}, b));
+        const auto s1 = story();
+        const auto& runs = s1.paras[1].runs;
+        check("bold: a run with local formatting, no style", runs.size() == 1 && runs[0].start == 4 && runs[0].end == 10 &&
+                                                              runs[0].style.empty() && runs[0].local.bold == 1);
+        const auto at = D::edit_text(j, d, "story.1", {1, 7}, {1, 7}, "x");
+        check("typing inside: it's bold too", at == core::TextPos{1, 8} && story().paras[1].runs[0].end == 11);
+        D::set_char_style(j, d, "story.1", {1, 4}, {1, 11}, "style.5");
+        check("a character style on top keeps it", story().paras[1].runs[0].style == "style.5" &&
+                                                    story().paras[1].runs[0].local.bold == 1);
+        D::set_local(j, d, "story.1", {1, 4}, {1, 11}, "Colour", [](core::Local& l) { l.color = "swatch.3"; l.size = 14; });
+        std::string err;
+        core::Doc e;
+        check("json: round-trips", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        const auto f = core::text_fields(d, "story.1", {1, 5}, {1, 5});
+        bool sz = false, co = false, bt = false;
+        for (const auto& x : f) {
+            sz = sz || (x.edit == "lsize" && x.value == "14 pt");
+            co = co || (x.edit == "lcolor" && x.value == "Guild Rust");
+            bt = bt || (x.edit == "local" && x.buttons);
+        }
+        check("inspector: Size, Colour, Bold / Italic / Clear", sz && co && bt);
+        D::set_local(j, d, "story.1", {1, 4}, {1, 11}, "Clear overrides", [](core::Local& l) { l = {}; });
+        check("clear: back to the style alone", story().paras[1].runs.size() == 1 && story().paras[1].runs[0].local.empty());
+        check("italic: the style's own counts", core::all_italic(d, story(), {1, 4}, {1, 11}));   // Emphasis is italic
+        namespace L = composix::layout;
+        // Drawn: a bold run sets wider than the same words plain.
+        core::Doc w;
+        load_plain(w);
+        core::DocJournal wj{w};
+        w.set_door([&wj] { return wj.open(); });
+        const auto x0 = L::caret_at(w, "story.1", L::flow_story(w, "story.1"), {1, 10}).x;
+        D::set_local(wj, w, "story.1", {1, 4}, {1, 10}, "Bold", [](core::Local& l) { l.bold = 1; });
+        const auto x1 = L::caret_at(w, "story.1", L::flow_story(w, "story.1"), {1, 10}).x;
+        check("drawn: bold words set wider", x1 > x0 + 0.5);
+    }
+
+    {
+        std::cout << "\n-- export settings --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("defaults: print, bleed, no profile", d.settings().exp.print && d.settings().exp.bleed && d.settings().exp.profile.empty());
+        core::ExportPrefs e{true, true, true, "GRACoL2013_CRPC6.icc", true, 1};
+        check("kept: one step", core::doc::set_export(j, d, e) && j.size() == 1 && d.settings().exp == e);
+        check("kept: the same again, no step", !core::doc::set_export(j, d, e) && j.size() == 1);
+        std::string err;
+        core::Doc f;
+        check("json: with the document", core::from_json(f, core::to_json(d), &err) && f.settings().exp == e, err);
+        L::FlowCache flows;
+        L::PreflightOpts o;
+        o.missing_profile = "Some Press Profile";
+        const auto v = L::preflight_issues(d, flows, o);
+        check("preflight: a profile not on this computer is named", std::any_of(v.begin(), v.end(), [](const L::Issue& i) {
+                  return i.kind == "profile" && i.text.find("Some Press Profile") != std::string::npos; }));
+        j.undo();
+        check("undo: back to the defaults", d.settings().exp == core::ExportPrefs{});
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

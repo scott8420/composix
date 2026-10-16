@@ -118,6 +118,7 @@ add_executable(composix
     src/views/Navigator.cpp
     src/views/TileView.cpp
     src/views/ItemView.cpp
+    src/views/StoryEditor.cpp
     src/views/Inspector.cpp
     src/views/Thumbs.cpp
     src/views/PageThumbs.cpp

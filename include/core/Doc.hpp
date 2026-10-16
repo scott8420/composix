@@ -64,11 +64,24 @@ struct Sides {
     bool operator==(const Sides&) const = default;
 };
 
+// s032: how the document exports, kept with it. The output profile by its
+// NAME (its description) -- found again among the profiles on whatever
+// computer opens the project, or reported missing.
+struct ExportPrefs {
+    bool        print = true;     // Plate (print) or cairo (screen)
+    bool        bleed = true, marks = false;
+    std::string profile;          // "" = none (device CMYK)
+    bool        convert = false;
+    int         standard = 0;     // 0 none, 1 PDF/X-1a:2003, 2 PDF/X-4
+    bool operator==(const ExportPrefs&) const = default;
+};
+
 struct Settings {
     std::string title  = "Untitled";
     double      trim_w = 6 * kPt, trim_h = 9 * kPt;
     double      bleed  = 0.125 * kPt;
     bool        facing = true;
+    ExportPrefs exp;                     // s032
     bool operator==(const Settings&) const = default;
 };
 
@@ -139,9 +152,20 @@ struct Frame {
 // A character style over bytes [start, end) of a paragraph (s011). A
 // paragraph's runs are sorted, never overlap, never empty; text outside any
 // run is in the paragraph style alone.
+// s030: formatting set on words directly, over their styles: -1 / 0 /
+// "" = leave it to the styles.
+struct Local {
+    int         bold = -1, italic = -1;   // -1 the styles', 0 off, 1 on
+    double      size = 0;                 // points
+    std::string color;                    // a swatch id
+    bool empty() const { return bold < 0 && italic < 0 && size <= 0 && color.empty(); }
+    bool operator==(const Local&) const = default;
+};
+
 struct Run {
     int         start = 0, end = 0;
-    std::string style;                   // a character style id
+    std::string style;                   // a character style id ("" with local formatting only)
+    Local       local;                   // s030
     bool operator==(const Run&) const = default;
 };
 
@@ -332,6 +356,12 @@ std::pair<TextPos, TextPos> word_at(const Story& s, TextPos p);
 // The character style at a place: the character before it carries on (as
 // typing continues it); at a paragraph's start, the first character's.
 std::string char_style_at(const Para& p, int byte);
+// s030: the local formatting at a place (as char_style_at: the character before it).
+Local local_at(const Para& p, int byte);
+// Is every character of [a, b) bold / italic, all told (local, then the
+// character style, then the paragraph style)? What Ctrl+B / Ctrl+I toggle.
+bool all_bold(const Doc& d, const Story& s, TextPos a, TextPos b);
+bool all_italic(const Doc& d, const Story& s, TextPos a, TextPos b);
 
 // ── images (s009) ───────────────────────────────────────────────────────────
 // A file as the UI found it on disk. The core never decodes: the app probes
@@ -418,6 +448,9 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
 // story whose LAST frame goes goes with it, and so does an image whose last
 // placement goes (s009, as InDesign). One step.
 bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
+// s032: the export settings, kept with the document (one step; none when
+// unchanged).
+bool set_export(DocJournal& j, Doc& d, const ExportPrefs& e);
 // s025: a master's item on `page` becomes the page's own -- a copy (a text
 // frame gets its own copy of the story) that hides the master's there.
 // "" if it isn't a master item shown on that page, or is already overridden.
@@ -471,6 +504,10 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
 // The paragraphs [a.para .. b.para] take a paragraph style. One step.
 bool set_para_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style);
 // [a, b) takes a character style ("" = none). One step.
+// s030: formatting on the words of [a, b) directly -- `f` changes each
+// piece's Local (Clear overrides: f = reset). One step.
+bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
+               const std::function<void(Local&)>& f);
 bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style);
 // Change styles' settings: `f` edits each; one step for all of them.
 bool edit_styles(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles, const std::string& label,
