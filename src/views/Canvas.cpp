@@ -573,8 +573,10 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
             }
         };
         if (!from_master && r.w > 24 && r.h > 24) {
-            port(std::round(r.x) + 3.5, std::round(r.y) + 3.5, at > 1);
-            const double px = std::round(r.r()) - ps - 3.5, py = std::round(r.b()) - ps - 3.5;
+            // s060: just outside the frame's edges (they sat over its first glyph).
+            const Rect in = port_rect(id, false), out = port_rect(id, true);
+            port(in.x, in.y, at > 1);
+            const double px = out.x, py = out.y;
             if (over_here) {
                 cr->set_source_rgb(0.85, 0.15, 0.15);
                 cr->rectangle(px - 1, py - 1, ps + 2, ps + 2);
@@ -691,8 +693,11 @@ Rect Canvas::port_rect(const std::string& frame, bool out) const {
     const Rect r = m_vp.to_screen(core::frame_in_layout(m_doc, m_placed, frame));
     if (r.w <= 24 || r.h <= 24) return {};
     const double ps = 7;
-    return out ? Rect{std::round(r.r()) - ps - 3.5, std::round(r.b()) - ps - 3.5, ps, ps}
-               : Rect{std::round(r.x) + 3.5, std::round(r.y) + 3.5, ps, ps};
+    // s060: outside the frame -- the in-port on the left edge near the top,
+    // the out-port on the right edge near the bottom (clear of the text and
+    // of the corner handles).
+    return out ? Rect{std::round(r.r()) + 3.5, std::round(r.b()) - ps - 10.5, ps, ps}
+               : Rect{std::round(r.x) - ps - 3.5, std::round(r.y) + 10.5, ps, ps};
 }
 
 std::string Canvas::out_port_hit(double sx, double sy) const {

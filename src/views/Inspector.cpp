@@ -169,6 +169,32 @@ void Inspector::fill(const std::string& title, const std::string& sub,
         l->set_valign(f.edit.empty() ? Gtk::Align::START : Gtk::Align::CENTER);
         m_fields.attach(*l, 0, row);
 
+        if (!f.edit.empty() && f.text) {
+            // s060: typed text -- sent as typed on Enter or leaving it.
+            auto en = Gtk::make_managed<Gtk::Entry>();
+            const std::string key = f.edit;
+            en->set_name("inspector.edit." + key);
+            en->add_css_class("cx-field-typed");
+            en->set_hexpand(true);
+            en->set_width_chars(8);
+            if (f.value == core::kMixed) { en->set_placeholder_text(core::kMixed); en->add_css_class("cx-mixed"); }
+            else en->set_text(f.value);
+            auto shown = std::make_shared<std::string>(f.value == core::kMixed ? std::string{} : f.value);
+            auto commit = [this, en, shown, key] {
+                if (m_painting) return;
+                const std::string text = en->get_text();
+                if (text == *shown || text.empty()) return;
+                *shown = text;
+                m_edit.emit(key, text);
+            };
+            en->signal_activate().connect(commit);
+            auto focus = Gtk::EventControllerFocus::create();
+            focus->signal_leave().connect(commit);
+            en->add_controller(focus);
+            m_fields.attach(*en, 1, row);
+            ++row;
+            continue;
+        }
         if (!f.edit.empty() && f.unit > 0) {
             // s041: a typed value, its presets in a menu beside it.
             auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);

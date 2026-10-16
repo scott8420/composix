@@ -150,11 +150,26 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         std::size_t i = 0;
         for (const auto& sid : d.ids_of<Section>()) {
             const auto& s = *d.as<Section>(sid);
-            o.add({sid, G::Document, s.name, "", {K::Section, 6, 9, tint(i++)},
-                   {{"Pages", folio_range(d, d.pages_of(sid))},
-                    {"Numbering", numbering_text(s.numbering), "numbering", numbering_choices},
-                    {"Starts", side_text(s.starts), "starts", side_choices},
-                    {"Master", master_label(d, s.master)}}});
+            // s060: name and first number typed; the master chosen; Remove.
+            Field name{"Name", s.name, "sname"};
+            name.text = true;
+            Field at{"Starts at", std::to_string(s.start_at), "sstart_at"};
+            at.text = true;
+            std::vector<Choice> mc{{"", "None"}};
+            for (const auto& mid : d.ids_of<Master>()) mc.push_back({mid, master_label(d, mid)});
+            std::vector<Field> f{name,
+                                 {"Pages", folio_range(d, d.pages_of(sid))},
+                                 {"Numbering", numbering_text(s.numbering), "numbering", numbering_choices},
+                                 at,
+                                 {"Starts", side_text(s.starts), "starts", side_choices},
+                                 {"Master", master_label(d, s.master), "smaster", mc}};
+            const auto pages_all = d.pages();
+            if (pages_all.empty() || s.start_page != pages_all.front()) {   // the first section stays
+                Field act{"", "", "section", {{"remove", "Remove section"}}};
+                act.buttons = true;
+                f.push_back(act);
+            }
+            o.add({sid, G::Document, s.name, "", {K::Section, 6, 9, tint(i++)}, f});
         }
     }
 

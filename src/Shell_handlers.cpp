@@ -518,6 +518,18 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "numbering") {
             did = core::doc::set_numbering(m_journal, m_doc, m_inspected,
                                            static_cast<core::Numbering>(std::stoi(choice)));
+        } else if (key == "sname") {   // s060: a section's name
+            if (m_inspected.size() == 1) did = core::doc::rename_section(m_journal, m_doc, m_inspected.front(), choice);
+        } else if (key == "sstart_at") {   // s060: its first page's number
+            int n = 0;
+            try { std::size_t used = 0; n = std::stoi(choice, &used); if (used != choice.size()) n = 0; } catch (const std::exception&) { n = 0; }
+            if (n < 1 || n > 99999) { alert("Not a page number", "Starts at takes a whole number from 1 -- \u201c" + choice + "\u201d isn\u2019t one."); return; }
+            did = core::doc::set_section_start_at(m_journal, m_doc, m_inspected, n);
+        } else if (key == "smaster") {   // s060: the master its new pages take
+            did = core::doc::set_section_master(m_journal, m_doc, m_inspected, choice);
+        } else if (key == "section") {   // s060: Remove section
+            if (choice == "remove")
+                for (const auto& id : m_inspected) did = core::doc::remove_section(m_journal, m_doc, id) || did;
         } else if (key == "starts") {
             did = core::doc::set_starts(m_journal, m_doc, m_inspected,
                                         static_cast<core::Side>(std::stoi(choice)));

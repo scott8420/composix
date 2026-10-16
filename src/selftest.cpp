@@ -2427,6 +2427,48 @@ int main() {
     }
 
     {
+        std::cout << "\n-- section editing (s060) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto secs = d.ids_of<core::Section>();
+        check("fixture: two sections (front matter, body)", secs.size() >= 2);
+        const auto body = secs.back();
+        const auto first_page = d.as<core::Section>(body)->start_page;
+        const auto steps = j.size();
+        check("rename: trimmed, one step", D::rename_section(j, d, body, "  Part One ") && j.size() == steps + 1 &&
+                                           d.as<core::Section>(body)->name == "Part One");
+        check("rename: empty refused", !D::rename_section(j, d, body, "   ") && d.as<core::Section>(body)->name == "Part One");
+        check("rename: Section Name markers read it", L::marker_value(d, 1, first_page, "") == "Part One");
+        const auto was = d.folio(first_page);
+        check("starts at: the first page takes it", D::set_section_start_at(j, d, {body}, 5) && d.folio(first_page) == "5");
+        check("starts at: 0 refused", !D::set_section_start_at(j, d, {body}, 0));
+        j.undo();
+        check("starts at: undo", d.folio(first_page) == was);
+        std::string m0;   // a master the section hasn't got
+        for (const auto& m : d.ids_of<core::Master>()) if (m != d.as<core::Section>(body)->master) { m0 = m; break; }
+        check("master: set, or a missing one refused", D::set_section_master(j, d, {body}, m0) &&
+                                                       d.as<core::Section>(body)->master == m0 &&
+                                                       !D::set_section_master(j, d, {body}, "master.none"));
+        const auto o = core::project(d, "");
+        const auto has_remove = [&](const std::string& id) {
+            const auto* it = o.find(id);
+            if (!it) return false;
+            for (const auto& f : it->fields) if (f.edit == "section") return true;
+            return false;
+        };
+        const auto name_field = [&](const std::string& id) {
+            for (const auto& f : o.find(id)->fields) if (f.edit == "sname") return f.text && f.value == d.as<core::Section>(id)->name;
+            return false;
+        };
+        check("inspector: Name typed; Remove offered except for the first section", name_field(body) && has_remove(body) &&
+                                                                                     !has_remove(secs.front()));
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

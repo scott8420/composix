@@ -76,6 +76,9 @@ struct Field {
     // pt, 72 = in); 0 = not typed. What it sends is points, in [lo, hi].
     // A compact row typed: each column edits on its own ("k:points").
     double unit = 0, lo = 0, hi = 0;
+    // s060: a value typed as TEXT (a name; a whole number): an entry that
+    // sends what's typed, as typed, on Enter or leaving it.
+    bool text = false;
     bool operator==(const Field&) const = default;
 };
 

@@ -521,6 +521,11 @@ Doc::Id add_section(DocJournal& j, Doc& d, const Doc::Id& start_page, const std:
 bool set_numbering(DocJournal& j, Doc& d, const std::vector<Doc::Id>& sections, Numbering n);
 bool set_starts(DocJournal& j, Doc& d, const std::vector<Doc::Id>& sections, Side s);
 bool remove_section(DocJournal& j, Doc& d, const Doc::Id& section);
+// s060: a section's name (what Section Name markers show), the number its
+// first page takes, and the master new pages in it get. One step each.
+bool rename_section(DocJournal& j, Doc& d, const Doc::Id& section, const std::string& name);
+bool set_section_start_at(DocJournal& j, Doc& d, const std::vector<Doc::Id>& sections, int start_at);
+bool set_section_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& sections, const Doc::Id& master);
 
 // The neighbour that takes the selection when `pages` go (next, else previous).
 Doc::Id neighbour_page(const Doc& d, const std::vector<Doc::Id>& pages);

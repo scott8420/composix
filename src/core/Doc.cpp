@@ -814,6 +814,24 @@ bool remove_section(DocJournal& j, Doc& d, const Doc::Id& section) {
                  [&] { d.put(section, std::nullopt); });
 }
 
+bool rename_section(DocJournal& j, Doc& d, const Doc::Id& section, const std::string& name) {
+    std::string n = name;
+    while (!n.empty() && (n.back() == ' ' || n.back() == '\t')) n.pop_back();
+    while (!n.empty() && (n.front() == ' ' || n.front() == '\t')) n.erase(n.begin());
+    if (n.empty() || !d.as<Section>(section)) return false;
+    return edit_sections(j, d, {section}, "Rename section \u201c" + n + "\u201d", [&](Section& s) { s.name = n; });
+}
+
+bool set_section_start_at(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, int start_at) {
+    if (start_at < 1) return false;
+    return edit_sections(j, d, ids, "Start numbering at " + std::to_string(start_at), [&](Section& s) { s.start_at = start_at; });
+}
+
+bool set_section_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const Doc::Id& master) {
+    if (!master.empty() && !d.as<Master>(master)) return false;
+    return edit_sections(j, d, ids, "Section master", [&](Section& s) { s.master = master; });
+}
+
 Doc::Id neighbour_page(const Doc& d, const std::vector<Doc::Id>& gone) {
     const auto order = d.pages();
     const auto is_gone = [&](const Doc::Id& p) { return std::find(gone.begin(), gone.end(), p) != gone.end(); };
@@ -1906,6 +1924,13 @@ const std::vector<Verb>& verbs() {
              set_starts(j, d, d.ids_of<Section>(), Side::Left);
          }},
         {"remove_section", [](DocJournal& j, Doc& d) { remove_section(j, d, d.ids_of<Section>().back()); }},
+        {"rename_section", [](DocJournal& j, Doc& d) { rename_section(j, d, d.ids_of<Section>().back(), "Part One"); }},   // s060
+        {"section_start_at", [](DocJournal& j, Doc& d) { set_section_start_at(j, d, {d.ids_of<Section>().back()}, 5); }},
+        {"section_master", [](DocJournal& j, Doc& d) {
+             const auto sec = d.ids_of<Section>().back();
+             for (const auto& m : d.ids_of<Master>())
+                 if (m != d.as<Section>(sec)->master) { set_section_master(j, d, {sec}, m); break; }
+         }},
         {"move_frames", [](DocJournal& j, Doc& d) { move_frames(j, d, {"frame.1", "frame.4"}, 9, -3); }},
         {"add_guide", [](DocJournal& j, Doc& d) { add_guide(j, d, "page.6", true, 100); }},
         {"add_text_frame", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Text, {54, 54, 200, 100}); }},
