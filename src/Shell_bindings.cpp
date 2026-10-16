@@ -192,6 +192,7 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_nav.signal_pick().connect(sigc::mem_fun(*this, &Shell::on_nav_pick));
     m_tiles.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_tiles_selection));
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
+    m_tiles.signal_new().connect([this] { open_swatch_editor({}); });   // s058
     // s052: the Colors view's size, kept between runs.
     {
         const auto it = m_settings.find("colors.view");   // (find: reading adds no empty key)

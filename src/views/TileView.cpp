@@ -2,6 +2,7 @@
 #include "views/Thumbs.hpp"
 #include "Log.hpp"
 
+#include <gtkmm/button.h>
 #include <gtkmm/dragsource.h>
 #include <gtkmm/drawingarea.h>
 #include <gtkmm/widgetpaintable.h>
@@ -77,6 +78,15 @@ TileView::TileView()
     }
     m_sizes.set_visible(false);
     m_head.append(m_sizes);
+    {   // s058: a new swatch, from the Colors view.
+        auto nb = Gtk::make_managed<Gtk::Button>("New Swatch\u2026");
+        nb->set_name("tiles.new");
+        nb->set_valign(Gtk::Align::CENTER);
+        nb->set_visible(false);
+        nb->signal_clicked().connect([this] { m_new_sig.emit(); });
+        m_head.append(*nb);
+        m_new_btn = nb;
+    }
     append(m_head);
 
     setup_grid(m_grid);
@@ -162,6 +172,7 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
     const bool sized = s == core::Segment::Colors;
     const TileSize z = sized ? m_size : TileSize::Large;
     m_sizes.set_visible(sized);
+    if (m_new_btn) m_new_btn->set_visible(sized);
     bool grouped = false;
     for (const auto* it : items) grouped = grouped || (sized && !it->group.empty());
     m_grid.set_visible(!grouped);

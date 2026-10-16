@@ -692,6 +692,20 @@ const std::vector<Verb>& verbs();
 // per use). 0 = unused.
 int swatch_uses(const Doc& d, const Doc::Id& swatch);
 
+// s058: swatches made and changed. The screen colour (`preview`) is worked
+// out from the values: RGB as is, Gray as grey, CMYK and a spot's
+// alternate by a simple ink model (the print conversion is the profile's).
+std::uint32_t swatch_preview(const Swatch& s);
+// The values as 0xRRGGBB and back (for switching a swatch's model).
+void swatch_from_rgb(Swatch& s, std::uint32_t rgb);
+// New (after the last swatch), changed (its preview made from its values),
+// duplicated ("<name> copy"); each one step. Delete: only swatches nothing
+// uses (false if any is used, nothing changed).
+Doc::Id add_swatch(DocJournal& j, Doc& d, Swatch s);
+bool    edit_swatch(DocJournal& j, Doc& d, const Doc::Id& id, Swatch s);
+Doc::Id duplicate_swatch(DocJournal& j, Doc& d, const Doc::Id& id);
+bool    delete_swatch(DocJournal& j, Doc& d, const Doc::Id& id);
+
 // ── Find / Change (s022) ────────────────────────────────────────────────────
 // What to look for: text (in one paragraph), optionally only in a
 // paragraph style and / or wholly in a character style. No text and a

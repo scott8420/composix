@@ -497,6 +497,8 @@ void Shell::on_tiles_selection(const std::vector<std::string>& ids) {  // handle
 // Opening tiles = selecting those items in the navigator, so there is ONE
 // route to "open": the navigator's pick (the tile view never opens on its own).
 void Shell::on_tiles_open(const std::vector<std::string>& ids) {  // handler
+    // s058: a swatch opens in its editor.
+    if (!ids.empty() && m_doc.as<core::Swatch>(ids.front())) { open_swatch_editor(ids.front()); return; }
     m_nav.select_items(ids);
 }
 
@@ -621,6 +623,18 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 if (did) Glib::signal_idle().connect_once([this, made] { m_tiles.show_section(m_outline, core::Segment::Styles, {made}); on_tiles_selection({made}); });
             } else if (choice == "delete") {
                 did = core::doc::delete_styles(m_journal, m_doc, m_inspected);
+            }
+        } else if (key == "swatch") {   // s058: Edit... / Duplicate / Delete
+            if (choice == "edit" && !m_inspected.empty()) {
+                open_swatch_editor(m_inspected.front());
+                return;
+            }
+            if (choice == "duplicate" && !m_inspected.empty()) {
+                const auto made = core::doc::duplicate_swatch(m_journal, m_doc, m_inspected.front());
+                did = !made.empty();
+                if (did) Glib::signal_idle().connect_once([this, made] { m_tiles.show_section(m_outline, core::Segment::Colors, {made}); on_tiles_selection({made}); });
+            } else if (choice == "delete") {
+                for (const auto& id : m_inspected) did = core::doc::delete_swatch(m_journal, m_doc, id) || did;
             }
         } else if (key == "based_on") {   // s037
             if (m_inspected.size() == 1) did = core::doc::set_style_base(m_journal, m_doc, m_inspected.front(), choice);

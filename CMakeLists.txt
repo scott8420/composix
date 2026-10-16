@@ -128,6 +128,7 @@ add_executable(composix
     src/Shell_new.cpp
     src/Shell_find.cpp
     src/Shell_colorreport.cpp
+    src/Shell_swatch.cpp
     src/Shell_preflight.cpp
     src/Shell_helpers.cpp
     # s002: the segmented navigator, tile view, item preview, inspector.

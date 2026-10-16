@@ -22,6 +22,11 @@
 #include <gtkmm/menubutton.h>
 #include "layout/Preflight.hpp"
 #include <gtkmm/togglebutton.h>
+#include <gtkmm/button.h>
+#include <gtkmm/drawingarea.h>
+#include <gtkmm/scale.h>
+#include <gtkmm/spinbutton.h>
+#include <plate/plate.hpp>
 #include <giomm/simpleaction.h>
 
 #include <functional>
@@ -97,6 +102,8 @@ private:
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
     void restore_window();                       // category: helper: s057 -- size + panels from settings.json
     void save_window();                          // category: helper: s057 -- and back, at close
+    void open_swatch_editor(const std::string& id);   // category: helper: s058 -- edit a swatch ("" = a new one)
+    void swatch_editor_sync();                   // category: helper: s058 -- the sheet's fields from m_sw
     void on_color_report();                      // category: handler: s053 -- the Colour Report window
     void report_refresh();                       // category: helper: s053 -- proof again (profile picked / shown)
     void on_export_pdf();                        // category: handler: the Export PDF sheet -> a file -> the report
@@ -215,6 +222,28 @@ private:
 
     // s013: the Export PDF sheet, and its choices for the session.
     std::unique_ptr<Gtk::Window>     m_export;
+    // s058: the swatch editor -- the swatch being made / changed, its sheet's widgets.
+    std::unique_ptr<Gtk::Window>     m_swed;
+    core::Swatch                     m_sw;
+    std::string                      m_sw_id;                 // "" = new
+    bool                             m_sw_quiet = false;
+    bool                             m_sw_hex_typing = false;
+    Gtk::Entry*                      m_sw_name = nullptr;
+    Gtk::DropDown*                   m_sw_model = nullptr;
+    Gtk::Entry*                      m_sw_hex = nullptr;
+    Gtk::Entry*                      m_sw_ink = nullptr;
+    Gtk::Label*                      m_sw_title = nullptr;
+    Gtk::Label*                      m_sw_press = nullptr;
+    Gtk::Button*                     m_sw_save = nullptr;
+    Gtk::DrawingArea*                m_sw_chip = nullptr;
+    std::vector<Gtk::Widget*>        m_sw_rows;                // 4 component rows
+    std::vector<Gtk::Label*>         m_sw_labels;
+    std::vector<Gtk::Scale*>         m_sw_scales;
+    std::vector<Gtk::SpinButton*>    m_sw_spins;
+    Gtk::Widget*                     m_sw_hex_row = nullptr;
+    Gtk::Widget*                     m_sw_ink_row = nullptr;
+    std::unique_ptr<plate::Proof>    m_sw_proof;              // the press, for an RGB swatch
+    std::uint32_t                    m_sw_after = 0;
     // s053: the Colour Report -- its window, profile choice, list, and each row's page / frame.
     std::unique_ptr<Gtk::Window>     m_report;
     Gtk::DropDown*                   m_report_profile = nullptr;

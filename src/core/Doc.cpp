@@ -1480,6 +1480,80 @@ Doc::Id duplicate_style(DocJournal& j, Doc& d, const Doc::Id& style) {
     return made;
 }
 
+// ── swatches (s058) ─────────────────────────────────────────────────────────
+std::uint32_t swatch_preview(const Swatch& s) {
+    const auto c = [](double v) { return static_cast<std::uint32_t>(std::lround(std::clamp(v, 0.0, 255.0))); };
+    double r = 0, g = 0, b = 0;
+    if (s.model == ColorModel::RGB) { r = s.v[0]; g = s.v[1]; b = s.v[2]; }
+    else if (s.model == ColorModel::Gray) { r = g = b = 255 * (1 - std::clamp(s.v[0], 0.0, 100.0) / 100); }
+    else {   // CMYK, or a spot's CMYK alternate
+        const double C = s.v[0] / 100, M = s.v[1] / 100, Y = s.v[2] / 100, K = s.v[3] / 100;
+        r = 255 * (1 - std::min(1.0, C)) * (1 - std::min(1.0, K));
+        g = 255 * (1 - std::min(1.0, M)) * (1 - std::min(1.0, K));
+        b = 255 * (1 - std::min(1.0, Y)) * (1 - std::min(1.0, K));
+    }
+    return (c(r) << 16) | (c(g) << 8) | c(b);
+}
+
+void swatch_from_rgb(Swatch& s, std::uint32_t rgb) {
+    const double r = ((rgb >> 16) & 0xff) / 255.0, g = ((rgb >> 8) & 0xff) / 255.0, b = (rgb & 0xff) / 255.0;
+    s.v = {0, 0, 0, 0};
+    if (s.model == ColorModel::RGB) {
+        s.v = {r * 255, g * 255, b * 255, 0};
+    } else if (s.model == ColorModel::Gray) {
+        s.v[0] = std::round((1 - (0.299 * r + 0.587 * g + 0.114 * b)) * 100);
+    } else {
+        const double k = 1 - std::max({r, g, b});
+        if (k < 1) {
+            s.v[0] = std::round((1 - r - k) / (1 - k) * 100);
+            s.v[1] = std::round((1 - g - k) / (1 - k) * 100);
+            s.v[2] = std::round((1 - b - k) / (1 - k) * 100);
+        }
+        s.v[3] = std::round(k * 100);
+    }
+}
+
+Doc::Id add_swatch(DocJournal& j, Doc& d, Swatch s) {
+    Doc::Id made;
+    s.preview = swatch_preview(s);
+    double pos = 0;
+    for (const auto& id : d.ids_of<Swatch>()) pos = std::max(pos, d.as<Swatch>(id)->pos);
+    s.pos = pos + 1;
+    if (s.name.empty()) s.name = "New Swatch";
+    j.run("New swatch " + s.name, {}, [&]() -> std::vector<Doc::Id> {
+        made = d.fresh_id("swatch");
+        d.put(made, s);
+        return {made};
+    });
+    return made;
+}
+
+bool edit_swatch(DocJournal& j, Doc& d, const Doc::Id& id, Swatch s) {
+    const auto* cur = d.as<Swatch>(id);
+    if (!cur) return false;
+    s.pos = cur->pos;
+    // The screen colour from the values -- unless they're as they were (a
+    // swatch's own tuned preview, as the sample's, is kept).
+    s.preview = (s.model == cur->model && s.v == cur->v) ? cur->preview : swatch_preview(s);
+    if (s.name.empty()) s.name = cur->name;
+    if (s == *cur) return false;
+    return j.run("Edit swatch " + s.name, {id}, [&] { d.put(id, s); });
+}
+
+Doc::Id duplicate_swatch(DocJournal& j, Doc& d, const Doc::Id& id) {
+    const auto* cur = d.as<Swatch>(id);
+    if (!cur) return {};
+    Swatch copy = *cur;
+    copy.name += " copy";
+    return add_swatch(j, d, copy);
+}
+
+bool delete_swatch(DocJournal& j, Doc& d, const Doc::Id& id) {
+    const auto* cur = d.as<Swatch>(id);
+    if (!cur || swatch_uses(d, id) > 0) return false;
+    return j.run("Delete swatch " + cur->name, {id}, [&] { d.put(id, std::nullopt); });
+}
+
 int style_uses(const Doc& d, const Doc::Id& style) {
     int n = 0;
     for (const auto& sid : d.ids_of<Story>())
@@ -1888,6 +1962,15 @@ const std::vector<Verb>& verbs() {
              edit_styles(j, d, {"style.1", "style.4"}, "Size", [](Style& s) { s.size = 12; s.leading = 15; });
          }},
         {"duplicate_style", [](DocJournal& j, Doc& d) { duplicate_style(j, d, "style.1"); }},
+        // s058: swatches.
+        {"add_swatch", [](DocJournal& j, Doc& d) { add_swatch(j, d, Swatch{"Teal", 0, ColorModel::CMYK, {80, 0, 30, 10}}); }},
+        {"edit_swatch", [](DocJournal& j, Doc& d) {
+             auto s = *d.as<Swatch>("swatch.4");
+             s.v = {20, 120, 200, 0};
+             edit_swatch(j, d, "swatch.4", s);
+         }},
+        {"duplicate_swatch", [](DocJournal& j, Doc& d) { duplicate_swatch(j, d, "swatch.3"); }},
+        {"delete_unused_swatch", [](DocJournal& j, Doc& d) { delete_swatch(j, d, "swatch.4"); }},
         {"delete_unused_style", [](DocJournal& j, Doc& d) { delete_styles(j, d, {"style.6", "style.1"}); }},  // Body is used: stays
         // s037: Based on / Next style.
         {"set_style_base", [](DocJournal& j, Doc& d) { set_style_base(j, d, "style.6", "style.1"); }},

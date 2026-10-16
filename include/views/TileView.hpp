@@ -31,6 +31,7 @@ public:
     TileSize tile_size() const { return m_size; }
     void     set_tile_size(TileSize z);   // redraws the section on show (quietly: no signal)
     sigc::signal<void(TileSize)>& signal_tile_size() { return m_size_sig; }
+    sigc::signal<void()>&         signal_new()       { return m_new_sig; }   // s058: Colors' New Swatch
 
     // `keep`: tiles to leave selected (a refresh after an edit), silently.
     void show_section(const core::Outline& o, core::Segment s, const std::vector<std::string>& keep = {});
@@ -60,6 +61,8 @@ private:
     std::vector<Gtk::FlowBox*> m_grids;  // the grids on show
     TileSize                m_size = TileSize::Large;
     sigc::signal<void(TileSize)> m_size_sig;
+    sigc::signal<void()>    m_new_sig;
+    Gtk::Widget*            m_new_btn = nullptr;
     core::Outline           m_last;      // the section on show, to redraw at another size
     core::Segment           m_seg = core::Segment::Document;
     bool                    m_shown = false;

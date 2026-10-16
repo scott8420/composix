@@ -2329,6 +2329,69 @@ int main() {
     }
 
     {
+        std::cout << "\n-- swatch editor (s058) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        load_plain(d);
+        using CM = core::ColorModel;
+        check("preview: RGB as is, grey, CMYK by the ink model",
+              D::swatch_preview({"a", 0, CM::RGB, {255, 128, 0, 0}}) == 0xff8000 &&
+              D::swatch_preview({"g", 0, CM::Gray, {100, 0, 0, 0}}) == 0x000000 &&
+              D::swatch_preview({"g", 0, CM::Gray, {0, 0, 0, 0}}) == 0xffffff &&
+              D::swatch_preview({"c", 0, CM::CMYK, {100, 0, 0, 0}}) == 0x00ffff &&
+              D::swatch_preview({"k", 0, CM::CMYK, {0, 0, 0, 100}}) == 0x000000);
+        {
+            core::Swatch s{"x", 0, CM::CMYK};
+            D::swatch_from_rgb(s, 0xff0000);
+            core::Swatch g{"y", 0, CM::Gray};
+            D::swatch_from_rgb(g, 0x808080);
+            check("from RGB: red is M+Y, grey is a percent", s.v[0] == 0 && s.v[1] == 100 && s.v[2] == 100 && s.v[3] == 0 &&
+                                                             g.v[0] >= 49 && g.v[0] <= 50);
+        }
+        const auto steps = j.size();
+        const auto made = D::add_swatch(j, d, {"Teal", 0, CM::CMYK, {80, 0, 30, 10}});
+        const auto* t = d.as<core::Swatch>(made);
+        double last = 0;
+        for (const auto& id : d.ids_of<core::Swatch>()) if (id != made) last = std::max(last, d.as<core::Swatch>(id)->pos);
+        check("add: one step, after the others, its preview made", t && j.size() == steps + 1 && t->pos > last &&
+                                                                   t->preview == D::swatch_preview(*t) && t->name == "Teal");
+        auto e = *t;
+        e.v = {0, 0, 0, 50};
+        e.preview = 0x123456;   // ignored: made from the values
+        check("edit: one step, preview follows", D::edit_swatch(j, d, made, e) && d.as<core::Swatch>(made)->preview == 0x808080);
+        check("edit: the same again -- no step", !D::edit_swatch(j, d, made, *d.as<core::Swatch>(made)));
+        {   // a swatch's own preview (the sample's tuned rust) survives an edit that leaves its values.
+            auto rust = *d.as<core::Swatch>("swatch.3");
+            const auto was = rust.preview;
+            rust.name = "Rust";
+            check("edit: the name only -- its own preview kept", D::edit_swatch(j, d, "swatch.3", rust) &&
+                                                                 d.as<core::Swatch>("swatch.3")->preview == was);
+            j.undo();
+        }
+        const auto copy = D::duplicate_swatch(j, d, "swatch.3");
+        check("duplicate: \"<name> copy\", same ink", d.as<core::Swatch>(copy) && d.as<core::Swatch>(copy)->name == "Guild Rust copy" &&
+                                                      d.as<core::Swatch>(copy)->spot == d.as<core::Swatch>("swatch.3")->spot);
+        check("delete: a used one stays", !D::delete_swatch(j, d, "swatch.3") && d.as<core::Swatch>("swatch.3"));
+        check("delete: an unused one goes, one step; undo brings it back",
+              D::delete_swatch(j, d, made) && !d.as<core::Swatch>(made) && (j.undo(), d.as<core::Swatch>(made) != nullptr));
+        // A frame using it follows the edit (the same id, new values).
+        {
+            core::Doc::Loading load(d);
+            auto f = *d.as<core::Frame>("frame.11");
+            f.fill = made;
+            d.put("frame.11", f);
+        }
+        auto e2 = *d.as<core::Swatch>(made);
+        e2.model = CM::RGB;
+        e2.v = {10, 200, 30, 0};
+        D::edit_swatch(j, d, made, e2);
+        check("edit: what uses it follows (same swatch)", d.as<core::Frame>("frame.11")->fill == made &&
+                                                         d.as<core::Swatch>(made)->preview == 0x0ac81e);
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

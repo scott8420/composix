@@ -467,8 +467,12 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         const std::string group = s.model == ColorModel::Spot ? "Spot inks"
                                 : s.model == ColorModel::RGB  ? "RGB \u2014 converts at output"
                                 : s.model == ColorModel::Gray ? "Gray" : "Process (CMYK)";
+        // s058: edit it, copy it, delete it (when nothing uses it).
+        Field act{"", "", "swatch", {{"edit", "Edit\u2026"}, {"duplicate", "Duplicate"}}};
+        if (uses == 0 && s.name != "Black" && s.name != "Paper") act.choices.push_back({"delete", "Delete"});
+        act.buttons = true;
         o.add({sid, G::Colors, s.name, badge, {K::Swatch, 1, 1, s.preview},
-               {{"Model", model_text(s.model)}, {"Value", swatch_value(s)}, {"Used", used}, {"Type", type}}, group});
+               {{"Model", model_text(s.model)}, {"Value", swatch_value(s)}, {"Used", used}, {"Type", type}, act}, group});
     }
 
     // ── Generated lists ─────────────────────────────────────────────────────
