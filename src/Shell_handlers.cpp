@@ -487,6 +487,20 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 did = core::doc::set_char_style(m_journal, m_doc, story, a, b, choice);
             }
             cv.grab_focus();   // back to typing
+        } else if (key == "lindent" || key == "rindent" || key == "findent" || key == "indent_after" || key == "tabs") {   // s026
+            static const std::map<std::string, std::string> labels{
+                {"lindent", "Left indent"}, {"rindent", "Right indent"}, {"findent", "First indent"},
+                {"indent_after", "Indent when"}, {"tabs", "Tabs"}};
+            const auto stops = key == "tabs" ? core::tab_preset(m_doc, choice) : std::vector<core::TabStop>{};
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Style& st) {
+                if (st.kind != core::StyleKind::Paragraph) return;
+                if (key == "tabs") st.tabs = stops;
+                else if (key == "indent_after") st.indent_after_same = choice == "1";
+                else {
+                    const double v = std::stod(choice);
+                    (key == "lindent" ? st.left_indent : key == "rindent" ? st.right_indent : st.first_indent) = v;
+                }
+            });
         } else if (key == "color_tint") {   // s021
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Tint",
                                          [&](core::Style& st) { st.color_tint = std::stod(choice) / 100; });

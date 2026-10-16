@@ -1461,6 +1461,47 @@ std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& id) {
     return chain;
 }
 
+double text_width(const Doc& d) {
+    const auto& st = d.settings();
+    const auto ms = d.ids_of<Master>();
+    if (ms.empty()) return st.trim_w - 1.5 * kPt;
+    const auto& m = *d.as<Master>(ms.front());
+    return std::max(36.0, st.trim_w - m.margins.inside - m.margins.outside);
+}
+
+std::string tabs_text(const std::vector<TabStop>& tabs) {
+    if (tabs.empty()) return "None";
+    if (tabs.size() > 1) return std::to_string(tabs.size()) + " stops";
+    static const char* kind[] = {"Left", "Centre", "Right", "Decimal"};
+    const auto& t = tabs.front();
+    std::string s = std::string(kind[static_cast<int>(t.align)]) + " " + inches(t.pos) + " in";
+    if (t.leader == ".") s += ", dots";
+    else if (!t.leader.empty()) s += ", " + t.leader;
+    return s;
+}
+
+std::vector<std::pair<std::string, std::string>> tab_presets(const Doc& d) {
+    const std::string w = inches(text_width(d)) + " in";
+    return {{"none", "None"},
+            {"right.", "Right at " + w + ", dots (contents)"},
+            {"right", "Right at " + w},
+            {"center", "Centre at " + inches(text_width(d) / 2) + " in"},
+            {"every", "Left, every \u00bd in"}};
+}
+
+std::vector<TabStop> tab_preset(const Doc& d, const std::string& id) {
+    const double w = text_width(d);
+    if (id == "right.") return {{w, TabAlign::Right, "."}};
+    if (id == "right") return {{w, TabAlign::Right, ""}};
+    if (id == "center") return {{w / 2, TabAlign::Center, ""}};
+    if (id == "every") {
+        std::vector<TabStop> v;
+        for (double x = 36; x < w - 1; x += 36) v.push_back({x, TabAlign::Left, ""});
+        return v;
+    }
+    return {};
+}
+
 int marker_at(const std::string& t, std::size_t i) {
     if (i + 3 > t.size()) return -1;
     if (static_cast<unsigned char>(t[i]) != 0xEE || static_cast<unsigned char>(t[i + 1]) != 0x80) return -1;

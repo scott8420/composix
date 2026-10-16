@@ -98,7 +98,7 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
 struct LineVisit {
     PangoLayoutLine* line = nullptr;
     double           x = 0, baseline = 0;
-    int              para = 0, from = 0;
+    int              para = 0, from = 0;   // s026: from -1 = a tab's leader (dots), not the paragraph's words
 };
 void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
                  const std::function<void(const LineVisit&)>& f, const core::Story* text = nullptr);

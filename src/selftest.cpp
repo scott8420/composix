@@ -47,6 +47,12 @@ void load_plain(composix::core::Doc& d) {
     auto f = *d.as<composix::core::Frame>("frame.11");
     f.wrap = composix::core::Wrap::None;
     d.put("frame.11", f);
+    // ... and without s026's indents (body first lines, hanging sources).
+    for (const char* id : {"style.1", "style.4"}) {
+        auto st = *d.as<composix::core::Style>(id);
+        st.first_indent = st.left_indent = 0;
+        d.put(id, st);
+    }
 }
 
 void check(const std::string& name, bool ok, const std::string& detail = "") {
@@ -1809,7 +1815,7 @@ int main() {
                                      core::char_style_at(d.as<core::Story>("story.1")->paras[1], h.front().a.byte + 1) == "style.5" &&
                                      d.as<core::Story>("story.1")->paras[1].text.find("coal") != std::string::npos);
         // Style only: a paragraph style on every heading's paragraph.
-        check("change: style only, text kept", D::change_hits(j, d, D::find_all(d, {"chapter"}), {false, "", "style.6"}, "Change All") == 2 &&
+        check("change: style only, text kept", D::change_hits(j, d, D::find_all(d, {"chapter", false, false, "style.2"}), {false, "", "style.6"}, "Change All") == 2 &&
                                                d.as<core::Story>("story.1")->paras[0].style == "style.6" &&
                                                d.as<core::Story>("story.1")->paras[0].text == "Chapter One");
         const auto at = j.size();
@@ -1954,6 +1960,56 @@ int main() {
                                               on == "page.9");
         check("hit: not on the wrong side", core::hit_master_item(d, core::layout_pages(d, {"page.8"}),
                                                                   pl[0].r.x + r->x + 5, pl[0].r.y + r->y + 5, 1, &on).empty());
+    }
+
+    {
+        std::cout << "\n-- indents + tabs --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::load_sample(d);
+        // Turn the wrapped picture off: plain lines to measure.
+        {
+            core::Doc::Loading load(d);
+            auto f = *d.as<core::Frame>("frame.11");
+            f.wrap = core::Wrap::None;
+            d.put("frame.11", f);
+        }
+        const auto fl = L::flow_story(d, "story.1");
+        const auto cx = [&](int p, int b) { return L::caret_at(d, "story.1", fl, {p, b}).x; };
+        check("first indent: none after the heading", std::abs(cx(1, 0)) < 0.5);
+        check("first indent: 18 pt after a body paragraph", std::abs(cx(2, 0) - 18) < 0.5);
+        check("first indent: only the first line", [&] {
+            for (const auto& ft : fl.frames)
+                for (const auto& l : ft.lines)
+                    if (l.para == 2 && l.start > 0) return std::abs(L::caret_at(d, "story.1", fl, {2, l.start}).x) < 0.5;
+            return false;
+        }());
+        const auto src = L::flow_story(d, "story.4");
+        bool hang = false;
+        for (const auto& ft : src.frames)
+            for (const auto& l : ft.lines)
+                if (l.para == 0 && l.start > 0) hang = std::abs(L::caret_at(d, "story.4", src, {0, l.start}).x - l.x + l.x - 12) < 0.5 ||
+                                                       std::abs(L::caret_at(d, "story.4", src, {0, l.start}).x - 12) < 0.5;
+        check("hanging indent: the first line out, the rest in", std::abs(L::caret_at(d, "story.4", src, {0, 0}).x) < 0.5 && hang);
+        // Contents: a right tab at the text's edge, with dots.
+        const auto con = L::flow_story(d, "story.9");
+        const double tw = core::text_width(d);
+        const auto one = L::caret_at(d, "story.9", con, {1, 12});   // after "Chapter One\t"
+        check("tab: right-aligned at the text's edge", one.ok && one.x > tw - 12 && one.x < tw);
+        int leaders = 0;
+        L::visit_lines(d, "story.9", con, "frame.16", [&](const L::LineVisit& v) { leaders += v.from < 0; });
+        check("tab: a dot leader on each entry", leaders == 3);
+        check("tabs: in words", core::tabs_text(d.as<core::Style>("style.8")->tabs) == "Right 4.5 in, dots" &&
+                                core::tabs_text({}) == "None");
+        check("tabs: presets measure the text width", core::tab_preset(d, "right.").front().pos == tw &&
+                                                      core::tab_preset(d, "every").size() == 8);
+        const auto o = core::project(d, "");
+        bool fi = false, tb = false;
+        for (const auto& f : o.find("style.1")->fields) {
+            fi = fi || (f.edit == "findent" && f.value == "18 pt");
+            tb = tb || (f.edit == "indent_after" && f.value == "After the same style");
+        }
+        check("inspector: First indent and when", fi && tb);
     }
 
     std::cout << "-----------------------------------------------\n";

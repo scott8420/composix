@@ -75,7 +75,14 @@ json to(const Record& r) {
                  {"family", v.family}, {"size", v.size}, {"leading", v.leading}, {"bold", v.bold},
                  {"italic", v.italic}, {"align", en(v.align)}, {"space_before", v.space_before},
                  {"space_after", v.space_after}, {"color", v.color},
-                 {"color_tint", v.color_tint}};
+                 {"color_tint", v.color_tint},
+                 {"left_indent", v.left_indent}, {"right_indent", v.right_indent}, {"first_indent", v.first_indent},
+                 {"indent_after_same", v.indent_after_same}};
+            if (!v.tabs.empty()) {
+                json tabs = json::array();
+                for (const auto& t : v.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
+                j["tabs"] = tabs;
+            }
         } else if constexpr (std::is_same_v<T, Swatch>) {
             j = {{"kind", "swatch"}, {"name", v.name}, {"pos", v.pos}, {"model", en(v.model)},
                  {"v", v.v}, {"spot", v.spot}, {"preview", v.preview}};
@@ -200,6 +207,13 @@ std::optional<Record> from(const json& j) {
         v.space_after = val(j, "space_after", 0.0);
         v.color = val<std::string>(j, "color", "");
         v.color_tint = val(j, "color_tint", 1.0);
+        v.left_indent = val(j, "left_indent", 0.0);
+        v.right_indent = val(j, "right_indent", 0.0);
+        v.first_indent = val(j, "first_indent", 0.0);
+        v.indent_after_same = val(j, "indent_after_same", false);
+        if (j.contains("tabs") && j["tabs"].is_array())
+            for (const auto& t : j["tabs"])
+                v.tabs.push_back({val(t, "pos", 0.0), de(t, "align", TabAlign::Left), val<std::string>(t, "leader", "")});
         return v;
     }
     if (k == "swatch") {

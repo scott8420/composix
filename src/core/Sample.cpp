@@ -56,10 +56,20 @@ void load_sample(Doc& d) {
     d.put("section.3", Section{"Back matter", pg[14], Numbering::Arabic, 11, Side::Any, "master.1"});
 
     // ── styles ──────────────────────────────────────────────────────────────
-    d.put("style.1", Style{"Body", StyleKind::Paragraph, 1, "Serif", 11, 14, false, false, Align::Justify});
+    {   // s026: body text indents its first lines -- not after a heading (as novels do).
+        Style b{"Body", StyleKind::Paragraph, 1, "Serif", 11, 14, false, false, Align::Justify};
+        b.first_indent = 18;
+        b.indent_after_same = true;
+        d.put("style.1", b);
+    }
     d.put("style.2", Style{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6, "swatch.3"});
     d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
-    d.put("style.4", Style{"Source", StyleKind::Paragraph, 4, "Serif", 10, 12, false, false, Align::Left});
+    {   // s026: sources hang: the first line out, the rest in.
+        Style src{"Source", StyleKind::Paragraph, 4, "Serif", 10, 12, false, false, Align::Left};
+        src.left_indent = 12;
+        src.first_indent = -12;
+        d.put("style.4", src);
+    }
     // Not used yet: a style a designer keeps ready (and the one Delete is offered on).
     d.put("style.6", Style{"Pull Quote", StyleKind::Paragraph, 6, "Serif", 14, 18, false, true, Align::Center, 6, 6});
     d.put("style.5", Style{"Emphasis", StyleKind::Character, 5, "", 0, 0, false, true, Align::Left});
@@ -162,6 +172,19 @@ void load_sample(Doc& d) {
         o.story = "story.8";
         d.put("story.8", Story{"Folio (page 1)", {{"style.7", kMarkPage}}});
         d.put("frame.15", o);
+    }
+
+    {   // s026: a contents page -- entries with a right tab at the text's
+        // edge and a dot leader.
+        Style c{"Contents Entry", StyleKind::Paragraph, 8, "Serif", 11, 18, false, false, Align::Left};
+        c.tabs = {{tw, TabAlign::Right, "."}};
+        d.put("style.8", c);
+        d.put("style.9", Style{"Contents Title", StyleKind::Paragraph, 9, "Serif", 18, 22, false, false, Align::Left, 0, 12});
+        d.put("story.9", Story{"Contents", {{"style.9", "Contents"},
+                                            {"style.8", "Chapter One\t1"},
+                                            {"style.8", "Chapter Two\t2"},
+                                            {"style.8", "Sources\t12"}}});
+        d.put("frame.16", Frame{pg[2], FrameKind::Text, m, m, tw, 3 * in, 0, 1, "story.9", "", ""});
     }
 
     // ── guides on the body master: the margins (s006) ──────────────────────

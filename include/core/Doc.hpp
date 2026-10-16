@@ -158,6 +158,16 @@ struct Story {
     bool operator==(const Story&) const = default;
 };
 
+// s026: a tab stop -- where (points from the text's left edge), how the
+// text after it lines up, and what fills the gap ("" none, "." dots).
+enum class TabAlign { Left, Center, Right, Decimal };
+struct TabStop {
+    double      pos = 0;
+    TabAlign    align = TabAlign::Left;
+    std::string leader;
+    bool operator==(const TabStop&) const = default;
+};
+
 struct Style {
     std::string name;
     StyleKind   kind   = StyleKind::Paragraph;
@@ -169,6 +179,13 @@ struct Style {
     double      space_before = 0, space_after = 0;   // s011: points, paragraph styles
     std::string color;                   // s015: a swatch id; "" = black (a character style: inherit)
     double      color_tint = 1;          // s021: of that swatch, 0.05..1
+    // s026: paragraph indents (points) and tab stops. A negative first
+    // indent hangs the first line out. `indent_after_same`: the first-line
+    // indent only after a paragraph of this same style -- none at a story's
+    // start or after a heading (as novels are set).
+    double      left_indent = 0, right_indent = 0, first_indent = 0;
+    bool        indent_after_same = false;
+    std::vector<TabStop> tabs;
     bool operator==(const Style&) const = default;
 };
 
@@ -548,6 +565,14 @@ inline constexpr const char* kMarkPrev    = "\xEE\x80\x83";   // U+E003: the pre
 // -1 none).
 int marker_at(const std::string& text, std::size_t i);
 bool has_markers(const Story& s);
+// s026: the width text is usually set at -- the trim less the first
+// master's inside and outside margins (tab presets measure from it).
+double text_width(const Doc& d);
+// A style's tab stops in a few words ("None", "Right 4.5 in, dots", "9 stops").
+std::string tabs_text(const std::vector<TabStop>& tabs);
+// The Tabs presets the inspector offers: {id, label}, and the stops for an id.
+std::vector<std::pair<std::string, std::string>> tab_presets(const Doc& d);
+std::vector<TabStop> tab_preset(const Doc& d, const std::string& id);
 // s021: a swatch's screen colour at a tint (mixed toward paper white).
 std::uint32_t tint_rgb(std::uint32_t rgb, double tint);
 // The tints offered (percent), and how a tint reads ("40%").

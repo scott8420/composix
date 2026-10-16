@@ -103,7 +103,9 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             // The run's colour: its character style's, else the paragraph's.
             std::string sw = ps ? ps->color : std::string{};
             double tint = ps ? ps->color_tint : 1;
-            if (const auto* cs = c.d.as<core::Style>(core::char_style_at(para, v.from + run.start + 1)); cs && !cs->color.empty()) {
+            // (A tab's leader -- from -1 -- takes the paragraph's colour.)
+            if (const auto* cs = v.from < 0 ? nullptr : c.d.as<core::Style>(core::char_style_at(para, v.from + run.start + 1));
+                cs && !cs->color.empty()) {
                 sw = cs->color;
                 tint = cs->color_tint;
             }

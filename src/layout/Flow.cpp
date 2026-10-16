@@ -70,7 +70,55 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
     pango_attr_list_unref(attrs);
 }
 
-LayoutPtr make_layout(const core::Style& st, const char* text, int len, double width, bool justify_last) {
+// s026: a paragraph's indents, where it is in its story (the first-line
+// indent may be skipped: at the story's start / after another style).
+struct Indents { double left = 0, right = 0, first = 0; };
+Indents indents_of(const core::Style& st, const core::Story& s, int p) {
+    Indents in{std::max(0.0, st.left_indent), std::max(0.0, st.right_indent), st.first_indent};
+    if (st.indent_after_same) {
+        const bool same = p > 0 && s.paras[static_cast<std::size_t>(p - 1)].style == s.paras[static_cast<std::size_t>(p)].style;
+        if (!same) in.first = 0;
+    }
+    return in;
+}
+
+// Where a paragraph's layout sits in a column `cw` wide: its left offset,
+// its width and Pango's indent. Pango hangs a NEGATIVE indent by
+// indenting the other lines, so a hanging paragraph's layout starts at
+// left + first (the first line's place) and Pango moves the rest in.
+struct Geo { double dx, width, indent; };
+Geo geo_of(const Indents& in, double cw, bool at_start) {
+    const double first = at_start ? in.first : 0;
+    const double dx = in.left + std::min(0.0, first);
+    return {dx, std::max(1.0, cw - dx - in.right), first};
+}
+
+// s026: the style's tab stops on a layout (positions from its left edge).
+void apply_tabs(PangoLayout* l, const core::Style& st) {
+    if (st.tabs.empty()) return;
+    PangoTabArray* tabs = pango_tab_array_new(static_cast<int>(st.tabs.size()), FALSE);
+    for (std::size_t i = 0; i < st.tabs.size(); ++i) {
+        const auto& t = st.tabs[i];
+        PangoTabAlign a = PANGO_TAB_LEFT;
+#if PANGO_VERSION_CHECK(1, 50, 0)
+        switch (t.align) {
+        case core::TabAlign::Left:    a = PANGO_TAB_LEFT; break;
+        case core::TabAlign::Center:  a = PANGO_TAB_CENTER; break;
+        case core::TabAlign::Right:   a = PANGO_TAB_RIGHT; break;
+        case core::TabAlign::Decimal: a = PANGO_TAB_DECIMAL; break;
+        }
+#endif
+        pango_tab_array_set_tab(tabs, static_cast<int>(i), a, static_cast<int>(std::lround(t.pos * PANGO_SCALE)));
+#if PANGO_VERSION_CHECK(1, 50, 0)
+        if (t.align == core::TabAlign::Decimal) pango_tab_array_set_decimal_point(tabs, static_cast<int>(i), '.');
+#endif
+    }
+    pango_layout_set_tabs(l, tabs);
+    pango_tab_array_free(tabs);
+}
+
+LayoutPtr make_layout(const core::Style& st, const char* text, int len, double width, bool justify_last,
+                      double indent = 0) {
     LayoutPtr l(pango_layout_new(measure_context()));
     PangoFontDescription* fd = pango_font_description_new();
     pango_font_description_set_family(fd, st.family.empty() ? "Serif" : st.family.c_str());
@@ -96,6 +144,8 @@ LayoutPtr make_layout(const core::Style& st, const char* text, int len, double w
         break;
     }
     (void)justify_last;
+    if (indent != 0) pango_layout_set_indent(l.get(), static_cast<int>(std::lround(indent * PANGO_SCALE)));   // s026
+    apply_tabs(l.get(), st);
     // s023: markers show as a sign of the same byte length, so every byte
     // place (caret, runs) holds.
     std::string shown(text, static_cast<std::size_t>(len));
@@ -183,6 +233,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             // s011: space before a paragraph -- not at the top of a column.
             const double before = (c.start == 0 && y > 0) ? style.space_before : 0;
             const int len = static_cast<int>(para.text.size());
+            const Indents ind = indents_of(style, st, c.p);   // s026
             double yy = y + before;
             if (wrapped) {   // s018: line by line, each at the width the wraps leave
                 int pos = c.start;
@@ -193,10 +244,18 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                     const auto spans = free_spans(wraps, cx, cx + cw, yy, yy + lead, &next);
                     if (spans.empty()) { yy = next; continue; }
                     for (const auto& sp : spans) {
-                        auto lay = make_layout(style, para.text.c_str() + pos, len - pos, sp.x1 - sp.x0, false);
+                        // s026: the indents where the span meets the column's edges.
+                        // (A line set alone is its layout's first line: a hanging
+                        // first line just starts further left.)
+                        const double hang = pos == 0 ? std::min(0.0, ind.first) : 0;
+                        const double x0 = sp.x0 + (sp.x0 <= cx + 0.01 ? std::max(0.0, ind.left + hang) : 0);
+                        const double x1 = sp.x1 - (sp.x1 >= cx + cw - 0.01 ? ind.right : 0);
+                        const double w = std::max(1.0, x1 - x0);
+                        auto lay = make_layout(style, para.text.c_str() + pos, len - pos, w, false,
+                                               pos == 0 ? std::max(0.0, ind.first) : 0);
                         apply_runs(lay.get(), d, para, pos);
                         const int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
-                        ft.lines.push_back({c.p, pos, pos + took, yy, lead, col, sp.x0, sp.x1 - sp.x0});
+                        ft.lines.push_back({c.p, pos, pos + took, yy, lead, col, x0, w});
                         pos += took;
                         if (pos >= len) { ended = true; break; }
                     }
@@ -212,7 +271,8 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 c.start = pos;
                 break;
             }
-            auto lay = make_layout(style, para.text.c_str() + c.start, len - c.start, cw, false);
+            const Geo g = geo_of(ind, cw, c.start == 0);
+            auto lay = make_layout(style, para.text.c_str() + c.start, len - c.start, g.width, false, g.indent);
             apply_runs(lay.get(), d, para, c.start);
             const int nl = pango_layout_get_line_count(lay.get());
             int placed = 0;
@@ -220,7 +280,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 if (yy + lead > hmax + 0.01) break;   // the column is full
                 PangoLayoutLine* line = pango_layout_get_line_readonly(lay.get(), i);
                 const int a = c.start + line->start_index;
-                ft.lines.push_back({c.p, a, a + line->length, yy, lead, col, cx});
+                ft.lines.push_back({c.p, a, a + line->length, yy, lead, col, cx + g.dx});
                 yy += lead;
                 ++placed;
             }
@@ -282,6 +342,12 @@ StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::St
 namespace {
 
 // One placed line, as the drawing and the editing geometry both see it.
+// s026: a tab's gap to be filled with its stop's leader (frame coords).
+struct LeaderGap {
+    double      x0 = 0, x1 = 0;
+    std::string text;
+};
+
 struct Placed {
     const Line*      line;
     PangoLayout*     lay;      // the paragraph's layout in this frame
@@ -289,7 +355,50 @@ struct Placed {
     int              from;     // the byte the layout starts at in the paragraph
     double           x;        // the line's left (alignment), frame coords
     double           base;     // its baseline, frame coords
+    std::vector<LeaderGap> leaders = {};
+    const core::Style*     style = nullptr;
 };
+
+// s026: the tabs on a placed line whose stop has a leader: their gaps.
+std::vector<LeaderGap> leader_gaps(PangoLayout* lay, PangoLayoutLine* pl, const core::Style& st, double line_x) {
+    std::vector<LeaderGap> out;
+    if (st.tabs.empty()) return out;
+    bool any = false;
+    for (const auto& t : st.tabs) any = any || !t.leader.empty();
+    if (!any) return out;
+    const char* text = pango_layout_get_text(lay);
+    for (int i = pl->start_index; i < pl->start_index + pl->length; ++i) {
+        if (text[i] != '\t') continue;
+        PangoRectangle pos;
+        pango_layout_index_to_pos(lay, i, &pos);
+        const double a = pos.x / static_cast<double>(PANGO_SCALE), b = (pos.x + pos.width) / static_cast<double>(PANGO_SCALE);
+        // The stop this tab goes to: the first past where it starts.
+        const core::TabStop* stop = nullptr;
+        for (const auto& t : st.tabs) if (t.pos > a + 0.5 && (!stop || t.pos < stop->pos)) stop = &t;
+        if (!stop || stop->leader.empty() || b - a < 1) continue;
+        out.push_back({line_x + a, line_x + b, stop->leader});
+    }
+    return out;
+}
+
+// A leader's glyphs: the unit repeated on a grid (so dots line up from
+// line to line), clear of the words either side. `f(line, x)` draws it.
+template <class F>
+void leader_lines(const core::Style& st, const LeaderGap& g, F&& f) {
+    auto unit = make_layout(st, g.text.c_str(), static_cast<int>(g.text.size()), 1e6, false);
+    PangoRectangle ext;
+    pango_layout_get_extents(unit.get(), nullptr, &ext);
+    const double w = ext.width / static_cast<double>(PANGO_SCALE);
+    if (w <= 0.1) return;
+    const double pad = std::max(2.0, w * 0.5);
+    const double start = std::ceil((g.x0 + pad) / w) * w;
+    const int n = static_cast<int>(std::floor((g.x1 - pad - start) / w));
+    if (n <= 0) return;
+    std::string rep;
+    for (int k = 0; k < n; ++k) rep += g.text;
+    auto lay = make_layout(st, rep.c_str(), static_cast<int>(rep.size()), 1e6, false);
+    f(pango_layout_get_line_readonly(lay.get(), 0), start);
+}
 
 const FrameText* frame_text(const StoryFlow& flow, const std::string& frame) {
     for (const auto& f : flow.frames) if (f.frame == frame) return &f;
@@ -320,8 +429,10 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
         const int from = std::min(ft->lines[i].start, static_cast<int>(text.size()));
         const bool solo = ft->lines[i].w > 0;
         const bool continues = !solo && ft->lines[j - 1].end < static_cast<int>(text.size());
+        const Indents ind = indents_of(style, *st, p);   // s026: as the flow set it
+        const Geo g = geo_of(ind, core::column_width(*fr, col), from == 0);
         auto lay = make_layout(style, text.c_str() + from, static_cast<int>(text.size()) - from,
-                               solo ? ft->lines[i].w : core::column_width(*fr, col), continues);
+                               solo ? ft->lines[i].w : g.width, continues, solo ? (from == 0 ? std::max(0.0, ind.first) : 0) : g.indent);
         apply_runs(lay.get(), d, st->paras[static_cast<std::size_t>(p)], from);
         PangoLayoutIter* it = pango_layout_get_iter(lay.get());
         for (std::size_t k = i; k < j; ++k) {
@@ -332,8 +443,9 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
             const double h = logical.height / static_cast<double>(PANGO_SCALE);
             const double x = logical.x / static_cast<double>(PANGO_SCALE);
             const auto& ln = ft->lines[k];
-            f(Placed{&ln, lay.get(), pango_layout_iter_get_line_readonly(it), from, ln.x + x,
-                     ln.y + (ln.h - h) / 2 + (bl - top)});
+            PangoLayoutLine* pll = pango_layout_iter_get_line_readonly(it);
+            f(Placed{&ln, lay.get(), pll, from, ln.x + x, ln.y + (ln.h - h) / 2 + (bl - top),
+                     leader_gaps(lay.get(), pll, style, ln.x), &style});
             if (!pango_layout_iter_next_line(it)) break;
         }
         pango_layout_iter_free(it);
@@ -396,6 +508,11 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
         else cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
         cairo_move_to(cr, ox + pl.x, oy + pl.base);
         pango_cairo_show_layout_line(cr, pl.pl);
+        for (const auto& g : pl.leaders)   // s026: dots to the tab stop
+            leader_lines(*pl.style, g, [&](PangoLayoutLine* l, double x) {
+                cairo_move_to(cr, ox + x, oy + pl.base);
+                pango_cairo_show_layout_line(cr, l);
+            });
     }, text);
     cairo_restore(cr);
 }
@@ -404,6 +521,10 @@ void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& 
                  const std::function<void(const LineVisit&)>& f, const core::Story* text) {
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         f(LineVisit{pl.pl, pl.x, pl.base, pl.line->para, pl.from});
+        for (const auto& g : pl.leaders)   // s026: each leader as a line of its own (from = -1)
+            leader_lines(*pl.style, g, [&](PangoLayoutLine* l, double x) {
+                f(LineVisit{l, x, pl.base, pl.line->para, -1});
+            });
     }, text);
 }
 

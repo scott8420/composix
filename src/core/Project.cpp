@@ -259,6 +259,19 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 f.push_back({"Align", align_text(s.align), "align", align_ch});
                 f.push_back({"Space before", pt(s.space_before), "before", space_ch});
                 f.push_back({"Space after", pt(s.space_after), "after", space_ch});
+                // s026: indents and tabs.
+                std::vector<Choice> ind_ch, first_ch;
+                for (double v : {0.0, 6.0, 9.0, 12.0, 18.0, 24.0, 36.0, 54.0, 72.0}) ind_ch.push_back({pts(v), pt(v)});
+                for (double v : {0.0, 9.0, 12.0, 14.0, 18.0, 24.0, 36.0, -9.0, -12.0, -18.0}) first_ch.push_back({pts(v), pt(v)});
+                f.push_back({"Left indent", pt(s.left_indent), "lindent", ind_ch});
+                f.push_back({"Right indent", pt(s.right_indent), "rindent", ind_ch});
+                f.push_back({"First indent", pt(s.first_indent), "findent", first_ch});
+                if (s.first_indent != 0)
+                    f.push_back({"Indent when", s.indent_after_same ? "After the same style" : "Always", "indent_after",
+                                 {{"0", "Always"}, {"1", "After the same style"}}});
+                std::vector<Choice> tab_ch;
+                for (const auto& [id, label] : tab_presets(d)) tab_ch.push_back({id, label});
+                f.push_back({"Tabs", tabs_text(s.tabs), "tabs", tab_ch});
             }
             f.push_back({"Used", uses ? std::to_string(uses) + "×" : "Not used"});
             Field act{"", "", "style", {{"duplicate", "Duplicate"}}};
