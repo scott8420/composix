@@ -81,6 +81,21 @@ public:
     }
 
     void pan_by(double dx_px, double dy_px) { m_ox += dx_px; m_oy += dy_px; clamp(); }
+    // s061: pan the least that brings a doc rect `margin` px inside the
+    // widget (its top / left first when it can't all fit). True if it moved.
+    bool reveal(const Rect& r, double margin = 40) {
+        if (m_w <= 0 || m_h <= 0) return false;
+        const Rect s = to_screen(r);
+        double dx = 0, dy = 0;
+        if (s.r() > m_w - margin) dx = (m_w - margin) - s.r();
+        if (s.x + dx < margin) dx = margin - s.x;
+        if (s.b() > m_h - margin) dy = (m_h - margin) - s.b();
+        if (s.y + dy < margin) dy = margin - s.y;
+        if (dx == 0 && dy == 0) return false;
+        m_ox += dx;
+        m_oy += dy;
+        return true;
+    }
     void set_origin(double ox, double oy) { m_ox = ox; m_oy = oy; clamp(); }
 
     // Keep at least `keep` px of the content on screen (or all of it, if smaller).

@@ -202,6 +202,12 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_tiles.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_tiles_selection));
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
     m_tiles.signal_new().connect([this] { open_swatch_editor({}); });   // s058
+    // s061: the caret's text went onto a page not shown -- show it (its spread).
+    // Showing the page moves the keyboard to the navigator: give it back to the text.
+    m_canvas_view.canvas().signal_follow().connect([this](const std::string& page) {
+        m_nav.select_items({page});
+        m_canvas_view.canvas().grab_focus();
+    });
     // s052: the Colors view's size, kept between runs.
     {
         const auto it = m_settings.find("colors.view");   // (find: reading adds no empty key)

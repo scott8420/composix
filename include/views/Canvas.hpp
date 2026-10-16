@@ -91,6 +91,11 @@ public:
     // one step. False when not editing.
     bool insert_special(const std::string& text, const std::string& label);
     bool insert_break(core::ParaStart kind);   // s055: column / frame / page break at the caret
+    // s061: the caret put at `p` (an undo's place), and the view follows it.
+    void place_caret(core::TextPos p);
+    // s061: the caret's frame is on a page not shown -- show that page (the
+    // shell turns the navigator there); the zoom stays.
+    sigc::signal<void(const std::string&)>& signal_follow() { return m_sig_follow; }
     const std::string& edit_story_id() const { return m_edit_story; }
     // The selection, in reading order (equal = just the caret).
     std::pair<core::TextPos, core::TextPos> edit_range() const {
@@ -201,6 +206,9 @@ private:
     bool              m_in = false;                // the pointer is over the canvas
     bool              m_snap = true, m_show_guides = true, m_show_grid = false;
     bool              m_show_hidden = false;   // s059
+    bool              m_follow_keep_zoom = false;   // s061: a follow shows another spread without fitting
+    sigc::signal<void(const std::string&)> m_sig_follow;
+    void follow_caret();                        // s061
     core::SnapTargets m_targets;                   // gathered at press
     double            m_snap_x = NAN, m_snap_y = NAN;   // the lines snapped to (layout), drawn mid-drag
     std::string       m_guide;                     // the guide being dragged

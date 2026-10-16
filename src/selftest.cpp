@@ -2469,6 +2469,62 @@ int main() {
     }
 
     {
+        std::cout << "\n-- caret follow (s061) --\n";
+        core::Viewport vp;
+        vp.set_widget(800, 600);
+        vp.set_content({0, 0, 5000, 5000});
+        vp.set_origin(0, 0);
+        check("reveal: already in view -- no move", !vp.reveal({100, 100, 4, 12}, 40) && vp.ox() == 0 && vp.oy() == 0);
+        check("reveal: below -- pans up just enough", vp.reveal({100, 700, 4, 12}, 40) &&
+                                                      std::abs(vp.oy() - (600 - 40 - 712)) < 1e-9 && vp.ox() == 0);
+        vp.set_origin(0, 0);
+        check("reveal: to the right and above", (vp.set_origin(0, -500), vp.reveal({1000, 100, 4, 12}, 40)) &&
+                                                std::abs(vp.ox() - (800 - 40 - 1004)) < 1e-9 && std::abs(vp.oy() - (40 - 100)) < 1e-9);
+        // Where a change ends, in the text after it.
+        core::Story a, b;
+        a.paras = {{"s", "The harbor", {}}, {"s", "smelled", {}}};
+        b = a;
+        b.paras[0].text = "The old harbor";
+        check("changed end: text came back -- after it", core::changed_end(a, b) == core::TextPos{0, 8});
+        check("changed end: text went -- where it was", core::changed_end(b, a) == core::TextPos{0, 4});
+        b = a;
+        b.paras = {{"s", "The harbor", {}}, {"s", "", {}}, {"s", "smelled", {}}};
+        check("changed end: a paragraph came back -- across the break", core::changed_end(a, b) == core::TextPos{1, 0} ||
+                                                                         core::changed_end(a, b) == core::TextPos{2, 0});
+        check("changed end: the same -- the start", core::changed_end(a, a) == core::TextPos{0, 0});
+        b = a;
+        b.paras[1].text = "smelled \u00e9";
+        check("changed end: never inside a character", core::changed_end(a, b) == core::TextPos{1, 10});
+        // A whole paragraph selected (triple-click): every line lit across, not
+        // just its first and last (a line's end read as the next line's start).
+        {
+            namespace L = composix::layout;
+            core::Doc d;
+            load_plain(d);
+            {
+                core::Doc::Loading load(d);
+                core::Frame f;
+                f.owner = d.pages().back();
+                f.kind = core::FrameKind::Text;
+                f.x = 36; f.y = 36; f.w = 200; f.h = 400;
+                f.story = "story.s";
+                d.put("frame.s", f);
+                core::Story st;
+                st.name = "Sel";
+                st.paras = {{"style.1", "The harbor smelled of diesel and oranges the morning the ship came in, and nobody on "
+                                        "the quay had expected her before the equinox and fewer still the cargo she carried.", {}}};
+                d.put("story.s", st);
+            }
+            const auto fl = L::flow_story(d, "story.s");
+            const int n = static_cast<int>(d.as<core::Story>("story.s")->paras[0].text.size());
+            const auto rects = L::selection_rects(d, "story.s", fl, "frame.s", {0, 0}, {0, n});
+            bool wide = rects.size() >= 3;
+            for (std::size_t k = 0; wide && k + 1 < rects.size(); ++k) wide = rects[k].w > 100;
+            check("selection: a paragraph's middle lines lit across", wide);
+        }
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

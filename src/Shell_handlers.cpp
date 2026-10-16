@@ -881,15 +881,28 @@ static bool all_frames(const core::Doc& d, const std::vector<std::string>& ids) 
 }
 
 void Shell::on_undo() {  // handler: take the last step back
+    // s061: typing, the caret goes where the text came back (or went).
+    auto& cv = m_canvas_view.canvas();
+    std::optional<core::Story> before;
+    if (cv.editing()) if (const auto* st = m_doc.as<core::Story>(cv.edit_story_id())) before = *st;
     const auto r = m_journal.undo();
     if (!r.done) return;
+    if (before && cv.editing())
+        if (const auto* st = m_doc.as<core::Story>(cv.edit_story_id()); st && !(*st == *before))
+            cv.place_caret(core::changed_end(*before, *st));
     if (all_frames(m_doc, r.selection)) m_canvas_view.canvas().set_selection(r.selection);
     if (auto lg = log::get(log::Area::Shell)) lg->info("undo: {}", r.label);
 }
 
 void Shell::on_redo() {  // handler: put the undone step back
+    auto& cv = m_canvas_view.canvas();
+    std::optional<core::Story> before;   // s061: as undo
+    if (cv.editing()) if (const auto* st = m_doc.as<core::Story>(cv.edit_story_id())) before = *st;
     const auto r = m_journal.redo();
     if (!r.done) return;
+    if (before && cv.editing())
+        if (const auto* st = m_doc.as<core::Story>(cv.edit_story_id()); st && !(*st == *before))
+            cv.place_caret(core::changed_end(*before, *st));
     if (all_frames(m_doc, r.selection)) m_canvas_view.canvas().set_selection(r.selection);
     if (auto lg = log::get(log::Area::Shell)) lg->info("redo: {}", r.label);
 }

@@ -798,6 +798,21 @@ double x_of(const Placed& pl, int byte) {
     return pl.line->x + pos.x / static_cast<double>(PANGO_SCALE);
 }
 
+// s061: the right edge of what ends at `byte` on this line -- at a line's
+// end, x_of(end) is the NEXT line's first character (back at the left), so
+// a selection's middle lines came out as slivers. The trailing edge of the
+// character before it instead.
+double x_end_of(const Placed& pl, int byte) {
+    if (byte <= pl.line->start || byte < pl.line->end) return x_of(pl, byte);
+    const char* text = pango_layout_get_text(pl.lay);
+    const char* at = text + (byte - pl.from);
+    const char* prev = g_utf8_find_prev_char(text, at);
+    if (!prev) return x_of(pl, byte);
+    PangoRectangle pos;
+    pango_layout_index_to_pos(pl.lay, static_cast<int>(prev - text), &pos);
+    return pl.line->x + (pos.x + std::max(0, pos.width)) / static_cast<double>(PANGO_SCALE);
+}
+
 // The byte nearest x on a placed line.
 int byte_at_x(const Placed& pl, double x) {
     int index = 0, trailing = 0;
@@ -841,11 +856,11 @@ std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& stor
         for (int i = ln.start; i < ln.end && i < static_cast<int>(t.size()); ++i) {
             const char c = t[static_cast<std::size_t>(i)];
             if (c != ' ' && c != '\t') continue;
-            out.push_back({c == ' ' ? HiddenMark::Kind::Space : HiddenMark::Kind::Tab, x_of(pl, i), x_of(pl, i + 1), pl.base, ln.h, 0});
+            out.push_back({c == ' ' ? HiddenMark::Kind::Space : HiddenMark::Kind::Tab, x_of(pl, i), x_end_of(pl, i + 1), pl.base, ln.h, 0});
         }
         if (ln.end < static_cast<int>(t.size())) return;   // not the paragraph's last line
         // Its end: the story's end, a break before the next, or a plain paragraph end.
-        HiddenMark m{HiddenMark::Kind::Para, x_of(pl, static_cast<int>(t.size())), 0, pl.base, ln.h, 0};
+        HiddenMark m{HiddenMark::Kind::Para, x_end_of(pl, static_cast<int>(t.size())), 0, pl.base, ln.h, 0};
         if (ln.para + 1 >= paras) m.kind = HiddenMark::Kind::End;
         else if (const auto b = st->paras[static_cast<std::size_t>(ln.para + 1)].brk; b != core::ParaStart::Anywhere) {
             m.kind = HiddenMark::Kind::Break;
@@ -1168,7 +1183,7 @@ std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& s
         const bool para_end_selected = l.end == para_len(*st, l.para) && l.para < b.para;
         if (s > e || (s == e && !para_end_selected)) return;
         if (l.para == a.para && a.byte > l.end) return;
-        double x0 = x_of(pl, s), x1 = x_of(pl, e);
+        double x0 = x_of(pl, s), x1 = x_end_of(pl, e);
         if (x1 < x0) std::swap(x0, x1);
         if (para_end_selected) x1 += 4;   // the paragraph break, shown as a sliver
         out.push_back({x0, l.y, x1 - x0, l.h});

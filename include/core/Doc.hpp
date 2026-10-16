@@ -440,6 +440,10 @@ TextPos prev_word(const Story& s, TextPos p);   // to the start of this / the pr
 TextPos story_end(const Story& s);
 // The text between two places, paragraphs joined by '\n'.
 std::string text_between(const Story& s, TextPos a, TextPos b);
+// s061: where a change to a story ends, in the story after it -- for the
+// caret after an undo / redo (the end of what came back, or where what
+// went was). The start when nothing differs.
+TextPos changed_end(const Story& before, const Story& after);
 // The word around a place (double-click): [first, last).
 std::pair<TextPos, TextPos> word_at(const Story& s, TextPos p);
 // The character style at a place: the character before it carries on (as

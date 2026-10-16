@@ -428,6 +428,28 @@ std::string text_between(const Story& s, TextPos a, TextPos b) {
     return out;
 }
 
+TextPos changed_end(const Story& before, const Story& after) {
+    const auto flat = [](const Story& s) {
+        std::string t;
+        for (std::size_t i = 0; i < s.paras.size(); ++i) { if (i) t += '\n'; t += s.paras[i].text; }
+        return t;
+    };
+    const std::string a = flat(before), b = flat(after);
+    std::size_t pre = 0;
+    while (pre < a.size() && pre < b.size() && a[pre] == b[pre]) ++pre;
+    std::size_t suf = 0;
+    while (suf < a.size() - pre && suf < b.size() - pre && a[a.size() - 1 - suf] == b[b.size() - 1 - suf]) ++suf;
+    std::size_t at = b.size() - suf;   // the end of what differs, in `after`
+    if (a == b) at = 0;
+    while (at > 0 && at < b.size() && (static_cast<unsigned char>(b[at]) & 0xC0) == 0x80) --at;   // not inside a character
+    TextPos p{0, 0};
+    for (std::size_t i = 0; i < at; ++i) {
+        if (b[i] == '\n') { ++p.para; p.byte = 0; }
+        else ++p.byte;
+    }
+    return p;
+}
+
 std::string char_style_at(const Para& p, int byte) {
     const int at = byte > 0 ? byte - 1 : 0;
     for (const auto& r : p.runs)

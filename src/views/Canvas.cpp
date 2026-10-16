@@ -136,7 +136,7 @@ void Canvas::show_pages(const std::vector<std::string>& ids) {
     relayout();
     if (!same) {
         m_sel.clear();
-        m_fit_pending = true;
+        m_fit_pending = !m_follow_keep_zoom;   // s061: following the caret keeps the zoom
     }
     queue_draw();
 }
@@ -852,7 +852,11 @@ void Canvas::on_drag_begin(double x, double y) {
         if (editing()) {
             if (text_frame && uf->story == m_edit_story) {   // a click in the story: the caret
                 const auto at = hit_story(under, px0, py0);
-                if (m_clicks >= 2) {
+                if (m_clicks >= 3) {   // s061: triple-click -- the paragraph
+                    const auto& para = edit_story()->paras[static_cast<std::size_t>(at.para)];
+                    m_anchor = {at.para, 0};
+                    set_caret({at.para, static_cast<int>(para.text.size())}, true);
+                } else if (m_clicks >= 2) {
                     const auto [a, b] = core::word_at(*edit_story(), at);
                     m_anchor = a;
                     set_caret(b, true);
@@ -1479,6 +1483,7 @@ bool Canvas::insert_break(core::ParaStart kind) {
     m_goal_x = NAN;
     m_burst_kind.clear();
     m_sig_edited.emit();
+    follow_caret();   // s061
     blink_restart();
     m_sig_caret.emit();
     grab_focus();
@@ -1524,8 +1529,36 @@ void Canvas::set_caret(core::TextPos p, bool extend, bool keep_goal) {
     if (!extend) m_anchor = m_caret;
     if (!keep_goal) m_goal_x = NAN;
     m_burst_kind.clear();   // a move ends the typing burst: the next keys are a new step
+    follow_caret();         // s061
     blink_restart();
     m_sig_caret.emit();
+}
+
+void Canvas::place_caret(core::TextPos p) {
+    if (!editing()) return;
+    set_caret(p, false);
+}
+
+// s061: keep the caret in view -- onto another spread when the text has
+// taken it there, then panned so it sits inside the canvas.
+void Canvas::follow_caret() {
+    if (!editing()) return;
+    const auto& flow = m_flows.get(m_doc, m_edit_story);
+    const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
+    if (!c.ok) return;   // overset: nowhere to show it
+    m_edit_frame = c.frame;
+    Rect fr = core::frame_in_layout(m_doc, m_placed, c.frame);
+    if (fr.w <= 0) {
+        const auto* f = m_doc.as<core::Frame>(c.frame);
+        if (!f || !m_doc.as<core::Page>(f->owner)) return;
+        m_follow_keep_zoom = true;
+        m_sig_follow.emit(f->owner);
+        m_follow_keep_zoom = false;
+        fr = core::frame_in_layout(m_doc, m_placed, c.frame);
+        if (fr.w <= 0) return;
+        if (auto lg = log::get(log::Area::View)) lg->info("caret: followed onto {}", f->owner);
+    }
+    if (m_vp.reveal({fr.x + c.x - 2, fr.y + c.y, 4, c.h}, 48)) queue_draw();
 }
 
 void Canvas::edit_insert(const std::string& text, const std::string& kind, const std::string& label) {
@@ -1537,6 +1570,7 @@ void Canvas::edit_insert(const std::string& text, const std::string& kind, const
     m_goal_x = NAN;
     if (kind.empty()) m_burst_kind.clear();
     m_sig_edited.emit();
+    follow_caret();   // s061: typing onto the next page takes the view along
     blink_restart();
     m_sig_caret.emit();
 }
