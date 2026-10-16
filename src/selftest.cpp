@@ -29,6 +29,7 @@
 #include <fstream>
 #include <iostream>
 #include <set>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -934,7 +935,8 @@ int main() {
         check("print: a TrimBox at the trim, inside the slug", has("/TrimBox [30 30 462 678]"));
         check("print: a BleedBox the bleed beyond it", has("/BleedBox [21 21 471 687]"));
         check("print: fonts embedded, subset, with ToUnicode",
-              (has("/FontFile2") || has("/FontFile3")) && has("/ToUnicode") && has("+DejaVu"));
+              (has("/FontFile2") || has("/FontFile3")) && has("/ToUnicode") &&
+                  std::regex_search(pdf, std::regex("/BaseFont /[A-Z]{6}\\+")));   // a subset tag, whatever Serif is here
         check("print: body text in 100 K", has("0 0 0 1 k\n"));
         // s016: Guild Rust is a spot colour -- its own plate, PMS 7593 C.
         check("print: the heading on its spot plate", has("[/Separation /PMS#207593#20C /DeviceCMYK") && has("cs 1 scn"));
