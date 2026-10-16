@@ -90,13 +90,16 @@ json to(const Record& r) {
                  {"left_indent", v.left_indent}, {"right_indent", v.right_indent}, {"first_indent", v.first_indent},
                  {"skip_after_heading", v.skip_after_heading},
                  {"drop_lines", v.drop_lines}, {"drop_chars", v.drop_chars}, {"align_grid", v.align_grid}, {"hyphenate", v.hyphenate},
-                 {"keep_next", v.keep_next}, {"keep_lines", v.keep_lines}};
+                 {"keep_next", v.keep_next}, {"keep_lines", v.keep_lines}, {"start", en(v.start)}};
             if (!v.tabs.empty()) {
                 json tabs = json::array();
                 for (const auto& t : v.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
                 j["tabs"] = tabs;
             }
             if (!v.based_on.empty()) { j["based_on"] = v.based_on; j["own"] = v.own; }   // s037
+            for (const auto& [key, r] : {std::pair{"rule_above", &v.rule_above}, std::pair{"rule_below", &v.rule_below}})   // s044
+                if (r->weight > 0)
+                    j[key] = {{"weight", r->weight}, {"color", r->color}, {"tint", r->tint}, {"offset", r->offset}, {"text", r->text_width}};
             if (!v.next.empty()) j["next"] = v.next;
         } else if constexpr (std::is_same_v<T, Swatch>) {
             j = {{"kind", "swatch"}, {"name", v.name}, {"pos", v.pos}, {"model", en(v.model)},
@@ -252,9 +255,15 @@ std::optional<Record> from(const json& j) {
         v.hyphenate = val(j, "hyphenate", false);     // s038
         v.keep_next = val(j, "keep_next", false);     // s039
         v.keep_lines = val(j, "keep_lines", 0);
+        v.start = de(j, "start", ParaStart::Anywhere);   // s043
         if (j.contains("tabs") && j["tabs"].is_array())
             for (const auto& t : j["tabs"])
                 v.tabs.push_back({val(t, "pos", 0.0), de(t, "align", TabAlign::Left), val<std::string>(t, "leader", "")});
+        for (const auto& [key, r] : {std::pair{"rule_above", &v.rule_above}, std::pair{"rule_below", &v.rule_below}})   // s044
+            if (j.contains(key) && j[key].is_object()) {
+                const auto& o = j[key];
+                *r = {val(o, "weight", 0.0), val<std::string>(o, "color", ""), val(o, "tint", 1.0), val(o, "offset", 0.0), val(o, "text", false)};
+            }
         v.based_on = val<std::string>(j, "based_on", "");   // s037
         v.next = val<std::string>(j, "next", "");
         if (j.contains("own") && j["own"].is_array())

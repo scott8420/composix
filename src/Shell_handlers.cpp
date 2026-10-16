@@ -595,6 +595,29 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Next style", [&](core::Style& st) {
                 if (st.kind == core::StyleKind::Paragraph) st.next = choice;
             });
+        } else if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {   // s044: paragraph rules
+            const bool above = key[5] == 'a';
+            const char what = key.back();
+            static const std::map<char, std::string> labels{{'w', "Rule"}, {'c', "Rule colour"}, {'t', "Rule tint"},
+                                                           {'o', "Rule offset"}, {'x', "Rule width"}};
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(what), [&](core::Style& st) {
+                if (st.kind != core::StyleKind::Paragraph) return;
+                auto& r = above ? st.rule_above : st.rule_below;
+                if (what == 'w') {
+                    const double w = std::stod(choice);
+                    // Turned on: sit clear of the text (above: a line's height up; below: a little down).
+                    if (r.weight <= 0 && w > 0 && r.offset == 0) r.offset = above ? std::round(st.size > 0 ? st.size : 11) : 4;
+                    r.weight = w;
+                } else if (what == 'c') r.color = choice;
+                else if (what == 't') r.tint = std::stod(choice) / 100;
+                else if (what == 'o') r.offset = std::stod(choice);
+                else r.text_width = choice == "1";
+            });
+        } else if (key == "pstart") {   // s043
+            const auto v = static_cast<core::ParaStart>(std::clamp(std::stoi(choice), 0, 4));
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Start", [&](core::Style& st) {
+                if (st.kind == core::StyleKind::Paragraph) st.start = v;
+            });
         } else if (key == "keep_next" || key == "keep_lines") {   // s039
             const int v = std::stoi(choice);
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "keep_next" ? "Keep with next" : "Keep lines",

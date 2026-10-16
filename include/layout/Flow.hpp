@@ -102,6 +102,16 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
 // left and baseline (frame coordinates), the paragraph, and the byte in it
 // where the line's layout starts (a run's layout byte + from = a byte in the
 // paragraph). The print exporter sets these through Plate.
+// s044: the paragraph rules `flow` puts in `frame` -- rectangles in frame
+// coordinates, with their swatch ("" black) and tint. Drawn under the text.
+struct RuleMark {
+    core::Rect  r;
+    std::string color;
+    double      tint = 1;
+};
+std::vector<RuleMark> paragraph_rules(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                                      const std::string& frame, const core::Story* text = nullptr);
+
 struct LineVisit {
     PangoLayoutLine* line = nullptr;
     double           x = 0, baseline = 0;

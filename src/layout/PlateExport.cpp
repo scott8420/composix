@@ -95,6 +95,12 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
     const auto& rs = c.flows.resolved(c.d, f.story, c.d.as<core::Master>(f.owner) ? on_page : std::string{});
     if (rs.any) st = &rs.text;
     const auto& flow = rs.any ? rs.flow : c.flows.get(c.d, f.story);
+    // s044: paragraph rules, under the words -- each in its swatch's ink.
+    for (const auto& m : paragraph_rules(c.d, f.story, flow, fid, rs.any ? &rs.text : nullptr)) {
+        pg.set_fill(ink_of(c.d, m.color, m.tint));
+        pg.rect({f.x + m.r.x, f.y + m.r.y, m.r.w, m.r.h});
+        pg.fill();
+    }
     visit_lines(c.d, f.story, flow, fid, [&](const LineVisit& v) {
         if (v.para >= static_cast<int>(st->paras.size())) return;
         const auto& para = st->paras[static_cast<std::size_t>(v.para)];

@@ -64,7 +64,8 @@ void mark_typed(std::vector<Field>& fields) {
         {"lindent", 1, 0, 1000}, {"rindent", 1, 0, 1000}, {"findent", 1, -1000, 1000},
         {"mtop", 72, 0, 5000}, {"mbottom", 72, 0, 5000}, {"minside", 72, 0, 5000}, {"moutside", 72, 0, 5000},
         {"mgutter", 1, 0, 500}, {"gutter", 1, 0, 500}, {"inset", 1, 0, 500}, {"wrap_off", 1, 0, 500},
-        {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000}};
+        {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
+        {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500}};
     for (auto& f : fields)
         for (const auto& t : typed)
             if (f.edit == t.key) { f.unit = t.unit; f.lo = t.lo; f.hi = t.hi; }
@@ -311,6 +312,28 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 std::string kl = "Off";
                 for (const auto& k : keeps) if (k.id == std::to_string(s.keep_lines)) kl = k.label;
                 f.push_back({"Keep lines", kl, "keep_lines", keeps});
+                // s043: where it starts.
+                static const std::vector<Choice> starts{{"0", "Anywhere"}, {"1", "Next column"}, {"2", "Next frame"},
+                                                        {"3", "Next page"}, {"4", "Next right-hand page"}};
+                f.push_back({"Start", starts[static_cast<std::size_t>(s.start)].label, "pstart", starts});
+                // s044: rules above / below.
+                for (const auto& [name, r, k] : {std::tuple{"above", &s.rule_above, "rule_a"}, std::tuple{"below", &s.rule_below, "rule_b"}}) {
+                    const std::string key = k, label = std::string(name) == "above" ? "Rule above" : "Rule below";
+                    std::vector<Choice> wc{{"0", "None"}};
+                    for (double w : {0.25, 0.5, 1.0, 2.0, 4.0, 6.0, 12.0}) wc.push_back({pts(w), pt(w)});
+                    f.push_back({label, r->weight > 0 ? pt(r->weight) : "None", key + "_w", wc});
+                    if (r->weight <= 0) continue;
+                    const std::string cap = std::string(name) == "above" ? "Above" : "Below";
+                    std::vector<Choice> col{{"", "Black"}};
+                    for (const auto& sw : d.ids_of<Swatch>()) col.push_back({sw, d.as<Swatch>(sw)->name});
+                    const auto* cur = d.as<Swatch>(r->color);
+                    f.push_back({cap + " colour", cur ? cur->name : "Black", key + "_c", col});
+                    f.push_back({cap + " tint", tint_text(r->tint), key + "_t", tint_choices()});
+                    std::vector<Choice> oc;
+                    for (double v : {0.0, 2.0, 4.0, 6.0, 9.0, 12.0, 18.0, 24.0}) oc.push_back({pts(v), pt(v)});
+                    f.push_back({cap + " offset", pt(r->offset), key + "_o", oc});
+                    f.push_back({cap + " width", r->text_width ? "Text" : "Column", key + "_x", {{"0", "Column"}, {"1", "Text"}}});
+                }
             }
             if (para) {   // s037: built on another style; what Enter starts next
                 std::vector<Choice> base_ch{{"", "None"}}, next_ch{{"", "Same style"}};

@@ -85,6 +85,8 @@ void load_sample(Doc& d) {
         Style h{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6, "swatch.3"};
         h.next = "style.10";
         h.keep_next = true;   // s039: never alone at a column's foot
+        h.start = ParaStart::NextRightPage;   // s043: each chapter opens a right-hand page
+        h.rule_below = {1, "swatch.3", 1, 4, false};   // s044: a Guild Rust line under the heading
         d.put("style.2", h);
     }
     d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
@@ -211,7 +213,7 @@ void load_sample(Doc& d) {
         d.put("style.9", Style{"Contents Title", StyleKind::Paragraph, 9, "Serif", 18, 22, false, false, Align::Left, 0, 12});
         d.put("story.9", Story{"Contents", {{"style.9", "Contents"},
                                             {"style.8", "Chapter One\t1"},
-                                            {"style.8", "Chapter Two\t2"},
+                                            {"style.8", "Chapter Two\t3"},   // s043: it opens page 3 now
                                             {"style.8", "Sources\t12"}}});
         d.put("frame.16", Frame{pg[2], FrameKind::Text, m, m, tw, 3 * in, 0, 1, "story.9", "", ""});
     }

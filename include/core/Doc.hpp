@@ -59,6 +59,8 @@ enum class ImageFit  { Fill, Fit, Custom };   // s009: cover the frame (cropped)
 // beside it.
 enum class Wrap      { None, Around, Jump };
 enum class VAlign    { Top, Center, Bottom, Justify };   // s042: a text frame's text, up and down
+// s043: where a paragraph (in this style) may start.
+enum class ParaStart { Anywhere, NextColumn, NextFrame, NextPage, NextRightPage };
 
 // Four distances, one per side (s018: a frame's text-wrap offset).
 struct Sides {
@@ -198,6 +200,19 @@ struct TabStop {
     bool operator==(const TabStop&) const = default;
 };
 
+// s044: a rule (a line) above a paragraph's first line or below its last.
+// `weight` 0 = none. Above: its bottom edge `offset` above the first
+// line's baseline; below: its top edge `offset` below the last line's.
+// Across the column (inside the indents), or just the line's text.
+struct ParaRule {
+    double      weight = 0;          // points
+    std::string color;               // a swatch id; "" = black
+    double      tint = 1;
+    double      offset = 0;          // points
+    bool        text_width = false;
+    bool operator==(const ParaRule&) const = default;
+};
+
 struct Style {
     std::string name;
     StyleKind   kind   = StyleKind::Paragraph;
@@ -233,6 +248,10 @@ struct Style {
     // paragraph together.
     bool        keep_next = false;
     int         keep_lines = 0;
+    // s043: start in the next column / frame / page / right-hand page when
+    // something is already set there (a chapter's opening heading).
+    ParaStart   start = ParaStart::Anywhere;
+    ParaRule    rule_above, rule_below;   // s044
     // s037: styles built on styles (paragraph styles). `based_on`: a style
     // whose settings this one takes, except those it sets itself (`own`,
     // keys from style_field_keys(), sorted). The inherited values are kept

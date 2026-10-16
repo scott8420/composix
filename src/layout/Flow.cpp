@@ -378,6 +378,11 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             const auto& para = st.paras[static_cast<std::size_t>(c.p)];
             const auto style = style_of(d, para.style);
             const double lead = leading_of(style);
+            // s043: a paragraph that starts afresh -- not where something is set already.
+            if (c.start == 0 && style.start != core::ParaStart::Anywhere) {
+                if (style.start == core::ParaStart::NextColumn && y > top) break;
+                if (style.start != core::ParaStart::NextColumn && !ft.lines.empty()) return false;   // flow_text finds the frame
+            }
             // s011: space before a paragraph -- not at the top of a column.
             const double before = (c.start == 0 && y > top) ? style.space_before : 0;
             const int len = static_cast<int>(para.text.size());
@@ -558,8 +563,17 @@ StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::St
 
     Cursor c;
     bool done = st->paras.empty();
+    std::string last_page;   // s043: the page of the last frame that took lines
     for (std::size_t fi = 0; fi < chain.size() && !done; ++fi) {
         const auto& fr = *d.as<core::Frame>(chain[fi]);
+        // s043: a paragraph to start on a new (right-hand) page passes the
+        // frames on the page it would follow on, and left-hand pages.
+        if (c.start == 0 && c.p < static_cast<int>(st->paras.size()) && !last_page.empty()) {
+            const auto start = style_of(d, st->paras[static_cast<std::size_t>(c.p)].style).start;
+            if ((start == core::ParaStart::NextPage || start == core::ParaStart::NextRightPage) &&
+                (fr.owner == last_page || (start == core::ParaStart::NextRightPage && d.side_of(fr.owner) == core::Side::Left)))
+                continue;
+        }
         const Cursor at = c;
         const auto wraps = core::wrap_rects(d, chain[fi]);
         const double floor = fr.h - std::max(0.0, fr.inset.bottom);   // s040: above the bottom inset
@@ -578,6 +592,7 @@ StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::St
             fill_frame(d, *st, fr, wraps, c, hi, out.frames[fi]);
         }
         vertical_justify(d, *st, fr, wraps, out.frames[fi]);   // s042
+        if (!out.frames[fi].lines.empty()) last_page = fr.owner;
     }
     for (const auto& ft : out.frames) out.lines += static_cast<int>(ft.lines.size());
     out.overset = !done;
@@ -750,6 +765,18 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
                      const std::string& frame, double ox, double oy, double ink, const core::Story* text) {
     cairo_save(cr);
     const auto* st = text ? text : d.as<core::Story>(story);
+    // s044: paragraph rules, under the words.
+    for (const auto& m : paragraph_rules(d, story, flow, frame, text)) {
+        if (const auto* sw = d.as<core::Swatch>(m.color)) {
+            const auto c = core::tint_rgb(sw->preview, m.tint);
+            cairo_set_source_rgb(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
+        } else {
+            const double g = 1 - m.tint * (1 - ink);
+            cairo_set_source_rgb(cr, g, g, g);
+        }
+        cairo_rectangle(cr, ox + m.r.x, oy + m.r.y, m.r.w, m.r.h);
+        cairo_fill(cr);
+    }
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         // The paragraph style's colour (s015), else the ink.
         const core::Swatch* sw = nullptr;
@@ -774,6 +801,47 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
             });
     }, text);
     cairo_restore(cr);
+}
+
+std::vector<RuleMark> paragraph_rules(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                                      const std::string& frame, const core::Story* text) {
+    std::vector<RuleMark> out;
+    const auto* st = text ? text : d.as<core::Story>(story);
+    const auto* fr = d.as<core::Frame>(frame);
+    if (!st || !fr) return out;
+    int after_cap = -1;   // a drop cap's paragraph: its first line is the one after the cap's
+    walk_frame(d, story, flow, frame, [&](const Placed& pl) {
+        const auto& ln = *pl.line;
+        if (ln.para >= static_cast<int>(st->paras.size())) return;
+        const auto& para = st->paras[static_cast<std::size_t>(ln.para)];
+        const auto style = style_of(d, para.style);
+        if (ln.cap > 0) { after_cap = ln.para; return; }
+        const bool first = (ln.start == 0) || after_cap == ln.para;
+        after_cap = -1;
+        const bool last = ln.end >= static_cast<int>(para.text.size());
+        struct Span { double x0, x1; };   // (not std::pair: GCC's psabi note)
+        const auto span = [&](const core::ParaRule& r) {
+            if (r.text_width) {
+                PangoRectangle e;
+                pango_layout_line_get_extents(pl.pl, nullptr, &e);
+                return Span{pl.x, pl.x + std::max(1.0, e.width / static_cast<double>(PANGO_SCALE))};
+            }
+            const Indents ind = indents_of(d, style, *st, ln.para);
+            const double cx = core::column_x(*fr, ln.col), cw = core::column_width(*fr, ln.col);
+            return Span{cx + std::max(0.0, ind.left), cx + cw - std::max(0.0, ind.right)};
+        };
+        if (first && style.rule_above.weight > 0) {
+            const auto [x0, x1] = span(style.rule_above);
+            const double b = pl.base - style.rule_above.offset;
+            out.push_back({{x0, b - style.rule_above.weight, x1 - x0, style.rule_above.weight}, style.rule_above.color, style.rule_above.tint});
+        }
+        if (last && style.rule_below.weight > 0) {
+            const auto [x0, x1] = span(style.rule_below);
+            const double t = pl.base + style.rule_below.offset;
+            out.push_back({{x0, t, x1 - x0, style.rule_below.weight}, style.rule_below.color, style.rule_below.tint});
+        }
+    }, text);
+    return out;
 }
 
 void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,

@@ -1214,6 +1214,9 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("hyphenate", "Hyphenate", hyphenate),
         COMPOSIX_SF("keep_next", "Keep with next", keep_next),
         COMPOSIX_SF("keep_lines", "Keep lines", keep_lines),
+        COMPOSIX_SF("start", "Start", start),
+        COMPOSIX_SF("rule_above", "Rule above", rule_above),
+        COMPOSIX_SF("rule_below", "Rule below", rule_below),
     };
     return fs;
 }

@@ -1162,7 +1162,10 @@ int main() {
         } else {
             check("column 2 has text", false);
         }
-        // Balance: where the story ends, the columns come out even.
+        // Balance: where the story ends, the columns come out even. (s043: the
+        // sample's Chapter Two starts a right-hand page; here it may follow on,
+        // so the story ends in this frame.)
+        core::doc::edit_styles(j, d, {"style.2"}, "Start", [](core::Style& s) { s.start = core::ParaStart::Anywhere; });
         core::doc::edit_frames(j, d, {"frame.1"}, "Columns", [](core::Frame& fr) { fr.h = 600; fr.balance = true; });
         const auto bal = L::flow_story(d, "story.1");
         int n0 = 0, n1 = 0;
@@ -2712,8 +2715,11 @@ int main() {
         std::string bad;
         for (const auto& it : o.items())
             for (const auto& f : it.fields)
-                if (f.unit > 0 && f.cols.empty() && f.value != "Auto" && f.value != "Inherit" && f.value != core::kMixed &&
-                    !core::parse_length(f.value, f.unit)) { reads = false; bad = f.label + "=" + f.value; }
+                if (f.unit > 0 && f.cols.empty() && f.value != core::kMixed && !core::parse_length(f.value, f.unit) &&
+                    std::none_of(f.choices.begin(), f.choices.end(), [&](const core::Choice& c) { return c.label == f.value; })) {
+                    reads = false;   // (a word shown must be one of its presets: Auto, Inherit, None)
+                    bad = f.label + "=" + f.value;
+                }
         check("typed values read back as lengths", reads, bad);
     }
 
@@ -2732,10 +2738,11 @@ int main() {
             for (const auto& f : L::flow_story(d, "story.3").frames) if (f.frame == "frame.7") return f.lines;
             return std::vector<L::Line>{};
         };
+        struct Span { double a, b; };   // (not std::pair: GCC's psabi note)
         const auto span = [](const std::vector<L::Line>& ls) {
             double a = 1e9, b = -1e9;
             for (const auto& l : ls) { a = std::min(a, l.y); b = std::max(b, l.y + l.h); }
-            return std::pair{a, b};
+            return Span{a, b};
         };
         check("sample: the dedication is centred", d.as<core::Frame>("frame.7")->valign == core::VAlign::Center);
         const auto set = [&](core::VAlign v) {
@@ -2788,6 +2795,147 @@ int main() {
         const auto after = opening(d);
         check("text wrap: the opening text (round a picture) stays at the top",
               !before.empty() && after.size() == before.size() && std::abs(after[0].y - before[0].y) < 1e-9);
+    }
+
+    {
+        std::cout << "\n-- paragraph start (s043) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // Where each paragraph of story.1 begins: frame, column, and that frame's page.
+        const auto where = [&](int para) {
+            const auto flow = L::flow_story(d, "story.1");
+            for (const auto& f : flow.frames)
+                for (const auto& l : f.lines)
+                    if (l.para == para && l.start == 0) return std::tuple{f.frame, l.col, d.as<core::Frame>(f.frame)->owner};
+            return std::tuple{std::string{}, -1, std::string{}};
+        };
+        const auto first_line = [&](const std::string& frame) {
+            for (const auto& f : L::flow_story(d, "story.1").frames)
+                if (f.frame == frame && !f.lines.empty()) return f.lines.front().para;
+            return -1;
+        };
+        check("sample: Heading 1 starts a right-hand page", d.as<core::Style>("style.2")->start == core::ParaStart::NextRightPage);
+        const auto [f1, c1, p1] = where(0);
+        check("story start: Chapter One where it is (nothing before it)", f1 == "frame.1");
+        const auto [f4, c4, p4] = where(4);
+        check("Chapter Two: on a right-hand page after Chapter One's",
+              !f4.empty() && p4 != p1 && d.side_of(p4) != core::Side::Left && d.page_index(p4) > d.page_index(p1),
+              f4 + " on " + p4);
+        check("Chapter Two: first in its frame", first_line(f4) == 4);
+        bool between_empty = true;   // frames on pages it passed hold nothing of it
+        for (const auto& f : L::flow_story(d, "story.1").frames) {
+            const auto pg = d.as<core::Frame>(f.frame)->owner;
+            if (d.page_index(pg) > d.page_index(p1) && d.page_index(pg) < d.page_index(p4)) between_empty = between_empty && f.lines.empty();
+        }
+        check("the pages between: left empty", between_empty);
+        // Next page (any side): the very next page with a frame of the thread.
+        core::doc::edit_styles(j, d, {"style.2"}, "Start", [](core::Style& s) { s.start = core::ParaStart::NextPage; });
+        const auto [g4, gc, gp] = where(4);
+        check("next page: a later page, first in its frame", d.page_index(gp) > d.page_index(p1) && first_line(g4) == 4);
+        // Next frame: the next frame of the thread.
+        core::doc::edit_styles(j, d, {"style.2"}, "Start", [](core::Style& s) { s.start = core::ParaStart::NextFrame; });
+        const auto [h4, hc, hp] = where(4);
+        check("next frame: frame.2, first in it", h4 == "frame.2" && first_line("frame.2") == 4, h4);
+        // Next column: two columns in frame.1 -- Chapter Two heads the second.
+        core::doc::edit_styles(j, d, {"style.2"}, "Start", [](core::Style& s) { s.start = core::ParaStart::NextColumn; });
+        core::doc::edit_frames(j, d, {"frame.1"}, "Columns", [](core::Frame& f) { f.columns = 2; });
+        const auto [k4, kc, kp] = where(4);
+        bool heads = true;
+        for (const auto& f : L::flow_story(d, "story.1").frames)
+            for (const auto& l : f.lines)
+                if (f.frame == k4 && l.col == kc && l.para < 4) heads = false;
+        check("next column: a fresh column, nothing before it there", !k4.empty() && (kc > 0 || k4 != "frame.1") && heads,
+              k4 + " col " + std::to_string(kc));
+        // Anywhere: back on page 1 with the rest.
+        core::doc::edit_styles(j, d, {"style.2"}, "Start", [](core::Style& s) { s.start = core::ParaStart::Anywhere; });
+        core::doc::edit_frames(j, d, {"frame.1"}, "Columns", [](core::Frame& f) { f.columns = 1; });
+        check("anywhere: Chapter Two follows on", std::get<0>(where(4)) == "frame.1");
+        check("no text lost: nothing overset", !L::flow_story(d, "story.1").overset);
+        j.undo(); j.undo();
+        const auto o = core::project(d, "");
+        bool row = false;
+        for (const auto& f : o.find("style.2")->fields) row = row || (f.edit == "pstart" && f.value == "Next column");
+        check("inspector: Start", row);
+        std::string err;
+        core::Doc e;
+        check("json: start kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+    }
+
+    {
+        std::cout << "\n-- paragraph rules (s044) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto rules = [&] {
+            const auto flow = L::flow_story(d, "story.1");
+            return L::paragraph_rules(d, "story.1", flow, "frame.1");
+        };
+        // The baseline of a paragraph's first / last line in frame.1, as drawn.
+        const auto base_of = [&](int para, bool last) {
+            const auto flow = L::flow_story(d, "story.1");
+            double b = -1;
+            L::visit_lines(d, "story.1", flow, "frame.1", [&](const L::LineVisit& v) {
+                if (v.para == para && v.from >= 0 && (b < 0 || last)) b = v.baseline;
+            });
+            return b;
+        };
+        const auto& fr = *d.as<core::Frame>("frame.1");
+        const auto r0 = rules();
+        check("sample: one rule under Chapter One (Guild Rust, 1 pt)", r0.size() == 1 && r0[0].color == "swatch.3" &&
+                                                                         std::abs(r0[0].r.h - 1) < 1e-9);
+        check("below: its top 4 pt under the heading's baseline", !r0.empty() && std::abs(r0[0].r.y - (base_of(0, true) + 4)) < 0.01,
+              r0.empty() ? "" : std::to_string(r0[0].r.y) + " vs " + std::to_string(base_of(0, true)));
+        check("below: across the column", !r0.empty() && std::abs(r0[0].r.x - core::column_x(fr, 0)) < 0.01 &&
+                                             std::abs(r0[0].r.w - core::column_width(fr, 0)) < 0.01);
+        // Above, on Body First (a drop cap: its first line is the one beside the cap), text width.
+        check("above: one step", core::doc::edit_styles(j, d, {"style.10"}, "Rule", [](core::Style& s) {
+            s.rule_above = {2, "", 0.5, 12, true};
+        }) && j.size() == 1);
+        const auto r1 = rules();
+        const core::Rect* above = nullptr;
+        for (const auto& m : r1) if (m.color.empty()) above = &m.r;
+        const auto flow = L::flow_story(d, "story.1");
+        double first_base = -1;   // the line beside the cap: the first non-cap line of para 1
+        L::visit_lines(d, "story.1", flow, "frame.1", [&](const L::LineVisit& v) {
+            if (v.para == 1 && v.from > 0 && first_base < 0) first_base = v.baseline;
+        });
+        check("above: its bottom 12 pt over the first line's baseline", above && std::abs(above->y + above->h - (first_base - 12)) < 0.01,
+              above ? std::to_string(above->y + above->h) + " vs " + std::to_string(first_base - 12) : "none");
+        check("above: text width -- inside the column", above && above->x >= core::column_x(fr, 0) - 0.01 &&
+                                                         above->x + above->w <= core::column_x(fr, 0) + core::column_width(fr, 0) + 0.01);
+        check("above: Body First's own (Body has none)", d.as<core::Style>("style.1")->rule_above.weight == 0 &&
+                                                         std::count(d.as<core::Style>("style.10")->own.begin(),
+                                                                    d.as<core::Style>("style.10")->own.end(), "rule_above") == 1);
+        // Rules don't move text.
+        j.undo();
+        const auto before = L::flow_story(d, "story.1");
+        core::doc::edit_styles(j, d, {"style.2"}, "Rule", [](core::Style& s) { s.rule_above = {6, "", 1, 30, false}; });
+        const auto after = L::flow_story(d, "story.1");
+        bool same = before.frames.size() == after.frames.size();
+        for (std::size_t i = 0; same && i < before.frames.size(); ++i) {
+            same = before.frames[i].lines.size() == after.frames[i].lines.size();
+            for (std::size_t k = 0; same && k < before.frames[i].lines.size(); ++k)
+                same = before.frames[i].lines[k].y == after.frames[i].lines[k].y && before.frames[i].lines[k].start == after.frames[i].lines[k].start;
+        }
+        check("rules take no room: the text where it was", same);
+        j.undo();
+        const auto o = core::project(d, "");
+        bool w = false, c = false, ofs = false;
+        for (const auto& f : o.find("style.2")->fields) {
+            w = w || (f.edit == "rule_b_w" && f.value == "1 pt");
+            c = c || (f.edit == "rule_b_c" && f.value == "Guild Rust");
+            ofs = ofs || (f.edit == "rule_b_o" && f.value == "4 pt" && f.unit == 1);
+        }
+        check("inspector: Rule below, its colour and offset (typed)", w && c && ofs);
+        std::string err;
+        core::Doc e;
+        check("json: rules kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records() &&
+                                      e.as<core::Style>("style.2")->rule_below.weight == 1, err);
     }
 
     std::cout << "-----------------------------------------------\n";
