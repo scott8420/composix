@@ -47,6 +47,12 @@ void load_plain(composix::core::Doc& d) {
     auto f = *d.as<composix::core::Frame>("frame.11");
     f.wrap = composix::core::Wrap::None;
     d.put("frame.11", f);
+    // ... and without s029's drop caps (the chapters' first paragraphs in Body)
+    {
+        auto st = *d.as<composix::core::Story>("story.1");
+        for (auto& p : st.paras) if (p.style == "style.10") p.style = "style.1";
+        d.put("story.1", st);
+    }
     // ... and without s026's indents (body first lines, hanging sources).
     for (const char* id : {"style.1", "style.4"}) {
         auto st = *d.as<composix::core::Style>(id);
@@ -1578,7 +1584,8 @@ int main() {
             const L::Line* left = nullptr;
             const L::Line* right = nullptr;
             for (std::size_t k = 0; k + 1 < ft->lines.size() && !right; ++k)
-                if (ft->lines[k + 1].y == ft->lines[k].y && ft->lines[k + 1].x > ft->lines[k].x) {
+                if (ft->lines[k + 1].y == ft->lines[k].y && ft->lines[k + 1].x > ft->lines[k].x &&
+                    ft->lines[k].cap <= 0 && ft->lines[k + 1].cap <= 0) {   // (not a drop cap and its line -- s029)
                     left = &ft->lines[k];
                     right = &ft->lines[k + 1];
                 }
@@ -1601,7 +1608,7 @@ int main() {
         const auto jr = core::wrap_rects(d, "frame.1");
         for (const auto& f : jf.frames)
             if (f.frame == "frame.1" && !jr.empty())
-                for (const auto& l : f.lines) none = none && !(l.y + l.h > jr[0].y0 && l.y < jr[0].y1);
+                for (const auto& l : f.lines) none = none && (l.cap > 0 || !(l.y + l.h > jr[0].y0 && l.y < jr[0].y1));
         check("wrap: Jump leaves its band empty", none && !jr.empty() && jr[0].jump);
         j.undo();
         check("wrap: undo", d.as<core::Frame>("frame.11")->wrap == core::Wrap::Around);
@@ -1610,7 +1617,8 @@ int main() {
                                                   [](core::Frame& f) { f.wrap = core::Wrap::None; }));
         bool plain = true;
         for (const auto& f : L::flow_story(d, "story.1").frames)
-            for (const auto& l : f.lines) plain = plain && l.w <= 0;
+            for (const auto& l : f.lines)   // (a drop cap's lines are set on their own too -- s029)
+                plain = plain && (l.w <= 0 || d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(l.para)].style == "style.10");
         check("wrap: none sets every line with its paragraph", plain);
         // The inspector: Wrap on every frame, Offset when it wraps.
         j.undo();
@@ -2009,7 +2017,7 @@ int main() {
         bool fi = false, tb = false;
         for (const auto& f : o.find("style.1")->fields) {
             fi = fi || (f.edit == "findent" && f.value == "18 pt");
-            tb = tb || (f.edit == "indent_after" && f.value == "After the same style");
+            tb = tb || (f.edit == "indent_after" && f.value == "Not after a heading");
         }
         check("inspector: First indent and when", fi && tb);
     }
@@ -2054,6 +2062,48 @@ int main() {
         j.undo();
         check("across the spine: one undo puts it back", d.as<core::Frame>(box)->owner == "page.6" &&
                                                         d.as<core::Frame>(box)->x == 300);
+    }
+
+    {
+        std::cout << "\n-- drop caps --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto fl = L::flow_story(d, "story.1");
+        const L::Line* cap = nullptr;
+        double cap_x1 = 0;
+        for (const auto& l : fl.frames.front().lines)
+            if (l.para == 1 && l.cap > 0) { cap = &l; cap_x1 = l.x + l.w; }
+        check("drop cap: the first letter, three lines tall", cap && cap->start == 0 && cap->end == 1 &&
+                                                              std::abs(cap->h - 3 * 14) < 1e-9 && cap->cap > 30);
+        bool beside = false;
+        for (const auto& l : fl.frames.front().lines)
+            if (cap && l.para == 1 && l.cap <= 0 && l.y < cap->y + cap->h) beside = beside || l.x > cap_x1;
+        check("drop cap: the lines beside it start past it", beside);
+        const auto c0 = L::caret_at(d, "story.1", fl, {1, 0});
+        const auto c1 = L::caret_at(d, "story.1", fl, {1, 1});
+        check("drop cap: the caret before it is as tall as it, after it beside", c0.ok && std::abs(c0.h - 42) < 1e-9 &&
+                                                                                 c1.ok && c1.x > cap_x1);
+        double next_y = 0;
+        for (const auto& l : fl.frames.front().lines) if (l.para == 2) { next_y = l.y; break; }
+        check("drop cap: a short paragraph still clears it", cap && next_y >= cap->y + cap->h - 0.01);
+        check("indent: the paragraph after the drop cap's is indented (not a heading)",
+              std::abs(L::caret_at(d, "story.1", fl, {2, 0}).x - 18) < 0.5);
+        core::doc::edit_styles(j, d, {"style.10"}, "Drop letters", [](core::Style& s) { s.drop_chars = 2; });
+        const auto f2 = L::flow_story(d, "story.1");
+        bool two = false;
+        for (const auto& l : f2.frames.front().lines) two = two || (l.para == 1 && l.cap > 0 && l.end == 2);
+        check("drop cap: two letters", two);
+        core::doc::edit_styles(j, d, {"style.10"}, "Drop cap", [](core::Style& s) { s.drop_lines = 0; });
+        bool none = true;
+        for (const auto& l : L::flow_story(d, "story.1").frames.front().lines) none = none && l.cap <= 0;
+        check("drop cap: none", none);
+        const auto o = core::project(d, "");
+        bool field = false;
+        for (const auto& f : o.find("style.10")->fields) field = field || (f.edit == "drop_lines" && f.value == "None");
+        check("inspector: Drop cap", field);
     }
 
     std::cout << "-----------------------------------------------\n";

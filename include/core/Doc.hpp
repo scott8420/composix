@@ -180,12 +180,16 @@ struct Style {
     std::string color;                   // s015: a swatch id; "" = black (a character style: inherit)
     double      color_tint = 1;          // s021: of that swatch, 0.05..1
     // s026: paragraph indents (points) and tab stops. A negative first
-    // indent hangs the first line out. `indent_after_same`: the first-line
-    // indent only after a paragraph of this same style -- none at a story's
-    // start or after a heading (as novels are set).
+    // indent hangs the first line out. `skip_after_heading`: no first-line
+    // indent at a story's start or after a heading -- a paragraph set
+    // larger than this one (as novels are set; s029 -- was "only after the
+    // same style", which also skipped it after a chapter's first paragraph).
     double      left_indent = 0, right_indent = 0, first_indent = 0;
-    bool        indent_after_same = false;
+    bool        skip_after_heading = false;
     std::vector<TabStop> tabs;
+    // s029: a drop cap -- the first `drop_chars` characters set `drop_lines`
+    // lines tall (0 = none), the paragraph's first lines beside them.
+    int         drop_lines = 0, drop_chars = 1;
     bool operator==(const Style&) const = default;
 };
 

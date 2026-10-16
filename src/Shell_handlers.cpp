@@ -495,11 +495,18 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Style& st) {
                 if (st.kind != core::StyleKind::Paragraph) return;
                 if (key == "tabs") st.tabs = stops;
-                else if (key == "indent_after") st.indent_after_same = choice == "1";
+                else if (key == "indent_after") st.skip_after_heading = choice == "1";
                 else {
                     const double v = std::stod(choice);
                     (key == "lindent" ? st.left_indent : key == "rindent" ? st.right_indent : st.first_indent) = v;
                 }
+            });
+        } else if (key == "drop_lines" || key == "drop_chars") {   // s029
+            const int v = std::stoi(choice);
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "drop_lines" ? "Drop cap" : "Drop letters",
+                                         [&](core::Style& st) {
+                if (st.kind != core::StyleKind::Paragraph) return;
+                (key == "drop_lines" ? st.drop_lines : st.drop_chars) = v;
             });
         } else if (key == "color_tint") {   // s021
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Tint",

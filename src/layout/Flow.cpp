@@ -73,11 +73,15 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
 // s026: a paragraph's indents, where it is in its story (the first-line
 // indent may be skipped: at the story's start / after another style).
 struct Indents { double left = 0, right = 0, first = 0; };
-Indents indents_of(const core::Style& st, const core::Story& s, int p) {
+Indents indents_of(const core::Doc& d, const core::Style& st, const core::Story& s, int p) {
     Indents in{std::max(0.0, st.left_indent), std::max(0.0, st.right_indent), st.first_indent};
-    if (st.indent_after_same) {
-        const bool same = p > 0 && s.paras[static_cast<std::size_t>(p - 1)].style == s.paras[static_cast<std::size_t>(p)].style;
-        if (!same) in.first = 0;
+    if (st.skip_after_heading) {
+        bool heading = p == 0;   // the story's start counts as one
+        if (p > 0) {
+            const auto prev = style_of(d, s.paras[static_cast<std::size_t>(p - 1)].style);
+            heading = (prev.size > 0 ? prev.size : 11) > (st.size > 0 ? st.size : 11) + 0.01;
+        }
+        if (heading) in.first = 0;
     }
     return in;
 }
@@ -233,15 +237,53 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             // s011: space before a paragraph -- not at the top of a column.
             const double before = (c.start == 0 && y > 0) ? style.space_before : 0;
             const int len = static_cast<int>(para.text.size());
-            const Indents ind = indents_of(style, st, c.p);   // s026
+            const Indents ind = indents_of(d, style, st, c.p);   // s026
             double yy = y + before;
-            if (wrapped) {   // s018: line by line, each at the width the wraps leave
+            // s029: a drop cap -- the first characters `drop_lines` lines tall.
+            // Its box joins the wraps for this paragraph, so the lines beside
+            // it are set line by line at the width it leaves (as a wrap's).
+            std::vector<core::WrapRect> local;
+            const bool drop = c.start == 0 && style.drop_lines >= 2 && len > 0;
+            double cap_bottom = 0;   // a short paragraph still clears its cap
+            if (drop) {
+                const int n = std::min(style.drop_lines, 8);
+                if (yy + n * lead > hmax + 0.01 && y > 0) break;   // no room for it here: the next column
+                const char* t = para.text.c_str();
+                int k = 0;
+                for (int ch = 0; ch < std::max(1, style.drop_chars) && k < len; ++ch)
+                    k = static_cast<int>(g_utf8_next_char(t + k) - t);
+                const double body = style.size > 0 ? style.size : 11;
+                core::Style cs = style;
+                cs.size = (n - 1) * lead / 0.7 + body;   // its cap height spans the lines (caps ~0.7 em)
+                cs.leading = 0;
+                cs.tabs.clear();
+                auto cl = make_layout(cs, t, k, 1e6, false);
+                PangoRectangle ext;
+                pango_layout_get_extents(cl.get(), nullptr, &ext);
+                const double wc = std::max(1.0, ext.width / static_cast<double>(PANGO_SCALE));
+                // Where a body line's baseline sits in its line box.
+                auto probe = make_layout(style, "X", 1, 1e6, false);
+                PangoLayoutIter* pit = pango_layout_get_iter(probe.get());
+                PangoRectangle pr;
+                pango_layout_iter_get_line_extents(pit, nullptr, &pr);
+                const double off = (lead - pr.height / static_cast<double>(PANGO_SCALE)) / 2 +
+                                   (pango_layout_iter_get_baseline(pit) - pr.y) / static_cast<double>(PANGO_SCALE);
+                pango_layout_iter_free(pit);
+                const double capx = cx + ind.left, gap = std::max(3.0, body * 0.3);
+                ft.lines.push_back({c.p, 0, k, yy, n * lead, col, capx, wc, cs.size, yy + (n - 1) * lead + off});
+                local = wraps;
+                local.push_back({cx - 1, yy, capx + wc + gap, yy + n * lead - 0.01, false});
+                cap_bottom = yy + n * lead;
+                c.start = k;
+            }
+            if (wrapped || drop) {   // s018: line by line, each at the width the wraps leave
+                const auto& wraps_here = drop ? local : wraps;
                 int pos = c.start;
                 bool ended = false, full = false;
                 while (!ended) {
                     if (yy + lead > hmax + 0.01) { full = true; break; }
                     double next = 0;
-                    const auto spans = free_spans(wraps, cx, cx + cw, yy, yy + lead, &next);
+                    const auto spans = free_spans(wraps_here, cx, cx + cw, yy, yy + lead, &next);
                     if (spans.empty()) { yy = next; continue; }
                     for (const auto& sp : spans) {
                         // s026: the indents where the span meets the column's edges.
@@ -262,7 +304,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                     yy += lead;
                 }
                 if (ended) {
-                    y = yy + style.space_after;
+                    y = std::max(yy, cap_bottom) + style.space_after;
                     ++c.p;
                     c.start = 0;
                     continue;
@@ -429,10 +471,17 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
         const int from = std::min(ft->lines[i].start, static_cast<int>(text.size()));
         const bool solo = ft->lines[i].w > 0;
         const bool continues = !solo && ft->lines[j - 1].end < static_cast<int>(text.size());
-        const Indents ind = indents_of(style, *st, p);   // s026: as the flow set it
+        const Indents ind = indents_of(d, style, *st, p);   // s026: as the flow set it
         const Geo g = geo_of(ind, core::column_width(*fr, col), from == 0);
-        auto lay = make_layout(style, text.c_str() + from, static_cast<int>(text.size()) - from,
-                               solo ? ft->lines[i].w : g.width, continues, solo ? (from == 0 ? std::max(0.0, ind.first) : 0) : g.indent);
+        // s029: a drop cap's line: its characters alone, at its size (the
+        // lines beside it start past them: no first indent).
+        const double cap = ft->lines[i].cap;
+        core::Style cs = style;
+        if (cap > 0) { cs.size = cap; cs.leading = 0; cs.tabs.clear(); }
+        auto lay = cap > 0 ? make_layout(cs, text.c_str() + from, ft->lines[i].end - from, 1e6, false)
+                           : make_layout(style, text.c_str() + from, static_cast<int>(text.size()) - from,
+                                         solo ? ft->lines[i].w : g.width, continues,
+                                         solo ? (from == 0 ? std::max(0.0, ind.first) : 0) : g.indent);
         apply_runs(lay.get(), d, st->paras[static_cast<std::size_t>(p)], from);
         PangoLayoutIter* it = pango_layout_get_iter(lay.get());
         for (std::size_t k = i; k < j; ++k) {
@@ -444,7 +493,7 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
             const double x = logical.x / static_cast<double>(PANGO_SCALE);
             const auto& ln = ft->lines[k];
             PangoLayoutLine* pll = pango_layout_iter_get_line_readonly(it);
-            f(Placed{&ln, lay.get(), pll, from, ln.x + x, ln.y + (ln.h - h) / 2 + (bl - top),
+            f(Placed{&ln, lay.get(), pll, from, ln.x + x, ln.cap > 0 ? ln.base : ln.y + (ln.h - h) / 2 + (bl - top),
                      leader_gaps(lay.get(), pll, style, ln.x), &style});
             if (!pango_layout_iter_next_line(it)) break;
         }

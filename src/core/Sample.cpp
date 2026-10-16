@@ -59,8 +59,15 @@ void load_sample(Doc& d) {
     {   // s026: body text indents its first lines -- not after a heading (as novels do).
         Style b{"Body", StyleKind::Paragraph, 1, "Serif", 11, 14, false, false, Align::Justify};
         b.first_indent = 18;
-        b.indent_after_same = true;
+        b.skip_after_heading = true;
         d.put("style.1", b);
+        // s029: a chapter's first paragraph opens with a three-line drop cap.
+        Style first = b;
+        first.name = "Body First";
+        first.pos = 10;
+        first.first_indent = 0;
+        first.drop_lines = 3;
+        d.put("style.10", first);
     }
     d.put("style.2", Style{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6, "swatch.3"});
     d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
@@ -79,13 +86,13 @@ void load_sample(Doc& d) {
     ch.name = "Chapters";
     ch.paras = {
         {"style.2", "Chapter One"},
-        {"style.1", "The harbor smelled of diesel and oranges the morning the ship came in."},
+        {"style.10", "The harbor smelled of diesel and oranges the morning the ship came in."},
         {"style.1", "Nobody on the quay had expected her before the equinox, and fewer still "
                     "had expected the cargo she carried."},
         {"style.1", "By noon the guild had posted a notice, and by evening the notice had "
                     "been torn down twice."},
         {"style.2", "Chapter Two"},
-        {"style.1", "The map came out of its tube in three panels, each a little narrower "
+        {"style.10", "The map came out of its tube in three panels, each a little narrower "
                     "than the last, so it would fold inside the book."},
     };
     d.put("story.1", ch);

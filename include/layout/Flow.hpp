@@ -47,6 +47,10 @@ struct Line {
     // s018: a line set on its own (text wrap): its width, from x. 0 = the
     // column's, set with the rest of its paragraph in the column.
     double w     = 0;
+    // s029: a drop cap's line -- its font size (0: an ordinary line) and
+    // its baseline (frame coordinates: the Nth line's).
+    double cap   = 0;
+    double base  = 0;
 };
 
 struct FrameText {

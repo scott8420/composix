@@ -77,7 +77,8 @@ json to(const Record& r) {
                  {"space_after", v.space_after}, {"color", v.color},
                  {"color_tint", v.color_tint},
                  {"left_indent", v.left_indent}, {"right_indent", v.right_indent}, {"first_indent", v.first_indent},
-                 {"indent_after_same", v.indent_after_same}};
+                 {"skip_after_heading", v.skip_after_heading},
+                 {"drop_lines", v.drop_lines}, {"drop_chars", v.drop_chars}};
             if (!v.tabs.empty()) {
                 json tabs = json::array();
                 for (const auto& t : v.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
@@ -210,7 +211,9 @@ std::optional<Record> from(const json& j) {
         v.left_indent = val(j, "left_indent", 0.0);
         v.right_indent = val(j, "right_indent", 0.0);
         v.first_indent = val(j, "first_indent", 0.0);
-        v.indent_after_same = val(j, "indent_after_same", false);
+        v.skip_after_heading = val(j, "skip_after_heading", val(j, "indent_after_same", false));   // s026 files said indent_after_same
+        v.drop_lines = val(j, "drop_lines", 0);
+        v.drop_chars = val(j, "drop_chars", 1);
         if (j.contains("tabs") && j["tabs"].is_array())
             for (const auto& t : j["tabs"])
                 v.tabs.push_back({val(t, "pos", 0.0), de(t, "align", TabAlign::Left), val<std::string>(t, "leader", "")});

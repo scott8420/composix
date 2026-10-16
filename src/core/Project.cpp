@@ -267,11 +267,16 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 f.push_back({"Right indent", pt(s.right_indent), "rindent", ind_ch});
                 f.push_back({"First indent", pt(s.first_indent), "findent", first_ch});
                 if (s.first_indent != 0)
-                    f.push_back({"Indent when", s.indent_after_same ? "After the same style" : "Always", "indent_after",
-                                 {{"0", "Always"}, {"1", "After the same style"}}});
+                    f.push_back({"Indent when", s.skip_after_heading ? "Not after a heading" : "Always", "indent_after",
+                                 {{"0", "Always"}, {"1", "Not after a heading"}}});
                 std::vector<Choice> tab_ch;
                 for (const auto& [id, label] : tab_presets(d)) tab_ch.push_back({id, label});
                 f.push_back({"Tabs", tabs_text(s.tabs), "tabs", tab_ch});
+                // s029: drop cap.
+                f.push_back({"Drop cap", s.drop_lines >= 2 ? std::to_string(s.drop_lines) + " lines" : "None", "drop_lines",
+                             {{"0", "None"}, {"2", "2 lines"}, {"3", "3 lines"}, {"4", "4 lines"}, {"5", "5 lines"}}});
+                if (s.drop_lines >= 2)
+                    f.push_back({"Drop letters", std::to_string(s.drop_chars), "drop_chars", {{"1", "1"}, {"2", "2"}, {"3", "3"}}});
             }
             f.push_back({"Used", uses ? std::to_string(uses) + "×" : "Not used"});
             Field act{"", "", "style", {{"duplicate", "Duplicate"}}};
