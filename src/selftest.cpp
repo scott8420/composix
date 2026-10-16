@@ -2525,6 +2525,43 @@ int main() {
     }
 
     {
+        std::cout << "\n-- page margins + master drop (s062) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        std::string pg, other;   // two pages on the same master
+        for (const auto& p : d.pages()) {
+            if (d.as<core::Page>(p)->master.empty()) continue;
+            if (pg.empty()) pg = p;
+            else if (d.as<core::Page>(p)->master == d.as<core::Page>(pg)->master) { other = p; break; }
+        }
+        check("fixture: two pages on one master", !pg.empty() && !other.empty());
+        const auto before = core::margin_rect(d, pg), other_before = core::margin_rect(d, other);
+        const auto steps = j.size();
+        check("own margins: one step, from the master's", D::edit_page_margins(j, d, {pg}, "Top margin", [](core::Margins& m) { m.top = 100; }) &&
+                                                         j.size() == steps + 1 && d.as<core::Page>(pg)->margins &&
+                                                         d.as<core::Page>(pg)->margins->bottom == core::margins_of(d, other)->bottom);
+        const auto after = core::margin_rect(d, pg);
+        check("own margins: this page's text area moves; its neighbour's doesn't",
+              std::abs(after.y - 100) < 1e-9 && std::abs(after.h - (before.h - (100 - before.y))) < 1e-9 &&
+              core::margin_rect(d, other) == other_before);
+        const auto json = core::to_json(d);
+        core::Doc e;
+        std::string err;
+        check("own margins: kept in the file", core::from_json(e, json, &err) && e.records() == d.records(), err);
+        check("reset: back to the master's, one step", D::reset_page_margins(j, d, {pg}) && !d.as<core::Page>(pg)->margins &&
+                                                       core::margin_rect(d, pg) == before);
+        // A master dropped on pages is set_master: one step, those pages.
+        std::string m2;
+        for (const auto& m : d.ids_of<core::Master>()) if (m != d.as<core::Page>(pg)->master) { m2 = m; break; }
+        const auto s2 = j.size();
+        check("master drop: the pages take it, one step", D::set_master(j, d, {pg, other}, m2) && j.size() == s2 + 1 &&
+                                                         d.as<core::Page>(pg)->master == m2 && d.as<core::Page>(other)->master == m2);
+    }
+
+    {
         std::cout << "\n-- page numbers --\n";
         namespace L = composix::layout;
         core::Doc d;

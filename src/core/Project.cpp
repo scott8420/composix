@@ -66,7 +66,8 @@ void mark_typed(std::vector<Field>& fields) {
         {"mgutter", 1, 0, 500}, {"gutter", 1, 0, 500}, {"inset", 1, 0, 500}, {"wrap_off", 1, 0, 500},
         {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
         {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500},
-        {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500}};   // s055
+        {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
+        {"ptop", 72, 0, 5000}, {"pbottom", 72, 0, 5000}, {"pinside", 72, 0, 5000}, {"poutside", 72, 0, 5000}};   // s062
     for (auto& f : fields)
         for (const auto& t : typed)
             if (f.edit == t.key) { f.unit = t.unit; f.lo = t.lo; f.hi = t.hi; }
@@ -186,13 +187,27 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         Field acts{"", "", "page", {{"add", "Add page after"}, {"delete", "Delete"}}};
         if (!starts) acts.choices.push_back({"section", "Start section"});
         acts.buttons = true;
-        o.add({pid, G::Pages, "Page " + d.folio(pid), p.folds.empty() ? "" : "Foldout", th,
-               {{"Folio", d.folio(pid)},
-                {"Size", size_text(p.w, p.h, p.folds.size()), "size", size_choices},
-                {"Master", master_label(d, p.master), "master", master_choices},
-                {"Section", sec.empty() ? "—" : d.as<Section>(sec)->name},
-                {"Side", side_text(d.side_of(pid))},
-                acts}});
+        std::vector<Field> pf{{"Folio", d.folio(pid)},
+                              {"Size", size_text(p.w, p.h, p.folds.size()), "size", size_choices},
+                              {"Master", master_label(d, p.master), "master", master_choices},
+                              {"Section", sec.empty() ? "—" : d.as<Section>(sec)->name},
+                              {"Side", side_text(d.side_of(pid))}};
+        {   // s062: its own margins, or the master's.
+            pf.push_back({"Margins", p.margins ? "This page's own" : "Master's", "pmargins",
+                          {{"master", "Master's"}, {"own", "This page's own"}}});
+            if (const auto* mg = margins_of(d, pid); mg && p.margins) {
+                static const double ms[] = {0, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1, 1.25, 1.5, 2};
+                std::vector<Choice> mc;
+                for (double v : ms) mc.push_back({pts(v * kPt), inches(v * kPt) + " in"});
+                pf.push_back({"Top", inches(mg->top) + " in", "ptop", mc});
+                pf.push_back({"Bottom", inches(mg->bottom) + " in", "pbottom", mc});
+                pf.push_back({"Inside", inches(mg->inside) + " in", "pinside", mc});
+                pf.push_back({"Outside", inches(mg->outside) + " in", "poutside", mc});
+            }
+        }
+        pf.push_back(acts);
+        mark_typed(pf);
+        o.add({pid, G::Pages, "Page " + d.folio(pid), p.folds.empty() ? "" : "Foldout", th, pf});
     }
 
     // ── Masters ─────────────────────────────────────────────────────────────

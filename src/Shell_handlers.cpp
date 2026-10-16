@@ -518,6 +518,17 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "numbering") {
             did = core::doc::set_numbering(m_journal, m_doc, m_inspected,
                                            static_cast<core::Numbering>(std::stoi(choice)));
+        } else if (key == "pmargins") {   // s062: a page's own margins, or back to the master's
+            if (choice == "own") did = core::doc::edit_page_margins(m_journal, m_doc, m_inspected, "Page's own margins", [](core::Margins&) {});
+            else did = core::doc::reset_page_margins(m_journal, m_doc, m_inspected);
+        } else if (key == "ptop" || key == "pbottom" || key == "pinside" || key == "poutside") {
+            const double v = std::stod(choice);
+            did = core::doc::edit_page_margins(m_journal, m_doc, m_inspected, "Page margin", [&](core::Margins& m) {
+                if (key == "ptop") m.top = v;
+                else if (key == "pbottom") m.bottom = v;
+                else if (key == "pinside") m.inside = v;
+                else m.outside = v;
+            });
         } else if (key == "sname") {   // s060: a section's name
             if (m_inspected.size() == 1) did = core::doc::rename_section(m_journal, m_doc, m_inspected.front(), choice);
         } else if (key == "sstart_at") {   // s060: its first page's number

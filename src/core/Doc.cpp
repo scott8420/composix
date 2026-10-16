@@ -787,6 +787,22 @@ bool move_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const Do
     });
 }
 
+bool edit_page_margins(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const std::string& label,
+                       const std::function<void(Margins&)>& f) {
+    return edit_pages(j, d, ids, label, [&](Page& p) {
+        if (!p.margins) {   // from what it uses now
+            const Master* m = nullptr;
+            for (const auto& mid : d.ids_of<Master>()) if (mid == p.master) m = d.as<Master>(mid);
+            p.margins = m ? m->margins : Margins{};
+        }
+        f(*p.margins);
+    });
+}
+
+bool reset_page_margins(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
+    return edit_pages(j, d, ids, "Margins from the master", [](Page& p) { p.margins.reset(); });
+}
+
 bool set_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const Doc::Id& master) {
     if (!master.empty() && !d.as<Master>(master)) return false;
     return edit_pages(j, d, ids, "Apply master " + master_label(d, master),
@@ -1946,6 +1962,9 @@ const std::vector<Verb>& verbs() {
              set_starts(j, d, d.ids_of<Section>(), Side::Left);
          }},
         {"remove_section", [](DocJournal& j, Doc& d) { remove_section(j, d, d.ids_of<Section>().back()); }},
+        {"page_margins", [](DocJournal& j, Doc& d) {   // s062
+             edit_page_margins(j, d, {d.pages().back()}, "Top margin", [](Margins& m) { m.top = 90; });
+         }},
         {"rename_section", [](DocJournal& j, Doc& d) { rename_section(j, d, d.ids_of<Section>().back(), "Part One"); }},   // s060
         {"section_start_at", [](DocJournal& j, Doc& d) { set_section_start_at(j, d, {d.ids_of<Section>().back()}, 5); }},
         {"section_master", [](DocJournal& j, Doc& d) {
@@ -2376,12 +2395,19 @@ const Master* master_of(const Doc& d, const Doc::Id& id) {
 }
 }  // namespace
 
+const Margins* margins_of(const Doc& d, const Doc::Id& id) {
+    if (const auto* p = d.as<Page>(id); p && p->margins) return &*p->margins;   // s062
+    const auto* m = master_of(d, id);
+    return m ? &m->margins : nullptr;
+}
+
 Rect margin_rect(const Doc& d, const Doc::Id& id) {
     const auto* m = master_of(d, id);
-    if (!m) return {};
-    double w = m->w, h = m->h;
-    if (const auto* p = d.as<Page>(id)) { w = p->w; h = p->h; }
-    const auto& mg = m->margins;
+    const auto* pg = d.as<Page>(id);
+    if (!m && !(pg && pg->margins)) return {};
+    double w = m ? m->w : pg->w, h = m ? m->h : pg->h;
+    if (pg) { w = pg->w; h = pg->h; }
+    const auto& mg = *margins_of(d, id);
     // A left-hand page: the spine is on its right.
     const bool left = d.as<Page>(id) && d.side_of(id) == Side::Left;
     const double l = left ? mg.outside : mg.inside, r = left ? mg.inside : mg.outside;
@@ -2392,7 +2418,7 @@ Rect margin_rect(const Doc& d, const Doc::Id& id) {
 BaselineGrid baseline_grid(const Doc& d, const Doc::Id& id) {
     const auto* m = master_of(d, id);
     if (!m || m->grid < 1) return {};
-    return {m->margins.top, m->grid};
+    return {margins_of(d, id)->top, m->grid};   // s062: from the page's own top margin
 }
 
 std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& id) {

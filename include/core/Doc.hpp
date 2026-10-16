@@ -99,18 +99,20 @@ struct Section {
     bool operator==(const Section&) const = default;
 };
 
+// Page margins (s014), points. Facing pages: inside = by the spine.
+struct Margins {
+    double top = 54, bottom = 54, inside = 54, outside = 54;
+    bool operator==(const Margins&) const = default;
+};
+
 struct Page {
     double              pos = 0;         // order (ascending)
     double              w = 6 * kPt, h = 9 * kPt;
     std::vector<double> folds;           // x of each fold, from the left; empty = not a foldout
     std::string         master;          // "" = none
+    // s062: the page's own margins, over its master's (none: the master's).
+    std::optional<Margins> margins;
     bool operator==(const Page&) const = default;
-};
-
-// Page margins (s014), points. Facing pages: inside = by the spine.
-struct Margins {
-    double top = 54, bottom = 54, inside = 54, outside = 54;
-    bool operator==(const Margins&) const = default;
 };
 
 struct Master {
@@ -518,6 +520,11 @@ std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int 
 bool remove_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages);
 bool move_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const Doc::Id& after);
 bool set_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const Doc::Id& master);
+// s062: pages' own margins -- `f` edits them (starting from what they use
+// now); `reset` drops them (back to the master's). One step.
+bool edit_page_margins(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const std::string& label,
+                       const std::function<void(Margins&)>& f);
+bool reset_page_margins(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages);
 bool set_page_size(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const SizePreset& sz);
 
 Doc::Id add_section(DocJournal& j, Doc& d, const Doc::Id& start_page, const std::string& name,
@@ -806,6 +813,9 @@ std::vector<double> column_weights(const Frame& f, int n);
 // own coordinates. A left-hand page mirrors inside / outside. Empty when it
 // has no master (no margins to show).
 Rect margin_rect(const Doc& d, const Doc::Id& page_or_master);
+// s062: the margins a page (or master) uses -- its own, else its master's.
+// Null with neither.
+const Margins* margins_of(const Doc& d, const Doc::Id& page_or_master);
 struct ColumnSpan { double x0, x1; };
 std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& page_or_master);
 // s036: the baseline grid on a page (or master), its own coordinates:

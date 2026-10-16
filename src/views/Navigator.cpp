@@ -4,6 +4,10 @@
 #include <gtkmm/image.h>
 #include <gtkmm/label.h>
 #include <gtkmm/listboxrow.h>
+#include <gtkmm/dragsource.h>
+#include <gtkmm/droptarget.h>
+#include <gtkmm/widgetpaintable.h>
+#include <gdkmm/contentprovider.h>
 
 #include <algorithm>
 #include <glibmm/main.h>
@@ -111,6 +115,44 @@ void Navigator::set_outline(const core::Outline* o) {
                 ib->append(*b);
                 m_labels[ir] = {il, b};
                 ir->set_child(*ib);
+                // s062: a master's row drags onto pages; a page's row takes one.
+                if (s == core::Segment::Masters) {
+                    auto src = Gtk::DragSource::create();
+                    src->set_actions(Gdk::DragAction::COPY);
+                    const std::string mid = it->id;
+                    src->signal_prepare().connect([mid](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
+                        Glib::Value<Glib::ustring> v;
+                        v.init(v.value_type());
+                        v.set("composix-master:" + mid);
+                        return Gdk::ContentProvider::create(v);
+                    }, false);
+                    // The row's name rides with the pointer, not the payload's text.
+                    src->signal_drag_begin().connect([src, ib](const Glib::RefPtr<Gdk::Drag>&) {
+                        src->set_icon(Gtk::WidgetPaintable::create(*ib), 12, 10);
+                    });
+                    ir->add_controller(src);
+                } else if (s == core::Segment::Pages) {
+                    auto drop = Gtk::DropTarget::create(G_TYPE_STRING, Gdk::DragAction::COPY);
+                    drop->signal_enter().connect([ir](double, double) { ir->add_css_class("cx-drop-on"); return Gdk::DragAction::COPY; }, false);
+                    drop->signal_leave().connect([ir] { ir->remove_css_class("cx-drop-on"); });
+                    const std::string pid = it->id;
+                    drop->signal_drop().connect([this, ir, pid](const Glib::ValueBase& value, double, double) {
+                        ir->remove_css_class("cx-drop-on");
+                        Glib::Value<Glib::ustring> v;
+                        v.init(value.gobj());
+                        const std::string text = v.get(), tag = "composix-master:";
+                        if (text.rfind(tag, 0) != 0) return false;
+                        // The selected pages if this one is among them, else this one.
+                        std::vector<std::string> pages;
+                        if (ir->is_selected())
+                            for (const auto& [row, id] : m_item_of) if (row->is_selected() && row->get_visible()) pages.push_back(id);
+                        if (pages.empty()) pages = {pid};
+                        const std::string master = text.substr(tag.size());
+                        Glib::signal_idle().connect_once([this, master, pages] { m_master_drop.emit(master, pages); });
+                        return true;
+                    }, false);
+                    ir->add_controller(drop);
+                }
                 ir->set_visible(false);
                 m_list.append(*ir);
                 m_item_of[ir] = it->id;

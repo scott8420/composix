@@ -32,6 +32,8 @@ public:
     void     set_tile_size(TileSize z);   // redraws the section on show (quietly: no signal)
     sigc::signal<void(TileSize)>& signal_tile_size() { return m_size_sig; }
     sigc::signal<void()>&         signal_new()       { return m_new_sig; }   // s058: Colors' New Swatch
+    // s062: a master dropped on page tiles: (master, pages).
+    sigc::signal<void(const std::string&, const std::vector<std::string>&)>& signal_master_drop() { return m_master_drop; }
 
     // `keep`: tiles to leave selected (a refresh after an edit), silently.
     void show_section(const core::Outline& o, core::Segment s, const std::vector<std::string>& keep = {});
@@ -62,6 +64,7 @@ private:
     TileSize                m_size = TileSize::Large;
     sigc::signal<void(TileSize)> m_size_sig;
     sigc::signal<void()>    m_new_sig;
+    sigc::signal<void(const std::string&, const std::vector<std::string>&)> m_master_drop;
     Gtk::Widget*            m_new_btn = nullptr;
     core::Outline           m_last;      // the section on show, to redraw at another size
     core::Segment           m_seg = core::Segment::Document;

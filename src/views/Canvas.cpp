@@ -99,6 +99,22 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
     auto drop = Gtk::DropTarget::create(GDK_TYPE_FILE_LIST, Gdk::DragAction::COPY);
     drop->signal_drop().connect(sigc::mem_fun(*this, &Canvas::on_drop), false);
     add_controller(drop);
+    // s062: a master dropped on a page.
+    auto mdrop = Gtk::DropTarget::create(G_TYPE_STRING, Gdk::DragAction::COPY);
+    mdrop->signal_drop().connect([this](const Glib::ValueBase& value, double x, double y) {
+        Glib::Value<Glib::ustring> v;
+        v.init(value.gobj());
+        const std::string text = v.get(), tag = "composix-master:";
+        if (text.rfind(tag, 0) != 0) return false;
+        double dx = 0, dy = 0;
+        m_vp.to_doc(x, y, dx, dy);
+        const auto page = core::page_at(m_placed, dx, dy);
+        if (page.empty() || !m_doc.as<core::Page>(page)) return false;
+        const std::string master = text.substr(tag.size());
+        Glib::signal_idle().connect_once([this, master, page] { m_sig_master_drop.emit(master, std::vector<std::string>{page}); });
+        return true;
+    }, false);
+    add_controller(mdrop);
 
     m_keys = Gtk::EventControllerKey::create();
     m_keys->signal_key_pressed().connect(

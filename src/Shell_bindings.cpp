@@ -202,6 +202,14 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_tiles.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_tiles_selection));
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
     m_tiles.signal_new().connect([this] { open_swatch_editor({}); });   // s058
+    // s062: a master dropped on pages (tiles, navigator rows, the canvas).
+    const auto master_drop = [this](const std::string& master, const std::vector<std::string>& pages) {
+        const bool did = core::doc::set_master(m_journal, m_doc, pages, master);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("master drop: {} on {} page(s): {}", master, pages.size(), did ? "step" : "no change");
+    };
+    m_tiles.signal_master_drop().connect(master_drop);
+    m_nav.signal_master_drop().connect(master_drop);
+    m_canvas_view.canvas().signal_master_drop().connect(master_drop);
     // s061: the caret's text went onto a page not shown -- show it (its spread).
     // Showing the page moves the keyboard to the navigator: give it back to the text.
     m_canvas_view.canvas().signal_follow().connect([this](const std::string& page) {

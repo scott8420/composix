@@ -45,6 +45,8 @@ json to(const Record& r) {
         } else if constexpr (std::is_same_v<T, Page>) {
             j = {{"kind", "page"}, {"pos", v.pos}, {"w", v.w}, {"h", v.h}, {"folds", v.folds},
                  {"master", v.master}};
+            if (v.margins)   // s062
+                j["margins"] = {v.margins->top, v.margins->bottom, v.margins->inside, v.margins->outside};
         } else if constexpr (std::is_same_v<T, Master>) {
             j = {{"kind", "master"}, {"prefix", v.prefix}, {"name", v.name}, {"pos", v.pos}, {"w", v.w},
                  {"h", v.h}, {"folds", v.folds}, {"columns", v.columns}, {"based_on", v.based_on},
@@ -161,6 +163,10 @@ std::optional<Record> from(const json& j) {
         v.h = val(j, "h", v.h);
         v.folds = val(j, "folds", std::vector<double>{});
         v.master = val<std::string>(j, "master", "");
+        if (j.contains("margins") && j["margins"].is_array() && j["margins"].size() == 4) {   // s062
+            const auto& a = j["margins"];
+            v.margins = Margins{a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>()};
+        }
         return v;
     }
     if (k == "master") {

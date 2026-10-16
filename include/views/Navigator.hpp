@@ -48,6 +48,8 @@ public:
     bool is_open(core::Segment s) const;
 
     sigc::signal<void(const Pick&)>& signal_pick() { return m_pick; }
+    // s062: a master dropped on page rows: (master, pages).
+    sigc::signal<void(const std::string&, const std::vector<std::string>&)>& signal_master_drop() { return m_master_drop; }
 
     // s031: how the pages group into spreads -- their rows are bracketed
     // together, with a little air between spreads. Empty groups: none.
@@ -78,6 +80,7 @@ private:
     std::map<const Gtk::ListBoxRow*, std::pair<Gtk::Label*, Gtk::Label*>> m_labels;   // item row -> title, badge
     std::map<const Gtk::ListBoxRow*, Gtk::Label*>                         m_counts;   // segment row -> count
     sigc::signal<void(const Pick&)>         m_pick;
+    sigc::signal<void(const std::string&, const std::vector<std::string>&)> m_master_drop;
     std::function<std::vector<std::vector<std::string>>()> m_grouping;
 };
 

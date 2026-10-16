@@ -280,3 +280,7 @@ list.cx-report-list > row { padding: 8px 6px; border-bottom: 1px solid @cx_hair;
 .cx-badge.cx-good { color: #2f9e5a; background: alpha(#2f9e5a, 0.14); }
 .cx-badge.cx-mild { color: @cx_dim; }
 .cx-badge.cx-bad  { color: @cx_bad; background: alpha(@cx_bad, 0.14); }
+
+/* s062: a master dragged over a page (tile or navigator row) */
+flowbox.cx-tile-grid > flowboxchild.cx-drop-on > .cx-tile-card { box-shadow: 0 0 0 3px @cx_ink; }
+row.cx-drop-on { background: alpha(@cx_ink, 0.18); }

@@ -399,22 +399,41 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
                 src->set_icon(Gtk::WidgetPaintable::create(*card), card->get_width() / 2, 30);
             });
             child->add_controller(src);
-            auto drop = Gtk::DropTarget::create(G_TYPE_STRING, Gdk::DragAction::MOVE);
-            const auto mark = [child](double x) {
+            // s062: also a master dropped on it (COPY): the page(s) take it.
+            auto drop = Gtk::DropTarget::create(G_TYPE_STRING, Gdk::DragAction::MOVE | Gdk::DragAction::COPY);
+            const auto mark = [this, child](double x) {
+                if (m_drag_ids.empty()) {   // not pages being moved: a master, onto this tile
+                    child->add_css_class("cx-drop-on");
+                    return Gdk::DragAction::COPY;
+                }
                 const bool before = x < child->get_width() / 2.0;
                 child->remove_css_class(before ? "cx-drop-after" : "cx-drop-before");
                 child->add_css_class(before ? "cx-drop-before" : "cx-drop-after");
+                return Gdk::DragAction::MOVE;
             };
-            drop->signal_enter().connect([mark](double x, double) { mark(x); return Gdk::DragAction::MOVE; }, false);
-            drop->signal_motion().connect([mark](double x, double) { mark(x); return Gdk::DragAction::MOVE; }, false);
+            drop->signal_enter().connect([mark](double x, double) { return mark(x); }, false);
+            drop->signal_motion().connect([mark](double x, double) { return mark(x); }, false);
             drop->signal_leave().connect([child] {
                 child->remove_css_class("cx-drop-before");
                 child->remove_css_class("cx-drop-after");
+                child->remove_css_class("cx-drop-on");
             });
-            drop->signal_drop().connect([this, child, gids](const Glib::ValueBase&, double x, double) {
+            drop->signal_drop().connect([this, child, gids](const Glib::ValueBase& value, double x, double) {
                 child->remove_css_class("cx-drop-before");
                 child->remove_css_class("cx-drop-after");
-                if (m_drag_ids.empty()) return false;
+                child->remove_css_class("cx-drop-on");
+                if (m_drag_ids.empty()) {   // s062
+                    Glib::Value<Glib::ustring> v;
+                    v.init(value.gobj());
+                    const std::string text = v.get();
+                    const std::string tag = "composix-master:";
+                    if (text.rfind(tag, 0) != 0) return false;
+                    const std::string master = text.substr(tag.size());
+                    auto pages = selected();
+                    if (std::find(pages.begin(), pages.end(), gids.front()) == pages.end()) pages = gids;
+                    Glib::signal_idle().connect_once([this, master, pages] { m_master_drop.emit(master, pages); });
+                    return true;
+                }
                 const auto ids = m_drag_ids;
                 m_drag_ids.clear();
                 const bool before = x < child->get_width() / 2.0;
@@ -424,6 +443,21 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
                 return true;
             }, false);
             child->add_controller(drop);
+        }
+        if (s == core::Segment::Masters) {   // s062: drag a master onto pages
+            auto src = Gtk::DragSource::create();
+            src->set_actions(Gdk::DragAction::COPY);
+            const std::string mid = gids.front();
+            src->signal_prepare().connect([mid](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
+                Glib::Value<Glib::ustring> v;
+                v.init(v.value_type());
+                v.set("composix-master:" + mid);
+                return Gdk::ContentProvider::create(v);
+            }, false);
+            src->signal_drag_begin().connect([src, card](const Glib::RefPtr<Gdk::Drag>&) {
+                src->set_icon(Gtk::WidgetPaintable::create(*card), card->get_width() / 2, 30);
+            });
+            child->add_controller(src);
         }
         auto& grid = grid_for(it->group);
         grid.append(*child);
