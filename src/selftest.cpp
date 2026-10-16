@@ -1672,6 +1672,51 @@ int main() {
         check("the projection shows it", o.size() > 0);
     }
 
+    {
+        std::cout << "\n-- page thumbnails --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        L::FlowCache flows;
+        const auto k5 = L::page_key(d, flows, "page.5");
+        const auto k16 = L::page_key(d, flows, "page.16");
+        check("key: a page with text carries its lines", !k5.lines.empty() && k5.lines.front().find("Chapter One") != std::string::npos);
+        check("key: the same page, the same key", L::page_key(d, flows, "page.5") == k5);
+        // A change on page 16 (sources) leaves page 1 of the body alone.
+        core::doc::edit_frames(j, d, {"frame.10"}, "Gutter", [](core::Frame& f) { f.gutter = 20; });
+        check("key: another page's change leaves it", L::page_key(d, flows, "page.5") == k5 &&
+                                                      !(L::page_key(d, flows, "page.16") == k16));
+        // Typing in the chapter changes the page it's set on.
+        core::doc::edit_text(j, d, "story.1", {1, 0}, {1, 0}, "Then ", "Typing", "");
+        check("key: its text changes it", !(L::page_key(d, flows, "page.5") == k5));
+        // The master's items are part of every page that shows it.
+        const auto k2 = L::page_key(d, flows, "page.6");
+        core::doc::edit_masters(j, d, {"master.2"}, "Columns", [](core::Master& m) { m.columns = 2; });
+        check("key: a master change reaches its pages", !(L::page_key(d, flows, "page.6") == k2));
+        // Drawn: ink where the text is, a soft plate where a picture is missing.
+        auto* surf = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 432, 648);
+        cairo_t* cr = cairo_create(surf);
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_paint(cr);
+        std::set<std::string> missing;
+        L::draw_page(cr, d, "page.5", flows, {}, &missing, {.placeholders = true});
+        cairo_destroy(cr);
+        cairo_surface_flush(surf);
+        const auto px = [&](int x, int y) {
+            const auto* row = cairo_image_surface_get_data(surf) + y * cairo_image_surface_get_stride(surf);
+            return reinterpret_cast<const std::uint32_t*>(row)[x] & 0xffffff;
+        };
+        int ink = 0;
+        for (int y = 180; y < 260; ++y) for (int x = 54; x < 378; ++x) ink += px(x, y) != 0xffffff;
+        const auto* pic = d.as<core::Frame>("frame.4");
+        check("drawn: the text inks the page", ink > 200);
+        check("drawn: a missing picture as a plate", px(static_cast<int>(pic->x + pic->w / 2), static_cast<int>(pic->y + 5)) != 0xffffff &&
+                                                     missing.count("harbor.psd") == 1);
+        cairo_surface_destroy(surf);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

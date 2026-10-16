@@ -17,13 +17,18 @@ constexpr double kMarkLen = 15;   // and run this long
 constexpr double kSlug = kMarkGap + kMarkLen + 3;
 
 void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const ImageSource& images,
-                std::set<std::string>& missing) {
+                std::set<std::string>* missing, const PageDraw& how) {
     const auto* a = d.as<core::Asset>(f.asset);
     if (!a) return;
     cairo_surface_t* pic = images ? images(*a, f.w, f.h) : nullptr;
     if (!pic || cairo_surface_status(pic) != CAIRO_STATUS_SUCCESS) {
         if (pic) cairo_surface_destroy(pic);
-        missing.insert(a->name);
+        if (missing) missing->insert(a->name);
+        if (how.placeholders) {   // s020: a soft plate where the picture would be
+            cairo_set_source_rgb(cr, 0.80, 0.84, 0.76);
+            cairo_rectangle(cr, f.x, f.y, f.w, f.h);
+            cairo_fill(cr);
+        }
         return;
     }
     const int pw = cairo_image_surface_get_width(pic), ph = cairo_image_surface_get_height(pic);
@@ -43,7 +48,7 @@ void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const Ima
 }
 
 void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, FlowCache& flows,
-                 const ImageSource& images, std::set<std::string>& missing) {
+                 const ImageSource& images, std::set<std::string>* missing, const PageDraw& how) {
     const auto paint = [&](const std::string& sw) {
         const auto* s = d.as<core::Swatch>(sw);
         if (!s) return false;
@@ -62,7 +67,7 @@ void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
             cairo_restore(cr);
             break;
         case core::FrameKind::Image:
-            draw_image(cr, d, f, images, missing);
+            draw_image(cr, d, f, images, missing, how);
             break;
         case core::FrameKind::Shape:   // its fill / stroke are all it has
             break;
@@ -93,6 +98,48 @@ void crop_marks(cairo_t* cr, double w, double h, double bleed) {
 }
 
 }  // namespace
+
+void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& id, FlowCache& flows, const ImageSource& images,
+               std::set<std::string>* missing, const PageDraw& how) {
+    for (const auto& m : core::master_chain(d, id)) draw_frames(cr, d, m, flows, images, missing, how);
+    draw_frames(cr, d, id, flows, images, missing, how);
+}
+
+PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) {
+    PageKey k;
+    const auto rec = [&](const std::string& rid) {
+        if (const auto it = d.records().find(rid); it != d.records().end()) k.recs.emplace_back(rid, it->second);
+    };
+    auto owners = core::master_chain(d, id);
+    owners.push_back(id);
+    for (const auto& o : owners) {
+        rec(o);
+        for (const auto& fid : d.frames_on(o)) {
+            rec(fid);
+            const auto& f = *d.as<core::Frame>(fid);
+            if (!f.asset.empty()) rec(f.asset);
+            if (f.kind != core::FrameKind::Text || f.story.empty()) continue;
+            const auto* st = d.as<core::Story>(f.story);
+            if (!st) continue;
+            for (const auto& ft : flows.get(d, f.story).frames) {
+                if (ft.frame != fid) continue;
+                for (const auto& l : ft.lines) {
+                    const auto& p = st->paras[static_cast<std::size_t>(l.para)];
+                    std::string line = fid + "|" + p.style + "|" + std::to_string(l.col) + "|" + std::to_string(l.x) + "|" +
+                                       std::to_string(l.y) + "|" + std::to_string(l.w) + "|";
+                    for (const auto& r : p.runs)
+                        if (r.end > l.start && r.start < l.end)
+                            line += std::to_string(r.start - l.start) + "-" + std::to_string(r.end - l.start) + r.style + ",";
+                    line += "|" + p.text.substr(static_cast<std::size_t>(l.start), static_cast<std::size_t>(l.end - l.start));
+                    k.lines.push_back(std::move(line));
+                }
+            }
+        }
+    }
+    for (const auto& sid : d.ids_of<core::Style>()) rec(sid);
+    for (const auto& sid : d.ids_of<core::Swatch>()) rec(sid);
+    return k;
+}
 
 bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& opt, const ImageSource& images,
                 PdfReport* report, std::string* err) {
@@ -128,8 +175,7 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
         cairo_save(cr);
         cairo_rectangle(cr, -bleed, -bleed, pg.w + 2 * bleed, pg.h + 2 * bleed);   // nothing past the bleed
         cairo_clip(cr);
-        for (const auto& m : core::master_chain(d, pid)) draw_frames(cr, d, m, flows, images, missing);
-        draw_frames(cr, d, pid, flows, images, missing);
+        draw_page(cr, d, pid, flows, images, &missing);
         cairo_restore(cr);
         if (opt.marks) crop_marks(cr, pg.w, pg.h, bleed);
         cairo_restore(cr);

@@ -2,6 +2,7 @@
 #include "AboutWindow.hpp"      // complete type for ~unique_ptr<AboutWindow> in ~Shell()
 #include "ShortcutsDialog.hpp"  // ditto
 #include "Log.hpp"
+#include "views/Thumbs.hpp"
 
 #include <filesystem>
 
@@ -45,6 +46,12 @@ void Shell::build_ui() {
     sync_nav();
 
     rebuild_recents_menu();
+
+    // s020: page and master tiles draw the page itself.
+    views::set_page_painter([this](const Cairo::RefPtr<Cairo::Context>& cr, const std::string& id, double x, double y,
+                                   double w, double h, bool large) {
+        return m_page_thumbs.paint(cr, id, x, y, w, h, large);
+    });
 
     // s019: the last project worked on, if it is still there; else the
     // built-in sample (loaded, not a step). The views see only its projection.

@@ -11,6 +11,11 @@ namespace composix::views {
 
 namespace {
 
+PagePainter& painter() {
+    static PagePainter p;
+    return p;
+}
+
 struct Rgb { double r, g, b; };
 Rgb rgb(std::uint32_t c) {
     return {((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0};
@@ -96,7 +101,9 @@ void page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Thumb& t, double 
     const int panels = std::max(1, t.panels);
     const double pw = w / panels;
     const double m = pw * 0.12;
-    for (int p = 0; p < panels; ++p) {
+    // s020: the page itself, when there's a painter for it.
+    const bool real = !t.page.empty() && painter() && painter()(cr, t.page, x, y, w, h, large);
+    for (int p = 0; p < panels && !real; ++p) {
         const double px = x + p * pw;
         if (large) {   // margin guides
             cr->set_source_rgba(0.85, 0.25, 0.65, 0.55);
@@ -130,6 +137,8 @@ void page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Thumb& t, double 
 }
 
 }  // namespace
+
+void set_page_painter(PagePainter p) { painter() = std::move(p); }
 
 void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W, int H,
                  const core::Thumb& t, bool large) {

@@ -49,6 +49,7 @@ struct Thumb {
     std::string   file;              // images (s009): the file to draw, "" = a stand-in
     std::int64_t  stamp  = 0;        // its time, so a changed file redraws
     std::string   family;            // style specimens (s011): its font
+    std::string   page;              // s020: pages / masters -- the record to draw ("" = stand-in)
 };
 
 // A field the inspector may EDIT carries a key (what the UI asks the shell to

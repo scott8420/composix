@@ -6,6 +6,7 @@
 #include "views/Inspector.hpp"
 #include "views/ItemView.hpp"
 #include "views/Navigator.hpp"
+#include "views/PageThumbs.hpp"
 #include "views/PanelHandle.hpp"
 #include "views/TileView.hpp"
 
@@ -170,6 +171,9 @@ private:
     std::string        m_project_dir;    // "" = the unsaved sample / never saved
     bool               m_dirty = false;
     bool               m_closing_ok = false;   // the user chose; let the close through
+
+    // s020: the page / master tiles drawn for real, kept per page.
+    views::PageThumbs  m_page_thumbs{m_doc, [this](const core::Asset& a) { return core::resolve_asset(a, m_project_dir); }};
 
     // s005: the page canvas -- after the document and journal it edits.
     views::CanvasView  m_canvas_view{m_doc, m_journal};

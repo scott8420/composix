@@ -116,6 +116,7 @@ add_executable(composix
     src/views/ItemView.cpp
     src/views/Inspector.cpp
     src/views/Thumbs.cpp
+    src/views/PageThumbs.cpp
     # s003: the inspector's handle + pull tab (from Samson).
     src/views/PanelHandle.cpp
     # s005: the page canvas.

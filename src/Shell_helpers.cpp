@@ -179,6 +179,7 @@ void Shell::adopt(const core::Doc& fresh, const std::string& dir) {  // helper
     }
     m_project_dir = dir;
     m_canvas_view.canvas().set_project_dir(dir);
+    m_page_thumbs.forget();  // s020: nothing drawn carries over either
     m_journal.clear();       // no step carries over from another document
     m_dirty = true;          // (so set_dirty repaints the title)
     set_dirty(false);
@@ -222,6 +223,7 @@ bool Shell::save_to(const std::string& dir) {  // helper
     }
     m_project_dir = dir;
     m_canvas_view.canvas().set_project_dir(dir);
+    m_page_thumbs.forget();   // s020: pictures may resolve in the new folder
     set_dirty(false);
     note_recent(dir);
     queue_refresh();   // linked-asset paths may resolve now that there is a folder

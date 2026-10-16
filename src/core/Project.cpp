@@ -147,6 +147,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         const std::string sec = d.section_of(pid);
         Thumb th{K::Page, p.w / kPt, p.h / kPt, 0xffffff, !p.folds.empty()};
         th.panels = static_cast<int>(p.folds.size()) + 1;
+        th.page = pid;   // s020: drawn for real
         // s014: what can be done to pages, as buttons.
         bool starts = false;
         for (const auto& sid : d.ids_of<Section>()) starts = starts || d.as<Section>(sid)->start_page == pid;
@@ -169,6 +170,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         for (const auto& pid : pages) n += d.as<Page>(pid)->master == mid;
         Thumb th{K::Page, m.w / kPt, m.h / kPt, 0xffffff, !m.folds.empty()};
         th.panels = static_cast<int>(m.folds.size()) + 1;
+        th.page = mid;   // s020
         // s014: margins and columns, editable.
         static const double margins[] = {0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1, 1.25, 1.5, 2, 2.5, 3};
         std::vector<Choice> mc;

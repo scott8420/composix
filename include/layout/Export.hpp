@@ -12,11 +12,13 @@
 // The core never opens image files, and neither does this: the app hands an
 // ImageSource that decodes one (gdk-pixbuf) -- the selftest hands a fake.
 #include "core/Doc.hpp"
+#include "layout/Flow.hpp"
 
 #include <cairo.h>
 
 #include <functional>
 #include <string>
+#include <set>
 #include <vector>
 
 namespace composix::layout {
@@ -48,6 +50,27 @@ struct PdfReport {
 // destroys it), or nullptr when it can't be read. `want_w` / `want_h`: the
 // placed size in points (a vector renders to suit; a raster ignores it).
 using ImageSource = std::function<cairo_surface_t*(const core::Asset& a, double want_w, double want_h)>;
+
+// s020: one page (or master) as the cairo writer draws it -- its masters'
+// items, then its own: fills, text, images, strokes -- in its own points
+// from (0, 0). Shared by the screen PDF and the page thumbnails.
+// `placeholders` draws a soft plate where a picture can't be had (thumbs).
+struct PageDraw {
+    bool placeholders = false;
+};
+void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& page_or_master, FlowCache& flows,
+               const ImageSource& images, std::set<std::string>* missing = nullptr, const PageDraw& how = {});
+
+// s020: everything that decides how a page LOOKS, to compare: its record,
+// its masters', the frames on them and their assets, every style and swatch,
+// and the text lines set in its text frames (with their words). Two equal
+// keys draw the same page -- a thumbnail is redrawn only when its key moves.
+struct PageKey {
+    std::vector<std::pair<std::string, core::Record>> recs;
+    std::vector<std::string>                          lines;
+    bool operator==(const PageKey&) const = default;
+};
+PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& page_or_master);
 
 bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& opt, const ImageSource& images,
                 PdfReport* report = nullptr, std::string* err = nullptr);
