@@ -82,6 +82,9 @@ public:
     // s022: edit `frame` with a..b selected (a Find hit). `focus`: take the
     // keyboard (else it stays where it is -- the find bar).
     void select_text(const std::string& frame, core::TextPos a, core::TextPos b, bool focus);
+    // s023: put `text` (a marker) at the caret, replacing the selection --
+    // one step. False when not editing.
+    bool insert_special(const std::string& text, const std::string& label);
     const std::string& edit_story_id() const { return m_edit_story; }
     // The selection, in reading order (equal = just the caret).
     std::pair<core::TextPos, core::TextPos> edit_range() const {
@@ -101,7 +104,7 @@ private:
     void draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
     void draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Frame& f, double ox, double oy,
-                    bool from_master, const std::string& id);
+                    bool from_master, const std::string& id, const std::string& on_page = {});
     void draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr);
     void draw_guides(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
     void draw_threads(const Cairo::RefPtr<Cairo::Context>& cr);

@@ -96,7 +96,16 @@ LayoutPtr make_layout(const core::Style& st, const char* text, int len, double w
         break;
     }
     (void)justify_last;
-    pango_layout_set_text(l.get(), text, len);
+    // s023: markers show as a sign of the same byte length, so every byte
+    // place (caret, runs) holds.
+    std::string shown(text, static_cast<std::size_t>(len));
+    for (std::size_t i = 0; i + 3 <= shown.size(); ++i)
+        if (const int k = core::marker_at(shown, i); k >= 0) {
+            static const char* sign[] = {"\xEF\xBC\x83", "\xE2\xB8\xB9", "\xE3\x80\x8B", "\xE3\x80\x8A"};   // ＃ ⸹ 》 《
+            shown.replace(i, 3, sign[k]);
+            i += 2;
+        }
+    pango_layout_set_text(l.get(), shown.c_str(), len);
     return l;
 }
 
@@ -232,9 +241,14 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
 }  // namespace
 
 StoryFlow flow_story(const core::Doc& d, const std::string& story) {
-    StoryFlow out;
     const auto* st = d.as<core::Story>(story);
-    if (!st) return out;
+    if (!st) return {};
+    return flow_text(d, story, *st);
+}
+
+StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::Story& text) {
+    StoryFlow out;
+    const auto* st = &text;
     const auto chain = thread_frames(d, story);
     for (const auto& f : chain) out.frames.push_back({f, {}});
     if (chain.empty()) return out;   // not placed: nothing flows, nothing is "over"
@@ -286,8 +300,9 @@ const FrameText* frame_text(const StoryFlow& flow, const std::string& frame) {
 // layout started where this frame's part of the paragraph starts -- the same
 // text at the same width breaks exactly as the flow measured it.
 template <class F>
-void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, F&& f) {
-    const auto* st = d.as<core::Story>(story);
+void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, F&& f,
+                const core::Story* text = nullptr) {
+    const auto* st = text ? text : d.as<core::Story>(story);
     const auto* fr = d.as<core::Frame>(frame);
     const FrameText* ft = frame_text(flow, frame);
     if (!st || !fr || !ft || ft->lines.empty()) return;
@@ -361,9 +376,9 @@ int byte_at_x(const Placed& pl, double x) {
 }  // namespace
 
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
-                     const std::string& frame, double ox, double oy, double ink) {
+                     const std::string& frame, double ox, double oy, double ink, const core::Story* text) {
     cairo_save(cr);
-    const auto* st = d.as<core::Story>(story);
+    const auto* st = text ? text : d.as<core::Story>(story);
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         // The paragraph style's colour (s015), else the ink.
         const core::Swatch* sw = nullptr;
@@ -381,15 +396,94 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
         else cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
         cairo_move_to(cr, ox + pl.x, oy + pl.base);
         pango_cairo_show_layout_line(cr, pl.pl);
-    });
+    }, text);
     cairo_restore(cr);
 }
 
 void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
-                 const std::function<void(const LineVisit&)>& f) {
+                 const std::function<void(const LineVisit&)>& f, const core::Story* text) {
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         f(LineVisit{pl.pl, pl.x, pl.base, pl.line->para, pl.from});
-    });
+    }, text);
+}
+
+// ── s023: markers filled in ─────────────────────────────────────────────────
+std::string marker_value(const core::Doc& d, int k, const std::string& page, const std::string& frame) {
+    if (!d.as<core::Page>(page)) return {};
+    switch (k) {
+    case 0: return d.folio(page);
+    case 1: {
+        const auto* sec = d.as<core::Section>(d.section_of(page));
+        return sec ? sec->name : std::string{};
+    }
+    case 2: case 3: {
+        // A page frame: the page of the next / previous frame in its thread.
+        // A master's (or none): the next / previous page of the document.
+        const auto* f = d.as<core::Frame>(frame);
+        if (f && d.as<core::Page>(f->owner) && !f->story.empty()) {
+            const auto chain = thread_frames(d, f->story);
+            const auto it = std::find(chain.begin(), chain.end(), frame);
+            if (it == chain.end()) return {};
+            if (k == 2 && it + 1 != chain.end()) return marker_value(d, 0, d.as<core::Frame>(*(it + 1))->owner, {});
+            if (k == 3 && it != chain.begin()) return marker_value(d, 0, d.as<core::Frame>(*(it - 1))->owner, {});
+            return {};
+        }
+        const auto pages = d.pages();
+        const auto it = std::find(pages.begin(), pages.end(), page);
+        if (it == pages.end()) return {};
+        if (k == 2 && it + 1 != pages.end()) return d.folio(*(it + 1));
+        if (k == 3 && it != pages.begin()) return d.folio(*(it - 1));
+        return {};
+    }
+    }
+    return {};
+}
+
+Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page) {
+    Resolved r;
+    const auto* st = d.as<core::Story>(story);
+    if (!st || !core::has_markers(*st)) return r;
+    r.any = true;
+    r.text = *st;
+    // Where each marker is set (page frames): from the plain flow.
+    const StoryFlow plain = on_page.empty() ? flow_story(d, story) : StoryFlow{};
+    const auto frame_of = [&](int para, int byte) -> std::string {
+        for (const auto& ft : plain.frames)
+            for (const auto& l : ft.lines)
+                if (l.para == para && byte >= l.start && byte < std::max(l.end, l.start + 1)) return ft.frame;
+        return {};
+    };
+    for (int p = 0; p < static_cast<int>(r.text.paras.size()); ++p) {
+        auto& para = r.text.paras[static_cast<std::size_t>(p)];
+        const std::string src = st->paras[static_cast<std::size_t>(p)].text;   // positions as the plain flow knows them
+        std::string out;
+        std::vector<std::pair<int, int>> shifts;   // (at byte in src, delta)
+        for (std::size_t i = 0; i < src.size();) {
+            const int k = core::marker_at(src, i);
+            if (k < 0) { out += src[i++]; continue; }
+            std::string page = on_page, frame;
+            if (page.empty()) {
+                frame = frame_of(p, static_cast<int>(i));
+                if (const auto* f = d.as<core::Frame>(frame)) page = f->owner;
+            }
+            std::string v = d.as<core::Page>(page) ? marker_value(d, k, page, frame) : src.substr(i, 3);
+            shifts.emplace_back(static_cast<int>(i), static_cast<int>(v.size()) - 3);
+            out += v;
+            i += 3;
+        }
+        if (shifts.empty()) continue;
+        // Character styles keep covering the same characters.
+        const auto moved = [&](int b) {
+            int delta = 0;
+            for (const auto& [at, dl] : shifts) if (at < b) delta += dl;
+            return b + delta;
+        };
+        for (auto& run : para.runs) { run.start = moved(run.start); run.end = moved(run.end); }
+        std::erase_if(para.runs, [](const core::Run& x) { return x.end <= x.start; });
+        para.text = std::move(out);
+    }
+    r.flow = flow_text(d, story, r.text);
+    return r;
 }
 
 Caret caret_at(const core::Doc& d, const std::string& story, const StoryFlow& flow, core::TextPos p) {
@@ -546,8 +640,20 @@ const std::vector<std::string>& font_families() {
     return list;
 }
 
+void FlowCache::check(const core::Doc& d) {
+    if (d.revision() != m_rev) { m_flows.clear(); m_resolved.clear(); m_rev = d.revision(); }
+}
+
+const Resolved& FlowCache::resolved(const core::Doc& d, const std::string& story, const std::string& on_page) {
+    check(d);
+    const std::string key = story + "|" + on_page;
+    auto it = m_resolved.find(key);
+    if (it == m_resolved.end()) it = m_resolved.emplace(key, resolve_story(d, story, on_page)).first;
+    return it->second;
+}
+
 const StoryFlow& FlowCache::get(const core::Doc& d, const std::string& story) {
-    if (d.revision() != m_rev) { m_flows.clear(); m_rev = d.revision(); }
+    check(d);
     auto it = m_flows.find(story);
     if (it == m_flows.end()) it = m_flows.emplace(story, flow_story(d, story)).first;
     return it->second;

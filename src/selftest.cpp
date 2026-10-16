@@ -784,8 +784,9 @@ int main() {
         check("text frame: its own story, one empty paragraph",
               tf && !tf->story.empty() && d.as<core::Story>(tf->story)->paras.size() == 1);
         check("text frame: one step (frame + story)", j.size() == 1);
+        const std::string made_story = tf ? tf->story : "x";
         j.undo();
-        check("undo: frame and story both gone", !d.as<core::Frame>(t) && !d.as<core::Story>(tf ? "story.5" : "x"));
+        check("undo: frame and story both gone", !d.as<core::Frame>(t) && !d.as<core::Story>(made_story));
         j.redo();
         check("new frame on top", d.as<core::Frame>(t)->z >= 1);
         check("no frame on the pasteboard", core::doc::add_frame(j, d, "", core::FrameKind::Shape, {0, 0, 9, 9}).empty());
@@ -1656,14 +1657,18 @@ int main() {
                   std::abs(f1->h - (9 * in - 1.75 * in)) < 1e-9 && f1->columns == 2 && f1->gutter == 18);
         check("threaded page to page", L::thread_frames(d, "story.1").size() == 8 && d.as<core::Frame>("frame.8")->next.empty());
         check("the story flows, nothing over", !L::flow_story(d, "story.1").overset);
-        check("styles + swatches to start with", d.ids_of<core::Style>().size() == 4 && d.ids_of<core::Swatch>().size() == 2);
+        check("styles + swatches to start with", d.ids_of<core::Style>().size() == 5 && d.ids_of<core::Swatch>().size() == 2);
+        check("a folio on the master: the page number", d.as<core::Frame>("frame.9") &&
+                                                        d.as<core::Frame>("frame.9")->owner == "master.1" &&
+                                                        d.as<core::Story>("story.2")->paras[0].text == core::kMarkPage);
         check("not a step: nothing to undo", !j.can_undo());
-        check("the next frame gets a fresh id", d.fresh_id("frame") == "frame.9");
+        check("the next frame gets a fresh id", d.fresh_id("frame") == "frame.10");
         std::string err;
         core::Doc e;
         check("round-trips through JSON", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
         n.facing = false;
         n.text_frames = false;
+        n.folios = false;
         core::Doc u;
         core::new_document(u, n);
         check("unfaced: no sides, no frames", u.side_of("page.2") != core::Side::Left && u.ids_of<core::Frame>().empty() &&
@@ -1682,7 +1687,8 @@ int main() {
         L::FlowCache flows;
         const auto k5 = L::page_key(d, flows, "page.5");
         const auto k16 = L::page_key(d, flows, "page.16");
-        check("key: a page with text carries its lines", !k5.lines.empty() && k5.lines.front().find("Chapter One") != std::string::npos);
+        check("key: a page with text carries its lines",
+              std::any_of(k5.lines.begin(), k5.lines.end(), [](const std::string& l) { return l.find("Chapter One") != std::string::npos; }));
         check("key: the same page, the same key", L::page_key(d, flows, "page.5") == k5);
         // A change on page 16 (sources) leaves page 1 of the body alone.
         core::doc::edit_frames(j, d, {"frame.10"}, "Gutter", [](core::Frame& f) { f.gutter = 20; });
@@ -1808,6 +1814,55 @@ int main() {
         const auto at = j.size();
         check("change: to the same thing, no step", D::change_hits(j, d, D::find_all(d, {"coal"}), {true, "coal"}, "Change") == 0 &&
                                                     j.size() == at);
+    }
+
+    {
+        std::cout << "\n-- page numbers --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        load_plain(d);
+        const std::string t = std::string("p") + core::kMarkPage + "s" + core::kMarkSection;
+        check("markers: found where they are", core::marker_at(t, 1) == 0 && core::marker_at(t, 5) == 1 &&
+                                               core::marker_at(t, 0) == -1 && core::marker_at(t, 2) == -1);
+        check("markers: a story with one", core::has_markers(*d.as<core::Story>("story.6")) &&
+                                           !core::has_markers(*d.as<core::Story>("story.1")));
+        // A master's folio, filled in for the page it's drawn on.
+        const auto body2 = L::resolve_story(d, "story.6", "page.6");
+        const auto front1 = L::resolve_story(d, "story.5", "page.1");
+        check("folio: page 2 of the body reads 2", body2.any && body2.text.paras[0].text == "2");
+        check("folio: the front matter's first page reads i", front1.text.paras[0].text == "i");
+        check("folio: set on the page's own lines", !body2.flow.frames.empty());
+        // On the master itself: the sign, the same number of bytes.
+        const auto onm = L::resolve_story(d, "story.6", "");
+        check("folio: on its master, the marker stays (a sign on screen)", onm.text.paras[0].text == core::kMarkPage);
+        // Page frames: each marker takes the page its line is on; next /
+        // previous are the thread's neighbours.
+        core::doc::edit_text(j, d, "story.1", {1, 0}, {1, 0},
+                             std::string("[") + core::kMarkSection + " " + core::kMarkPrev + "/" + core::kMarkNext + "] ");
+        const auto r1 = L::resolve_story(d, "story.1", "");
+        check("page frame: section name, no previous, the next frame's page",
+              r1.text.paras[1].text.rfind("[Body /2] ", 0) == 0, r1.text.paras[1].text.substr(0, 16));
+        // A character style keeps covering the same words after the swap.
+        core::doc::set_char_style(j, d, "story.1", {1, 18}, {1, 24}, "style.5");   // "harbor" (after the 14-byte prefix + "The ")
+        const auto r2 = L::resolve_story(d, "story.1", "");
+        const auto& p2 = r2.text.paras[1];
+        bool styled = false;
+        for (const auto& run : p2.runs) styled = styled || (p2.text.substr(run.start, run.end - run.start) == "harbor");
+        check("page frame: character styles follow the words", styled);
+        // The thumbnail key follows the folio: move page 2 of the body first.
+        L::FlowCache flows;
+        const auto k6 = L::page_key(d, flows, "page.6");
+        bool two = false;
+        for (const auto& l : k6.lines) two = two || (l.size() >= 2 && l.substr(l.size() - 2) == "|2");
+        check("key: the folio as drawn", two);
+        core::doc::move_pages(j, d, {"page.6"}, "page.4");
+        check("key: a page that moves gets a new folio, a new key", !(L::page_key(d, flows, "page.6") == k6));
+        // While editing (and in every flow), a marker is three bytes wherever it shows.
+        const auto plain = L::flow_story(d, "story.6");
+        check("display: the marker's three bytes on one line", !plain.frames.empty() && !plain.frames[0].lines.empty() &&
+                                                               plain.frames[0].lines[0].end == 3);
     }
 
     std::cout << "-----------------------------------------------\n";

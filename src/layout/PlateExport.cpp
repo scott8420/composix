@@ -88,10 +88,13 @@ struct Ctx {
     std::set<std::string> rgb_images;   // placed and left RGB
 };
 
-void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string& fid) {
+void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string& fid, const std::string& on_page) {
     const auto* st = c.d.as<core::Story>(f.story);
     if (!st) return;
-    const auto& flow = c.flows.get(c.d, f.story);
+    // s023: markers filled in -- a master's for the page it's drawn on.
+    const auto& rs = c.flows.resolved(c.d, f.story, c.d.as<core::Master>(f.owner) ? on_page : std::string{});
+    if (rs.any) st = &rs.text;
+    const auto& flow = rs.any ? rs.flow : c.flows.get(c.d, f.story);
     visit_lines(c.d, f.story, flow, fid, [&](const LineVisit& v) {
         if (v.para >= static_cast<int>(st->paras.size())) return;
         const auto& para = st->paras[static_cast<std::size_t>(v.para)];
@@ -107,7 +110,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             pg.set_fill(ink_of(c.d, sw, tint));
             plate::pango::show(c.doc, pg, run);
         }
-    });
+    }, rs.any ? &rs.text : nullptr);
 }
 
 void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
@@ -140,7 +143,7 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
     pg.restore();
 }
 
-void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner) {
+void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core::Doc::Id& on_page) {
     for (const auto& fid : c.d.frames_on(owner)) {
         const auto& f = *c.d.as<core::Frame>(fid);
         pg.save();
@@ -150,7 +153,7 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner) {
             pg.rect({f.x, f.y, f.w, f.h});
             pg.fill();
         }
-        if (f.kind == core::FrameKind::Text && !f.story.empty()) draw_text(c, pg, f, fid);
+        if (f.kind == core::FrameKind::Text && !f.story.empty()) draw_text(c, pg, f, fid, on_page);
         else if (f.kind == core::FrameKind::Image) draw_image(c, pg, f);
         if (c.d.as<core::Swatch>(f.stroke) && f.stroke_w > 0) {
             pg.set_stroke(ink_of(c.d, f.stroke, f.stroke_tint));
@@ -228,8 +231,8 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         pg.translate(off, off);
         pg.save();
         pg.clip_rect({-bleed, -bleed, p.w + 2 * bleed, p.h + 2 * bleed});   // nothing past the bleed
-        for (const auto& m : core::master_chain(d, pid)) draw_frames(c, pg, m);
-        draw_frames(c, pg, pid);
+        for (const auto& m : core::master_chain(d, pid)) draw_frames(c, pg, m, pid);
+        draw_frames(c, pg, pid, pid);
         pg.restore();
         if (opt.marks) crop_marks(pg, p.w, p.h, bleed);
         pg.restore();

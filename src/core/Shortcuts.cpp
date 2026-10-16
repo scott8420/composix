@@ -152,6 +152,12 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Drop an image file on a page", "Place it there (on an image frame: into it)"},
         {"Mouse", "", {}, "Esc", "Cancel a drag, put down a loaded image, then clear the picks"},
 
+        // ── Text (s023: special characters, while editing) ─────────────────
+        {"Text", "win.insert-page-number",  {"<Ctrl><Alt><Shift>n"}, "", "Insert the page number (each page shows its own)"},
+        {"Text", "win.insert-section-name", {"<Ctrl><Alt><Shift>e"}, "", "Insert the section name (a running head)"},
+        {"Text", "win.insert-next-page",    {"<Ctrl><Alt>bracketright"}, "", "Insert the next frame's page number (\"continued on\")"},
+        {"Text", "win.insert-prev-page",    {"<Ctrl><Alt>bracketleft"}, "", "Insert the previous frame's page number (\"continued from\")"},
+
         // ── View (s002) ───────────────────────────────────────────────────────
         {"View", "win.zoom-in",          {"<Ctrl>equal", "<Ctrl>plus"}, "", "Zoom in"},
         {"View", "win.zoom-out",         {"<Ctrl>minus"}, "", "Zoom out"},

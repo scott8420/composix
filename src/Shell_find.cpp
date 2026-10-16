@@ -14,6 +14,16 @@
 
 namespace composix {
 
+// s023: Edit > Insert Special Character.
+Glib::RefPtr<Gio::Menu> Shell::special_menu() {  // zone
+    auto m = Gio::Menu::create();
+    m->append("Page Number", "win.insert-page-number");
+    m->append("Section Name", "win.insert-section-name");
+    m->append("Next Page Number", "win.insert-next-page");
+    m->append("Previous Page Number", "win.insert-prev-page");
+    return m;
+}
+
 void Shell::build_find_bar() {  // zone
     m_find_rev = Gtk::make_managed<Gtk::Revealer>();
     m_find_rev->set_name("find.reveal");

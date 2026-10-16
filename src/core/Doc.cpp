@@ -1413,6 +1413,21 @@ std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& id) {
     return chain;
 }
 
+int marker_at(const std::string& t, std::size_t i) {
+    if (i + 3 > t.size()) return -1;
+    if (static_cast<unsigned char>(t[i]) != 0xEE || static_cast<unsigned char>(t[i + 1]) != 0x80) return -1;
+    const int k = static_cast<unsigned char>(t[i + 2]) - 0x80;
+    return k >= 0 && k <= 3 ? k : -1;
+}
+
+bool has_markers(const Story& s) {
+    for (const auto& p : s.paras)
+        if (p.text.find("\xEE\x80") != std::string::npos)
+            for (std::size_t i = 0; i < p.text.size(); ++i)
+                if (marker_at(p.text, i) >= 0) return true;
+    return false;
+}
+
 std::uint32_t tint_rgb(std::uint32_t rgb, double t) {
     t = std::clamp(t, 0.0, 1.0);
     std::uint32_t out = 0;

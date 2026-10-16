@@ -1,6 +1,7 @@
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "core/Recents.hpp"
+#include <tuple>
 
 #include <giomm/simpleactiongroup.h>
 #include <gtkmm/eventcontrollerkey.h>
@@ -19,6 +20,18 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     // Plain win.* actions -> handler bodies (Shell_handlers.cpp).
     add_action("new",           sigc::mem_fun(*this, &Shell::on_new));      // s019
     add_action("find",          sigc::mem_fun(*this, &Shell::on_find));     // s022
+    // s023: special characters, at the caret while editing text.
+    for (const auto& [name, mark, label] : std::initializer_list<std::tuple<const char*, const char*, const char*>>{
+             {"insert-page-number", core::kMarkPage, "Insert page number"},
+             {"insert-section-name", core::kMarkSection, "Insert section name"},
+             {"insert-next-page", core::kMarkNext, "Insert next page number"},
+             {"insert-prev-page", core::kMarkPrev, "Insert previous page number"}}) {
+        const std::string m = mark, l = label;
+        add_action(name, [this, m, l] {
+            if (!m_canvas_view.canvas().insert_special(m, l))
+                alert("Click into text first", "Special characters go in at the text cursor: double-click a text frame, then insert.");
+        });
+    }
     add_action("open-sample",   sigc::mem_fun(*this, &Shell::on_sample));   // s019
     add_action("open",          sigc::mem_fun(*this, &Shell::on_open));
     add_action("zoom-in",       [this] { m_canvas_view.canvas().zoom_step(+1); });

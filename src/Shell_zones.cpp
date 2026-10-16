@@ -174,6 +174,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     m_edit_menu->append("Undo", "win.undo");
     m_edit_menu->append("Redo", "win.redo");
     m_edit_menu->append("Find / Change\u2026", "win.find");   // s022
+    m_edit_menu->append_submenu("Insert Special Character", special_menu());   // s023
     menu->append_section(m_edit_menu);
 
     auto view = Gio::Menu::create();

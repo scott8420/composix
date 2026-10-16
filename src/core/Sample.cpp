@@ -135,6 +135,15 @@ void load_sample(Doc& d) {
         d.put("frame.11", pic);
     }
 
+    // s023: folios -- the page number at the foot of every page, set on the
+    // front and body masters (roman in front, arabic in the body: each
+    // page's own section numbering).
+    d.put("style.7", Style{"Folio", StyleKind::Paragraph, 7, "Serif", 9, 11, false, false, Align::Center});
+    d.put("story.5", Story{"Folio (front)", {{"style.7", kMarkPage}}});
+    d.put("story.6", Story{"Folio (body)", {{"style.7", kMarkPage}}});
+    d.put("frame.12", Frame{"master.1", FrameKind::Text, m, s.trim_h - 0.5 * in, tw, 0.25 * in, 0, 1, "story.5", "", ""});
+    d.put("frame.13", Frame{"master.2", FrameKind::Text, m, s.trim_h - 0.5 * in, tw, 0.25 * in, 0, 1, "story.6", "", ""});
+
     // ── guides on the body master: the margins (s006) ──────────────────────
     d.put("guide.1", Guide{"master.2", true, m});
     d.put("guide.2", Guide{"master.2", true, s.trim_w - m});

@@ -64,12 +64,32 @@ struct StoryFlow {
 std::vector<std::string> thread_frames(const core::Doc& d, const std::string& story);
 
 StoryFlow flow_story(const core::Doc& d, const std::string& story);
+// s023: flow `text` (a version of the story's words -- markers filled in)
+// through that story's thread.
+StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::Story& text);
+
+// s023: a story as a page shows it -- its markers (page number, section
+// name, next / previous page) filled in, and flowed. `on_page`: the page a
+// MASTER's frame is being drawn on ("" -- the story sits in page frames:
+// each marker takes the page its line is set on). `any` false: no
+// markers; use the plain flow.
+struct Resolved {
+    bool        any = false;
+    core::Story text;
+    StoryFlow   flow;
+};
+Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page);
+// The value a marker takes on `page` (k as core::marker_at). `frame`: the
+// frame it sits in, for next / previous (its thread's neighbours).
+std::string marker_value(const core::Doc& d, int k, const std::string& page, const std::string& frame);
 
 // Draw what `flow` put in `frame`, with the frame's top-left at (ox, oy) in the
 // cairo context's current user space (points). The caller sets the scale.
 // `ink`: the text's grey (screen: near-black; print, s013: 0 = pure black).
+// `text`: the words `flow` was made from when not the story's own (s023).
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
-                     const std::string& frame, double ox, double oy, double ink = 0.08);
+                     const std::string& frame, double ox, double oy, double ink = 0.08,
+                     const core::Story* text = nullptr);
 
 // s015: the lines `flow` put in `frame`, exactly as drawn: the Pango line, its
 // left and baseline (frame coordinates), the paragraph, and the byte in it
@@ -81,7 +101,7 @@ struct LineVisit {
     int              para = 0, from = 0;
 };
 void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
-                 const std::function<void(const LineVisit&)>& f);
+                 const std::function<void(const LineVisit&)>& f, const core::Story* text = nullptr);
 
 // ── editing geometry (s010) ─────────────────────────────────────────────────
 // All in FRAME coordinates (points), from the same layouts the drawing uses,
@@ -115,9 +135,14 @@ class FlowCache {
 public:
     const StoryFlow& get(const core::Doc& d, const std::string& story);
 
+    // s023: a story with its markers filled in for a page (see resolve_story).
+    const Resolved& resolved(const core::Doc& d, const std::string& story, const std::string& on_page);
+
 private:
+    void check(const core::Doc& d);
     std::uint64_t                    m_rev = ~0ull;
     std::map<std::string, StoryFlow> m_flows;
+    std::map<std::string, Resolved>  m_resolved;   // story "|" page
 };
 
 }  // namespace composix::layout

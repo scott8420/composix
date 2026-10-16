@@ -113,6 +113,7 @@ private:
     void confirm_discard(std::function<void()> then);  // category: helper: s019 -- unsaved? ask, then go on
     void show_new_sheet();                        // category: helper: s019 -- the New sheet
     void build_find_bar();                        // category: zone: s022 -- Find / Change, over the main area
+    Glib::RefPtr<Gio::Menu> special_menu();       // category: zone: s023 -- Insert Special Character
     void find_refresh();                          // category: helper: s022 -- the hits again, from the bar's settings
     void find_go(int dir);                        // category: helper: s022 -- next / previous hit, shown on the canvas
     void find_show(int i, bool focus);            // category: helper: s022 -- one hit, on its page, selected

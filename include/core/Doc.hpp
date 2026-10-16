@@ -525,6 +525,18 @@ struct ColumnSpan { double x0, x1; };
 std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& page_or_master);
 // The page's column count and gutter (1 / 12 with no master).
 std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& page_or_master);
+// s023: special characters in text, standing for what each page fills in.
+// Private-use code points (3 bytes of UTF-8 each), so they travel in the
+// text like any character. While editing (and on a master) they show as a
+// sign of the same byte length; drawn on a page they become the value.
+inline constexpr const char* kMarkPage    = "\xEE\x80\x80";   // U+E000: this page's number
+inline constexpr const char* kMarkSection = "\xEE\x80\x81";   // U+E001: this page's section name
+inline constexpr const char* kMarkNext    = "\xEE\x80\x82";   // U+E002: the next frame's page number (jump lines)
+inline constexpr const char* kMarkPrev    = "\xEE\x80\x83";   // U+E003: the previous frame's page number
+// Which marker starts at text[i] (0 page, 1 section, 2 next, 3 previous;
+// -1 none).
+int marker_at(const std::string& text, std::size_t i);
+bool has_markers(const Story& s);
 // s021: a swatch's screen colour at a tint (mixed toward paper white).
 std::uint32_t tint_rgb(std::uint32_t rgb, double tint);
 // The tints offered (percent), and how a tint reads ("40%").
@@ -591,6 +603,7 @@ struct NewDoc {
     double      gutter  = 12;
     double      bleed   = 0.125 * kPt;
     bool        text_frames = true;   // one story threaded through a frame in every page's margins
+    bool        folios = true;        // s023: the page number at the foot, on the master
     bool operator==(const NewDoc&) const = default;
 };
 // Common book trims (the first is the default).

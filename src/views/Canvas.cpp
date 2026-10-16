@@ -371,9 +371,9 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
     if (!p.master)
         for (const auto& m : core::master_chain(m_doc, p.id))
             for (const auto& fid : m_doc.frames_on(m))
-                draw_frame(cr, *m_doc.as<core::Frame>(fid), p.r.x, p.r.y, true, fid);
+                draw_frame(cr, *m_doc.as<core::Frame>(fid), p.r.x, p.r.y, true, fid, p.id);
     for (const auto& fid : m_doc.frames_on(p.id))
-        draw_frame(cr, *m_doc.as<core::Frame>(fid), p.r.x, p.r.y, false, fid);
+        draw_frame(cr, *m_doc.as<core::Frame>(fid), p.r.x, p.r.y, false, fid, p.id);
 
     // The page's name, under it.
     std::string name;
@@ -389,7 +389,7 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
 }
 
 void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Frame& f, double ox, double oy,
-                        bool from_master, const std::string& id) {
+                        bool from_master, const std::string& id, const std::string& on_page) {
     const Rect r = m_vp.to_screen(Rect{ox + f.x, oy + f.y, f.w, f.h});
     const double s = m_vp.scale();
     const double dim = from_master ? 0.45 : 1.0;
@@ -431,7 +431,13 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
         cr->translate(r.x, r.y);
         cr->scale(s, s);
         if (from_master || op < 1) cr->push_group();
-        layout::draw_frame_text(cr->cobj(), m_doc, f.story, flow, id, 0, 0);
+        // s023: page numbers and the like filled in -- except in the story
+        // being edited, whose markers show as signs (every byte where it was).
+        const bool live = editing() && m_edit_story == f.story;
+        const std::string ctx = from_master && m_doc.as<core::Page>(on_page) ? on_page : std::string{};
+        const layout::Resolved* rs = live ? nullptr : &m_flows.resolved(m_doc, f.story, ctx);
+        if (rs && rs->any) layout::draw_frame_text(cr->cobj(), m_doc, f.story, rs->flow, id, 0, 0, 0.08, &rs->text);
+        else layout::draw_frame_text(cr->cobj(), m_doc, f.story, flow, id, 0, 0);
         if (from_master || op < 1) { cr->pop_group_to_source(); cr->paint_with_alpha(dim * op); }
         cr->restore();
         cr->set_source_rgba(0.45, 0.55, 0.7, 0.55 * dim);
@@ -1242,6 +1248,13 @@ void Canvas::select_text(const std::string& frame, core::TextPos a, core::TextPo
     if (had) had->grab_focus();
     queue_draw();
     m_sig_caret.emit();
+}
+
+bool Canvas::insert_special(const std::string& text, const std::string& label) {
+    if (!editing()) return false;
+    edit_insert(text, "", label);
+    grab_focus();
+    return true;
 }
 
 void Canvas::end_edit() {

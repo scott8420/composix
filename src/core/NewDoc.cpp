@@ -83,6 +83,15 @@ bool new_document(Doc& d, const NewDoc& n) {
     d.put("style.2", Style{"Heading 1", StyleKind::Paragraph, 2, "Serif", 20, 24, true, false, Align::Left, 12, 6});
     d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
     d.put("style.4", Style{"Emphasis", StyleKind::Character, 4, "", 0, 0, false, true, Align::Left});
+    d.put("style.5", Style{"Folio", StyleKind::Paragraph, 5, "Serif", 9, 11, false, false, Align::Center});
+
+    if (n.folios) {   // s023: centred in the bottom margin, across the text width
+        const double h = 14, y = n.trim_h - n.margins.bottom / 2 - h / 2;
+        d.put("story.2", Story{"Folio", {{"style.5", kMarkPage}}});
+        Frame f{"master.1", FrameKind::Text, n.margins.inside, y, n.trim_w - n.margins.inside - n.margins.outside, h, 0, 1,
+                "story.2", "", ""};
+        d.put("frame." + std::to_string(n.pages + 1), f);   // after the page frames
+    }
 
     if (n.text_frames) {
         d.put("story.1", Story{"Main", {{"style.1", ""}}});

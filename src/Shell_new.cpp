@@ -52,6 +52,7 @@ struct NewForm {
     Gtk::SpinButton*  gutter = nullptr;
     Gtk::SpinButton*  bleed = nullptr;
     Gtk::CheckButton* frames = nullptr;
+    Gtk::CheckButton* folios = nullptr;
     Gtk::Label*       note = nullptr;
     Gtk::Button*      go = nullptr;
     bool              syncing = false;
@@ -69,6 +70,7 @@ struct NewForm {
         n.gutter = gutter->get_value();
         n.bleed = bleed->get_value() * in;
         n.text_frames = frames->get_active();
+        n.folios = folios->get_active();
         return n;
     }
 };
@@ -198,6 +200,11 @@ void Shell::show_new_sheet() {  // helper
     f->frames->set_name("new.frames");
     f->frames->set_active(m_newdoc.text_frames);
     grid->attach(*f->frames, 1, row, 3);
+    ++row;
+    f->folios = Gtk::make_managed<Gtk::CheckButton>("Page numbers at the foot (on the master)");
+    f->folios->set_name("new.folios");
+    f->folios->set_active(m_newdoc.folios);
+    grid->attach(*f->folios, 1, row, 3);
     ++row;
     box->append(*grid);
 

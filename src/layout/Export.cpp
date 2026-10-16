@@ -48,7 +48,8 @@ void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const Ima
 }
 
 void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, FlowCache& flows,
-                 const ImageSource& images, std::set<std::string>* missing, const PageDraw& how) {
+                 const ImageSource& images, std::set<std::string>* missing, const PageDraw& how,
+                 const core::Doc::Id& on_page) {
     for (const auto& fid : d.frames_on(owner)) {
         const auto& f = *d.as<core::Frame>(fid);
         // s021: the swatch at its tint; the frame's opacity on each part.
@@ -67,7 +68,11 @@ void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
             if (f.story.empty()) break;
             cairo_save(cr);
             cairo_translate(cr, f.x, f.y);
-            draw_frame_text(cr, d, f.story, flows.get(d, f.story), fid, 0, 0, 0.0);
+            // s023: markers filled in -- a master's for the page it's drawn on.
+            if (const auto& rs = flows.resolved(d, f.story, d.as<core::Master>(owner) ? on_page : std::string{}); rs.any)
+                draw_frame_text(cr, d, f.story, rs.flow, fid, 0, 0, 0.0, &rs.text);
+            else
+                draw_frame_text(cr, d, f.story, flows.get(d, f.story), fid, 0, 0, 0.0);
             cairo_restore(cr);
             break;
         case core::FrameKind::Image:
@@ -106,8 +111,9 @@ void crop_marks(cairo_t* cr, double w, double h, double bleed) {
 
 void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& id, FlowCache& flows, const ImageSource& images,
                std::set<std::string>* missing, const PageDraw& how) {
-    for (const auto& m : core::master_chain(d, id)) draw_frames(cr, d, m, flows, images, missing, how);
-    draw_frames(cr, d, id, flows, images, missing, how);
+    const core::Doc::Id on_page = d.as<core::Page>(id) ? id : core::Doc::Id{};
+    for (const auto& m : core::master_chain(d, id)) draw_frames(cr, d, m, flows, images, missing, how, on_page);
+    draw_frames(cr, d, id, flows, images, missing, how, on_page);
 }
 
 PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) {
@@ -126,7 +132,9 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
             if (f.kind != core::FrameKind::Text || f.story.empty()) continue;
             const auto* st = d.as<core::Story>(f.story);
             if (!st) continue;
-            for (const auto& ft : flows.get(d, f.story).frames) {
+            const auto& rs = flows.resolved(d, f.story, d.as<core::Master>(o) && d.as<core::Page>(id) ? id : std::string{});
+            if (rs.any) st = &rs.text;   // s023: as drawn, numbers filled in
+            for (const auto& ft : (rs.any ? rs.flow : flows.get(d, f.story)).frames) {
                 if (ft.frame != fid) continue;
                 for (const auto& l : ft.lines) {
                     const auto& p = st->paras[static_cast<std::size_t>(l.para)];
