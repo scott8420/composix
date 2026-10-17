@@ -50,6 +50,9 @@ struct PdfOptions {
     // side, tops aligned; bleed on the outer edges only, the trim around the
     // whole spread).
     bool spreads = false;
+    // s102: how far along (0..1) and what it's doing, from the writer's
+    // thread (the app exports on a worker, with a progress bar).
+    std::function<void(double, const std::string&)> progress;
 };
 
 // s084: the PDF's sheets -- each one page, or (spreads) a spread's pages

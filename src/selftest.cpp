@@ -39,6 +39,7 @@
 #include <regex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace core = composix::core;
@@ -5646,6 +5647,76 @@ int main() {
         check("page order: follows a move", scan());
         j.undo(); j.undo();
         check("page order: and undo", scan() && d.page_index("page.3") == 2 && d.page_index(added[0]) == -1);
+    }
+
+    {
+        std::cout << "\n-- layout off the UI thread (s102) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::load_sample(d);
+        const auto here = L::flow_story(d, "story.1");
+        L::StoryFlow there;
+        std::thread([&] { there = L::flow_story(d, "story.1"); }).join();   // its own Pango context
+        bool same = here.frames.size() == there.frames.size() && here.overset == there.overset;
+        for (std::size_t i = 0; same && i < here.frames.size(); ++i) {
+            const auto& a = here.frames[i].lines;
+            const auto& b = there.frames[i].lines;
+            same = a.size() == b.size();
+            for (std::size_t k = 0; same && k < a.size(); ++k)
+                same = a[k].para == b[k].para && a[k].start == b[k].start && a[k].end == b[k].end && a[k].y == b[k].y;
+        }
+        check("a worker thread breaks the lines exactly as the UI thread", same && here.lines > 0);
+        int reports = 0;
+        double last = -1;
+        bool rising = true;
+        core::Doc b;
+        (void)L::load_big_book(b, {.pages = 20, .progress = [&](double f, const std::string&) {
+            ++reports;
+            rising = rising && f >= last;
+            last = f;
+        }});
+        check("big book: says how far along, rising", reports > 3 && rising && last > 0.9);
+    }
+
+    {
+        std::cout << "\n-- progress you can see (s102) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        (void)L::load_big_book(d, {.pages = 20});
+        const auto dir = std::filesystem::temp_directory_path();
+        for (const bool print : {false, true}) {
+            L::PdfOptions o;
+            int calls = 0;
+            double last = -1;
+            bool rising = true, wrote = false;
+            o.progress = [&](double f, const std::string& line) {
+                ++calls;
+                rising = rising && f >= last;
+                last = f;
+                wrote = wrote || line.rfind("Writing page", 0) == 0;
+            };
+            std::string err;
+            const auto path = (dir / (print ? "cx_progress_print.pdf" : "cx_progress_screen.pdf")).string();
+            const bool ok = print ? L::export_print_pdf(d, path, o, {}, nullptr, &err) : L::export_pdf(d, path, o, {}, nullptr, &err);
+            check(std::string(print ? "print" : "screen") + " PDF: progress page by page, rising, near the end",
+                  ok && calls > static_cast<int>(d.pages().size()) && rising && wrote && last > 0.85, err);
+            std::filesystem::remove(path);
+        }
+        // A layout made from a copy, handed to the document it was copied from.
+        core::Doc copy;
+        {
+            core::Doc::Loading load(copy);
+            for (const auto& [id, r] : d.records()) copy.put(id, r);
+        }
+        L::FlowCache made;
+        int ticks = 0, total = 0;
+        L::flow_all(copy, made, [&](int done, int t) { ticks = done; total = t; });
+        check("flow_all: counts every frame of every story", total > 0 && ticks == total);
+        const auto* before = &made.get(copy, "story.1");
+        const int nlines = before->lines;
+        made.rebase(d);
+        const auto* after = &made.get(d, "story.1");
+        check("a handed-over layout is the document's own (kept, not flowed again)", after == before && after->lines == nlines && nlines > 0);
     }
 
     std::cout << "-----------------------------------------------\n";

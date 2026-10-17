@@ -143,7 +143,15 @@ private:
     void show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper
     void show_pick_now(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper: s068 -- show_pick, before the Up button
     bool open_project(const std::string& dir);    // category: helper: load + reset the journal + views
-    void adopt(const core::Doc& fresh, const std::string& dir);  // category: helper: s019 -- swap in a whole document
+    // s102: a progress dialog in front of long work (Shell_busy.cpp).
+    using Report = std::function<void(double fraction, const std::string& line)>;
+    void busy(const std::string& title, const std::string& what, std::function<void()> work);   // category: helper: UI-thread work, dialog drawn first
+    void busy_thread(const std::string& title, const std::string& what, std::function<void(const Report&)> job,
+                     const std::string& then_what, std::function<void()> done);   // category: helper: a worker job with a bar, then UI work
+    static constexpr std::size_t kBusyPages = 100;
+    void export_pdf_now(const std::string& path);   // category: helper: s102 -- export_pdf_to's work (it may put up the dialog first)   // s102: books this long get the dialog
+    void adopt(const core::Doc& fresh, const std::string& dir,
+               layout::FlowCache* laid = nullptr);  // category: helper: s019 -- swap in a whole document; s102: `laid` -- its flows, made on a worker
     void confirm_discard(std::function<void()> then);  // category: helper: s019 -- unsaved? ask, then go on
     void show_new_sheet();                        // category: helper: s019 -- the New sheet
     void build_find_bar();                        // category: zone: s022 -- Find / Change, over the main area

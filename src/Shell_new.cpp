@@ -43,26 +43,49 @@ void Shell::on_sample() {  // handler
 // (Save As puts it somewhere of your own); delete the folder to make it anew.
 void Shell::on_big_book() {  // handler
     confirm_discard([this] {
-        const auto t0 = std::chrono::steady_clock::now();
+        // s102: made (or read back) on a worker with a progress bar; the
+        // window's own layout of it after, under the same dialog.
+        struct Out {
+            core::Doc               doc;
+            layout::FlowCache       flows;   // laid out on the worker too
+            layout::BigBookInfo     info;
+            bool                    read = false;
+            std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        };
+        auto out = std::make_shared<Out>();
         const std::string dir = Glib::build_filename(Glib::get_user_cache_dir(), "composix", "big-book");
-        const std::string kept = Glib::build_filename(dir, "book-s100");   // the generator's version
-        core::Doc fresh;
-        std::string err;
-        bool read = core::load_project(fresh, kept, &err);
-        layout::BigBookInfo info;
-        if (!read) {
-            layout::BigBookOpts o;
-            o.picture_dir = dir;
-            info = layout::load_big_book(fresh, o);
-            if (!core::save_project(fresh, kept, &err))
-                if (auto lg = log::get(log::Area::Io)) lg->warn("big test book: not kept ({})", err);
-        }
-        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        const auto pages = fresh.pages().size();
-        adopt(fresh, "");
-        if (auto lg = log::get(log::Area::Shell))
-            lg->info("opened the big test book: {} pages -- {} in {:.0f} ms", pages,
-                     read ? "read back" : "made (" + std::to_string(info.rounds) + " chapter flows, " + std::to_string(info.whole) + " whole)", ms);
+        busy_thread("Opening the Big Test Book", "Reading it back\u2026",
+            [out, dir](const Report& report) {
+                const std::string kept = Glib::build_filename(dir, "book-s100");   // the generator's version
+                std::string err;
+                out->read = core::load_project(out->doc, kept, &err);
+                double base = 0;   // where the layout's share of the bar starts
+                if (!out->read) {
+                    layout::BigBookOpts o;
+                    o.picture_dir = dir;
+                    o.progress = [&](double f, const std::string& line) { report(0.7 * f, line); };
+                    out->info = layout::load_big_book(out->doc, o);
+                    report(0.7, "Keeping it for next time\u2026");
+                    if (!core::save_project(out->doc, kept, &err))
+                        if (auto lg = log::get(log::Area::Io)) lg->warn("big test book: not kept ({})", err);
+                    base = 0.7;
+                }
+                const auto pages = out->doc.pages().size();
+                layout::flow_all(out->doc, out->flows, [&](int done, int total) {
+                    report(base + (1 - base) * done / total, "Laying out page " +
+                           std::to_string(std::max<std::size_t>(1, pages * done / total)) + " of " + std::to_string(pages) + "\u2026");
+                });
+            },
+            "Showing it\u2026",
+            [this, out] {
+                const auto pages = out->doc.pages().size();
+                adopt(out->doc, "", &out->flows);
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - out->t0).count();
+                if (auto lg = log::get(log::Area::Shell))
+                    lg->info("opened the big test book: {} pages -- {} -- ready in {:.0f} ms", pages,
+                             out->read ? "read back" : "made (" + std::to_string(out->info.rounds) + " chapter flows, " +
+                                                           std::to_string(out->info.whole) + " whole)", ms);
+            });
     });
 }
 

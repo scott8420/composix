@@ -11,6 +11,7 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM REQUIRED gtkmm-4.0)
 find_package(spdlog REQUIRED)
+find_package(Threads REQUIRED)   # s102: work off the UI thread (the progress dialog)
 
 # ── composix_core -- the GTK-free core (the model side of the one real seam) ──────
 # No gtkmm on this library's link line, BY DESIGN: a stray UI include under
@@ -84,7 +85,7 @@ target_compile_options(composix_layout PUBLIC ${PANGOCAIRO_CFLAGS_OTHER})
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
 add_executable(composix_selftest src/selftest.cpp)
-target_link_libraries(composix_selftest PRIVATE composix_core composix_layout)
+target_link_libraries(composix_selftest PRIVATE composix_core composix_layout Threads::Threads)
 
 # ── s100: timings on the generated long book -- run by hand, not a gate ───────
 add_executable(composix_bench src/bench.cpp)
@@ -137,6 +138,7 @@ add_executable(composix
     src/Shell_swatch.cpp
     src/Shell_start.cpp
     src/Shell_preflight.cpp
+    src/Shell_busy.cpp
     src/Shell_helpers.cpp
     # s002: the segmented navigator, tile view, item preview, inspector.
     src/views/Navigator.cpp
@@ -160,6 +162,6 @@ add_executable(composix
     src/Log.cpp
 )
 target_include_directories(composix PRIVATE include ${GTKMM_INCLUDE_DIRS})
-target_link_libraries(composix     PRIVATE ${GTKMM_LIBRARIES} composix_core composix_layout spdlog::spdlog)
+target_link_libraries(composix     PRIVATE ${GTKMM_LIBRARIES} composix_core composix_layout spdlog::spdlog Threads::Threads)
 target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})

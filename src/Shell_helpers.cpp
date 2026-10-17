@@ -226,15 +226,42 @@ bool Shell::open_project(const std::string& dir) {  // helper
         if (auto lg = log::get(log::Area::Io)) lg->warn("open '{}': {}", dir, err);
         return false;
     }
-    adopt(fresh, dir);
-    note_recent(dir);
-    if (auto lg = log::get(log::Area::Io)) lg->info("opened '{}' ({} records)", dir, m_doc.size());
+    auto finish = [this, dir](const core::Doc& doc) {
+        adopt(doc, dir);
+        note_recent(dir);
+        if (auto lg = log::get(log::Area::Io)) lg->info("opened '{}' ({} records)", dir, m_doc.size());
+    };
+    const auto pages = fresh.pages().size();
+    if (pages < kBusyPages) {
+        finish(fresh);
+        return true;
+    }
+    // s102: a long book -- laid out on a worker, page by page on the bar,
+    // then handed to the window with its layout done.
+    struct Held { core::Doc doc; layout::FlowCache flows; };
+    auto held = std::make_shared<Held>();
+    held->doc = std::move(fresh);
+    const auto* st = held->doc.as<core::Settings>("doc");
+    busy_thread("Opening \u201c" + (st && !st->title.empty() ? st->title : std::filesystem::path(dir).filename().string()) + "\u201d",
+                "Laying out " + std::to_string(pages) + " pages\u2026",
+                [held, pages](const Report& report) {
+                    layout::flow_all(held->doc, held->flows, [&](int done, int total) {
+                        report(static_cast<double>(done) / total, "Laying out page " +
+                               std::to_string(std::max<std::size_t>(1, pages * done / total)) + " of " + std::to_string(pages) + "\u2026");
+                    });
+                },
+                "Showing it\u2026",
+                [this, held, dir] {
+                    adopt(held->doc, dir, &held->flows);
+                    note_recent(dir);
+                    if (auto lg = log::get(log::Area::Io)) lg->info("opened '{}' ({} records)", dir, m_doc.size());
+                });
     return true;
 }
 
 // s019: a whole document in place of this one (opened, new, the sample).
 // Swapped in under a load: not a user choice, not undoable.
-void Shell::adopt(const core::Doc& fresh, const std::string& dir) {  // helper
+void Shell::adopt(const core::Doc& fresh, const std::string& dir, layout::FlowCache* laid) {  // helper
     {
         m_doc.reset();
         core::Doc::Loading load(m_doc);
@@ -243,6 +270,10 @@ void Shell::adopt(const core::Doc& fresh, const std::string& dir) {  // helper
     m_project_dir = dir;
     m_canvas_view.canvas().set_project_dir(dir);
     m_page_thumbs.forget();  // s020: nothing drawn carries over either
+    if (laid) {   // s102: laid out on a worker from the same records -- keep it, as this document's
+        m_pf_flows = std::move(*laid);
+        m_pf_flows.rebase(m_doc);
+    }
     m_journal.clear();       // no step carries over from another document
     m_dirty = true;          // (so set_dirty repaints the title)
     m_saved_mark = m_journal.mark();   // s057
@@ -492,6 +523,10 @@ namespace composix {
 
 // Write the PDF, then say what was written and what wants a look (s013).
 void Shell::export_pdf_to(const std::string& path) {  // helper
+    export_pdf_now(path);
+}
+
+void Shell::export_pdf_now(const std::string& path) {  // helper
     layout::PdfOptions opt;
     opt.bleed = m_pdf_bleed;
     opt.marks = m_pdf_marks;
@@ -508,25 +543,51 @@ void Shell::export_pdf_to(const std::string& path) {  // helper
     const layout::ImageSource images = [dir](const core::Asset& a, double w, double h) {
         return views::images::print_surface(core::resolve_asset(a, dir), w, h);
     };
-    layout::PdfReport rep;
-    std::string err;
-    const bool ok = m_pdf_print ? layout::export_print_pdf(m_doc, path, opt, images, &rep, &err)
-                                : layout::export_pdf(m_doc, path, opt, images, &rep, &err);
-    if (!ok) {
-        alert("Can’t export the PDF", err);
-        if (auto lg = log::get(log::Area::Io)) lg->warn("export '{}': {}", path, err);
+    // s102: a long book is written on a worker from a copy of the document,
+    // page by page on the bar; the report after, as before.
+    struct Job {
+        core::Doc         doc;
+        layout::PdfReport rep;
+        std::string       err;
+        bool              ok = false;
+    };
+    auto job = std::make_shared<Job>();
+    const bool print = m_pdf_print;
+    auto write = [job, path, opt, images, print](const Report* report) mutable {
+        if (report) opt.progress = *report;
+        job->ok = print ? layout::export_print_pdf(job->doc, path, opt, images, &job->rep, &job->err)
+                        : layout::export_pdf(job->doc, path, opt, images, &job->rep, &job->err);
+    };
+    auto after = [this, job, path] {
+        const auto& rep = job->rep;
+        if (!job->ok) {
+            alert("Can\u2019t export the PDF", job->err);
+            if (auto lg = log::get(log::Area::Io)) lg->warn("export '{}': {}", path, job->err);
+            return;
+        }
+        if (auto lg = log::get(log::Area::Io))
+            lg->info("exported '{}' ({}): {} page(s), {} warning(s)", path, m_pdf_print ? "print, plate" : "screen, cairo",
+                     rep.pages, rep.warnings.size());
+        std::string detail = std::filesystem::path(path).filename().string();
+        if (rep.warnings.empty()) detail += "\n\nNothing to check.";
+        else {
+            detail += "\n\nWorth a look:";
+            for (const auto& w : rep.warnings) detail += "\n\u2022 " + w;
+        }
+        alert("Exported " + std::to_string(rep.pages) + (rep.pages == 1 ? " page" : " pages"), detail);
+    };
+    const auto n = m_doc.pages().size();
+    {   // the copy the writer reads -- records only (not the window's door or change hook)
+        core::Doc::Loading load(job->doc);
+        for (const auto& [id, r] : m_doc.records()) job->doc.put(id, r);
+    }
+    if (n < kBusyPages) {
+        write(nullptr);
+        after();
         return;
     }
-    if (auto lg = log::get(log::Area::Io))
-        lg->info("exported '{}' ({}): {} page(s), {} warning(s)", path, m_pdf_print ? "print, plate" : "screen, cairo",
-                 rep.pages, rep.warnings.size());
-    std::string detail = std::filesystem::path(path).filename().string();
-    if (rep.warnings.empty()) detail += "\n\nNothing to check.";
-    else {
-        detail += "\n\nWorth a look:";
-        for (const auto& w : rep.warnings) detail += "\n• " + w;
-    }
-    alert("Exported " + std::to_string(rep.pages) + (rep.pages == 1 ? " page" : " pages"), detail);
+    busy_thread("Exporting PDF", "Writing " + std::to_string(n) + " pages\u2026",
+                [write](const Report& report) mutable { write(&report); }, "", after);
 }
 
 }  // namespace composix

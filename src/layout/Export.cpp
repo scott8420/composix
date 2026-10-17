@@ -485,6 +485,13 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
 
     cairo_t* cr = cairo_create(surf);
     FlowCache flows;
+    const std::size_t npages = pages.size();
+    auto report_layout = [&](int done, int total) {   // s102
+        if (opt.progress && total > 0)
+            opt.progress(0.3 * done / total, "Laying out page " + std::to_string(std::max<std::size_t>(1, npages * done / total)) +
+                                                 " of " + std::to_string(npages) + "\u2026");
+    };
+    if (opt.progress) flow_all(d, flows, report_layout);
     const auto links = contents_links(d, flows);   // s083
     std::set<std::string> missing;
     int n = 0;
@@ -503,6 +510,8 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
             draw_page(cr, d, pid, flows, images, &missing);
             cairo_restore(cr);
             ++n;
+            if (opt.progress)   // s102
+                opt.progress(0.3 + 0.67 * n / npages, "Writing page " + std::to_string(n) + " of " + std::to_string(npages) + "\u2026");
             for (const auto& l : links) {   // s083: the contents page's entries, clickable
                 if (l.page != pid) continue;
                 const auto to = sheet_of(sheets, l.to);

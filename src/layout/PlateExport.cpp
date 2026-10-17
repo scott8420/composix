@@ -241,6 +241,14 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         doc.set_convert_rgb(opt.convert);
     }
     Ctx c{d, doc, images, {}, {}, {}};
+    const std::size_t npages = pages.size();
+    if (opt.progress)   // s102: lay it all out first, so the bar can say so
+        flow_all(d, c.flows, [&](int done, int total) {
+            if (total > 0)
+                opt.progress(0.3 * done / total, "Laying out page " + std::to_string(std::max<std::size_t>(1, npages * done / total)) +
+                                                     " of " + std::to_string(npages) + "\u2026");
+        });
+    std::size_t written = 0;
     const auto sheets = pdf_sheets(d, pages, opt.spreads);   // s084
     for (const auto& sh : sheets) {
         auto& pg = doc.add_page(sh.w + 2 * off, sh.h + 2 * off);
@@ -258,6 +266,9 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
             for (const auto& m : core::master_chain(d, pid)) draw_frames(c, pg, m, pid);
             draw_frames(c, pg, pid, pid);
             pg.restore();
+            if (opt.progress && ++written <= npages)   // s102
+                opt.progress(0.3 + 0.6 * written / npages,
+                             "Writing page " + std::to_string(written) + " of " + std::to_string(npages) + "\u2026");
         }
         if (opt.marks) {
             pg.save();
@@ -267,7 +278,7 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         }
     }
     {   // s083: the contents page's entries, clickable (Plate leaves them out under PDF/X)
-        FlowCache flows;
+        FlowCache& flows = c.flows;   // s102: the pages' own flows (was a fresh layout of the book)
         for (const auto& l : contents_links(d, flows)) {
             const auto at = sheet_of(sheets, l.page), to = sheet_of(sheets, l.to);   // s084: by sheet
             if (at.sheet >= 0 && to.sheet >= 0)
@@ -276,11 +287,12 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         }
     }
     if (opt.bookmarks) {   // s054
-        FlowCache flows;
+        FlowCache& flows = c.flows;   // s102: as above
         for (const auto& b : bookmarks(d, flows, opt.mark_lists, pages))
             if (const auto at = sheet_of(sheets, b.page); at.sheet >= 0)
                 doc.add_bookmark(b.title, b.level, static_cast<std::size_t>(at.sheet), off + b.y);
     }
+    if (opt.progress) opt.progress(0.92, "Saving the file\u2026");   // s102: fonts subset, images compressed
     if (!doc.save(path, err)) return false;
     preflight(d, std::vector<std::string>(c.missing.begin(), c.missing.end()), static_cast<int>(pages.size()), report);
     if (report && !c.rgb_images.empty()) {

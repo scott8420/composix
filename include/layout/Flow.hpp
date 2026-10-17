@@ -71,6 +71,9 @@ struct StoryFlow {
 std::vector<std::string> thread_frames(const core::Doc& d, const std::string& story);
 
 StoryFlow flow_story(const core::Doc& d, const std::string& story);
+// s102: the same, telling `tick` after each frame (done, of total).
+using FlowTick = std::function<void(int done, int total)>;
+StoryFlow flow_story(const core::Doc& d, const std::string& story, const FlowTick& tick);
 // s048: auto-size frames -- each (the last of its thread, one column)
 // measured with room to spare and given the height its text needs (top
 // fixed; at least 1 pt). What changes, for DocJournal::set_settle.
@@ -172,12 +175,23 @@ std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& s
 const std::vector<std::string>& font_families();
 
 // Flows, recomputed only when the document changes (Doc::revision()).
+class FlowCache;
+// s102: every story of `d` flowed into `cache`, `tick` told across all
+// their frames (done, of total) -- a long book's layout with a progress bar.
+void flow_all(const core::Doc& d, FlowCache& cache, const std::function<void(int done, int total)>& tick);
+
 class FlowCache {
 public:
     const StoryFlow& get(const core::Doc& d, const std::string& story);
 
     // s023: a story with its markers filled in for a page (see resolve_story).
     const Resolved& resolved(const core::Doc& d, const std::string& story, const std::string& on_page);
+
+    // s102: a flow worked out elsewhere (a worker) for this revision of `d`.
+    void put(const core::Doc& d, const std::string& story, StoryFlow f);
+    // s102: flows made from a copy with the same records as `d` (loaded on a
+    // worker, then copied in): keep them, now as `d`'s.
+    void rebase(const core::Doc& d) { m_rev = d.revision(); }
 
 private:
     void check(const core::Doc& d);

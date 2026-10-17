@@ -198,6 +198,10 @@ BigBookInfo load_big_book(core::Doc& d, const BigBookOpts& o) {
     d.put("swatch.2", core::Swatch{"Paper", 2, core::ColorModel::CMYK, {0, 1, 5, 0}, "", 0xfbf8f1});
     d.put("swatch.3", core::Swatch{"Guild Rust", 3, core::ColorModel::Spot, {0, 70, 90, 20}, "PMS 7593 C", 0xb5512b});
 
+    auto report = [&](double f, const std::string& line) {
+        if (o.progress) o.progress(f, line);
+    };
+    report(0.01, "Drawing the pictures\u2026");
     // ── the plates (pictures) ──────────────────────────────────────────────
     std::vector<Doc::Id> plates;
     {
@@ -270,6 +274,7 @@ BigBookInfo load_big_book(core::Doc& d, const BigBookOpts& o) {
         d.put(d.fresh_id("frame"), l);
     }
 
+    report(0.04, "Writing the text\u2026");
     // ── how much text a full page holds, measured (fonts differ by machine) ─
     Greek g(o.seed);
     double per_page = 2400;
@@ -441,7 +446,11 @@ BigBookInfo load_big_book(core::Doc& d, const BigBookOpts& o) {
     for (std::size_t c = 0; c < chapters.size(); ++c)
         chapters[c].second = c + 1 < chapters.size() ? chapters[c + 1].first : body.paras.size();
 
+    std::size_t done_ch = 0;
     for (const auto& [p0, p1] : chapters) {
+        report(0.05 + 0.75 * static_cast<double>(done_ch) / static_cast<double>(chapters.size()),
+               "Setting chapter " + std::to_string(done_ch + 1) + " of " + std::to_string(chapters.size()) + "\u2026");
+        ++done_ch;
         if (bp.size() % 2 == 1) {   // a left-hand page: blank before the chapter (the flow passes it)
             const auto k = add_page(kBody);
             if (k > 0) link(k - 1, k);
@@ -495,6 +504,7 @@ BigBookInfo load_big_book(core::Doc& d, const BigBookOpts& o) {
     d.put(kScratch, std::nullopt);
     d.put("section.2", core::Section{"Body", bp.front().page, core::Numbering::Arabic, 1, core::Side::Right, "master.2"});
 
+    report(0.82, "Checking all " + std::to_string(front.size() + bp.size()) + " pages\u2026");
     // The check: the whole story, flowed once. Whole-story rounds only if it
     // came out otherwise than the chapters did.
     StoryFlow final;
@@ -531,6 +541,7 @@ BigBookInfo load_big_book(core::Doc& d, const BigBookOpts& o) {
     for (std::size_t k = 0; k < bp.size(); ++k) info.pictures += is_open[k] + is_pic[k];
     info.pages = static_cast<int>(front.size() + bp.size());
 
+    report(0.97, "Writing the contents\u2026");
     // ── the contents list, built where the headings landed ─────────────────
     d.put("list.1", core::GenList{"Table of Contents", core::ListKind::Contents, 1, {"style.2"}, front[2], -1, "story.4"});
     {   // from the final flow (what list_entries would find, without

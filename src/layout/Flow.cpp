@@ -12,10 +12,16 @@ namespace composix::layout {
 
 namespace {
 
-// One measuring context for the process: 72 dpi (1 unit = 1 pt), no hinting,
-// so the same text breaks the same way at every zoom.
+// One measuring context a thread: 72 dpi (1 unit = 1 pt), no hinting, so
+// the same text breaks the same way at every zoom. s102: per thread (was
+// one for the process) -- Pango contexts aren't thread safe, and its default
+// font map is already per thread; layout off the UI thread gets its own.
 PangoContext* measure_context() {
-    static PangoContext* ctx = [] {
+    struct Held {   // let go when the thread ends (a worker's font map with it)
+        PangoContext* c;
+        ~Held() { if (c) g_object_unref(c); }
+    };
+    thread_local Held ctx{[] {
         PangoFontMap* fm = pango_cairo_font_map_get_default();
         PangoContext* c = pango_font_map_create_context(fm);
         pango_cairo_context_set_resolution(c, 72.0);
@@ -26,8 +32,8 @@ PangoContext* measure_context() {
         pango_cairo_context_set_font_options(c, fo);
         cairo_font_options_destroy(fo);
         return c;
-    }();
-    return ctx;
+    }()};
+    return ctx.c;
 }
 
 struct LayoutDel { void operator()(PangoLayout* l) const { g_object_unref(l); } };
@@ -599,7 +605,13 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
 
 namespace {
 StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::Story& text,
-                    const std::map<std::string, double>* heights);
+                    const std::map<std::string, double>* heights, const FlowTick* tick = nullptr);
+}
+
+StoryFlow flow_story(const core::Doc& d, const std::string& story, const FlowTick& tick) {   // s102
+    const auto* st = d.as<core::Story>(story);
+    if (!st) return {};
+    return flow_impl(d, story, *st, nullptr, tick ? &tick : nullptr);
 }
 
 StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::Story& text) {
@@ -631,7 +643,7 @@ std::vector<core::DocJournal::Settled> fit_frames(const core::Doc& d) {
 
 namespace {
 StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::Story& text,
-                    const std::map<std::string, double>* heights) {
+                    const std::map<std::string, double>* heights, const FlowTick* tick) {
     StoryFlow out;
     const auto* st = &text;
     const auto chain = thread_frames(d, story);
@@ -674,6 +686,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         }
         if (!measuring) vertical_justify(d, *st, fr, wraps, out.frames[fi]);   // s042
         if (!out.frames[fi].lines.empty()) last_page = fr.owner;
+        if (tick) (*tick)(static_cast<int>(fi + 1), static_cast<int>(chain.size()));   // s102
     }
     for (const auto& ft : out.frames) out.lines += static_cast<int>(ft.lines.size());
     out.overset = !done;
@@ -1284,6 +1297,27 @@ const Resolved& FlowCache::resolved(const core::Doc& d, const std::string& story
     auto it = m_resolved.find(key);
     if (it == m_resolved.end()) it = m_resolved.emplace(key, resolve_story(d, story, on_page)).first;
     return it->second;
+}
+
+void FlowCache::put(const core::Doc& d, const std::string& story, StoryFlow f) {   // s102
+    check(d);
+    m_flows[story] = std::move(f);
+}
+
+void flow_all(const core::Doc& d, FlowCache& cache, const std::function<void(int, int)>& tick) {   // s102
+    const auto stories = d.ids_of<core::Story>();
+    std::vector<std::size_t> sizes;
+    int total = 0;
+    for (const auto& s : stories) {
+        sizes.push_back(thread_frames(d, s).size());
+        total += static_cast<int>(sizes.back());
+    }
+    int before = 0;
+    for (std::size_t i = 0; i < stories.size(); ++i) {
+        const FlowTick t = [&](int done, int) { if (tick) tick(before + done, total); };
+        cache.put(d, stories[i], flow_story(d, stories[i], t));
+        before += static_cast<int>(sizes[i]);
+    }
 }
 
 const StoryFlow& FlowCache::get(const core::Doc& d, const std::string& story) {

@@ -21,6 +21,7 @@
 // for decoding. Empty: the assets are left missing (placeholders).
 #include "core/Doc.hpp"
 
+#include <functional>
 #include <string>
 
 namespace composix::layout {
@@ -29,6 +30,9 @@ struct BigBookOpts {
     int         pages = 400;       // roughly: the body is fitted to its text
     std::string picture_dir;       // "" = no files (missing links)
     unsigned    seed = 100;        // the greeking's (same seed, same book)
+    // s102: how far along (0..1) and what it's doing -- called on the
+    // calling thread (the app runs this on a worker, with a progress bar).
+    std::function<void(double, const std::string&)> progress;
 };
 
 struct BigBookInfo {
