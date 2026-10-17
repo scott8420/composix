@@ -6249,6 +6249,86 @@ int main() {
         }
     }
 
+    {
+        std::cout << "\n-- footnote numbering (s111) --\n";
+        namespace L = composix::layout;
+        using NS = core::NoteStyle;
+        check("labels: 1, iv, c, *, †, **", core::note_label(1, NS::Arabic) == "1" && core::note_label(4, NS::RomanLower) == "iv" &&
+                                                 core::note_label(3, NS::AlphaLower) == "c" && core::note_label(1, NS::Symbols) == "*" &&
+                                                 core::note_label(2, NS::Symbols) == "†" && core::note_label(7, NS::Symbols) == "**");
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        (void)L::load_big_book(d, {.pages = 24});
+        // Notes in several paragraphs, two in one, far apart.
+        for (const int p : {40, 12, 12, 5})
+            core::doc::insert_note(j, d, "story.1", {p, 0}, "A note in paragraph " + std::to_string(p) + ".");
+        const auto per_page = [&](const L::StoryFlow& f) {   // page -> its notes' numbers in order
+            std::map<std::string, std::vector<int>> m;
+            for (const auto& ft : f.frames)
+                for (const auto& np : ft.notes) m[d.as<core::Frame>(ft.frame)->owner].push_back(np.number);
+            return m;
+        };
+        L::FlowCache flows;
+        auto whole = per_page(flows.get(d, "story.1"));
+        std::vector<int> all;
+        for (const auto& pg : d.pages()) for (int n : whole[pg]) all.push_back(n);
+        std::size_t pages_with = 0;
+        for (const auto& [pg, ns] : whole) pages_with += !ns.empty();
+        check("through the story: 1, 2, 3, 4 in page order, on several pages", all == std::vector<int>{1, 2, 3, 4} && pages_with >= 2,
+              std::to_string(pages_with) + " pages");
+        check("numbering: one step", core::doc::set_note_numbering(j, d, core::NoteRestart::Page, NS::Arabic) &&
+                                     !core::doc::set_note_numbering(j, d, core::NoteRestart::Page, NS::Arabic));
+        const auto& fp = flows.get(d, "story.1");
+        bool restarts = true;
+        int ones = 0;
+        for (const auto& [pg, ns] : per_page(fp))
+            for (std::size_t i = 0; i < ns.size(); ++i) {
+                restarts = restarts && ns[i] == static_cast<int>(i) + 1;
+                ones += ns[i] == 1;
+            }
+        check("each page: its notes 1, 2, ...", restarts && ones >= 2);
+        // Re-flowed under page numbering: still the whole flow.
+        L::FlowCache inc;
+        (void)inc.get(d, "story.1");
+        bool same = true;
+        for (const auto& [p, b] : std::vector<std::pair<int, int>>{{3, 0}, {12, 5}, {20, 0}}) {
+            core::doc::edit_text(j, d, "story.1", {p, b}, {p, b}, "some words here to move a line on ", "Typing", "");
+            const auto a = per_page(inc.get(d, "story.1"));
+            same = same && a == per_page(L::flow_story(d, "story.1"));
+        }
+        check("re-flowed by page: the same numbers as a whole flow", same);
+        {   // By section: numbers count on across pages, starting again in each section.
+            core::doc::set_note_numbering(j, d, core::NoteRestart::Section, NS::Arabic);
+            const auto& fsec = flows.get(d, "story.1");
+            std::map<std::string, std::vector<int>> by;
+            for (const auto& pg : d.pages())
+                for (const auto& ft : fsec.frames)
+                    if (d.as<core::Frame>(ft.frame)->owner == pg)
+                        for (const auto& np : ft.notes) by[d.section_of(pg)].push_back(np.number);
+            bool ok = !by.empty();
+            for (const auto& [sec, ns] : by)
+                for (std::size_t i = 0; i < ns.size(); ++i) ok = ok && ns[i] == static_cast<int>(i) + 1;
+            check("each section: its notes 1, 2, ... across its pages", ok);
+        }
+        // The look: symbols in the notes and at the marks.
+        core::doc::set_note_numbering(j, d, core::NoteRestart::Page, NS::Symbols);
+        const auto& fs = flows.get(d, "story.1");
+        int stars = 0;
+        for (const auto& ft : fs.frames)
+            if (!ft.notes.empty())
+                L::visit_lines(d, "story.1", fs, ft.frame, [&](const L::LineVisit& v) {
+                    if (v.from != -3 && v.from != -4) return;
+                    const int n = pango_layout_line_get_length(v.line) > 0 ? 1 : 0;
+                    stars += n;
+                });
+        check("symbols: the numbers are drawn", stars >= 8);
+        core::Doc e;
+        std::string err;
+        check("json: numbering kept", core::from_json(e, core::to_json(d), &err) &&
+                                      e.settings().note_restart == core::NoteRestart::Page && e.settings().note_style == NS::Symbols, err);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

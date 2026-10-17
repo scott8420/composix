@@ -225,6 +225,18 @@ flowboxchild:selected > .cx-tile-card {
 /* s067: the link (same all round) and the presets beside a compact row -- slim */
 .cx-insp-mini, .cx-insp-mini > button { min-width: 20px; min-height: 24px; padding: 0 2px; }
 /* s099: the canvas header's Proof pill -- a warm tint so it's plain the colours are simulated */
+/* s112: a footnote in the Story Editor -- its number, a small raised chip */
+button.cx-note-chip {
+  min-height: 0;
+  min-width: 0;
+  padding: 0 4px;
+  margin: 0 1px;
+  font-size: 0.7em;
+  font-weight: 700;
+  color: @cx_accent;
+  background: alpha(@cx_accent, 0.12);
+  border-radius: 6px;
+}
 /* s108: background work -- quiet, beside Preflight */
 .cx-work-pill {
   font-size: 0.8em;

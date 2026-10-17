@@ -73,6 +73,7 @@ struct FrameText {
     // last frame that took lines. A re-flow starts at a frame from these.
     int               from_p = -1, from_b = 0;
     std::string       page_before;
+    int               note_from = 0;   // s111: notes numbered on its page (section) before it, when numbering restarts
 };
 
 struct StoryFlow {

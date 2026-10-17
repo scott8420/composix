@@ -62,6 +62,7 @@ void Shell::edit_note(const std::string& story, int p, int k) {  // helper
     });
     m_note_pop->popup();
     entry->grab_focus();
+    entry->set_position(-1);   // the cursor after the words (not all of them selected)
 }
 
 }  // namespace composix

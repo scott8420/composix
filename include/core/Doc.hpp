@@ -103,6 +103,11 @@ struct SavedQuery {
     bool operator==(const SavedQuery&) const = default;
 };
 
+// s111: how footnotes are numbered -- counting on through the story, or
+// starting again on each page / in each section; and how a number looks.
+enum class NoteRestart { Story, Page, Section };
+enum class NoteStyle   { Arabic, RomanLower, AlphaLower, Symbols };
+
 struct Settings {
     std::string title  = "Untitled";
     double      trim_w = 6 * kPt, trim_h = 9 * kPt;
@@ -114,6 +119,8 @@ struct Settings {
     Units       units = Units::Inches;   // s073
     std::vector<SavedQuery> queries;     // s078: Find / Change, saved
     ExportPrefs exp;                     // s032
+    NoteRestart note_restart = NoteRestart::Story;   // s111
+    NoteStyle   note_style   = NoteStyle::Arabic;
     bool operator==(const Settings&) const = default;
 };
 
@@ -498,6 +505,8 @@ using DocJournal = Journal<Doc>;
 
 // Display helpers.
 std::string format_folio(int n, Numbering how);
+// s111: a footnote's number as shown: 1, i, a -- or * \u2020 \u2021 \u00a7 \u2016 \u00b6, then doubled ...
+std::string note_label(int n, NoteStyle how);
 std::string inches(double pt);                          // 432 -> "6", 423 -> "5.875"
 // s041: a typed length in points: "12", "12.5 pt", "1in", "1\"", "3p6" (3
 // picas 6 points), "6p", "10 mm", "1.5cm". A bare number is in `unit`
@@ -635,6 +644,8 @@ bool set_bleed(DocJournal& j, Doc& d, double bleed);
 bool set_facing(DocJournal& j, Doc& d, bool facing);
 // s069: wrap pushes only text beneath (Settings::wrap_beneath). One step.
 bool set_wrap_beneath(DocJournal& j, Doc& d, bool on);
+// s111: footnote numbering (restart, look). One step each; false if unchanged.
+bool set_note_numbering(DocJournal& j, Doc& d, NoteRestart restart, NoteStyle style);
 // s073: the document's display unit. One step.
 bool set_units(DocJournal& j, Doc& d, Units u);
 // s078: keep a query under its name (trimmed, not empty; the same name is

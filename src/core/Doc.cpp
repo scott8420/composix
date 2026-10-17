@@ -210,6 +210,23 @@ std::vector<Doc::Id> Doc::frames_on(const Id& owner) const {
 // ─────────────────────────────────────────────────────────────────────────────
 // Display helpers
 // ─────────────────────────────────────────────────────────────────────────────
+std::string note_label(int n, NoteStyle how) {   // s111
+    if (n <= 0) return std::to_string(n);
+    switch (how) {
+    case NoteStyle::Arabic:     return std::to_string(n);
+    case NoteStyle::RomanLower: return format_folio(n, Numbering::RomanLower);
+    case NoteStyle::AlphaLower: return format_folio(n, Numbering::AlphaLower);
+    case NoteStyle::Symbols: {
+        static const char* sym[] = {"*", "\u2020", "\u2021", "\u00a7", "\u2016", "\u00b6"};
+        std::string out;
+        const int times = (n - 1) / 6 + 1;
+        for (int i = 0; i < times; ++i) out += sym[(n - 1) % 6];
+        return out;
+    }
+    }
+    return std::to_string(n);
+}
+
 std::string format_folio(int n, Numbering how) {
     if (n <= 0) return std::to_string(n);
     switch (how) {
@@ -1236,6 +1253,16 @@ bool set_wrap_beneath(DocJournal& j, Doc& d, bool on) {   // s069
     return j.run("Text wrap affects", {"doc"}, [&] {
         Settings s = d.settings();
         s.wrap_beneath = on;
+        d.put("doc", s);
+    });
+}
+
+bool set_note_numbering(DocJournal& j, Doc& d, NoteRestart restart, NoteStyle style) {   // s111
+    if (restart == d.settings().note_restart && style == d.settings().note_style) return false;
+    return j.run("Footnote numbering", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.note_restart = restart;
+        s.note_style = style;
         d.put("doc", s);
     });
 }
@@ -2722,6 +2749,7 @@ const std::vector<Verb>& verbs() {
         {"set_bleed", [](DocJournal& j, Doc& d) { set_bleed(j, d, d.settings().bleed + 9); }},
         {"set_facing", [](DocJournal& j, Doc& d) { set_facing(j, d, !d.settings().facing); }},
         {"set_wrap_beneath", [](DocJournal& j, Doc& d) { set_wrap_beneath(j, d, true); }},   // s069
+        {"set_note_numbering", [](DocJournal& j, Doc& d) { set_note_numbering(j, d, NoteRestart::Page, NoteStyle::Symbols); }},   // s111
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
         {"delete_query", [](DocJournal& j, Doc& d) { delete_query(j, d, "Double spaces"); }},

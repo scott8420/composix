@@ -950,6 +950,13 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Ignore text wrap", [&](core::Frame& f) {
                 if (f.kind == core::FrameKind::Text) f.ignore_wrap = choice == "1";
             });
+        } else if (key == "dnote_restart" || key == "dnote_style") {   // s111
+            const int v = std::clamp(std::stoi(choice), 0, 3);
+            auto r = m_doc.settings().note_restart;
+            auto st = m_doc.settings().note_style;
+            if (key == "dnote_restart") r = static_cast<core::NoteRestart>(std::min(v, 2));
+            else st = static_cast<core::NoteStyle>(v);
+            did = core::doc::set_note_numbering(m_journal, m_doc, r, st);
         } else if (key == "dfacing") {
             did = core::doc::set_facing(m_journal, m_doc, choice == "1");
         } else if (key == "pmargins") {   // s062: a page's own margins, or back to the master's

@@ -4,6 +4,8 @@
 #include "Log.hpp"
 
 #include <gtkmm/button.h>
+#include <gtkmm/entry.h>
+#include <gtkmm/textchildanchor.h>
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/gestureclick.h>
 #include <gtkmm/label.h>
@@ -28,6 +30,9 @@ std::string shown_text(const core::Story& st) {
             if (const int m = core::marker_at(t, k); m >= 0) {
                 static const char* sign[] = {"\xEF\xBC\x83", "\xE2\xB8\xB9", "\xE3\x80\x8B", "\xE3\x80\x8A"};
                 t.replace(k, 3, sign[m]);
+                k += 2;
+            } else if (core::note_at(t, k)) {   // s112: a footnote -- where its chip goes (U+FFFC, an anchor)
+                t.replace(k, 3, "\xEF\xBF\xBC");
                 k += 2;
             }
         text += t;
@@ -147,7 +152,88 @@ StoryEditor::StoryEditor(core::Doc& d, core::DocJournal& j)
     append(m_scroll);
 }
 
-StoryEditor::~StoryEditor() { m_pick.unparent(); }
+StoryEditor::~StoryEditor() {
+    m_pick.unparent();
+    m_note_pop.unparent();   // s112
+}
+
+// s112: each footnote mark as a chip -- its number; its words on hover;
+// click to edit them. The mark's place in the buffer is an anchor (U+FFFC,
+// three bytes like the mark), so places still map byte for byte.
+void StoryEditor::place_note_chips() {
+    const auto* st = m_doc.as<core::Story>(m_story);
+    if (!st) return;
+    auto buf = m_view.get_buffer();
+    const bool was = m_applying;
+    m_applying = true;
+    const auto style = m_doc.settings().note_style;
+    for (int p = 0; p < static_cast<int>(st->paras.size()) && p < buf->get_line_count(); ++p) {
+        const auto& para = st->paras[static_cast<std::size_t>(p)];
+        for (std::size_t i = para.text.find(core::kMarkNote); i != std::string::npos; i = para.text.find(core::kMarkNote, i + 3)) {
+            const int k = core::notes_in(para.text, 0, i);
+            auto it = buf->get_iter_at_line_index(p, static_cast<int>(i));
+            Glib::RefPtr<Gtk::TextChildAnchor> anchor = it.get_child_anchor();
+            if (!anchor) {   // the plain U+FFFC from the text: made an anchor
+                auto next = it;
+                next.forward_char();
+                it = buf->erase(it, next);
+                anchor = buf->create_child_anchor(it);
+            }
+            const std::string words = k < static_cast<int>(para.notes.size()) ? para.notes[static_cast<std::size_t>(k)].text : std::string{};
+            const std::string label = core::note_label(core::note_number(*st, p, k), style);
+            const std::string tip = "Footnote " + label + (words.empty() ? std::string(" (no words yet)") : ": " + words) +
+                                    "\nClick to edit its words";
+            const auto widgets = anchor->get_widgets();
+            if (!widgets.empty()) {   // already a chip: brought up to date
+                if (auto* b = dynamic_cast<Gtk::Button*>(widgets.front())) {
+                    b->set_label(label);
+                    b->set_tooltip_text(tip);
+                }
+                continue;
+            }
+            auto chip = Gtk::make_managed<Gtk::Button>(label);
+            chip->set_name("story.note");
+            chip->add_css_class("cx-note-chip");
+            chip->add_css_class("flat");
+            chip->set_tooltip_text(tip);
+            chip->set_focus_on_click(false);
+            const int pp = p, kk = k;
+            chip->signal_clicked().connect([this, pp, kk, chip] { edit_note(pp, kk, *chip); });
+            m_view.add_child_at_anchor(*chip, anchor);
+        }
+    }
+    m_applying = was;
+}
+
+void StoryEditor::edit_note(int para, int k, Gtk::Widget& chip) {
+    const auto* st = m_doc.as<core::Story>(m_story);
+    if (!st || para >= static_cast<int>(st->paras.size())) return;
+    const auto& pr = st->paras[static_cast<std::size_t>(para)];
+    const std::string words = k < static_cast<int>(pr.notes.size()) ? pr.notes[static_cast<std::size_t>(k)].text : std::string{};
+    if (m_note_pop.get_parent()) m_note_pop.unparent();
+    m_note_pop.set_parent(chip);
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+    box->set_margin(8);
+    auto head = Gtk::make_managed<Gtk::Label>("Footnote " + core::note_label(core::note_number(*st, para, k), m_doc.settings().note_style));
+    head->set_xalign(0);
+    head->add_css_class("heading");
+    auto entry = Gtk::make_managed<Gtk::Entry>();
+    entry->set_name("story.note.words");
+    entry->set_text(words);
+    entry->set_width_chars(48);
+    entry->set_placeholder_text("The note's words");
+    box->append(*head);
+    box->append(*entry);
+    m_note_pop.set_child(*box);
+    entry->signal_activate().connect([this] { m_note_pop.popdown(); });
+    m_note_conn.disconnect();
+    m_note_conn = m_note_pop.signal_closed().connect([this, para, k, entry] {
+        if (core::doc::set_note_text(m_journal, m_doc, m_story, para, k, entry->get_text())) m_edited.emit();
+    });
+    m_note_pop.popup();
+    entry->grab_focus();
+    entry->set_position(-1);   // the cursor after the words (not all of them selected)
+}
 
 void StoryEditor::pick_para_style(int para, double y) {
     const auto* st = m_doc.as<core::Story>(m_story);
@@ -229,7 +315,9 @@ void StoryEditor::model_changed() {
     if (!m_doc.as<core::Story>(m_story)) { m_story.clear(); load(); return; }
     if (!m_applying) {
         // Changed elsewhere: reload if the words differ.
-        if (m_view.get_buffer()->get_text(false).raw() != shown_text(*m_doc.as<core::Story>(m_story))) load();
+        auto b = m_view.get_buffer();   // (the slice: chips' anchors included)
+        if (b->get_slice(b->begin(), b->end(), true).raw() != shown_text(*m_doc.as<core::Story>(m_story))) load();
+        else place_note_chips();   // a note's words changed: its chip's tooltip
     }
     mark_overset();
     show_looks();
@@ -275,6 +363,7 @@ void StoryEditor::load() {
     const auto* st = m_doc.as<core::Story>(m_story);
     const std::string text = st ? shown_text(*st) : std::string{};
     buf->set_text(text);
+    place_note_chips();   // s112
     buf->place_cursor(buf->get_iter_at_offset(std::min(at, buf->end().get_offset())));
     m_applying = false;
     m_title.set_text(st ? "Story — " + st->name : "Story");

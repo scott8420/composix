@@ -195,6 +195,13 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                {"2", unit_label(Units::Picas)}, {"3", unit_label(Units::Points)}}},
                              {"Text wrap", st.wrap_beneath ? "Text beneath" : "All text", "dwrap",   // s069
                               {{"0", "All text"}, {"1", "Text beneath"}}},
+                             {"Footnotes", st.note_restart == NoteRestart::Page ? "Each page"   // s111
+                                           : st.note_restart == NoteRestart::Section ? "Each section" : "Through the story",
+                              "dnote_restart", {{"0", "Through the story"}, {"1", "Each page"}, {"2", "Each section"}}},
+                             {"Numbers", st.note_style == NoteStyle::RomanLower ? "i ii iii"
+                                         : st.note_style == NoteStyle::AlphaLower ? "a b c"
+                                         : st.note_style == NoteStyle::Symbols ? "* \u2020 \u2021" : "1 2 3",
+                              "dnote_style", {{"0", "1 2 3"}, {"1", "i ii iii"}, {"2", "a b c"}, {"3", "* \u2020 \u2021"}}},
                              {"Length", std::to_string(d.pages().size()) + (d.pages().size() == 1 ? " page" : " pages")}};
         mark_typed(f, unit_pt(d.settings().units));
         o.add({"doc", G::Document, "Document settings", "", {K::Section, 6, 9, 0x9a8f88}, f});

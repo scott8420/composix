@@ -52,6 +52,9 @@ private:
     void apply_char_style(const std::string& id);
     void apply_para_style(int para, const std::string& id);
     void draw_gutter(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
+    // s112: footnotes as chips in the text -- each mark an anchor holding its number.
+    void place_note_chips();
+    void edit_note(int para, int k, Gtk::Widget& chip);
 
     core::Doc&           m_doc;
     core::DocJournal&    m_journal;
@@ -65,6 +68,8 @@ private:
     Gtk::Popover         m_pick;        // s050: on the gutter (unparented in the destructor)
     Gtk::MenuButton      m_char_btn;    // s050: in the header
     Gtk::Popover         m_char_pop;
+    Gtk::Popover         m_note_pop;    // s112: a footnote's words (unparented in the destructor)
+    sigc::connection     m_note_conn;
     std::string          m_story;
     bool                 m_applying = false;   // our own edit: the reload would undo the cursor
     sigc::signal<void()> m_edited;
