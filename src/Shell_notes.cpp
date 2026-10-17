@@ -68,6 +68,15 @@ void Shell::edit_note(const std::string& story, int p, int k, int sel_a, int sel
         if (take_focus) Glib::signal_idle().connect_once([this] { m_canvas_view.canvas().grab_focus(); });
     });
     m_note_pop->popup();
+    // Fix after s120: a popover that didn't come up must not keep the pointer.
+    if (!m_note_pop->get_visible()) {
+        if (auto lg = log::get(log::Area::Shell)) lg->warn("footnote popover didn't show (canvas mapped {}) -- dropped", canvas.get_mapped());
+        m_note_pop->popdown();
+        m_note_pop->unparent();
+        m_note_pop.reset();
+        return;
+    }
+    if (auto lg = log::get(log::Area::Shell)) lg->info("footnote popover up: note {} of paragraph {}", k, p);
     if (sel_a >= 0 && sel_b >= sel_a) {   // bytes -> characters
         const auto chars = [&](int b) {
             return static_cast<int>(g_utf8_strlen(words.c_str(), std::clamp(b, 0, static_cast<int>(words.size()))));

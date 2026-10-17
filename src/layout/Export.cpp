@@ -159,12 +159,13 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
                     const auto& p = st->paras[static_cast<std::size_t>(np.para)];
                     std::string line = fid + "|note|" + std::to_string(np.number) + "|" + std::to_string(np.col) + "|" +
                                        std::to_string(np.y) + "|" + p.style + "|" + std::to_string(np.from) + "-" +
-                                       std::to_string(np.to) + (np.cont ? "c" : "") + "|";   // s117: its piece
-                    if (np.k < static_cast<int>(p.notes.size())) {
+                                       std::to_string(np.to) + (np.cont ? "c" : "") + (np.end ? "e" : "") + "|";   // s117: its piece; s120 an endnote
+                    if (np.k >= 0 && np.k < static_cast<int>(p.notes.size())) {
                         const auto& n = p.notes[static_cast<std::size_t>(np.k)];
                         for (const auto& r : n.runs) line += std::to_string(r.start) + "-" + std::to_string(r.end) + r.style + ",";
                         line += "|" + n.text;
                     }
+                    if (np.k == -1) line += "|" + d.settings().note_title;   // s120: the endnotes' title
                     k.lines.push_back(std::move(line));
                 }
             }

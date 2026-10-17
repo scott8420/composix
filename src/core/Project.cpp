@@ -229,6 +229,13 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                  c.text = true;
                                  return c;
                              }(),
+                             {"Notes at", st.note_at == NoteAt::StoryEnd ? "End of the story" : "Foot of the column",   // s120
+                              "dnote_at", {{"0", "Foot of the column"}, {"1", "End of the story"}}},
+                             [&] {
+                                 Field t{"Endnotes title", st.note_title, "dnote_title", {}};
+                                 t.text = true;
+                                 return t;
+                             }(),
                              {"Length", std::to_string(d.pages().size()) + (d.pages().size() == 1 ? " page" : " pages")}};
         mark_typed(f, unit_pt(d.settings().units));
         o.add({"doc", G::Document, "Document settings", "", {K::Section, 6, 9, 0x9a8f88}, f});

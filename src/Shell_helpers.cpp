@@ -271,7 +271,22 @@ void Shell::go_to_note(const std::string& id) {  // helper
     m_nav.select_items({f->owner});   // its page (or master) on the canvas
     m_canvas_view.canvas().select_text(c.frame, {p, m}, {p, m + 3}, true);
     if (auto lg = log::get(log::Area::Shell)) lg->info("footnotes: to {} (page {})", id, f->owner);
-    Glib::signal_idle().connect_once([this, story, p, k] { edit_note(story, p, k); });
+    // Fix after s120 (Scott: "the app locked up" opening a note from Footnotes,
+    // fine the next time): the words open only once the canvas is on screen
+    // with the caret shown -- a popover put up over a canvas the window
+    // hasn't shown yet can hold the pointer (Wayland) without appearing.
+    auto tries = std::make_shared<int>(0);
+    Glib::signal_timeout().connect([this, story, p, k, tries] {
+        auto& cv = m_canvas_view.canvas();
+        const auto r = cv.caret_screen();
+        const bool ready = cv.get_mapped() && cv.get_width() > 0 && r.w > 0;
+        if (!ready && ++*tries < 40) return true;   // up to 2 s
+        if (auto lg = log::get(log::Area::Shell))
+            lg->info("footnotes: words open after {} wait(s) -- canvas mapped {}, {}x{}, caret ({:.0f},{:.0f}) shown {}", *tries,
+                     cv.get_mapped(), cv.get_width(), cv.get_height(), r.x, r.y, r.w > 0);
+        if (ready) edit_note(story, p, k);
+        return false;
+    }, 50);
 }
 
 bool Shell::open_project(const std::string& dir) {  // helper

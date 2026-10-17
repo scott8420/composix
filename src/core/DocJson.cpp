@@ -51,6 +51,8 @@ json to(const Record& r) {
             if (v.note_rule_w != 0.5) j["note_rule_w"] = v.note_rule_w;
             if (v.note_space != 0) j["note_space"] = v.note_space;
             if (!v.note_cont.empty()) j["note_cont"] = v.note_cont;
+            if (v.note_at != NoteAt::Foot) j["note_at"] = static_cast<int>(v.note_at);   // s120
+            if (v.note_title != "Notes") j["note_title"] = v.note_title;
             if (!v.exp.mark_lists.empty()) j["export"]["mark_lists"] = v.exp.mark_lists;   // s082
             if (v.exp.spreads) j["export"]["spreads"] = true;                              // s084
             if (v.exp.perceptual) j["export"]["perceptual"] = true;                        // s085
@@ -210,6 +212,8 @@ std::optional<Record> from(const json& j) {
         v.note_rule_w = std::clamp(val(j, "note_rule_w", 0.5), 0.1, 6.0);
         v.note_space = std::clamp(val(j, "note_space", 0.0), 0.0, 36.0);
         v.note_cont = val(j, "note_cont", std::string{});
+        v.note_at = static_cast<NoteAt>(std::clamp(val(j, "note_at", 0), 0, 1));   // s120
+        v.note_title = val(j, "note_title", std::string("Notes"));
         if (j.contains("export")) {   // s032
             const auto& e = j.at("export");
             v.exp = {val(e, "print", true), val(e, "bleed", true), val(e, "marks", false),

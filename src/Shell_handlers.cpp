@@ -980,6 +980,12 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             else if (key == "dnote_space") sp = std::stod(choice);
             else cont = choice;
             did = core::doc::set_note_look(m_journal, m_doc, rule, w, sp, cont);
+        } else if (key == "dnote_at" || key == "dnote_title") {   // s120
+            auto at = m_doc.settings().note_at;
+            auto title = m_doc.settings().note_title;
+            if (key == "dnote_at") at = choice == "1" ? core::NoteAt::StoryEnd : core::NoteAt::Foot;
+            else title = choice;
+            did = core::doc::set_note_place(m_journal, m_doc, at, title);
         } else if (key == "dnote_area") {   // s117
             did = core::doc::set_note_area(m_journal, m_doc, static_cast<int>(std::lround(std::stod(choice))));
         } else if (key == "dfacing") {

@@ -6811,6 +6811,121 @@ int main() {
         check("running on: the number of its first piece", pieces >= 2 && L::laid_note_number(flows.get(d, "story.1"), 1, 0) == 1);
     }
 
+    {
+        std::cout << "\n-- endnotes (s120) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::insert_note(j, d, "story.1", {1, 4}, "The first, on page 1.");   // the sample's own (Chapter Two) is second
+        check("notes at: one step, kept", D::set_note_place(j, d, core::NoteAt::StoryEnd, "Notes") &&
+                                          !D::set_note_place(j, d, core::NoteAt::StoryEnd, "Notes"));
+        {
+            core::Doc e;
+            std::string err;
+            D::set_note_place(j, d, core::NoteAt::StoryEnd, "Endnotes");
+            check("json: endnotes and their title kept", core::from_json(e, core::to_json(d), &err) &&
+                                                         e.settings().note_at == core::NoteAt::StoryEnd && e.settings().note_title == "Endnotes", err);
+            D::set_note_place(j, d, core::NoteAt::StoryEnd, "Notes");
+        }
+        D::set_note_numbering(j, d, core::NoteRestart::Page, core::NoteStyle::Arabic);   // endnotes count through the story anyway
+        const auto check_flow = [&](const L::StoryFlow& f, std::vector<const L::NotePlace*>* all, bool* inside, bool* after, bool* clear) {
+            *inside = *after = *clear = true;
+            for (const auto& ft : f.frames) {
+                const auto* fr = d.as<core::Frame>(ft.frame);
+                double last = 0;
+                for (const auto& l : ft.lines) last = std::max(last, l.y + l.h);
+                for (const auto& np : ft.notes) {
+                    all->push_back(&np);
+                    *inside = *inside && np.y >= -0.01 && np.y + np.h <= fr->h - std::max(0.0, fr->inset.bottom) + 0.01;
+                    *after = *after && np.y >= last - 0.01;
+                    for (const auto& l : ft.lines) if (l.col == np.col && l.y + l.h > np.y + 0.01 && l.y < np.y + np.h - 0.01) *clear = false;
+                }
+            }
+        };
+        L::FlowCache flows;
+        std::vector<const L::NotePlace*> all;
+        bool inside = false, after = false, clear = false;
+        check_flow(flows.get(d, "story.1"), &all, &inside, &after, &clear);
+        check("endnotes: the title, then each note in story order, numbered 1, 2",
+              all.size() == 3 && all[0]->k == -1 && all[1]->para == 1 && all[1]->number == 1 && all[2]->para == 5 && all[2]->number == 2 &&
+                  std::all_of(all.begin(), all.end(), [](const L::NotePlace* n) { return n->end; }));
+        check("endnotes: after the text, inside the frame, clear of it", inside && after && clear);
+        check("the marks: numbered through the story", L::laid_note_number(flows.get(d, "story.1"), 1, 0) == 1 &&
+                                                       L::laid_note_number(flows.get(d, "story.1"), 5, 0) == 2);
+        {
+            int drawn = 0;
+            const auto& f = flows.get(d, "story.1");
+            for (const auto& ft : f.frames) L::visit_lines(d, "story.1", f, ft.frame, [&](const L::LineVisit& v) { drawn += v.from == -4; });
+            check("endnotes drawn (title and notes)", drawn >= 3);
+            bool foot_rule = false;
+            for (const auto& ft : f.frames)
+                for (const auto& r : L::paragraph_rules(d, "story.1", f, ft.frame))
+                    for (const auto& np : ft.notes) if (r.r.y < np.y && r.r.y > np.y - 12 && r.r.h <= 0.6) foot_rule = true;
+            check("no footnote rule over endnotes", !foot_rule);
+        }
+        D::set_note_place(j, d, core::NoteAt::StoryEnd, "");
+        all.clear();
+        check_flow(flows.get(d, "story.1"), &all, &inside, &after, &clear);
+        check("no title set: none", all.size() == 2 && all[0]->k == 0);
+        // A long endnote runs on: its pieces chained, in order (overset past the last frame).
+        std::string longw;
+        for (int i = 1; i <= 60; ++i) longw += "Clause " + std::to_string(i) + " of the harbour ordinance applies to every vessel. ";
+        D::set_note_text(j, d, "story.1", 5, 0, longw);
+        all.clear();
+        const auto& lf = flows.get(d, "story.1");
+        check_flow(lf, &all, &inside, &after, &clear);
+        std::vector<const L::NotePlace*> pcs;
+        for (auto* n : all) if (n->para == 5 && n->k == 0) pcs.push_back(n);
+        bool chain = !pcs.empty() && pcs.front()->from == 0;
+        for (std::size_t i = 1; i < pcs.size(); ++i) chain = chain && pcs[i]->from == pcs[i - 1]->to && pcs[i]->cont;
+        check("a long endnote: cut where the last frame ends, the rest overset (chained)",
+              !pcs.empty() && chain && pcs.back()->to > 0 && lf.overset, std::to_string(pcs.size()) + " pieces");
+        check("long: inside, after the text, clear", inside && after && clear);
+        {   // The last frame in two columns: the endnote runs on into the second.
+            const auto last = L::thread_frames(d, "story.1").back();
+            core::doc::edit_frames(j, d, {last}, "Columns", [](core::Frame& f) { f.columns = 2; });
+            std::vector<const L::NotePlace*> two;
+            bool in2 = false, af2 = false, cl2 = false;
+            const auto& f2 = flows.get(d, "story.1");
+            check_flow(f2, &two, &in2, &af2, &cl2);
+            std::vector<const L::NotePlace*> p2;
+            for (auto* n : two) if (n->para == 5 && n->k == 0) p2.push_back(n);
+            bool ch = !p2.empty() && p2.front()->from == 0;
+            for (std::size_t i = 1; i < p2.size(); ++i) ch = ch && p2[i]->from == p2[i - 1]->to && p2[i]->cont && p2[i]->col > p2[i - 1]->col;
+            check("two columns: the endnote runs on into the next column", p2.size() >= 2 && ch && in2 && cl2, std::to_string(p2.size()));
+            j.undo();
+        }
+        // Re-flow after an edit == whole.
+        {
+            const core::Story before = *d.as<core::Story>("story.1");
+            const auto old = L::flow_story(d, "story.1");
+            D::edit_text(j, d, "story.1", {3, 0}, {3, 0}, "Late that night ", "Typing", "");
+            const auto re = L::reflow_story(d, "story.1", before, old);
+            const auto wf = L::flow_story(d, "story.1");
+            bool same = re.frames.size() == wf.frames.size() && re.overset == wf.overset;
+            for (std::size_t i = 0; same && i < re.frames.size(); ++i) {
+                same = re.frames[i].notes.size() == wf.frames[i].notes.size() && re.frames[i].lines.size() == wf.frames[i].lines.size() &&
+                       re.frames[i].ending_in == wf.frames[i].ending_in;
+                for (std::size_t k = 0; same && k < re.frames[i].notes.size(); ++k)
+                    same = re.frames[i].notes[k].from == wf.frames[i].notes[k].from && std::abs(re.frames[i].notes[k].y - wf.frames[i].notes[k].y) < 1e-9;
+            }
+            check("re-flow with endnotes == whole flow", same);
+        }
+        // Back to the foot: no endnotes left behind.
+        D::set_note_place(j, d, core::NoteAt::Foot, "Notes");
+        bool any_end = false;
+        for (const auto& ft : flows.get(d, "story.1").frames) for (const auto& np : ft.notes) any_end = any_end || np.end;
+        check("back to the foot: none set as endnotes", !any_end);
+        // A story with no notes: no title.
+        D::set_note_place(j, d, core::NoteAt::StoryEnd, "Notes");
+        bool none = true;
+        for (const auto& ft : flows.get(d, "story.2").frames) none = none && ft.notes.empty();
+        check("no notes: no endnotes title", none);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

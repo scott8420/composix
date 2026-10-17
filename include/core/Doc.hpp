@@ -107,6 +107,9 @@ struct SavedQuery {
 // starting again on each page / in each section; and how a number looks.
 enum class NoteRestart { Story, Page, Section };
 enum class NoteStyle   { Arabic, RomanLower, AlphaLower, Symbols };
+// s120: where notes are set -- each column's foot, or all of them after the
+// story's last paragraph (endnotes, numbered through the story).
+enum class NoteAt { Foot, StoryEnd };
 
 struct Settings {
     std::string title  = "Untitled";
@@ -131,6 +134,8 @@ struct Settings {
     double      note_rule_w  = 0.5;
     double      note_space   = 0;
     std::string note_cont;
+    NoteAt      note_at    = NoteAt::Foot;   // s120
+    std::string note_title = "Notes";        // s120: over the endnotes ("" none)
     bool operator==(const Settings&) const = default;
 };
 
@@ -661,6 +666,8 @@ bool set_note_area(DocJournal& j, Doc& d, int percent);
 // s118: the foot's look -- rule (percent 0..100), its weight (0.1..6 pt),
 // space between notes (0..36 pt), the continued line. One step.
 bool set_note_look(DocJournal& j, Doc& d, int rule, double rule_w, double space, const std::string& cont);
+// s120: where notes go, and the endnotes' title. One step.
+bool set_note_place(DocJournal& j, Doc& d, NoteAt at, const std::string& title);
 // s073: the document's display unit. One step.
 bool set_units(DocJournal& j, Doc& d, Units u);
 // s078: keep a query under its name (trimmed, not empty; the same name is

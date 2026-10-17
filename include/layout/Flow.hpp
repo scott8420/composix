@@ -66,6 +66,9 @@ struct NotePlace {
     // `cont`: run on from a column before (no number; a full-width rule).
     int    from = 0, to = -1;
     bool   cont = false;
+    // s120: an endnote -- set in the text's column after the story's end, not
+    // at the foot. k -1: the endnotes' title.
+    bool   end = false;
 };
 
 // s117: a note running on -- the rest of paragraph `para`'s k-th note, from
@@ -86,6 +89,7 @@ struct FrameText {
     std::string       page_before;
     int               note_from = 0;   // s111: notes numbered on its page (section) before it, when numbering restarts
     std::vector<NoteRun> carry_in;     // s117: notes running on into this frame
+    bool              ending_in = false;   // s120: ... as endnotes (the story's text ended before it)
 };
 
 struct StoryFlow {
