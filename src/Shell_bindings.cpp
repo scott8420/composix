@@ -241,13 +241,18 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
         m_nav.select_items({page});
         m_canvas_view.canvas().grab_focus();
     });
-    // s052: the Colors view's size, kept between runs.
+    // s052: the Colors view's size, kept between runs; s080: every
+    // section's, under "<section>.view" ("colors.view" as before).
     {
-        const auto it = m_settings.find("colors.view");   // (find: reading adds no empty key)
-        const std::string v = it == m_settings.end() ? std::string{} : it->second;
-        m_tiles.set_tile_size(v == "small" ? views::TileSize::Small : v == "list" ? views::TileSize::List : views::TileSize::Large);
-        m_tiles.signal_tile_size().connect([this](views::TileSize z) {
-            m_settings["colors.view"] = z == views::TileSize::Small ? "small" : z == views::TileSize::List ? "list" : "large";
+        for (const auto& si : core::segments()) {
+            const auto it = m_settings.find(si.key + ".view");   // (find: reading adds no empty key)
+            const std::string v = it == m_settings.end() ? std::string{} : it->second;
+            m_tiles.set_tile_size(si.id, v == "small" ? views::TileSize::Small : v == "list" ? views::TileSize::List
+                                                                                              : views::TileSize::Large);
+        }
+        m_tiles.signal_tile_size().connect([this](core::Segment s, views::TileSize z) {
+            m_settings[core::segment_info(s).key + ".view"] =
+                z == views::TileSize::Small ? "small" : z == views::TileSize::List ? "list" : "large";
             core::save_settings(m_settings_file, m_settings);
         });
     }

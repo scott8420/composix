@@ -86,6 +86,7 @@ void Shell::build_ui() {
 // s057: the window's size and the side panels, kept between runs.
 void Shell::restore_window() {  // helper
     const auto& st = m_settings;
+    m_newdoc = core::new_from_settings(st);   // s079: the New sheet as it was last used
     set_default_size(core::setting_int(st, "window.width", 1280, 640, 10000),
                      core::setting_int(st, "window.height", 820, 480, 10000));
     if (core::setting_int(st, "window.maximized", 0, 0, 1)) maximize();

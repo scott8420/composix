@@ -5,6 +5,9 @@
 #include <gtkmm/button.h>
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/stringlist.h>
+#include <gtkmm/menubutton.h>
+#include <gtkmm/popover.h>
+#include <gtkmm/entry.h>
 #include <algorithm>
 
 // Shell_find.cpp -- s022: Find / Change. A bar over the main area (Ctrl+F):
@@ -127,6 +130,42 @@ void Shell::build_find_bar() {  // zone
     r4->append(*m_find_mode);
     r4->append(*scl);
     r4->append(*m_find_scope);
+    {   // s078: saved queries -- load one; save this one under a name.
+        auto mb = Gtk::make_managed<Gtk::MenuButton>();
+        mb->set_name("find.saved");
+        mb->set_label("Saved");
+        mb->set_tooltip_text("Saved queries -- kept with the document");
+        m_find_saved_pop = Gtk::make_managed<Gtk::Popover>();
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+        box->set_margin(6);
+        m_find_saved_list = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 2);
+        m_find_saved_list->set_name("find.saved.list");
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        m_find_saved_name = Gtk::make_managed<Gtk::Entry>();
+        m_find_saved_name->set_name("find.saved.name");
+        m_find_saved_name->set_placeholder_text("Name this query");
+        auto save = Gtk::make_managed<Gtk::Button>("Save");
+        save->set_name("find.saved.save");
+        const auto do_save = [this] {
+            auto q = find_capture();
+            q.name = m_find_saved_name->get_text();
+            if (core::doc::save_query(m_journal, m_doc, q)) {
+                if (auto lg = log::get(log::Area::Shell)) lg->info("find: saved query '{}'", q.name);
+                m_find_saved_name->set_text("");
+                find_saved_fill();
+            }
+        };
+        save->signal_clicked().connect(do_save);
+        m_find_saved_name->signal_activate().connect(do_save);
+        row->append(*m_find_saved_name);
+        row->append(*save);
+        box->append(*m_find_saved_list);
+        box->append(*row);
+        m_find_saved_pop->set_child(*box);
+        m_find_saved_pop->signal_show().connect([this] { find_saved_fill(); });
+        mb->set_popover(*m_find_saved_pop);
+        r4->append(*mb);
+    }
 
     bar->append(*r1);
     bar->append(*r2);
@@ -158,7 +197,12 @@ void Shell::build_find_bar() {  // zone
     close->signal_clicked().connect([this] { m_find_rev->set_reveal_child(false); });
     auto keys = Gtk::EventControllerKey::create();
     keys->signal_key_pressed().connect([this](guint kv, guint, Gdk::ModifierType st) {
-        if (kv == GDK_KEY_Escape) { m_find_rev->set_reveal_child(false); return true; }
+        if (kv == GDK_KEY_Escape) {
+            // s078: Esc in the Saved popover closes just that (its keys reach the bar too).
+            if (m_find_saved_pop && m_find_saved_pop->get_visible()) { m_find_saved_pop->popdown(); return true; }
+            m_find_rev->set_reveal_child(false);
+            return true;
+        }
         if ((kv == GDK_KEY_Return || kv == GDK_KEY_KP_Enter) && (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK) {
             find_go(-1);
             return true;
@@ -362,6 +406,80 @@ void Shell::on_story_editor() {  // handler
     m_nav.set_open(core::Segment::Stories, true);
     m_nav.select_items({story});
     m_story_ed.focus_text();
+}
+
+}  // namespace composix
+
+namespace composix {
+
+// s078: the bar's settings as a query (styles by id, "" = any / leave).
+core::SavedQuery Shell::find_capture() const {  // helper
+    core::SavedQuery q;
+    q.what = m_find_what->get_text();
+    q.with = m_find_with->get_text();
+    q.match_case = m_find_case->get_active();
+    q.whole_word = m_find_word->get_active();
+    q.mode = static_cast<int>(std::min(2u, m_find_mode->get_selected()));
+    q.format = static_cast<int>(std::min(3u, m_find_format->get_selected()));
+    if (const auto i = m_find_in->get_selected(); i > 0 && i - 1 < m_find_styles.size()) q.in_style = m_find_styles[i - 1];
+    if (const auto i = m_find_apply->get_selected(); i > 0 && i - 1 < m_find_styles.size()) q.apply_style = m_find_styles[i - 1];
+    return q;
+}
+
+// s078: a saved query into the bar -- a style that's gone reads as Any / Leave.
+void Shell::find_load(const core::SavedQuery& q) {  // helper
+    const auto at = [this](const std::string& id) -> guint {
+        for (std::size_t k = 0; k < m_find_styles.size(); ++k) if (m_find_styles[k] == id) return static_cast<guint>(k + 1);
+        return 0;
+    };
+    m_find_what->set_text(q.what);
+    m_find_with->set_text(q.with);
+    m_find_case->set_active(q.match_case);
+    m_find_word->set_active(q.whole_word);
+    m_find_mode->set_selected(static_cast<guint>(std::clamp(q.mode, 0, 2)));
+    m_find_format->set_selected(static_cast<guint>(std::clamp(q.format, 0, 3)));
+    m_find_in->set_selected(q.in_style.empty() ? 0 : at(q.in_style));
+    m_find_apply->set_selected(q.apply_style.empty() ? 0 : at(q.apply_style));
+    m_hits_rev = ~0ull;
+    find_refresh();
+    if (!m_hits.empty()) find_show(0, false);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("find: loaded query '{}' -> {} hit(s)", q.name, m_hits.size());
+}
+
+// s078: the Saved popover's rows -- a button to load each, an x to delete it.
+void Shell::find_saved_fill() {  // helper
+    if (!m_find_saved_list) return;
+    while (auto* c = m_find_saved_list->get_first_child()) m_find_saved_list->remove(*c);
+    const auto& qs = m_doc.settings().queries;
+    if (qs.empty()) {
+        auto none = Gtk::make_managed<Gtk::Label>("None saved yet");
+        none->add_css_class("cx-export-note");
+        m_find_saved_list->append(*none);
+        return;
+    }
+    for (const auto& q : qs) {
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 2);
+        auto load = Gtk::make_managed<Gtk::Button>(q.name);
+        load->add_css_class("flat");
+        load->set_hexpand(true);
+        if (auto* lab = dynamic_cast<Gtk::Label*>(load->get_child())) lab->set_xalign(0.0f);
+        load->set_tooltip_text(q.what.empty() ? "(formatting only)" : "Find: " + q.what);
+        const auto name = q.name;
+        load->signal_clicked().connect([this, name] {
+            for (const auto& x : m_doc.settings().queries)
+                if (x.name == name) { const auto copy = x; m_find_saved_pop->popdown(); find_load(copy); break; }
+        });
+        auto del = Gtk::make_managed<Gtk::Button>();
+        del->set_icon_name("window-close-symbolic");
+        del->add_css_class("flat");
+        del->set_tooltip_text("Delete this saved query");
+        del->signal_clicked().connect([this, name] {
+            if (core::doc::delete_query(m_journal, m_doc, name)) find_saved_fill();
+        });
+        row->append(*load);
+        row->append(*del);
+        m_find_saved_list->append(*row);
+    }
 }
 
 }  // namespace composix

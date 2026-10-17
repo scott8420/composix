@@ -2,6 +2,7 @@
 // sample it is LOADED: every write inside a Doc::Loading scope, no step.
 #include "core/Doc.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace composix::core {
@@ -45,6 +46,56 @@ std::string check_new(const NewDoc& n) {
     return {};
 }
 
+void new_to_settings(const NewDoc& n, AppSettings& s) {   // s079
+    s["new.trim_w"] = num_text(n.trim_w);
+    s["new.trim_h"] = num_text(n.trim_h);
+    s["new.pages"] = std::to_string(n.pages);
+    s["new.facing"] = n.facing ? "1" : "0";
+    s["new.m_top"] = num_text(n.margins.top);
+    s["new.m_bottom"] = num_text(n.margins.bottom);
+    s["new.m_inside"] = num_text(n.margins.inside);
+    s["new.m_outside"] = num_text(n.margins.outside);
+    s["new.columns"] = std::to_string(n.columns);
+    s["new.gutter"] = num_text(n.gutter);
+    s["new.bleed"] = num_text(n.bleed);
+    s["new.frames"] = n.text_frames ? "1" : "0";
+    s["new.folios"] = n.folios ? "1" : "0";
+    s["new.units"] = std::to_string(static_cast<int>(n.units));
+}
+
+NewDoc new_from_settings(const AppSettings& s) {   // s079
+    NewDoc n;
+    const auto num = [&](const char* key, double fallback, double lo, double hi) {
+        const auto it = s.find(key);
+        if (it == s.end()) return fallback;
+        try {
+            std::size_t used = 0;
+            const double v = std::stod(it->second, &used);
+            if (used != it->second.size() || !std::isfinite(v)) return fallback;
+            return std::clamp(v, lo, hi);
+        } catch (...) { return fallback; }
+    };
+    const auto flag = [&](const char* key, bool fallback) {
+        const auto it = s.find(key);
+        return it == s.end() ? fallback : it->second == "1";
+    };
+    n.trim_w = num("new.trim_w", n.trim_w, 36, 5000);
+    n.trim_h = num("new.trim_h", n.trim_h, 36, 5000);
+    n.pages = static_cast<int>(num("new.pages", n.pages, 1, 2000));
+    n.facing = flag("new.facing", n.facing);
+    n.margins.top = num("new.m_top", n.margins.top, 0, 2500);
+    n.margins.bottom = num("new.m_bottom", n.margins.bottom, 0, 2500);
+    n.margins.inside = num("new.m_inside", n.margins.inside, 0, 2500);
+    n.margins.outside = num("new.m_outside", n.margins.outside, 0, 2500);
+    n.columns = static_cast<int>(num("new.columns", n.columns, 1, 12));
+    n.gutter = num("new.gutter", n.gutter, 0, 72);
+    n.bleed = num("new.bleed", n.bleed, 0, 72);
+    n.text_frames = flag("new.frames", n.text_frames);
+    n.folios = flag("new.folios", n.folios);
+    n.units = static_cast<Units>(static_cast<int>(num("new.units", 0, 0, 3)));
+    return n;
+}
+
 bool new_document(Doc& d, const NewDoc& n) {
     if (!check_new(n).empty()) return false;
     d.reset();
@@ -56,6 +107,7 @@ bool new_document(Doc& d, const NewDoc& n) {
     s.trim_h = n.trim_h;
     s.bleed = n.bleed;
     s.facing = n.facing;
+    s.units = n.units;   // s079
     d.put("doc", s);
 
     Master m{"A", "Master", 1, n.trim_w, n.trim_h, {}, n.columns, ""};

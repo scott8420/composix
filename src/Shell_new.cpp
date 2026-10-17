@@ -53,12 +53,16 @@ struct NewForm {
     Gtk::SpinButton*  bleed = nullptr;
     Gtk::CheckButton* frames = nullptr;
     Gtk::CheckButton* folios = nullptr;
+    Gtk::DropDown*    units = nullptr;   // s079: the sheet's (and the document's) unit
+    core::Units       u = core::Units::Inches;
+    Gtk::Label*       wh_unit = nullptr;
+    Gtk::Label*       bleed_lab = nullptr;
     Gtk::Label*       note = nullptr;
     Gtk::Button*      go = nullptr;
     bool              syncing = false;
 
     core::NewDoc read() const {
-        const double in = core::kPt;
+        const double in = core::unit_pt(u);   // s079: the boxes are in the sheet's unit
         core::NewDoc n;
         n.title = title->get_text();
         n.trim_w = w->get_value() * in;
@@ -71,7 +75,32 @@ struct NewForm {
         n.bleed = bleed->get_value() * in;
         n.text_frames = frames->get_active();
         n.folios = folios->get_active();
+        n.units = u;
         return n;
+    }
+    // s079: the length boxes in unit `to` -- values kept as lengths, ranges,
+    // steps and decimals to suit it.
+    void set_unit(core::Units to) {
+        const double from_pt = core::unit_pt(u), to_pt = core::unit_pt(to);
+        struct B { Gtk::SpinButton* s; double lo_in, hi_in; };
+        const B boxes[] = {{w, 1, 50}, {h, 1, 50}, {top, 0, 10}, {bottom, 0, 10}, {inside, 0, 10}, {outside, 0, 10}, {bleed, 0, 1}};
+        double step = 0.125;
+        int digits = 3;
+        switch (to) {
+        case core::Units::Millimetres: step = 1; digits = 2; break;
+        case core::Units::Picas:       step = 1; digits = 2; break;
+        case core::Units::Points:      step = 1; digits = 1; break;
+        default: break;
+        }
+        for (const auto& b : boxes) {
+            const double pts = b.s->get_value() * from_pt;
+            const double st = (b.s == bleed && to == core::Units::Inches) ? 0.0625 : step;
+            b.s->set_digits(static_cast<guint>(b.s == bleed && to == core::Units::Inches ? 4 : digits));
+            b.s->set_adjustment(Gtk::Adjustment::create(pts / to_pt, b.lo_in * core::kPt / to_pt, b.hi_in * core::kPt / to_pt, st, st * 4));
+        }
+        u = to;
+        if (wh_unit) wh_unit->set_text(core::unit_name(to));
+        if (bleed_lab) bleed_lab->set_text("Bleed (" + core::unit_name(to) + ")");
     }
 };
 
@@ -148,6 +177,7 @@ void Shell::show_new_sheet() {  // helper
         auto x = Gtk::make_managed<Gtk::Label>("×");
         auto unit = Gtk::make_managed<Gtk::Label>("in");
         unit->add_css_class("cx-field-label");
+        f->wh_unit = unit;
         wh->append(*f->w);
         wh->append(*x);
         wh->append(*f->h);
@@ -194,7 +224,16 @@ void Shell::show_new_sheet() {  // helper
     ++row;
 
     f->bleed = spin("new.bleed", 0, 1, 0.0625, 4, m_newdoc.bleed / in);
-    put("Bleed (in)", *f->bleed, 1);
+    f->bleed_lab = label("Bleed (in)");
+    grid->attach(*f->bleed_lab, 0, row);
+    grid->attach(*f->bleed, 1, row);
+    {   // s079: the unit -- the boxes above follow it, and so does the document.
+        f->units = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Inches", "Millimetres", "Picas", "Points"}));
+        f->units->set_name("new.units");
+        grid->attach(*label("Units"), 2, row);
+        grid->attach(*f->units, 3, row);
+    }
+    ++row;
 
     f->frames = Gtk::make_managed<Gtk::CheckButton>("A text frame on every page, threaded");
     f->frames->set_name("new.frames");
@@ -239,7 +278,7 @@ void Shell::show_new_sheet() {  // helper
         const double lw = n.trim_w - n.margins.inside - n.margins.outside;
         const double lh = n.trim_h - n.margins.top - n.margins.bottom;
         f->note->set_text(std::to_string(n.pages) + (n.pages == 1 ? " page, " : " pages, ") +
-                          core::size_text(n.trim_w, n.trim_h, 0) + "; text area " + core::size_text(lw, lh, 0) + ".");
+                          core::size_text(n.trim_w, n.trim_h, 0, n.units) + "; text area " + core::size_text(lw, lh, 0, n.units) + ".");
         f->inside_lab->set_text(n.facing ? "Inside" : "Left");
         f->outside_lab->set_text(n.facing ? "Outside" : "Right");
     };
@@ -248,8 +287,8 @@ void Shell::show_new_sheet() {  // helper
         f->syncing = true;
         guint at = static_cast<guint>(presets.size());   // Custom
         for (std::size_t i = 0; i < presets.size(); ++i)
-            if (std::abs(presets[i].w / core::kPt - f->w->get_value()) < 0.002 &&
-                std::abs(presets[i].h / core::kPt - f->h->get_value()) < 0.002) at = static_cast<guint>(i);
+            if (std::abs(presets[i].w - f->w->get_value() * core::unit_pt(f->u)) < 0.15 &&
+                std::abs(presets[i].h - f->h->get_value() * core::unit_pt(f->u)) < 0.15) at = static_cast<guint>(i);
         f->size->set_selected(at);
         f->syncing = false;
         check();
@@ -259,16 +298,27 @@ void Shell::show_new_sheet() {  // helper
         const auto i = f->size->get_selected();
         if (i < presets.size()) {
             f->syncing = true;
-            f->w->set_value(presets[i].w / core::kPt);
-            f->h->set_value(presets[i].h / core::kPt);
+            f->w->set_value(presets[i].w / core::unit_pt(f->u));
+            f->h->set_value(presets[i].h / core::unit_pt(f->u));
             f->syncing = false;
         }
         check();
     });
+    // (Reconnected when the unit changes: set_adjustment keeps the button's
+    // own value-changed signal, so these hold.)
     f->w->signal_value_changed().connect(match_preset);
     f->h->signal_value_changed().connect(match_preset);
     for (auto* s : {f->pages, f->top, f->bottom, f->inside, f->outside, f->columns, f->gutter, f->bleed})
         s->signal_value_changed().connect(check);
+    // s079: the remembered unit, then any change of it converts the boxes.
+    f->set_unit(m_newdoc.units);
+    f->units->set_selected(static_cast<guint>(m_newdoc.units));
+    f->units->property_selected().signal_changed().connect([f, match_preset] {
+        f->syncing = true;
+        f->set_unit(static_cast<core::Units>(std::min(3u, f->units->get_selected())));
+        f->syncing = false;
+        match_preset();
+    });
     f->facing->signal_toggled().connect(check);
     f->title->signal_changed().connect(check);
     match_preset();
@@ -286,6 +336,9 @@ void Shell::show_new_sheet() {  // helper
         core::Doc fresh;
         if (!core::new_document(fresh, n)) return;   // the note already says why
         m_newdoc = n;
+        // s079: the choices kept for next time (not the name).
+        core::new_to_settings(n, m_settings);
+        if (!m_settings_file.empty()) core::save_settings(m_settings_file, m_settings);
         m_new->set_visible(false);
         adopt(fresh, "");
         if (auto lg = log::get(log::Area::Shell))

@@ -152,7 +152,10 @@ private:
     void find_go(int dir);                        // category: helper: s022 -- next / previous hit, shown on the canvas
     void find_show(int i, bool focus);            // category: helper: s022 -- one hit, on its page, selected
     void find_change(bool all);                   // category: helper: s022 -- Change / Change All (one step)
-    void find_status(const std::string& extra = {});  // category: helper: s022 -- "3 of 12"
+    void find_status(const std::string& extra = {});
+    core::SavedQuery find_capture() const;        // category: helper: s078 -- the bar's settings, as a query
+    void find_load(const core::SavedQuery& q);    // category: helper: s078 -- a saved query into the bar
+    void find_saved_fill();                       // category: helper: s078 -- the Saved popover's list, afresh  // category: helper: s022 -- "3 of 12"
     bool save_to(const std::string& dir);         // category: helper: write + remember + clean
     void set_dirty(bool d);                       // category: helper
     void update_title();                          // category: helper: the header's two lines
@@ -312,6 +315,9 @@ private:
     core::TextPos                    m_find_from, m_find_to;
     std::string                      m_find_bad;                // s056: why nothing can be found (a bad pattern ...)
     Gtk::Label*                      m_find_count = nullptr;
+    Gtk::Popover*                    m_find_saved_pop = nullptr;   // s078: saved queries
+    Gtk::Box*                        m_find_saved_list = nullptr;
+    Gtk::Entry*                      m_find_saved_name = nullptr;
     std::vector<std::string>         m_find_styles;   // the dropdowns' ids after "Any" / "Leave"
     std::vector<core::doc::Hit>      m_hits;
     int                              m_hit = -1;

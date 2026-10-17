@@ -2740,6 +2740,97 @@ int main() {
     }
 
     {
+        std::cout << "\n-- paste through Next style (s081) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // Two paragraph styles: A -> next B, B -> next B (none set: itself).
+        core::Doc::Id A, B;
+        for (const auto& id : d.ids_of<core::Style>())
+            if (d.as<core::Style>(id)->kind == core::StyleKind::Paragraph) { if (A.empty()) A = id; else if (B.empty() && id != A) B = id; }
+        check("sample: two paragraph styles", !A.empty() && !B.empty());
+        core::doc::edit_styles(j, d, {A}, "Next style", [&](core::Style& s) { s.next = B; });
+        core::doc::edit_styles(j, d, {B}, "Next style", [&](core::Style& s) { s.next.clear(); });
+        // A paragraph in A, at its end: paste three lines.
+        core::doc::set_para_style(j, d, "story.1", {1, 0}, {1, 0}, A);
+        const int end = static_cast<int>(d.as<core::Story>("story.1")->paras.at(1).text.size());
+        const auto n0 = d.as<core::Story>("story.1")->paras.size();
+        core::doc::edit_text(j, d, "story.1", {1, end}, {1, end}, "\nTitle two\nBody one\nBody two", "Paste");
+        const auto& ps = d.as<core::Story>("story.1")->paras;
+        check("paste: three new paragraphs", ps.size() == n0 + 3);
+        check("paste at an end: A, then its Next (B), then B's (B)", ps.at(1).style == A && ps.at(2).style == B &&
+                                                                     ps.at(3).style == B && ps.at(4).style == B);
+        // Into the middle of an A paragraph: the last piece is that paragraph's rest -- it stays A.
+        core::doc::set_para_style(j, d, "story.1", {1, 0}, {1, 0}, A);
+        core::doc::edit_text(j, d, "story.1", {1, 3}, {1, 3}, "x\ny\nz", "Paste");
+        const auto& p2 = d.as<core::Story>("story.1")->paras;
+        check("paste mid-paragraph: the middle takes Next, the rest keeps A", p2.at(1).style == A && p2.at(2).style == B && p2.at(3).style == A);
+        // Enter alone, as before: at the end -> Next; in the middle -> the same.
+        core::doc::set_para_style(j, d, "story.1", {1, 0}, {1, 0}, A);
+        const int e1 = static_cast<int>(d.as<core::Story>("story.1")->paras.at(1).text.size());
+        core::doc::edit_text(j, d, "story.1", {1, e1}, {1, e1}, "\n");
+        check("Enter at the end: Next style", d.as<core::Story>("story.1")->paras.at(2).style == B);
+        core::doc::edit_text(j, d, "story.1", {1, 2}, {1, 2}, "\n");
+        check("Enter in the middle: the same style", d.as<core::Story>("story.1")->paras.at(2).style == A);
+    }
+
+    {
+        std::cout << "\n-- New sheet memory (s079) --\n";
+        core::NewDoc n;
+        n.trim_w = 5.5 * core::kPt;
+        n.trim_h = 8.5 * core::kPt;
+        n.pages = 48;
+        n.facing = false;
+        n.margins = {40, 50, 60, 70};
+        n.columns = 2;
+        n.gutter = 14;
+        n.bleed = 0;
+        n.text_frames = false;
+        n.folios = false;
+        n.units = core::Units::Millimetres;
+        core::AppSettings st{{"window.width", "1400"}};
+        core::new_to_settings(n, st);
+        auto back = core::new_from_settings(st);
+        back.title = n.title;
+        check("new sheet: every choice comes back", back == n);
+        check("new sheet: other settings left alone", st.at("window.width") == "1400");
+        check("new sheet: nothing saved -> the defaults", core::new_from_settings({}) == core::NewDoc{});
+        core::AppSettings bad{{"new.pages", "lots"}, {"new.trim_w", "1e9"}, {"new.units", "7"}, {"new.columns", "3.5x"}};
+        const auto b = core::new_from_settings(bad);
+        check("new sheet: unreadable keys keep defaults, numbers held in range",
+              b.pages == core::NewDoc{}.pages && b.trim_w == 5000 && b.units == core::Units::Points && b.columns == core::NewDoc{}.columns);
+        core::Doc d;
+        check("new document: in the chosen unit", core::new_document(d, n) && d.settings().units == core::Units::Millimetres);
+    }
+
+    {
+        std::cout << "\n-- saved queries (s078) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("sample: one saved query", d.settings().queries.size() == 1 && d.settings().queries[0].name == "Double spaces");
+        core::SavedQuery q{"  Dashes ", "--", "\u2014"};
+        q.mode = 1;
+        check("save: one step, the name trimmed, kept by name", core::doc::save_query(j, d, q) && j.size() == 1 &&
+                                                                 d.settings().queries.size() == 2 && d.settings().queries[0].name == "Dashes");
+        check("save: the same again is no step", !core::doc::save_query(j, d, d.settings().queries[0]));
+        q.name = "Dashes";
+        q.with = "\u2013";
+        check("save: the same name replaces", core::doc::save_query(j, d, q) && d.settings().queries.size() == 2 &&
+                                              d.settings().queries[0].with == "\u2013");
+        check("save: no name, no query", !core::doc::save_query(j, d, {"   ", "x"}));
+        std::string err;
+        core::Doc e;
+        check("json: queries kept, every setting", core::from_json(e, core::to_json(d), &err) && e.settings().queries == d.settings().queries, err);
+        check("delete: one step; unknown name none", core::doc::delete_query(j, d, "Dashes") && d.settings().queries.size() == 1 &&
+                                                     !core::doc::delete_query(j, d, "Dashes"));
+        j.undo();
+        check("undo: back", d.settings().queries.size() == 2);
+    }
+
+    {
         std::cout << "\n-- export memory (s077) --\n";
         core::Doc d;
         core::DocJournal j{d};
@@ -3742,7 +3833,9 @@ int main() {
                   d.as<core::Story>("story.1")->paras[1].style == "style.2");
             j.undo();
             core::doc::edit_text(j, d, "story.1", {0, 11}, {0, 11}, "a\nb");
-            check("next style: a paste keeps the style", d.as<core::Story>("story.1")->paras[1].style == "style.2");
+            // s081 (was "a paste keeps the style"): a paste at a heading's end
+            // runs through Next style too -- the backlog's "Next style for a paste".
+            check("next style: a paste at the heading's end takes its Next", d.as<core::Story>("story.1")->paras[1].style == "style.10");
             j.undo();
             const auto& b1 = d.as<core::Story>("story.1")->paras[1];
             core::doc::edit_text(j, d, "story.1", {1, static_cast<int>(b1.text.size())}, {1, static_cast<int>(b1.text.size())}, "\n");

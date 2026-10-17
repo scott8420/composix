@@ -1197,6 +1197,30 @@ bool set_wrap_beneath(DocJournal& j, Doc& d, bool on) {   // s069
     });
 }
 
+bool save_query(DocJournal& j, Doc& d, SavedQuery q) {   // s078
+    const auto a = q.name.find_first_not_of(" \t"), b = q.name.find_last_not_of(" \t");
+    if (a == std::string::npos) return false;
+    q.name = q.name.substr(a, b - a + 1);
+    Settings s = d.settings();
+    auto it = std::find_if(s.queries.begin(), s.queries.end(), [&](const SavedQuery& x) { return x.name == q.name; });
+    if (it != s.queries.end()) {
+        if (*it == q) return false;
+        *it = q;
+    } else {
+        s.queries.push_back(q);
+        std::sort(s.queries.begin(), s.queries.end(), [](const SavedQuery& x, const SavedQuery& y) { return x.name < y.name; });
+    }
+    return j.run("Save query", {"doc"}, [&] { d.put("doc", s); });
+}
+
+bool delete_query(DocJournal& j, Doc& d, const std::string& name) {   // s078
+    Settings s = d.settings();
+    const auto n = s.queries.size();
+    std::erase_if(s.queries, [&](const SavedQuery& x) { return x.name == name; });
+    if (s.queries.size() == n) return false;
+    return j.run("Delete query", {"doc"}, [&] { d.put("doc", s); });
+}
+
 bool set_units(DocJournal& j, Doc& d, Units u) {   // s073
     if (u == d.settings().units) return false;
     return j.run("Units", {"doc"}, [&] {
@@ -1479,14 +1503,21 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     for (const auto& sp : head) head_len += sp.text.size();
 
     std::vector<Para> made;
+    std::string prev = style;
     for (std::size_t i = 0; i < pieces.size(); ++i) {
         std::vector<Span> sp;
         if (i == 0) sp = head;
         sp.push_back({pieces[i], cstyle, local});
-        if (i + 1 == pieces.size()) sp.insert(sp.end(), tail.begin(), tail.end());
-        // s037: Enter at a paragraph's end starts its Next style.
-        const bool next = i > 0 && text == "\n" && tail.empty();
-        made.push_back(para_of(next ? next_style_of(d, style) : style, sp));
+        const bool last = i + 1 == pieces.size();
+        if (last) sp.insert(sp.end(), tail.begin(), tail.end());
+        // s037: Enter at a paragraph's end starts its Next style. s081: so
+        // does every new paragraph of a paste -- each the Next style of the
+        // one before (a heading, its body, ...) -- except a last one that
+        // carries the rest of the paragraph pasted into (it keeps its style).
+        const bool next = i > 0 && (!last || tail.empty());
+        const std::string ps = next ? next_style_of(d, prev) : style;
+        made.push_back(para_of(ps, sp));
+        prev = ps;
         if (i == 0) { made.back().restart = restart; made.back().brk = brk; }
     }
     s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
@@ -2308,6 +2339,8 @@ const std::vector<Verb>& verbs() {
         {"set_facing", [](DocJournal& j, Doc& d) { set_facing(j, d, !d.settings().facing); }},
         {"set_wrap_beneath", [](DocJournal& j, Doc& d) { set_wrap_beneath(j, d, true); }},   // s069
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
+        {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
+        {"delete_query", [](DocJournal& j, Doc& d) { delete_query(j, d, "Double spaces"); }},
         {"set_picture_offset", [](DocJournal& j, Doc& d) { set_picture_offset(j, d, {"frame.11"}, 0, -6); }},   // s076
         {"arrange_back", [](DocJournal& j, Doc& d) { arrange(j, d, {"frame.11"}, Arrange::Back); }},   // s070
         {"arrange_forward", [](DocJournal& j, Doc& d) { arrange(j, d, {"frame.1"}, Arrange::Forward); }},

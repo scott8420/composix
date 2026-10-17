@@ -22,7 +22,7 @@
 
 namespace composix::views {
 
-// s052: how big the tiles are -- Colors offers all three (others: Large).
+// s052: how big the tiles are (s080: every section, each its own).
 enum class TileSize { Large, Small, List };
 
 class TileView : public widgets::Box {
@@ -31,9 +31,10 @@ public:
     void set_nav(const std::string& back_to, const std::string& fwd_to) { m_nav_btns.set(back_to, fwd_to); }
     TileView();
 
-    TileSize tile_size() const { return m_size; }
-    void     set_tile_size(TileSize z);   // redraws the section on show (quietly: no signal)
-    sigc::signal<void(TileSize)>& signal_tile_size() { return m_size_sig; }
+    // s080: per section (Large until set).
+    TileSize tile_size(core::Segment s) const;
+    void     set_tile_size(core::Segment s, TileSize z);   // quietly: no signal
+    sigc::signal<void(core::Segment, TileSize)>& signal_tile_size() { return m_size_sig; }
     sigc::signal<void()>&         signal_new()       { return m_new_sig; }   // s058: Colors' New Swatch
     // s062: a master dropped on page tiles: (master, pages).
     sigc::signal<void(const std::string&, const std::vector<std::string>&)>& signal_master_drop() { return m_master_drop; }
@@ -65,8 +66,8 @@ private:
     widgets::Box            m_groups;    // s052: a heading + a grid per item group
     widgets::Box            m_sizes;     // s052: Large / Small / List
     std::vector<Gtk::FlowBox*> m_grids;  // the grids on show
-    TileSize                m_size = TileSize::Large;
-    sigc::signal<void(TileSize)> m_size_sig;
+    std::map<core::Segment, TileSize> m_size_of;   // s080: each section's
+    sigc::signal<void(core::Segment, TileSize)> m_size_sig;
     sigc::signal<void()>    m_new_sig;
     sigc::signal<void(const std::string&, const std::vector<std::string>&)> m_master_drop;
     Gtk::Widget*            m_new_btn = nullptr;

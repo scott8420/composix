@@ -29,6 +29,7 @@
 // back exactly where it was, under the same id.
 #include "core/Geometry.hpp"
 #include "core/Undo.hpp"
+#include "core/Settings.hpp"
 
 #include <array>
 #include <cstdint>
@@ -86,6 +87,17 @@ struct ExportPrefs {
 // Typing any unit still works everywhere; a bare number is in this one.
 enum class Units { Inches, Millimetres, Picas, Points };
 
+// s078: a Find / Change query kept with the document, by name. Styles by
+// id ("" = any / leave); mode 0 text, 1 wildcards, 2 regex; format 0 any,
+// 1 bold, 2 italic, 3 both.
+struct SavedQuery {
+    std::string name, what, with;
+    bool        match_case = false, whole_word = false;
+    int         mode = 0, format = 0;
+    std::string in_style, apply_style;
+    bool operator==(const SavedQuery&) const = default;
+};
+
 struct Settings {
     std::string title  = "Untitled";
     double      trim_w = 6 * kPt, trim_h = 9 * kPt;
@@ -95,6 +107,7 @@ struct Settings {
     // stacking order (masters below their pages); off: every text frame.
     bool        wrap_beneath = false;
     Units       units = Units::Inches;   // s073
+    std::vector<SavedQuery> queries;     // s078: Find / Change, saved
     ExportPrefs exp;                     // s032
     bool operator==(const Settings&) const = default;
 };
@@ -570,6 +583,10 @@ bool set_facing(DocJournal& j, Doc& d, bool facing);
 bool set_wrap_beneath(DocJournal& j, Doc& d, bool on);
 // s073: the document's display unit. One step.
 bool set_units(DocJournal& j, Doc& d, Units u);
+// s078: keep a query under its name (trimmed, not empty; the same name is
+// replaced, else it's added, the list kept by name); delete one. One step.
+bool save_query(DocJournal& j, Doc& d, SavedQuery q);
+bool delete_query(DocJournal& j, Doc& d, const std::string& name);
 // s062: pages' own margins -- `f` edits them (starting from what they use
 // now); `reset` drops them (back to the master's). One step.
 bool edit_page_margins(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const std::string& label,
@@ -695,7 +712,9 @@ bool set_column_width(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames,
 
 // ── text (s010) ─────────────────────────────────────────────────────────────
 // THE text verb: replace [a, b) in a story with `text` ('\n' splits a
-// paragraph; new paragraphs take the style of the one split). Typing,
+// paragraph; new paragraphs take the style of the one split -- s037 / s081:
+// at a paragraph's end, or within a paste, each new paragraph the Next style
+// of the one before). Typing,
 // Backspace, Delete, Enter, paste, cut -- all this one verb. A merge key folds
 // a burst of keystrokes into ONE step. Returns where the caret goes (just
 // after the inserted text); `a` (clamped) when nothing changed.
@@ -1007,8 +1026,15 @@ struct NewDoc {
     double      bleed   = 0.125 * kPt;
     bool        text_frames = true;   // one story threaded through a frame in every page's margins
     bool        folios = true;        // s023: the page number at the foot, on the master
+    Units       units = Units::Inches; // s079: the new document's (and the sheet's) unit
     bool operator==(const NewDoc&) const = default;
 };
+// s079: the New sheet's choices between runs, in the app's settings
+// ("new.trim_w" ... points; the name isn't kept). Reading is tolerant: a
+// missing or unreadable key keeps NewDoc's default, numbers held to sane
+// ranges.
+void   new_to_settings(const NewDoc& n, AppSettings& s);
+NewDoc new_from_settings(const AppSettings& s);
 // Common book trims (the first is the default).
 struct TrimPreset { std::string label; double w, h; };
 const std::vector<TrimPreset>& trim_presets();

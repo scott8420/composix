@@ -42,6 +42,13 @@ json to(const Record& r) {
                  {"export", {{"print", v.exp.print}, {"bleed", v.exp.bleed}, {"marks", v.exp.marks},
                              {"profile", v.exp.profile}, {"convert", v.exp.convert}, {"standard", v.exp.standard},
                              {"range", v.exp.range}, {"bookmarks", v.exp.bookmarks}}}};
+            if (!v.queries.empty()) {   // s078
+                json qs = json::array();
+                for (const auto& q : v.queries)
+                    qs.push_back({{"name", q.name}, {"what", q.what}, {"with", q.with}, {"case", q.match_case}, {"word", q.whole_word},
+                                  {"mode", q.mode}, {"format", q.format}, {"in", q.in_style}, {"apply", q.apply_style}});
+                j["queries"] = qs;
+            }
         } else if constexpr (std::is_same_v<T, Section>) {
             j = {{"kind", "section"}, {"name", v.name}, {"start_page", v.start_page},
                  {"numbering", en(v.numbering)}, {"start_at", v.start_at}, {"starts", en(v.starts)},
@@ -154,6 +161,11 @@ std::optional<Record> from(const json& j) {
                      val<std::string>(e, "profile", ""), val(e, "convert", false), val(e, "standard", 0),
                      val<std::string>(e, "range", ""), val(e, "bookmarks", true)};   // s077
         }
+        if (j.contains("queries") && j.at("queries").is_array())   // s078
+            for (const auto& q : j.at("queries"))
+                v.queries.push_back({val<std::string>(q, "name", ""), val<std::string>(q, "what", ""), val<std::string>(q, "with", ""),
+                                     val(q, "case", false), val(q, "word", false), val(q, "mode", 0), val(q, "format", 0),
+                                     val<std::string>(q, "in", ""), val<std::string>(q, "apply", "")});
         return v;
     }
     if (k == "section") {

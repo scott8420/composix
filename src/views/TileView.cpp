@@ -56,7 +56,7 @@ TileView::TileView()
     m_head.append(m_title);
     m_head.append(m_count);
 
-    // s052: Large / Small / List (Colors).
+    // s052: Large / Small / List (s080: every section).
     m_sizes.add_css_class("linked");
     m_sizes.set_hexpand(true);
     m_sizes.set_halign(Gtk::Align::END);
@@ -64,17 +64,18 @@ TileView::TileView()
     Gtk::ToggleButton* first = nullptr;
     for (const auto& [z, key, label, tip] : {std::tuple{TileSize::Large, "large", "Large", "Large tiles"},
                                              std::tuple{TileSize::Small, "small", "Small", "Small tiles"},
-                                             std::tuple{TileSize::List, "list", "List", "A swatch and its name, one a line"}}) {
+                                             std::tuple{TileSize::List, "list", "List", "One a line: a small picture, the name, its first details"}}) {
         auto b = Gtk::make_managed<Gtk::ToggleButton>(label);
         b->set_name(std::string("tiles.size.") + key);
         b->set_tooltip_text(tip);
         if (first) b->set_group(*first); else first = b;
         b->signal_toggled().connect([this, b, z = z] {
-            if (!b->get_active() || m_quiet || z == m_size) return;
-            m_size = z;
-            if (auto lg = log::get(log::Area::View)) lg->info("tiles: size {}", static_cast<int>(z));
+            if (!b->get_active() || m_quiet || z == tile_size(m_seg)) return;
+            m_size_of[m_seg] = z;
+            if (auto lg = log::get(log::Area::View))
+                lg->info("tiles: {} size {}", core::segment_info(m_seg).key, static_cast<int>(z));
             if (m_shown) show_section(m_last, m_seg, selected());
-            m_size_sig.emit(z);
+            m_size_sig.emit(m_seg, z);
         });
         m_sizes.append(*b);
     }
@@ -115,8 +116,13 @@ TileView::TileView()
     sync_size_buttons();
 }
 
-void TileView::set_tile_size(TileSize z) {
-    m_size = z;
+TileSize TileView::tile_size(core::Segment s) const {
+    const auto it = m_size_of.find(s);
+    return it == m_size_of.end() ? TileSize::Large : it->second;
+}
+
+void TileView::set_tile_size(core::Segment s, TileSize z) {
+    m_size_of[s] = z;
     sync_size_buttons();
 }
 
@@ -124,7 +130,7 @@ void TileView::sync_size_buttons() {
     m_quiet = true;
     int i = 0;
     for (auto* c = m_sizes.get_first_child(); c; c = c->get_next_sibling(), ++i)
-        if (auto* b = dynamic_cast<Gtk::ToggleButton*>(c)) b->set_active(i == static_cast<int>(m_size));
+        if (auto* b = dynamic_cast<Gtk::ToggleButton*>(c)) b->set_active(i == static_cast<int>(tile_size(m_seg)));
     m_quiet = false;
 }
 
@@ -170,13 +176,14 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
     m_grids.clear();
 
     const auto items = o.in(s);
-    // s052: Colors comes Large, Small or as a List, under its groups' headings.
-    const bool sized = s == core::Segment::Colors;
-    const TileSize z = sized ? m_size : TileSize::Large;
-    m_sizes.set_visible(sized);
-    if (m_new_btn) m_new_btn->set_visible(sized);
+    // s052: Colors comes Large, Small or as a List, under its groups'
+    // headings; s080: every section has the three, each remembered.
+    const TileSize z = tile_size(s);
+    m_sizes.set_visible(true);
+    sync_size_buttons();
+    if (m_new_btn) m_new_btn->set_visible(s == core::Segment::Colors);
     bool grouped = false;
-    for (const auto* it : items) grouped = grouped || (sized && !it->group.empty());
+    for (const auto* it : items) grouped = grouped || (s == core::Segment::Colors && !it->group.empty());
     m_grid.set_visible(!grouped);
     m_groups.set_visible(grouped);
     const auto fit = [z](Gtk::FlowBox& g) {
@@ -285,7 +292,9 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
             b->add_css_class("cx-badge");
             if (flag) b->add_css_class("cx-warn");
             b->set_valign(Gtk::Align::CENTER);
-            b->set_width_chars(5);
+            b->set_width_chars(9);       // s080: "Foldout", "Missing" -- a fixed slot, so the columns line up
+            b->set_max_width_chars(9);
+            b->set_ellipsize(Pango::EllipsizeMode::END);
             b->set_opacity(badge.empty() ? 0 : 1);
             card->append(*b);
         } else if (z == TileSize::Small) {   // s052: the thumbnail and the name
@@ -296,10 +305,11 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
             auto area = Gtk::make_managed<Gtk::DrawingArea>();
             area->set_name("tiles.tile." + tile_id + ".thumb");
             area->add_css_class("cx-thumb");
-            area->set_content_width(kSmallW);
+            area->set_content_width(spreads ? kSmallW * 2 : kSmallW);   // s080: a spread, both pages
             area->set_content_height(kSmallH);
             area->set_draw_func([area, thumbs](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
-                paint_thumb(cr, *area, w, h, thumbs.front());
+                if (thumbs.size() == 1) paint_thumb(cr, *area, w, h, thumbs.front());
+                else paint_spread(cr, *area, w, h, thumbs);
             });
             overlay->set_child(*area);
             if (!badge.empty()) {
@@ -316,7 +326,7 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
             title->set_ellipsize(Pango::EllipsizeMode::END);
             title->set_max_width_chars(1);
             card->append(*title);
-            card->set_size_request(kSmallW, -1);
+            card->set_size_request(spreads ? kSmallW * 2 : kSmallW, -1);
         } else {
             card = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
             card->add_css_class("cx-tile-card");

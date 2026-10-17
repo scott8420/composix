@@ -17,6 +17,7 @@ void load_sample(Doc& d) {
 
     Settings s;
     s.title = "Sample Book";
+    s.queries = {{"Double spaces", "  ", " "}};   // s078: a saved Find / Change
     d.put("doc", s);
 
     // ── masters ─────────────────────────────────────────────────────────────
