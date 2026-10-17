@@ -1254,6 +1254,45 @@ bool set_list_styles(DocJournal& j, Doc& d, const Doc::Id& list, const std::vect
     });
 }
 
+int list_title_paras(const Story& st) {   // s090
+    if (st.paras.empty()) return 0;
+    const auto& p0 = st.paras.front();
+    if (p0.text.empty() || p0.text.find('\t') != std::string::npos) return 0;
+    if (st.paras.size() == 1) return 1;
+    for (std::size_t k = 1; k < st.paras.size(); ++k)
+        if (st.paras[k].style != p0.style) return 1;
+    return 0;
+}
+
+bool set_list_entry_style(DocJournal& j, Doc& d, const Doc::Id& list, int level, const Doc::Id& style) {   // s090
+    const auto* l = d.as<GenList>(list);
+    if (!l || level < 1 || level > 9) return false;
+    if (!style.empty()) {
+        const auto* s = d.as<Style>(style);
+        if (!s || s->kind != StyleKind::Paragraph) return false;
+    }
+    const auto at = static_cast<std::size_t>(level - 1);
+    const std::string now = at < l->entry_styles.size() ? l->entry_styles[at] : std::string{};
+    if (now == style) return false;
+    return j.run("Entry style", {list}, [&] {
+        GenList nl = *d.as<GenList>(list);
+        if (nl.entry_styles.size() <= at) nl.entry_styles.resize(at + 1);
+        nl.entry_styles[at] = style;
+        while (!nl.entry_styles.empty() && nl.entry_styles.back().empty()) nl.entry_styles.pop_back();
+        d.put(list, nl);
+    });
+}
+
+bool set_list_numbers(DocJournal& j, Doc& d, const Doc::Id& list, bool on) {   // s090
+    const auto* l = d.as<GenList>(list);
+    if (!l || l->numbers == on) return false;
+    return j.run(on ? "Page numbers" : "No page numbers", {list}, [&] {
+        GenList nl = *d.as<GenList>(list);
+        nl.numbers = on;
+        d.put(list, nl);
+    });
+}
+
 bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<ListEntry>& entries) {   // s087
     const auto* l = d.as<GenList>(list);
     if (!l) return false;
@@ -1263,12 +1302,11 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
     // Level 1's style, and the title.
     Doc::Id entry_style;
     std::vector<Para> paras;
-    if (st) {
-        for (const auto& p : st->paras)
-            if (p.text.find('\t') != std::string::npos) { entry_style = p.style; break; }
-        if (entry_style.empty() && !st->paras.empty()) entry_style = st->paras.front().style;
-        if (!st->paras.empty() && !st->paras.front().text.empty() && st->paras.front().text.find('\t') == std::string::npos)
-            paras.push_back(st->paras.front());   // the title
+    if (st) {   // s090: the title by style (entries may have no tab)
+        const auto t = static_cast<std::size_t>(list_title_paras(*st));
+        if (t < st->paras.size()) entry_style = st->paras[t].style;
+        else if (!st->paras.empty()) entry_style = st->paras.front().style;
+        if (t == 1) paras.push_back(st->paras.front());   // the title
     } else {
         for (const auto& s : d.ids_of<Style>())
             if (d.as<Style>(s)->kind == StyleKind::Paragraph) { entry_style = s; break; }
@@ -1300,7 +1338,8 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
     }
     const std::size_t title = paras.size();
     for (const auto& e : entries)
-        paras.push_back({lv_style[static_cast<std::size_t>(std::clamp(e.level, 1, deepest))], e.text + "\t" + e.folio});
+        paras.push_back({lv_style[static_cast<std::size_t>(std::clamp(e.level, 1, deepest))],
+                         l->numbers ? e.text + "\t" + e.folio : e.text});   // s090: or the words alone
     if (paras.empty()) paras.push_back({entry_style, ""});
     const int n = static_cast<int>(entries.size());
     if (st && to_make.empty() && st->paras == paras && l->built_entries == n) return false;
@@ -2484,6 +2523,8 @@ const std::vector<Verb>& verbs() {
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
         {"override_all", [](DocJournal& j, Doc& d) { override_all(j, d, {"page.7", "page.8"}); }},   // s072
         {"remove_all_overrides", [](DocJournal& j, Doc& d) { remove_all_overrides(j, d, d.pages()); }},
+        {"set_list_entry_style", [](DocJournal& j, Doc& d) { set_list_entry_style(j, d, "list.1", 1, "style.3"); }},   // s090
+        {"set_list_numbers", [](DocJournal& j, Doc& d) { set_list_numbers(j, d, "list.1", false); }},                 // s090
         {"set_list_styles", [](DocJournal& j, Doc& d) { set_list_styles(j, d, "list.1", {"style.2", "style.3"}); }},   // s088
         {"build_list", [](DocJournal& j, Doc& d) {   // s087
              build_list(j, d, "list.1", {{"Chapter One", "1"}, {"Chapter Two", "3"}});

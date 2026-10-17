@@ -45,6 +45,7 @@ json to(const Record& r) {
             if (!v.exp.mark_lists.empty()) j["export"]["mark_lists"] = v.exp.mark_lists;   // s082
             if (v.exp.spreads) j["export"]["spreads"] = true;                              // s084
             if (v.exp.perceptual) j["export"]["perceptual"] = true;                        // s085
+            if (!v.exp.rebuild) j["export"]["rebuild"] = false;                            // s089
             if (!v.queries.empty()) {   // s078
                 json qs = json::array();
                 for (const auto& q : v.queries)
@@ -144,6 +145,7 @@ json to(const Record& r) {
                  {"built_entries", v.built_entries}};
             if (!v.story.empty()) j["story"] = v.story;   // s087
             if (!v.entry_styles.empty()) j["entry_styles"] = v.entry_styles;   // s088
+            if (!v.numbers) j["numbers"] = false;                              // s090
         }
         return j;
     }, r);
@@ -170,6 +172,7 @@ std::optional<Record> from(const json& j) {
                     if (m.is_string()) v.exp.mark_lists.push_back(m.get<std::string>());
             v.exp.spreads = val(e, "spreads", false);   // s084
             v.exp.perceptual = val(e, "perceptual", false);   // s085
+            v.exp.rebuild = val(e, "rebuild", true);          // s089
         }
         if (j.contains("queries") && j.at("queries").is_array())   // s078
             for (const auto& q : j.at("queries"))
@@ -374,6 +377,7 @@ std::optional<Record> from(const json& j) {
         v.placed_on = val<std::string>(j, "placed_on", "");
         v.built_entries = val(j, "built_entries", -1);
         v.story = val<std::string>(j, "story", "");   // s087
+        v.numbers = val(j, "numbers", true);   // s090
         if (j.contains("entry_styles") && j.at("entry_styles").is_array())   // s088
             for (const auto& e : j.at("entry_styles")) v.entry_styles.push_back(e.is_string() ? e.get<std::string>() : std::string{});
         return v;

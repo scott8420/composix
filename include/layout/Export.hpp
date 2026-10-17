@@ -113,6 +113,17 @@ std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& fl
 // contents page can push the headings on), at most a few rounds. One step.
 bool build_list(core::DocJournal& j, core::Doc& d, const std::string& list);
 
+// s089: the Contents lists whose written entries no longer say what the
+// headings do -- a heading renamed, moved to another page, added or gone --
+// or that were never built. (The words and page numbers; not the styles.)
+// `why`: the first difference, in words ("Chapter Two: page 3 \u2192 4",
+// "Not built yet"). Lists with neither a story nor a page are left out.
+struct StaleList {
+    std::string list, why;
+    bool operator==(const StaleList&) const = default;
+};
+std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows);
+
 // s086: what an export will give, in words, for the Export sheet -- worked
 // out from the options as they stand (no file written). `print`: Plate (else
 // the screen writer); `profile_name`: the output profile's ("" = none).

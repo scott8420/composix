@@ -314,6 +314,11 @@ void Shell::on_export_pdf() {  // handler
         lists->set_name("export.lists");
         lists->set_margin_start(24);
         left->append(*lists);
+        // s089: shown when a contents list is out of date.
+        auto rebuild = Gtk::make_managed<Gtk::CheckButton>("Rebuild the contents first");
+        rebuild->set_name("export.rebuild");
+        rebuild->set_tooltip_text("A contents list no longer matches its headings -- rebuild it (one undo step) before writing");
+        left->append(*rebuild);
 
         // ── Colour (s016 profile / convert, s085 intent, s017 standard).
         right->append(*section_head("COLOUR", "export.head.colour"));
@@ -383,7 +388,7 @@ void Shell::on_export_pdf() {  // handler
         w.set_child(*box);
 
         // Which controls are live, and the card -- after any change.
-        m_export_sync = [this, print, prof, conv, intent, stdd, screen_note, range, spreads, bleed, marksb, lists, card, go] {
+        m_export_sync = [this, print, prof, conv, intent, stdd, screen_note, range, spreads, bleed, marksb, lists, rebuild, card, go] {
             const bool on = print->get_active(), pro = on && prof->get_selected() > 0;
             prof->set_sensitive(on);
             stdd->set_sensitive(pro);
@@ -437,10 +442,10 @@ void Shell::on_export_pdf() {  // handler
             const auto s = layout::export_summary(m_doc, m_pf_flows, o, on, pname);
             size->set_text(s.size);
             colour->set_text(s.colour);
-            nav->set_text(s.nav);
+            nav->set_text(s.nav + (rebuild->get_visible() && rebuild->get_active() ? " \u00b7 contents rebuilt first" : ""));
         };
         const auto sync = [this] { if (m_export_sync) m_export_sync(); };
-        for (auto* t : {static_cast<Gtk::CheckButton*>(spreads), bleed, conv, marksb})
+        for (auto* t : {static_cast<Gtk::CheckButton*>(spreads), bleed, conv, marksb, rebuild})
             t->signal_toggled().connect(sync);
         print->signal_toggled().connect(sync);
         for (auto* dd : {prof, intent, stdd}) dd->property_selected().signal_changed().connect(sync);
@@ -456,7 +461,7 @@ void Shell::on_export_pdf() {  // handler
         w.add_controller(keys);
         w.set_default_widget(*go);
         range->signal_activate().connect([go] { if (go->get_sensitive()) go->activate(); });
-        go->signal_clicked().connect([this, bleed, marks, spreads, print, prof, conv, stdd, intent, range, marksb, lists] {
+        go->signal_clicked().connect([this, bleed, marks, spreads, print, prof, conv, stdd, intent, range, marksb, lists, rebuild] {
             // s054: the range first (the card has said why if it's bad).
             {
                 const auto text = std::string(range->get_text());
@@ -485,16 +490,22 @@ void Shell::on_export_pdf() {  // handler
             m_pdf_profile = (i > 0 && i - 1 < m_profiles.size()) ? m_profiles[i - 1] : std::string{};
             m_pdf_convert = conv->get_active();
             m_pdf_perceptual = intent->get_selected() == 1;   // s085
+            m_pdf_rebuild = rebuild->get_active();             // s089
             m_pdf_standard = (m_pdf_print && !m_pdf_profile.empty()) ? static_cast<int>(stdd->get_selected()) : 0;
             // s032: kept with the document, the profile by its name.
             {
                 core::ExportPrefs e{m_pdf_print, m_pdf_bleed, m_pdf_marks, {}, m_pdf_convert, m_pdf_standard,
                                     m_pdf_range, m_pdf_bookmarks, m_pdf_mark_lists, m_pdf_spreads,
-                                    m_pdf_perceptual};
+                                    m_pdf_perceptual, m_pdf_rebuild};
                 for (std::size_t k = 0; k < m_profiles.size(); ++k)
                     if (m_profiles[k] == m_pdf_profile) e.profile = m_profile_names[k];
                 m_profile_missing.clear();
                 core::doc::set_export(m_journal, m_doc, e);
+            }
+            if (rebuild->get_visible() && m_pdf_rebuild) {   // s089: its own undo step, before the file
+                bool any = false;
+                for (const auto& s : layout::stale_lists(m_doc, m_pf_flows)) any = layout::build_list(m_journal, m_doc, s.list) || any;
+                if (any) queue_refresh();
             }
             update_preflight();   // s024: the standard's checks follow
             m_export->set_visible(false);
@@ -534,6 +545,15 @@ void Shell::on_export_pdf() {  // handler
     if (auto* b = named<Gtk::CheckButton>(root, "export.convert")) b->set_active(m_pdf_convert);
     if (auto* dd = named<Gtk::DropDown>(root, "export.standard")) dd->set_selected(static_cast<guint>(m_pdf_standard));
     if (auto* dd = named<Gtk::DropDown>(root, "export.intent")) dd->set_selected(m_pdf_perceptual ? 1u : 0u);   // s085
+    if (auto* b = named<Gtk::CheckButton>(root, "export.rebuild")) {   // s089: only when something's out of date
+        std::string names;
+        for (const auto& s : layout::stale_lists(m_doc, m_pf_flows))
+            names += (names.empty() ? "" : ", ") + m_doc.as<core::GenList>(s.list)->name;
+        b->set_visible(!names.empty());
+        b->set_label("Rebuild out-of-date contents first");
+        b->set_tooltip_text("Out of date: " + names + ". Rebuilt (one undo step) before the file is written.");
+        b->set_active(m_pdf_rebuild);
+    }
     if (auto* lb = named<Gtk::Box>(root, "export.lists")) {   // s082: the document's lists, as they are now
         while (auto* k = lb->get_first_child()) lb->remove(*k);
         const auto all = layout::bookmark_lists(m_doc);
@@ -989,6 +1009,13 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                     else std::erase(v, choice);
                     did = core::doc::set_list_styles(m_journal, m_doc, id, v) || did;
                 }
+        } else if (key == "list_entry") {   // s090: "level:style"
+            const auto colon = choice.find(':');
+            if (colon != std::string::npos)
+                for (const auto& id : m_inspected)
+                    did = core::doc::set_list_entry_style(m_journal, m_doc, id, std::stoi(choice.substr(0, colon)), choice.substr(colon + 1)) || did;
+        } else if (key == "list_numbers") {   // s090
+            for (const auto& id : m_inspected) did = core::doc::set_list_numbers(m_journal, m_doc, id, choice == "1") || did;
         } else if (key == "genlist") {   // s087: Build / Rebuild
             if (choice == "build")
                 for (const auto& id : m_inspected) did = layout::build_list(m_journal, m_doc, id) || did;

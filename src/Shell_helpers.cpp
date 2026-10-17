@@ -86,7 +86,9 @@ core::Outline Shell::project_now() const {  // helper
     std::vector<std::string> over;
     for (const auto& sid : m_doc.ids_of<core::Story>())
         if (layout::flow_story(m_doc, sid).overset) over.push_back(sid);
-    return core::project(m_doc, m_project_dir, &over, &layout::font_families());
+    std::map<std::string, std::string> stale;   // s089
+    for (const auto& s : layout::stale_lists(m_doc, m_pf_flows)) stale[s.list] = s.why;
+    return core::project(m_doc, m_project_dir, &over, &layout::font_families(), &stale);
 }
 
 void Shell::queue_refresh() {  // helper
@@ -258,6 +260,7 @@ void Shell::load_export_prefs() {  // helper
     m_pdf_mark_lists = e.mark_lists;   // s082
     m_pdf_spreads = e.spreads;         // s084
     m_pdf_perceptual = e.perceptual;   // s085
+    m_pdf_rebuild = e.rebuild;         // s089
     m_pdf_profile.clear();
     m_profile_missing.clear();
     if (!e.profile.empty()) {

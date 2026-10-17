@@ -83,6 +83,7 @@ struct ExportPrefs {
     std::vector<std::string> mark_lists;   // s082: the lists the outline comes from (ids; empty = the first Contents)
     bool        spreads = false;  // s084: facing pages as one sheet each
     bool        perceptual = false;   // s085: the conversion's intent (else relative colorimetric + BPC)
+    bool        rebuild = true;   // s089: rebuild out-of-date contents lists before writing
     bool operator==(const ExportPrefs&) const = default;
 };
 
@@ -367,6 +368,7 @@ struct GenList {
     int                      built_entries = -1;   // entries when last built; -1 = never
     std::string              story;         // s087: the story Build writes into ("" = none yet)
     std::vector<std::string> entry_styles;  // s088: the style each level's entries take (by level; "" / missing = found or made)
+    bool                     numbers = true;   // s090: entries end with a tab and the page number
     bool operator==(const GenList&) const = default;
 };
 
@@ -815,9 +817,17 @@ struct ListEntry {
     bool operator==(const ListEntry&) const = default;
 };
 bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<ListEntry>& entries);
+// s090: how many paragraphs open a list's story as its title (0 or 1): the
+// first, when it has words and no tab and either stands alone or some later
+// paragraph is in another style. (Entries may have no tab -- page numbers off.)
+int list_title_paras(const Story& st);
 // s088: the paragraph styles a list gathers, in level order (others dropped,
 // each once). One step; the same -> no step.
 bool set_list_styles(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Doc::Id>& styles);
+// s090: a list's settings -- a level's entry style ("" = automatic),
+// page numbers on / off. One step; no change -> no step.
+bool set_list_entry_style(DocJournal& j, Doc& d, const Doc::Id& list, int level, const Doc::Id& style);
+bool set_list_numbers(DocJournal& j, Doc& d, const Doc::Id& list, bool on);
 
 // The verb table the selftest walks: every verb, runnable on the sample.
 struct Verb {

@@ -296,6 +296,7 @@ private:
     std::vector<std::string>         m_pdf_mark_lists;      // s082: the lists the outline comes from (empty = default)
     bool                             m_pdf_spreads = false; // s084: facing pages as one sheet
     bool                             m_pdf_perceptual = false;   // s085: the conversion's intent
+    bool                             m_pdf_rebuild = true;       // s089: rebuild stale contents first
     std::string                      m_pdf_range;   // s077: as typed, "" = all
     int                              m_pdf_standard = 0;   // s017: 0 none, 1 PDF/X-1a, 2 PDF/X-4
     std::vector<std::string>         m_profiles;           // the sheet's list, as paths
@@ -334,7 +335,7 @@ private:
     Gtk::Label*                      m_preflight_label = nullptr;
     Gtk::ListBox*                    m_preflight_list = nullptr;
     std::vector<layout::Issue>       m_issues;
-    layout::FlowCache                m_pf_flows;
+    mutable layout::FlowCache        m_pf_flows;   // s089: mutable -- project_now reads it too
 
     // s019: the New sheet, and what it was last set to (for the session).
     std::unique_ptr<Gtk::Window>     m_new;

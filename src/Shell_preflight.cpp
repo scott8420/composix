@@ -97,6 +97,17 @@ void Shell::update_preflight() {  // helper
         text->set_hexpand(true);
         row->append(*dot);
         row->append(*text);
+        if (i.kind == "stale_list" && !i.item.empty()) {   // s089: fix it from here
+            auto b = Gtk::make_managed<Gtk::Button>("Rebuild");
+            b->set_name("preflight.rebuild." + i.item);
+            b->add_css_class("cx-insp-action");
+            b->set_valign(Gtk::Align::CENTER);
+            const std::string lid = i.item;
+            b->signal_clicked().connect([this, lid] {
+                if (layout::build_list(m_journal, m_doc, lid)) queue_refresh();
+            });
+            row->append(*b);
+        }
         m_preflight_list->append(*row);
     }
 }

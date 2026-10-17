@@ -21,6 +21,7 @@ struct Issue {
     std::string text;    // "Overset text: Chapters"
     std::string page;    // where (a page; "" = nowhere in particular)
     std::string frame;
+    std::string item;    // s089: a record it's about, when not a frame (a list: "stale_list")
     bool operator==(const Issue&) const = default;
 };
 

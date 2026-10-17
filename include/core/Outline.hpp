@@ -14,6 +14,7 @@
 // GTK-free: lives in composix_core, guarded headless by the selftest.
 #include <cstdint>
 #include <optional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -124,9 +125,12 @@ class Doc;
 // measured by the layout library, which core cannot see; null = unknown.
 // `fonts` (s011): the installed families, which the style fields offer (the
 // layout library lists them; null = the Font field is read-only).
+// `stale` (s089): Contents lists out of date -> why (the layout's check);
+// null = judged by the count of entries, as before.
 Outline project(const Doc& d, const std::string& project_dir,
                 const std::vector<std::string>* overset = nullptr,
-                const std::vector<std::string>* fonts = nullptr);
+                const std::vector<std::string>* fonts = nullptr,
+                const std::map<std::string, std::string>* stale = nullptr);
 
 // s005: frames picked on the canvas, as items the inspector reads (fields:
 // Kind, On, X, Y, W, H, and Story + Thread or Asset). Not in the navigator.

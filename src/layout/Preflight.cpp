@@ -6,6 +6,7 @@
 #include <set>
 
 #include "layout/ColorReport.hpp"
+#include "layout/Export.hpp"
 #include <plate/plate.hpp>
 #include <cmath>
 #include <cstdio>
@@ -129,6 +130,16 @@ std::vector<Issue> preflight_issues(const core::Doc& d, FlowCache& flows, const 
         }
         if (s->model == core::ColorModel::RGB && o.standard == 1 && !o.profile)
             out.push_back({L::Error, "rgb", "RGB colour " + s->name + " \u2014 PDF/X-1a needs a profile to convert it", pg, fid});
+    }
+    // s089: a contents list that no longer says what the headings do.
+    for (const auto& s : stale_lists(d, flows)) {
+        const auto& l = *d.as<core::GenList>(s.list);
+        std::string fr;
+        for (const auto& fid : d.frames_on(l.placed_on))
+            if (const auto* f = d.as<core::Frame>(fid); f->story == l.story && !l.story.empty()) { fr = fid; break; }
+        Issue i{L::Warning, "stale_list", "Contents out of date: " + l.name + " \u2014 " + s.why, l.placed_on, fr};
+        i.item = s.list;
+        out.push_back(i);
     }
     if (!o.missing_profile.empty())
         out.push_back({L::Error, "profile", "Output profile \u201c" + o.missing_profile + "\u201d is not on this computer (Export PDF)", {}, {}});

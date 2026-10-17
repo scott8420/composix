@@ -151,7 +151,7 @@ Field sides_row(const std::string& label, const Sides& s, const std::string& key
 }  // namespace
 
 Outline project(const Doc& d, const std::string& dir, const std::vector<std::string>* overset,
-                const std::vector<std::string>* fonts) {
+                const std::vector<std::string>* fonts, const std::map<std::string, std::string>* stale_lists) {
     Outline o;
     using G = Segment;
     using K = ThumbKind;
@@ -594,9 +594,14 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             from += (from.empty() ? "" : ", ") + style_name(d, st);
         }
         const bool never = l.built_entries < 0;
-        const bool stale = !never && l.built_entries != now;
+        bool stale = !never && l.built_entries != now;
         std::string built = never ? "Never" : stale ? "Stale — built with " + std::to_string(l.built_entries)
                                                     : "Current";
+        if (stale_lists && l.kind == ListKind::Contents && !never) {   // s089: what Build would change
+            const auto it = stale_lists->find(lid);
+            stale = it != stale_lists->end();
+            built = stale ? "Out of date — " + it->second : "Current";
+        }
         // s088: the styles it gathers, by level -- add one (the next level), take one out.
         std::string levels;
         for (std::size_t k = 0; k < l.from_styles.size(); ++k)
@@ -611,7 +616,22 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         Field drop{"", "", "list_remove", {}};
         drop.buttons = true;
         for (const auto& s : l.from_styles) drop.choices.push_back({s, "− " + style_name(d, s)});
-        o.add({lid, G::Generated, l.name, stale || never ? "Stale" : "", {K::Generated, 6, 9, 0, stale || never},
+        // s090: each level's entry style (Automatic = found or made by Build), and page numbers.
+        std::vector<Field> entry_rows;
+        if (l.kind == ListKind::Contents) {
+            for (std::size_t k = 0; k < l.from_styles.size(); ++k) {
+                const std::string lv = std::to_string(k + 1);
+                std::vector<Choice> ch{{lv + ":", "Automatic"}};
+                for (const auto& s : d.ids_of<Style>())
+                    if (d.as<Style>(s)->kind == StyleKind::Paragraph) ch.push_back({lv + ":" + s, d.as<Style>(s)->name});
+                const std::string cur = k < l.entry_styles.size() ? l.entry_styles[k] : std::string{};
+                const auto* cs = d.as<Style>(cur);
+                entry_rows.push_back({l.from_styles.size() > 1 ? "Level " + lv + " in" : "Entries in", cs ? cs->name : "Automatic",
+                                      "list_entry", ch});
+            }
+            entry_rows.push_back({"Page numbers", l.numbers ? "Yes" : "No", "list_numbers", {{"1", "Yes"}, {"0", "No"}}});
+        }
+        Item it{lid, G::Generated, l.name, stale || never ? "Stale" : "", {K::Generated, 6, 9, 0, stale || never},
                {{"From", from.empty() ? "—" : levels},
                 {"Entries", std::to_string(now)},
                 {"Built", built},
@@ -624,7 +644,10 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                         act.choices.push_back({"build", never ? "Build" : "Rebuild"});
                     act.buttons = true;
                     return act;
-                }()}});
+                }()}};
+        // s090: the entry rows before the Build action
+        it.fields.insert(it.fields.end() - 1, entry_rows.begin(), entry_rows.end());
+        o.add(std::move(it));
     }
 
     return o;

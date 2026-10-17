@@ -354,6 +354,43 @@ bool build_list(core::DocJournal& j, core::Doc& d, const std::string& list) {   
     return core::doc::build_list(j, d, list, entries);
 }
 
+std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows) {   // s089
+    std::vector<StaleList> out;
+    for (const auto& lid : bookmark_lists(d)) {
+        const auto& l = *d.as<core::GenList>(lid);
+        if (l.kind != core::ListKind::Contents) continue;
+        const auto* st = l.story.empty() ? nullptr : d.as<core::Story>(l.story);
+        if (!st && l.placed_on.empty()) continue;
+        if (!st || l.built_entries < 0) { out.push_back({lid, "Not built yet"}); continue; }
+        auto en = list_entries(d, flows, lid);
+        if (!l.numbers) for (auto& e : en) e.folio.clear();   // s090: words alone
+        // What's written: the entries after a title (text, no tab).
+        std::size_t k = static_cast<std::size_t>(core::doc::list_title_paras(*st));   // s090
+        std::vector<core::doc::ListEntry> had;
+        for (; k < st->paras.size(); ++k) {
+            const auto& t = st->paras[k].text;
+            const auto tab = l.numbers ? t.rfind('\t') : std::string::npos;
+            had.push_back({tab == std::string::npos ? t : t.substr(0, tab), tab == std::string::npos ? "" : t.substr(tab + 1)});
+        }
+        std::string why;
+        const std::size_t n = std::min(en.size(), had.size());
+        for (std::size_t i = 0; i < n && why.empty(); ++i) {
+            if (en[i].text == had[i].text && had[i].folio.empty() && !en[i].folio.empty())
+                why = "Page numbers not written";   // s090: switched back on
+            else if (en[i].text == had[i].text && en[i].folio != had[i].folio)
+                why = en[i].text + ": page " + had[i].folio + " \u2192 " + en[i].folio;
+            else if (en[i].text != had[i].text)
+                why = std::find_if(had.begin(), had.end(), [&](const auto& h) { return h.text == en[i].text; }) == had.end()
+                          ? "\u201c" + en[i].text + "\u201d not listed yet"
+                          : "\u201c" + had[i].text + "\u201d listed, no such heading";
+        }
+        if (why.empty() && en.size() > had.size()) why = "\u201c" + en[n].text + "\u201d not listed yet";
+        if (why.empty() && had.size() > en.size()) why = "\u201c" + had[n].text + "\u201d listed, no such heading";
+        if (!why.empty()) out.push_back({lid, why});
+    }
+    return out;
+}
+
 ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOptions& opt, bool print,
                              const std::string& profile_name) {   // s086
     ExportSummary s;

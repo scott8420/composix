@@ -2747,6 +2747,136 @@ int main() {
     }
 
     {
+        std::cout << "\n-- level styles, page numbers (s090) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto stale = [&]() -> std::string {
+            L::FlowCache f;
+            const auto v = L::stale_lists(d, f);
+            return v.empty() ? std::string("current") : v.front().why;
+        };
+        L::build_list(j, d, "list.1");
+        const auto texts = [&] {
+            std::string t;
+            for (const auto& p : d.as<core::Story>("story.9")->paras) t += p.text + "|";
+            return t;
+        };
+        check("numbers off: one step", core::doc::set_list_numbers(j, d, "list.1", false) && !d.as<core::GenList>("list.1")->numbers &&
+                                       !core::doc::set_list_numbers(j, d, "list.1", false));
+        check("numbers off: the list is out of date", stale() != "current");
+        L::build_list(j, d, "list.1");
+        check("numbers off: built -- the words alone, the title kept", texts() == "Contents|Chapter One|Chapter Two|");
+        check("numbers off: current, and a rebuild changes nothing", stale() == "current" && !L::build_list(j, d, "list.1"));
+        core::doc::set_list_numbers(j, d, "list.1", true);
+        check("numbers on again: says so", stale() == "Page numbers not written");
+        L::build_list(j, d, "list.1");
+        check("numbers on again: built", texts() == "Contents|Chapter One\t1|Chapter Two\t3|");
+        // Level 1 in a picked style.
+        check("entry style: picked, one step", core::doc::set_list_entry_style(j, d, "list.1", 1, "style.3") &&
+                                               d.as<core::GenList>("list.1")->entry_styles == std::vector<std::string>{"style.3"});
+        check("entry style: a character style refused", !core::doc::set_list_entry_style(j, d, "list.1", 1, "style.5"));
+        L::build_list(j, d, "list.1");
+        const auto& ps = d.as<core::Story>("story.9")->paras;
+        check("entry style: built in it, the title kept", ps.size() == 3 && ps[0].text == "Contents" && ps[1].style == "style.3" &&
+                                                          ps[2].style == "style.3");
+        check("entry style: back to Automatic -- the list forgets it", core::doc::set_list_entry_style(j, d, "list.1", 1, "") &&
+                                                                       d.as<core::GenList>("list.1")->entry_styles.empty());
+        // The title rule.
+        core::Story st{"t", {{"style.9", "Contents"}, {"style.8", "A"}, {"style.8", "B"}}};
+        const bool titled = core::doc::list_title_paras(st) == 1;
+        core::Story same{"t", {{"style.8", "A"}, {"style.8", "B"}}};
+        core::Story alone{"t", {{"style.9", "Contents"}}};
+        core::Story tabbed{"t", {{"style.8", "A\t1"}, {"style.9", "B"}}};
+        check("title: another style below -- a title; all alike -- none; alone -- a title; a tab -- none",
+              titled && core::doc::list_title_paras(same) == 0 && core::doc::list_title_paras(alone) == 1 &&
+              core::doc::list_title_paras(tabbed) == 0);
+        std::string err;
+        core::Doc f;
+        core::doc::set_list_numbers(j, d, "list.1", false);
+        check("json: page numbers off kept", core::from_json(f, core::to_json(d), &err) && !f.as<core::GenList>("list.1")->numbers, err);
+    }
+
+    {
+        std::cout << "\n-- stale contents (s089) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto why = [&]() -> std::string {
+            L::FlowCache f;
+            const auto v = L::stale_lists(d, f);
+            return v.empty() ? std::string("current") : v.front().list + ": " + v.front().why;
+        };
+        check("stale: the sample's extra line", why() == "list.1: \u201cSources\u201d listed, no such heading");
+        L::build_list(j, d, "list.1");
+        check("stale: built -- current", why() == "current");
+        const auto toc = *d.as<core::Story>("story.9");
+        const auto body = *d.as<core::Story>("story.1");
+        {   // a written number that's wrong
+            core::Doc::Loading load(d);
+            auto st = toc;
+            st.paras.at(2).text = "Chapter Two\t9";
+            d.put("story.9", st);
+        }
+        check("stale: a page number moved", why() == "list.1: Chapter Two: page 9 → 3");
+        {   // ... put back; a heading renamed
+            core::Doc::Loading load(d);
+            d.put("story.9", toc);
+            auto st = body;
+            for (auto& p : st.paras) if (p.text == "Chapter Two") p.text = "Chapter Deux";
+            d.put("story.1", st);
+        }
+        check("stale: a heading renamed", why() == "list.1: \u201cChapter Deux\u201d not listed yet");
+        {
+            core::Doc::Loading load(d);
+            d.put("story.1", body);
+        }
+        check("stale: put back -- current again", why() == "current");
+        {
+            auto l = *d.as<core::GenList>("list.1");
+            l.built_entries = -1;
+            core::Doc e = d;
+            core::DocJournal je{e};
+            e.set_door([&je] { return je.open(); });
+            e.put("list.1", l);
+            L::FlowCache f;
+            const auto v = L::stale_lists(e, f);
+            check("stale: never built", v.size() == 1 && v[0].why == "Not built yet");
+        }
+        // The outline and preflight say so.
+        {
+            core::Doc e;
+            core::load_sample(e);
+            L::FlowCache f;
+            std::map<std::string, std::string> m;
+            for (const auto& x : L::stale_lists(e, f)) m[x.list] = x.why;
+            const auto o = core::project(e, "", nullptr, nullptr, &m);
+            std::string built;
+            for (const auto* it : o.in(core::Segment::Generated))
+                if (it->id == "list.1")
+                    for (const auto& fl : it->fields) if (fl.label == "Built") built = fl.value;
+            check("outline: Built says what's out of date", built == "Out of date — \u201cSources\u201d listed, no such heading");
+            const auto iss = L::preflight_issues(e, f, {});
+            const auto it = std::find_if(iss.begin(), iss.end(), [](const L::Issue& i) { return i.kind == "stale_list"; });
+            check("preflight: a warning at the contents frame, naming the list", it != iss.end() && it->level == L::Issue::Level::Warning &&
+                                                                                it->item == "list.1" && it->frame == "frame.16" &&
+                                                                                it->page == e.as<core::GenList>("list.1")->placed_on);
+        }
+        // Export's "rebuild first", kept.
+        auto e = d.settings().exp;
+        check("export: rebuild first by default", e.rebuild);
+        e.rebuild = false;
+        core::doc::set_export(j, d, e);
+        std::string err;
+        core::Doc f;
+        check("json: rebuild first kept", core::from_json(f, core::to_json(d), &err) && !f.settings().exp.rebuild, err);
+    }
+
+    {
         std::cout << "\n-- list levels (s088) --\n";
         namespace L = composix::layout;
         core::Doc d;
@@ -3820,6 +3950,15 @@ int main() {
             return std::any_of(v.begin(), v.end(), [&](const L::Issue& i) { return i.kind == kind; });
         };
         auto v = L::preflight_issues(d, flows, {});
+        // s089: the sample's contents is out of date on purpose (its Sources line names no heading).
+        check("sample: the contents out of date, one warning", L::problem_count(v) == 1 && has(v, "stale_list"));
+        {
+            core::DocJournal pj{d};
+            d.set_door([&pj] { return pj.open(); });
+            L::build_list(pj, d, "list.1");
+            d.set_door({});
+        }
+        v = L::preflight_issues(d, flows, {});
         check("clean sample: no problems, the spot plate noted", L::problem_count(v) == 0 && has(v, "spot"));
         {   // overset, at its last frame; a low-res picture; links as told
             core::Doc::Loading load(d);
