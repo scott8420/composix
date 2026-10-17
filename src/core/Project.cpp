@@ -596,6 +596,41 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                {{"Model", model_text(s.model)}, {"Value", swatch_value(s)}, {"Used", used}, {"Type", type}, act}, group});
     }
 
+    // ── Footnotes (s115): each one, story by story, in order ────────────────
+    for (const auto& sid : d.ids_of<Story>()) {
+        const auto& st = *d.as<Story>(sid);
+        const std::string sname = st.name.empty() ? sid : st.name;
+        int n = 0;
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            const auto& para = st.paras[static_cast<std::size_t>(p)];
+            for (int k = 0; k < static_cast<int>(para.notes.size()); ++k) {
+                ++n;
+                const auto& words = para.notes[static_cast<std::size_t>(k)].text;
+                // Its paragraph's opening words, marks left out (context: where it is).
+                std::string in;
+                for (std::size_t i = 0; i < para.text.size() && in.size() < 48;) {
+                    const auto c = static_cast<unsigned char>(para.text[i]);
+                    if (c == 0xEE) { i += 3; continue; }   // a marker / a mark (U+E0xx)
+                    in += para.text[i++];
+                }
+                if (in.size() < para.text.size()) {
+                    while (!in.empty() && (static_cast<unsigned char>(in.back()) & 0xC0) == 0x80) in.pop_back();   // whole characters
+                    if (!in.empty()) in.pop_back();
+                    in += "\u2026";
+                }
+                Field w{"Words", words, "note_words"};
+                w.text = true;
+                Field go{"", "", "note", {{"show", "Show in the Text"}}};
+                go.buttons = true;
+                Thumb th{K::Text, 6, 9};
+                th.sample = words.empty() ? std::string("(no words yet)") : words;
+                o.add({note_item_id(sid, p, k), G::Notes, "Note " + std::to_string(n) + " \u00b7 " + sname,
+                       words.empty() ? "Empty" : "", th,
+                       {w, {"Story", sname}, {"Number", std::to_string(n) + " in the story"}, {"In", in.empty() ? "\u2014" : in}, go}});
+            }
+        }
+    }
+
     // ── Generated lists ─────────────────────────────────────────────────────
     for (const auto& lid : d.ids_of<GenList>()) {
         const auto& l = *d.as<GenList>(lid);

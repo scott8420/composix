@@ -20,7 +20,7 @@
 
 namespace composix::core {
 
-enum class Segment { Document, Pages, Masters, Stories, Styles, Assets, Colors, Generated };
+enum class Segment { Document, Pages, Masters, Stories, Styles, Assets, Colors, Generated, Notes };   // s115: Notes last (an index into names); shown after Stories
 
 struct SegmentInfo {
     Segment     id;
@@ -32,6 +32,11 @@ struct SegmentInfo {
 // Navigator order. Every Segment appears exactly once (selftest).
 const std::vector<SegmentInfo>& segments();
 const SegmentInfo& segment_info(Segment s);
+
+// s115: a footnote's item in the outline -- "note:<story>:<para>:<k>" (where
+// it is now; the ids move with the text). parse: false when not one.
+std::string note_item_id(const std::string& story, int para, int k);
+bool parse_note_item_id(const std::string& id, std::string& story, int& para, int& k);
 
 // How a tile draws its thumbnail. The painter lives on the GTK side; the core
 // says only WHAT it is.

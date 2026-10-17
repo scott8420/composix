@@ -219,6 +219,18 @@ void Shell::show_pick_now(const views::Pick& p, const std::vector<std::string>& 
             m_inspector.show_items(items);
             return;
         }
+        // s115: a footnote -- its page, the mark picked, its words open.
+        {
+            std::string story;
+            int np = 0, nk = 0;
+            if (p.items.size() == 1 && core::parse_note_item_id(p.items.front(), story, np, nk)) {
+                m_inspected = p.items;
+                m_inspector.show_items(items);
+                const auto id = p.items.front();
+                Glib::signal_idle().connect_once([this, id] { go_to_note(id); });
+                return;
+            }
+        }
         // s033: a story opens in the story editor.
         if (p.items.size() == 1 && m_doc.as<core::Story>(p.items.front())) {
             if (m_story_ed.story() != p.items.front()) m_story_ed.show_story(p.items.front());
@@ -236,6 +248,30 @@ void Shell::show_pick_now(const views::Pick& p, const std::vector<std::string>& 
     m_inspected.clear();
     m_main.set_visible_child("welcome");
     m_inspector.clear();
+}
+
+// s115: a footnote (its outline id): its page on the canvas, its mark
+// picked, its words open to edit. Overset or not placed: said so.
+void Shell::go_to_note(const std::string& id) {  // helper
+    std::string story;
+    int p = 0, k = 0;
+    if (!core::parse_note_item_id(id, story, p, k)) return;
+    const auto* st = m_doc.as<core::Story>(story);
+    const int m = st ? core::doc::note_mark_byte(*st, p, k) : -1;
+    if (m < 0) return;
+    const auto flow = layout::flow_story(m_doc, story);
+    const auto c = layout::caret_at(m_doc, story, flow, {p, m});
+    if (!c.ok) {
+        alert(flow.frames.empty() ? "This story isn\u2019t placed" : "This note is in overset text",
+              flow.frames.empty() ? "Place the story in a text frame to see its footnotes on a page."
+                                  : "Its mark is past the last frame: make room for the text, or thread another frame.");
+        return;
+    }
+    const auto* f = m_doc.as<core::Frame>(c.frame);
+    m_nav.select_items({f->owner});   // its page (or master) on the canvas
+    m_canvas_view.canvas().select_text(c.frame, {p, m}, {p, m + 3}, true);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("footnotes: to {} (page {})", id, f->owner);
+    Glib::signal_idle().connect_once([this, story, p, k] { edit_note(story, p, k); });
 }
 
 bool Shell::open_project(const std::string& dir) {  // helper

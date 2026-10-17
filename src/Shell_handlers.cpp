@@ -921,6 +921,19 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         return;
     }
     if (m_inspected.empty()) return;
+    if (key == "note" || key == "note_words") {   // s115: a footnote picked in Footnotes
+        std::string story;
+        int p = 0, k = 0;
+        if (key == "note") {
+            if (choice == "show" && core::parse_note_item_id(m_inspected.front(), story, p, k)) go_to_note(m_inspected.front());
+            return;
+        }
+        int n = 0;
+        for (const auto& id : m_inspected)
+            if (core::parse_note_item_id(id, story, p, k) && core::doc::set_note_text(m_journal, m_doc, story, p, k, choice)) ++n;
+        if (auto lg = log::get(log::Area::Shell)) lg->info("footnotes: words set on {}", n);
+        return;
+    }
     bool did = false;
     try {
         if (key == "master") {

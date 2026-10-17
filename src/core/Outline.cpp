@@ -11,6 +11,7 @@ const std::vector<SegmentInfo>& segments() {
         {Segment::Pages,     "pages",     "Pages & Spreads", "view-grid-symbolic"},
         {Segment::Masters,   "masters",   "Masters",         "view-dual-symbolic"},
         {Segment::Stories,   "stories",   "Stories",         "format-justify-left-symbolic"},
+        {Segment::Notes,     "notes",     "Footnotes",       "composix-footnote-symbolic"},   // s115 (bundled)
         {Segment::Styles,    "styles",    "Styles",          "format-text-bold-symbolic"},
         {Segment::Assets,    "assets",    "Links & Assets",  "image-x-generic-symbolic"},
         {Segment::Colors,    "colors",    "Colors",          "applications-graphics-symbolic"},
@@ -23,6 +24,29 @@ const SegmentInfo& segment_info(Segment s) {
     for (const auto& i : segments())
         if (i.id == s) return i;
     throw std::logic_error("segment_info: unknown section");
+}
+
+std::string note_item_id(const std::string& story, int para, int k) {   // s115
+    return "note:" + story + ":" + std::to_string(para) + ":" + std::to_string(k);
+}
+
+bool parse_note_item_id(const std::string& id, std::string& story, int& para, int& k) {
+    if (id.rfind("note:", 0) != 0) return false;
+    const auto c2 = id.rfind(':');
+    if (c2 == std::string::npos || c2 < 5) return false;
+    const auto c1 = id.rfind(':', c2 - 1);
+    if (c1 == std::string::npos || c1 < 5) return false;
+    try {
+        std::size_t used = 0;
+        para = std::stoi(id.substr(c1 + 1, c2 - c1 - 1), &used);
+        if (used != c2 - c1 - 1) return false;
+        k = std::stoi(id.substr(c2 + 1), &used);
+        if (used != id.size() - c2 - 1) return false;
+    } catch (...) {
+        return false;
+    }
+    story = id.substr(5, c1 - 5);
+    return !story.empty() && para >= 0 && k >= 0;
 }
 
 std::vector<const Item*> Outline::in(Segment s) const {
@@ -114,7 +138,7 @@ std::string selection_title(const std::vector<const Item*>& sel) {
                                       [&](const Item* i) { return i->segment == s; });
     if (!one_kind) return std::to_string(sel.size()) + " items";
     static const char* noun[] = {"sections", "pages", "masters", "stories",
-                                 "styles", "assets", "colors", "generated lists"};
+                                 "styles", "assets", "colors", "generated lists", "footnotes"};
     return std::to_string(sel.size()) + " " + noun[static_cast<int>(s)];
 }
 

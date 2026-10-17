@@ -166,6 +166,7 @@ private:
     void finish_flows();
     void poll_work();
     void edit_note(const std::string& story, int p, int k, int sel_a = -1, int sel_b = -1, bool take_focus = true);   // s113: a Find hit's words selected, the keyboard left where it is
+    void go_to_note(const std::string& id);    // category: helper: s115 -- a footnote's page, its words open
     void close_find_note();                     // category: helper: s113 -- the note Find opened, closed   // category: helper: s110 -- a footnote's words, in a popover at the caret                             // category: helper: s108 -- the header's "working" pill                          // category: helper: s106 -- a provisional flow's whole, on a worker
     void go_to_issue(const layout::Issue& i);     // category: helper: s024 -- its page, its frame picked
     void find_refresh();                          // category: helper: s022 -- the hits again, from the bar's settings

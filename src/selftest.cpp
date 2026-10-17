@@ -320,7 +320,7 @@ int main() {
             keys.insert(s.key);
         }
         check("segments: every segment listed once", seen.size() == core::segments().size() &&
-                                                     seen.size() == 8 && keys.size() == 8);
+                                                     seen.size() == 9 && keys.size() == 9);
     }
     {
         std::cout << "\n-- document: places, folios, sections --\n";
@@ -6450,6 +6450,47 @@ int main() {
             check("the note's lines drawn, smaller than Body's", lines >= 1 && h1 > 0 && body > 0 && h1 < body * 0.9,
                   std::to_string(h1) + " / " + std::to_string(body));
         }
+    }
+
+    {
+        std::cout << "\n-- the Footnotes section (s115) --\n";
+        std::string st;
+        int p = -1, k = -1;
+        const auto id = core::note_item_id("story.1", 5, 0);
+        check("note item id: made and read back", core::parse_note_item_id(id, st, p, k) && st == "story.1" && p == 5 && k == 0);
+        check("note item id: not one -- refused", !core::parse_note_item_id("story.1", st, p, k) &&
+                                                  !core::parse_note_item_id("note:story.1:x:0", st, p, k) &&
+                                                  !core::parse_note_item_id("note::1:0", st, p, k) &&
+                                                  !core::parse_note_item_id("note:story.1:1:2z", st, p, k));
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto o = core::project(d, "");
+        auto notes = o.in(core::Segment::Notes);
+        const auto words = [](const core::Item* it) {
+            for (const auto& f : it->fields) if (f.edit == "note_words") return f.value;
+            return std::string("?");
+        };
+        check("the sample's note listed, its words editable",
+              notes.size() == 1 && notes[0]->id == id && words(notes[0]) == d.as<core::Story>("story.1")->paras[5].notes[0].text &&
+                  notes[0]->thumb.sample == words(notes[0]));
+        core::doc::insert_note(j, d, "story.1", {1, 4}, "");
+        core::doc::insert_note(j, d, "story.2", {0, 0}, "Surveyed again in 1872.");
+        o = core::project(d, "");
+        notes = o.in(core::Segment::Notes);
+        check("each note, in story order, numbered in its story",
+              notes.size() == 3 && notes[0]->id == core::note_item_id("story.1", 1, 0) && notes[0]->title.rfind("Note 1", 0) == 0 &&
+                  notes[1]->id == id && notes[1]->title.rfind("Note 2", 0) == 0 && notes[2]->title.rfind("Note 1", 0) == 0);
+        check("an empty note is badged", notes[0]->badge == "Empty" && notes[1]->badge.empty());
+        bool show = false;
+        for (const auto& f : notes[1]->fields) show = show || (f.buttons && f.edit == "note" && !f.choices.empty());
+        check("Show in the Text offered", show);
+        check("ids unique across the outline", [&] {
+            std::set<std::string> ids;
+            for (const auto& it : o.items()) if (!ids.insert(it.id).second) return false;
+            return true;
+        }());
     }
 
     std::cout << "-----------------------------------------------\n";
