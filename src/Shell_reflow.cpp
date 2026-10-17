@@ -74,4 +74,38 @@ void Shell::finish_flows() {  // helper
     });
 }
 
+// s108: what's going on in the background, in the header: the rest of a
+// story being set, page tiles, canvas pages. After 400 ms of it (quick work
+// never shows); gone when it's done.
+void Shell::poll_work() {  // helper
+    if (!m_work) return;
+    const std::size_t tiles = m_page_thumbs.store().pending();
+    const std::size_t pages = m_canvas_view.canvas().pages_pending();
+    const bool flowing = m_flow_job != nullptr;
+    const bool busy = flowing || tiles > 0 || pages > 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (busy && !m_work_busy) m_work_since = now;
+    m_work_busy = busy;
+    const bool show = busy && now - m_work_since >= std::chrono::milliseconds(400);
+    if (show) {
+        std::string what, tip;
+        if (flowing) {
+            what = "Setting the rest of the text\u2026";
+            tip = "The pages near your edit are set; the rest of the story follows on in the background.";
+        } else if (tiles > 0) {
+            what = "Drawing pages \u00b7 " + std::to_string(tiles) + " to go";
+            tip = "The page tiles are drawn in the background; each shows as it's ready.";
+        } else {
+            what = "Drawing pages\u2026";
+            tip = "The canvas's pages are drawn again in the background (a zoom, Proof Colours).";
+        }
+        m_work_label->set_text(what);
+        m_work->set_tooltip_text(tip);
+    }
+    if (show != m_work->get_visible()) {
+        m_work->set_visible(show);
+        if (show) m_work_spin->start(); else m_work_spin->stop();
+    }
+}
+
 }  // namespace composix

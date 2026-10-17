@@ -2053,6 +2053,23 @@ int main() {
                 }
                 check("proof: the screen's fast path looks as check says (within 2 levels)", same);
             }
+            {   // s107: the paper, and CMYK inks on screen through the press.
+                plate::Proof plain, paper;
+                plain.load(icc);
+                paper.load(icc, false, nullptr, true);
+                std::uint8_t w0[3] = {255, 255, 255}, w1[3] = {255, 255, 255};
+                plain.simulate(w0, 1);
+                paper.simulate(w1, 1);
+                check("proof: without the paper, white stays white", w0[0] >= 250 && w0[1] >= 250 && w0[2] >= 250 && !plain.paper());
+                check("proof: with the paper, white is the paper's (not screen white)",
+                      paper.paper() && (w1[0] < 253 || w1[1] < 253 || w1[2] < 253) && w1[0] > 180 && w1[1] > 180 && w1[2] > 180,
+                      std::to_string(w1[0]) + "," + std::to_string(w1[1]) + "," + std::to_string(w1[2]));
+                const double none[4] = {0, 0, 0, 0}, k[4] = {0, 0, 0, 100}, c[4] = {100, 0, 0, 0};
+                const auto wn = plain.cmyk_to_screen(none), kk = plain.cmyk_to_screen(k), cc = plain.cmyk_to_screen(c);
+                check("CMYK on screen: no ink is white, K is dark, C is cyan",
+                      (wn >> 16 & 0xff) >= 245 && (wn & 0xff) >= 245 && (kk >> 16 & 0xff) < 100 &&
+                      (cc >> 16 & 0xff) < 120 && (cc & 0xff) > 150);
+            }
             {   // s085: the intent asked for, and the proof made with it.
                 const auto per = L::color_report(d, icc, true, blue_px);
                 const L::ColorRow* psky = nullptr;
@@ -5863,6 +5880,22 @@ int main() {
         for (const auto& p : pages) all = all && st.look(d, flows, {}, p, p, 80, 120, false).current;
         check("every page of a 40-page book drawn on the worker, current", all && st.renders() == static_cast<int>(pages.size()));
     }
+    {
+        std::cout << "\n-- CMYK drawn through the press profile (s107) --\n";
+        core::Swatch cm{"Ink", 1, core::ColorModel::CMYK, {10, 20, 30, 40}, "", 0x123456};
+        core::Swatch rgb{"Sky", 2, core::ColorModel::RGB, {10, 20, 30, 0}, "", 0x0a141e};
+        const auto g0 = core::doc::screen_gen();
+        check("no profile: the preview", core::doc::screen_rgb(cm) == 0x123456 && core::doc::screen_rgb(rgb) == 0x0a141e);
+        core::doc::set_screen_cmyk([](const double v[4]) { return static_cast<std::uint32_t>(v[0] * 1000 + v[3]); });
+        check("a profile: CMYK through it, RGB as it is, and caches told",
+              core::doc::screen_rgb(cm) == 10040 && core::doc::screen_rgb(rgb) == 0x0a141e && core::doc::screen_gen() > g0);
+        core::Swatch spot = cm;
+        spot.model = core::ColorModel::Spot;
+        check("a spot: its CMYK alternate through it", core::doc::screen_rgb(spot) == 10040);
+        core::doc::set_screen_cmyk({});
+        check("back to the ink model", core::doc::screen_rgb(cm) == 0x123456);
+    }
+
     {
         std::cout << "\n-- a keystroke re-flows from the edit (s105) --\n";
         namespace L = composix::layout;

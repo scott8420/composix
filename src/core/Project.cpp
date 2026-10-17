@@ -585,7 +585,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         Field act{"", "", "swatch", {{"edit", "Edit\u2026"}, {"duplicate", "Duplicate"}}};
         if (uses == 0 && s.name != "Black" && s.name != "Paper") act.choices.push_back({"delete", "Delete"});
         act.buttons = true;
-        o.add({sid, G::Colors, s.name, badge, {K::Swatch, 1, 1, s.preview},
+        o.add({sid, G::Colors, s.name, badge, {K::Swatch, 1, 1, doc::screen_rgb(s)},
                {{"Model", model_text(s.model)}, {"Value", swatch_value(s)}, {"Used", used}, {"Type", type}, act}, group});
     }
 

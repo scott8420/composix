@@ -899,6 +899,14 @@ int swatch_uses(const Doc& d, const Doc::Id& swatch);
 // out from the values: RGB as is, Gray as grey, CMYK and a spot's
 // alternate by a simple ink model (the print conversion is the profile's).
 std::uint32_t swatch_preview(const Swatch& s);
+// s107: the colour a swatch is DRAWN in on screen (canvas, thumbnails, the
+// screen PDF, the panels' chips): its preview -- except a CMYK swatch (or
+// a spot's CMYK alternate) when the app has a press profile, then the
+// profile's look of those inks (set_screen_cmyk). Any thread.
+std::uint32_t screen_rgb(const Swatch& s);
+using ScreenCmyk = std::function<std::uint32_t(const double cmyk[4])>;
+void set_screen_cmyk(ScreenCmyk f);   // {} = the simple ink model (the preview)
+std::uint64_t screen_gen();          // moves with each set_screen_cmyk: caches of drawn pages key on it
 // The values as 0xRRGGBB and back (for switching a swatch's model).
 void swatch_from_rgb(Swatch& s, std::uint32_t rgb);
 // New (after the last swatch), changed (its preview made from its values),

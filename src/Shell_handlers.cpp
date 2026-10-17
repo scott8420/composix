@@ -489,6 +489,7 @@ void Shell::on_export_pdf() {  // handler
             m_pdf_print = print->get_active();
             const auto i = prof->get_selected();
             m_pdf_profile = (i > 0 && i - 1 < m_profiles.size()) ? m_profiles[i - 1] : std::string{};
+            update_screen_colours();   // s107
             m_pdf_convert = conv->get_active();
             m_pdf_perceptual = intent->get_selected() == 1;   // s085
             m_pdf_rebuild = rebuild->get_active();             // s089
@@ -844,11 +845,31 @@ bool Shell::apply_proof(bool on) {  // helper
     }
     if (path.empty()) return false;
     auto proof = std::make_shared<plate::Proof>();
-    if (!proof->load(path, m_pdf_perceptual)) return false;
+    if (!proof->load(path, m_pdf_perceptual, nullptr, m_proof_paper)) return false;   // s107: the paper too
     m_proofing = true;
     m_canvas_view.canvas().set_proof(proof);
-    m_canvas_view.set_proof_label(name.empty() ? proof->name() : name);
+    m_canvas_view.set_proof_label((name.empty() ? proof->name() : name) + (m_proof_paper ? " \u00b7 paper" : ""));
     return true;
+}
+
+// s107: CMYK swatches (and spots' alternates) drawn through the press
+// profile -- the export's, else the first installed; the simple ink model
+// when there is none. The drawn pages' caches key on core::screen_gen().
+void Shell::update_screen_colours() {  // helper
+    std::string path = m_pdf_profile;
+    if (path.empty())
+        for (const auto& p : plate::find_cmyk_profiles(profile_dirs())) { path = p.path; break; }
+    if (path == m_screen_profile) return;
+    m_screen_profile = path;
+    auto pr = std::make_shared<plate::Proof>();
+    if (!path.empty() && pr->load(path)) {
+        core::doc::set_screen_cmyk([pr](const double cmyk[4]) { return pr->cmyk_to_screen(cmyk); });
+        if (auto lg = log::get(log::Area::Shell)) lg->info("CMYK on screen through '{}'", pr->name());
+    } else {
+        core::doc::set_screen_cmyk({});
+    }
+    queue_refresh();
+    m_canvas_view.canvas().queue_draw();
 }
 
 // s097: Links & Assets, nothing picked -- the files in assets/ nothing uses

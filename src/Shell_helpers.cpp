@@ -332,6 +332,7 @@ void Shell::load_export_prefs() {  // helper
         if (m_pdf_profile.empty()) m_profile_missing = e.profile;
     }
     m_pdf_standard = m_pdf_profile.empty() ? 0 : e.standard;
+    update_screen_colours();   // s107
 }
 
 // s019: before a document is replaced -- unsaved changes? Save / Don't Save /

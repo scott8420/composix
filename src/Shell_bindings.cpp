@@ -111,6 +111,15 @@ void Shell::bind_actions() {  // bindings: actions + recents group
         });
         add_action(a);
     }
+    {   // s107: the proof simulates the paper (its white, the ink's black) -- kept between runs.
+        m_proof_paper = core::setting_int(m_settings, "view.paper", 1, 0, 1) == 1;
+        toggle("toggle-paper", [this](bool v) {
+            m_proof_paper = v;
+            m_settings["view.paper"] = v ? "1" : "0";
+            core::save_settings(m_settings_file, m_settings);
+            if (m_proofing) apply_proof(true);
+        }, m_proof_paper);
+    }
     add_action("save",          sigc::mem_fun(*this, &Shell::on_save));
     add_action("save-as",       sigc::mem_fun(*this, &Shell::on_save_as));
     add_action("place",         sigc::mem_fun(*this, &Shell::on_place));   // s009

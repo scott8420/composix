@@ -459,7 +459,8 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
             std::snprintf(buf, sizeof buf, "w%.9g|%.4f|%.4f|%g", v.s, ox - std::floor(ox), oy - std::floor(oy), ds);
         var = buf;
         var += "|" + v.dir + "|" + v.live_story + (v.show_hidden ? "|h" : "|-") + (v.spine_left ? "L" : "-") +
-               (v.spine_right ? "R" : "-") + "|p" + std::to_string(m_proof ? m_proof_gen : 0);
+               (v.spine_right ? "R" : "-") + "|p" + std::to_string(m_proof ? m_proof_gen : 0) +
+               "|s" + std::to_string(core::doc::screen_gen());   // s107: CMYK through the press profile
         for (const auto& fid : m_doc.frames_on(p.id)) {
             const auto* f = m_doc.as<core::Frame>(fid);
             if (!f || f->kind != core::FrameKind::Text || f->story.empty()) continue;

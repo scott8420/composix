@@ -225,6 +225,14 @@ flowboxchild:selected > .cx-tile-card {
 /* s067: the link (same all round) and the presets beside a compact row -- slim */
 .cx-insp-mini, .cx-insp-mini > button { min-width: 20px; min-height: 24px; padding: 0 2px; }
 /* s099: the canvas header's Proof pill -- a warm tint so it's plain the colours are simulated */
+/* s108: background work -- quiet, beside Preflight */
+.cx-work-pill {
+  font-size: 0.8em;
+  color: @cx_dim;
+  background: @cx_faint;
+  border-radius: 999px;
+  padding: 2px 10px 2px 6px;
+}
 .cx-proof-pill { background: alpha(@cx_warn, 0.18); color: @cx_fg; }
 /* s096: four-across typed values share the row; their minimum doesn't widen the panel */
 entry.cx-insp-col-entry { min-width: 0; padding-left: 5px; padding-right: 3px; }

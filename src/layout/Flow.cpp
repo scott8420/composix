@@ -66,7 +66,7 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
             pango_attr_list_insert(attrs, at);
         };
         const auto colour = [&](const core::Swatch* sw, double tint) {
-            const auto c = core::tint_rgb(sw->preview, tint);   // s021: at its tint
+            const auto c = core::tint_rgb(core::doc::screen_rgb(*sw), tint);   // s021: at its tint
             add(pango_attr_foreground_new(static_cast<guint16>(((c >> 16) & 0xff) * 257),
                                           static_cast<guint16>(((c >> 8) & 0xff) * 257),
                                           static_cast<guint16>((c & 0xff) * 257)));
@@ -1052,7 +1052,7 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
         for (auto& m : column_rules(*fr)) marks.push_back(std::move(m));
     for (const auto& m : marks) {
         if (const auto* sw = d.as<core::Swatch>(m.color)) {
-            const auto c = core::tint_rgb(sw->preview, m.tint);
+            const auto c = core::tint_rgb(core::doc::screen_rgb(*sw), m.tint);
             cairo_set_source_rgb(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
         } else {
             const double g = 1 - m.tint * (1 - ink);
@@ -1071,7 +1071,7 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
                 tint = ps->color_tint;
             }
         if (sw) {
-            const auto c = core::tint_rgb(sw->preview, tint);   // s021
+            const auto c = core::tint_rgb(core::doc::screen_rgb(*sw), tint);   // s021
             cairo_set_source_rgb(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
         }
         else if (tint < 1) cairo_set_source_rgb(cr, 1 - tint * (1 - ink), 1 - tint * (1 - ink), 1 - tint * (1 - ink));   // black, tinted: grey

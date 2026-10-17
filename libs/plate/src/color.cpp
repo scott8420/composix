@@ -146,6 +146,7 @@ struct Proof::Impl {
     cmsHTRANSFORM to_cmyk = nullptr, back = nullptr, rgb_lab = nullptr, cmyk_lab = nullptr;
     cmsHTRANSFORM fast = nullptr;   // s099: sRGB 8-bit -> press -> sRGB 8-bit
     std::string   name;
+    bool          paper = false;    // s107
     std::mutex    mx;               // s104: proofed from the canvas page worker too
     ~Impl() {
         for (auto t : {to_cmyk, back, rgb_lab, cmyk_lab, fast}) if (t) cmsDeleteTransform(t);
@@ -156,7 +157,7 @@ struct Proof::Impl {
 Proof::Proof() = default;
 Proof::~Proof() = default;
 
-bool Proof::load(const std::string& path, bool perceptual, std::string* err) {
+bool Proof::load(const std::string& path, bool perceptual, std::string* err, bool paper) {
     m.reset();
     auto i = std::make_unique<Impl>();
     i->out = cmsOpenProfileFromFile(path.c_str(), "r");
@@ -182,19 +183,36 @@ bool Proof::load(const std::string& path, bool perceptual, std::string* err) {
         // chain's profiles alternately as output and input).
         cmsHPROFILE chain[4] = {i->srgb, i->out, i->out, i->srgb};
         cmsBool bpc[4] = {perceptual ? FALSE : TRUE, perceptual ? FALSE : TRUE, FALSE, FALSE};
-        cmsUInt32Number intents[4] = {in, in, INTENT_RELATIVE_COLORIMETRIC, INTENT_RELATIVE_COLORIMETRIC};
-        cmsFloat64Number adapt[4] = {0, 0, 0, 0};
+        // s107: with the paper, the way back is absolute -- the paper's white
+        // and the ink's black as they are, adapted to the screen's white.
+        const cmsUInt32Number back_in = paper ? INTENT_ABSOLUTE_COLORIMETRIC : INTENT_RELATIVE_COLORIMETRIC;
+        cmsUInt32Number intents[4] = {in, in, back_in, back_in};
+        cmsFloat64Number adapt[4] = {0, 0, paper ? 1.0 : 0.0, paper ? 1.0 : 0.0};
         i->fast = cmsCreateExtendedTransform(nullptr, 4, chain, bpc, intents, adapt, nullptr, 0, TYPE_RGB_8, TYPE_RGB_8, 0);
     }
     if (!i->to_cmyk || !i->back || !i->rgb_lab || !i->cmyk_lab) {   // (no fast one: simulate goes pixel by pixel)
         if (err) *err = "couldn't build the proofing transforms";
         return false;
     }
+    i->paper = paper;
     m = std::move(i);
     return true;
 }
 
 bool Proof::ok() const { return m != nullptr; }
+bool Proof::paper() const { return m && m->paper; }
+
+std::uint32_t Proof::cmyk_to_screen(const double cmyk[4]) const {   // s107
+    if (!m) return 0;
+    double in[4], out[3] = {0, 0, 0};
+    for (int k = 0; k < 4; ++k) in[k] = std::clamp(cmyk[k], 0.0, 100.0);
+    {
+        std::lock_guard lk(m->mx);
+        cmsDoTransform(m->back, in, out, 1);
+    }
+    const auto c = [](double v) { return static_cast<std::uint32_t>(std::lround(std::clamp(v, 0.0, 1.0) * 255.0)); };
+    return (c(out[0]) << 16) | (c(out[1]) << 8) | c(out[2]);
+}
 std::string Proof::name() const { return m ? m->name : std::string{}; }
 
 Proof::Result Proof::check(std::uint8_t r, std::uint8_t g, std::uint8_t b) const {

@@ -35,6 +35,8 @@
 
 #include <functional>
 #include <memory>
+#include <chrono>
+#include <gtkmm/spinner.h>
 #include <glibmm/dispatcher.h>
 #include <thread>
 #include <string>
@@ -95,6 +97,7 @@ private:
     // ── handlers ───────────────────────────────────────────────────────────
     void on_nav_pick(const views::Pick& p);      // category: handler: section -> tiles, items -> open
     void on_tiles_selection(const std::vector<std::string>& ids);  // category: handler: -> inspector
+    void update_screen_colours();                 // category: helper: s107 -- CMYK swatches on screen through the press profile
     bool apply_proof(bool on);   // s099: proof colours with the export's profile and intent; false = no profile
     std::vector<core::Field> section_fields(core::Segment s) const;   // s097: a section's own Inspector rows
     void on_tiles_open(const std::vector<std::string>& ids);       // category: handler: -> navigator selects them
@@ -160,7 +163,8 @@ private:
     Glib::RefPtr<Gio::Menu> special_menu();       // category: zone: s023 -- Insert Special Character
     void build_preflight();                       // category: zone: s024 -- the header's Preflight button + list
     void update_preflight();                      // category: helper: s024 -- the checks again; the count, the list
-    void finish_flows();                          // category: helper: s106 -- a provisional flow's whole, on a worker
+    void finish_flows();
+    void poll_work();                             // category: helper: s108 -- the header's "working" pill                          // category: helper: s106 -- a provisional flow's whole, on a worker
     void go_to_issue(const layout::Issue& i);     // category: helper: s024 -- its page, its frame picked
     void find_refresh();                          // category: helper: s022 -- the hits again, from the bar's settings
     void find_go(int dir);                        // category: helper: s022 -- next / previous hit, shown on the canvas
@@ -251,6 +255,8 @@ private:
     // s089: Preflight's flows; s101: THE flow cache -- the canvas and the
     // thumbnails share it (declared before them: it outlives them).
     mutable layout::FlowCache        m_pf_flows;
+    std::string                      m_screen_profile = "\x01";   // s107: the profile CMYK is shown through ("" none)
+    bool                             m_proof_paper = true;          // s107: Proof Colours simulates the paper
     static constexpr int             kReflowBudget = 24;   // s106: frames a re-flow sets on the spot
     static int reflow_budget();   // kReflowBudget, or COMPOSIX_REFLOW_BUDGET (a test knob)
     // s106: the whole of a provisional flow, worked out on a worker.
@@ -360,6 +366,13 @@ private:
 
     // s024: Preflight -- the header button (a count), its list, the checks' flows.
     Gtk::MenuButton*                 m_preflight = nullptr;
+    // s108: background work you can see -- a spinner and what it's doing.
+    Gtk::Box*                        m_work = nullptr;
+    Gtk::Spinner*                    m_work_spin = nullptr;
+    Gtk::Label*                      m_work_label = nullptr;
+    std::chrono::steady_clock::time_point m_work_since{};
+    bool                             m_work_busy = false;
+    sigc::connection                 m_work_poll;
     Gtk::Label*                      m_preflight_label = nullptr;
     Gtk::ListBox*                    m_preflight_list = nullptr;
     std::vector<layout::Issue>       m_issues;

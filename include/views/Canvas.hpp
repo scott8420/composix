@@ -79,6 +79,7 @@ public:
     // print them (null: off).
     void set_proof(std::shared_ptr<const plate::Proof> p) { m_proof = std::move(p); ++m_proof_gen; queue_draw(); }
     bool proofing() const { return m_proof != nullptr; }
+    std::size_t pages_pending() const { return m_pages.pending(); }   // s108: page images on the worker
     bool show_hidden() const { return m_show_hidden; }
 
     // s009: images. The project folder resolves relative / embedded files.

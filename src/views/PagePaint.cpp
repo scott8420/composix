@@ -122,7 +122,7 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
     const double op = std::clamp(f.opacity, 0.0, 1.0);   // s021: on fill, content and stroke alike
     // s016: the frame's fill, behind its content (and its stroke, after).
     if (const auto* fs = P.doc.as<core::Swatch>(f.fill)) {
-        const auto c = core::tint_rgb(fs->preview, f.fill_tint);   // s021
+        const auto c = core::tint_rgb(core::doc::screen_rgb(*fs), f.fill_tint);   // s021
         cr->save();
         cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0, dim * op);
         cr->rectangle(r.x, r.y, r.w, r.h);
@@ -134,7 +134,7 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
         ~StrokeLater() {
             const auto* ss = d.as<core::Swatch>(f.stroke);
             if (!ss || f.stroke_w <= 0) return;
-            const auto c = core::tint_rgb(ss->preview, f.stroke_tint);   // s021
+            const auto c = core::tint_rgb(core::doc::screen_rgb(*ss), f.stroke_tint);   // s021
             cr->save();
             cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0,
                                 dim * std::clamp(f.opacity, 0.0, 1.0));

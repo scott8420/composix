@@ -58,6 +58,19 @@ void Shell::build_shell() {  // zone: header + panes
     header->pack_end(m_insp_toggle);
     build_preflight();   // s024
     header->pack_end(*m_preflight);
+    // s108: work going on in the background, beside Preflight -- shown only
+    // once it has gone on a moment, so quick work doesn't flicker it.
+    m_work = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    m_work->set_name("shell.work");
+    m_work->add_css_class("cx-work-pill");
+    m_work->set_valign(Gtk::Align::CENTER);
+    m_work_spin = Gtk::make_managed<Gtk::Spinner>();
+    m_work_label = Gtk::make_managed<Gtk::Label>();
+    m_work->append(*m_work_spin);
+    m_work->append(*m_work_label);
+    m_work->set_visible(false);
+    header->pack_end(*m_work);
+    m_work_poll = Glib::signal_timeout().connect([this] { poll_work(); return true; }, 200);
     set_titlebar(*header);
 
     // ── body: nav | (main | inspector) ─────────────────────────────────────
@@ -203,6 +216,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     canvas->append("Baseline Grid", "win.toggle-grid");   // s036
     canvas->append("Hidden Characters", "win.toggle-hidden");   // s059
     canvas->append("Proof Colours", "win.toggle-proof");        // s099
+    canvas->append("Simulate Paper", "win.toggle-paper");       // s107
     canvas->append("Snap to Guides & Edges", "win.toggle-snap");
     view->append_section(canvas);
 

@@ -106,7 +106,9 @@ ThumbStore::Look ThumbStore::look(const core::Doc& d, FlowCache& flows, const Im
     const Render r = [id, pw, ph, guides](const core::Doc& doc, FlowCache& fl, const ImageSource& im) {
         return render_thumb(doc, fl, id, pw, ph, guides, im);
     };
-    return look(d, flows, images, slot, id, {}, pw, ph, r, m_threaded ? Miss::Ask : Miss::Now);
+    // s107: how CMYK is shown on screen is part of the picture.
+    return look(d, flows, images, slot, id, "s" + std::to_string(core::doc::screen_gen()), pw, ph, r,
+                m_threaded ? Miss::Ask : Miss::Now);
 }
 
 ThumbStore::Look ThumbStore::look(const core::Doc& d, FlowCache& flows, const ImageSource& images,

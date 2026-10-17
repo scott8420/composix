@@ -60,7 +60,7 @@ void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
         const auto paint = [&](const std::string& sw, double tint) {
             const auto* s = d.as<core::Swatch>(sw);
             if (!s) return false;
-            const auto c = core::tint_rgb(s->preview, tint);
+            const auto c = core::tint_rgb(core::doc::screen_rgb(*s), tint);
             cairo_set_source_rgba(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0, op);
             return true;
         };

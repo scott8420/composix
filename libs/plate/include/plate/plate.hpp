@@ -240,8 +240,14 @@ public:
     ~Proof();
     Proof(const Proof&) = delete;
     Proof& operator=(const Proof&) = delete;
-    bool load(const std::string& icc_path, bool perceptual = false, std::string* err = nullptr);
+    // s107: `paper` -- simulate() shows the press's paper and black (the way
+    // back absolute colorimetric): white comes out the paper's white.
+    bool load(const std::string& icc_path, bool perceptual = false, std::string* err = nullptr, bool paper = false);
     bool ok() const;
+    bool paper() const;
+    // s107: what a CMYK ink mix (0..100 each) looks like on screen through
+    // this press -- relative colorimetric (screen white is the paper). Any thread.
+    std::uint32_t cmyk_to_screen(const double cmyk[4]) const;
     std::string name() const;   // the profile's description
     struct Result {
         double        cmyk[4] = {0, 0, 0, 0};   // 0..100

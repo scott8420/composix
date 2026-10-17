@@ -2,6 +2,9 @@
 
 #include <map>
 #include <algorithm>
+#include <memory>
+#include <atomic>
+#include <mutex>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -2179,6 +2182,40 @@ std::uint32_t swatch_preview(const Swatch& s) {
         b = 255 * (1 - std::min(1.0, Y)) * (1 - std::min(1.0, K));
     }
     return (c(r) << 16) | (c(g) << 8) | c(b);
+}
+
+namespace {
+struct ScreenHook {
+    std::mutex                        mx;
+    std::shared_ptr<const ScreenCmyk> f;
+    std::atomic<std::uint64_t>        gen{1};
+};
+ScreenHook& screen_hook() {
+    static ScreenHook h;
+    return h;
+}
+}  // namespace
+
+void set_screen_cmyk(ScreenCmyk f) {   // s107
+    auto& h = screen_hook();
+    std::lock_guard lk(h.mx);
+    h.f = f ? std::make_shared<const ScreenCmyk>(std::move(f)) : nullptr;
+    ++h.gen;
+}
+
+std::uint64_t screen_gen() { return screen_hook().gen.load(); }
+
+std::uint32_t screen_rgb(const Swatch& s) {   // s107
+    if (s.model != ColorModel::CMYK && s.model != ColorModel::Spot) return s.preview;
+    std::shared_ptr<const ScreenCmyk> f;
+    {
+        auto& h = screen_hook();
+        std::lock_guard lk(h.mx);
+        f = h.f;
+    }
+    if (!f) return s.preview;
+    const double v[4] = {s.v[0], s.v[1], s.v[2], s.v[3]};
+    return (*f)(v);
 }
 
 void swatch_from_rgb(Swatch& s, std::uint32_t rgb) {

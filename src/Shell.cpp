@@ -39,6 +39,7 @@ Shell::Shell()
 }
 
 Shell::~Shell() {
+    m_work_poll.disconnect();   // s108
     if (m_flow_thread.joinable()) m_flow_thread.join();   // s106
     if (m_ctx_menu) m_ctx_menu->unparent();   // s074: a popover parented by hand goes by hand
 }
