@@ -92,7 +92,7 @@ std::vector<Field> shared_fields(const std::vector<const Item*>& sel) {
             for (std::size_t k = 0; k < parts.size(); ++k) g.value += (k ? "\t" : "") + parts[k];
             g.cols = f.cols;
         }
-        if (editable) { g.edit = f.edit; g.choices = f.choices; g.buttons = f.buttons; g.unit = f.unit; g.lo = f.lo; g.hi = f.hi; g.text = f.text; g.link = f.link; }
+        if (editable) { g.edit = f.edit; g.choices = f.choices; g.buttons = f.buttons; g.unit = f.unit; g.lo = f.lo; g.hi = f.hi; g.text = f.text; g.link = f.link; g.percent = f.percent; }
         out.push_back(std::move(g));
     }
     return out;

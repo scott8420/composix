@@ -80,6 +80,10 @@ struct ExportPrefs {
     bool operator==(const ExportPrefs&) const = default;
 };
 
+// s073: the unit lengths are shown in (rulers, the inspector, sizes).
+// Typing any unit still works everywhere; a bare number is in this one.
+enum class Units { Inches, Millimetres, Picas, Points };
+
 struct Settings {
     std::string title  = "Untitled";
     double      trim_w = 6 * kPt, trim_h = 9 * kPt;
@@ -88,6 +92,7 @@ struct Settings {
     // s069: a frame's text wrap pushes only text frames beneath it in the
     // stacking order (masters below their pages); off: every text frame.
     bool        wrap_beneath = false;
+    Units       units = Units::Inches;   // s073
     ExportPrefs exp;                     // s032
     bool operator==(const Settings&) const = default;
 };
@@ -428,9 +433,20 @@ std::string inches(double pt);                          // 432 -> "6", 423 -> "5
 // picas 6 points), "6p", "10 mm", "1.5cm". A bare number is in `unit`
 // points (1: points, 72: inches). Nothing (nullopt) if it isn't a length.
 std::optional<double> parse_length(std::string_view text, double unit = 1);
+// s071: a typed percentage: "40", "40%", "40 %", "12.5%". Nothing if it
+// isn't one.
+std::optional<double> parse_percent(std::string_view text);
 // A number for a verb: 12 -> "12", 12.5 -> "12.5" (to 1/1000).
 std::string num_text(double v);
-std::string size_text(double w, double h, std::size_t folds);   // "17.75 × 9 in (3-panel)"
+std::string size_text(double w, double h, std::size_t folds, Units u = Units::Inches);   // "17.75 × 9 in (3-panel)"
+// s073: lengths in a unit. unit_pt: points per unit (72, 72 / 25.4, 12, 1).
+// unit_name: "in", "mm", "picas", "pt". length_in: the number alone
+// ("0.75", "19.05", "4p6", "54"); length_text: with its unit ("0.75 in",
+// "19.05 mm", "4p6", "54 pt").
+double      unit_pt(Units u);
+std::string unit_name(Units u);
+std::string length_in(double pt, Units u);
+std::string length_text(double pt, Units u);
 std::string numbering_text(Numbering n);
 std::string side_text(Side s);
 std::string master_label(const Doc& d, const Doc::Id& master);  // "B-Body", "None"
@@ -540,6 +556,8 @@ bool set_bleed(DocJournal& j, Doc& d, double bleed);
 bool set_facing(DocJournal& j, Doc& d, bool facing);
 // s069: wrap pushes only text beneath (Settings::wrap_beneath). One step.
 bool set_wrap_beneath(DocJournal& j, Doc& d, bool on);
+// s073: the document's display unit. One step.
+bool set_units(DocJournal& j, Doc& d, Units u);
 // s062: pages' own margins -- `f` edits them (starting from what they use
 // now); `reset` drops them (back to the master's). One step.
 bool edit_page_margins(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const std::string& label,
@@ -597,6 +615,14 @@ bool set_export(DocJournal& j, Doc& d, const ExportPrefs& e);
 // frame gets its own copy of the story) that hides the master's there.
 // "" if it isn't a master item shown on that page, or is already overridden.
 Doc::Id override_master_item(DocJournal& j, Doc& d, const Doc::Id& page, const Doc::Id& master_frame);
+// s072: every master item showing on each of `pages` (not yet overridden)
+// overridden at once -- ONE step; the copies made, in order.
+std::vector<Doc::Id> override_all(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages);
+// s072: every override on each of `pages` back to the master's -- one step.
+bool remove_all_overrides(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages);
+// s072: the master items showing on `page` that it could override (its
+// masters' items for its side, not yet overridden), bottom up.
+std::vector<Doc::Id> overridable_items(const Doc& d, const Doc::Id& page);
 // Back to the master's: the page copies go (their stories with them).
 bool remove_overrides(DocJournal& j, Doc& d, const std::vector<Doc::Id>& page_frames);
 // Thread `from` -> `to` (`to` goes into the thread right after `from`). `to`
@@ -635,6 +661,13 @@ bool edit_masters(DocJournal& j, Doc& d, const std::vector<Doc::Id>& masters, co
 // one step for all.
 bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, const std::string& label,
                  const std::function<void(Frame&)>& f);
+// s070: stacking order -- the frames among the others on their page (or
+// master): to the front / one forward / one backward / to the back. The
+// picked keep their order among themselves; forward / backward step past
+// ONE frame that isn't picked. z is renumbered 0..n-1 on each owner
+// touched. One step; false when nothing moves.
+enum class Arrange { Front, Forward, Backward, Back };
+bool arrange(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, Arrange how);
 // s067: one side of a frame's text inset (text frames) or wrap offset --
 // side 0..3 = top / right / bottom / left, -1 = all four ("same all
 // round"). Points, 0..500. One step for all the frames.

@@ -8,6 +8,7 @@
 
 #include "json.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <ctime>
@@ -37,7 +38,7 @@ json to(const Record& r) {
         json j;
         if constexpr (std::is_same_v<T, Settings>) {
             j = {{"kind", "settings"}, {"title", v.title}, {"trim_w", v.trim_w}, {"trim_h", v.trim_h},
-                 {"bleed", v.bleed}, {"facing", v.facing}, {"wrap_beneath", v.wrap_beneath},
+                 {"bleed", v.bleed}, {"facing", v.facing}, {"wrap_beneath", v.wrap_beneath}, {"units", static_cast<int>(v.units)},
                  {"export", {{"print", v.exp.print}, {"bleed", v.exp.bleed}, {"marks", v.exp.marks},
                              {"profile", v.exp.profile}, {"convert", v.exp.convert}, {"standard", v.exp.standard}}}};
         } else if constexpr (std::is_same_v<T, Section>) {
@@ -144,6 +145,7 @@ std::optional<Record> from(const json& j) {
         v.bleed = val(j, "bleed", v.bleed);
         v.facing = val(j, "facing", v.facing);
         v.wrap_beneath = val(j, "wrap_beneath", false);   // s069
+        v.units = static_cast<Units>(std::clamp(val(j, "units", 0), 0, 3));   // s073
         if (j.contains("export")) {   // s032
             const auto& e = j.at("export");
             v.exp = {val(e, "print", true), val(e, "bleed", true), val(e, "marks", false),

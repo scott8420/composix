@@ -84,6 +84,8 @@ struct Field {
     // any column goes to all four ("a:points"); unlinked, to its own
     // ("k:points"). Linking unequal sides makes all four the first.
     bool link = false;
+    // s071: a percentage typed ("40", "40%") -- sends the number, in [lo, hi].
+    bool percent = false;
     bool operator==(const Field&) const = default;
 };
 

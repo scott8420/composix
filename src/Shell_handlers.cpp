@@ -384,7 +384,7 @@ void Shell::on_export_pdf() {  // handler
             static_cast<Gtk::Label*>(c)->set_text("Every page at its own size, fonts embedded,\nimages at full resolution.");
         } else if (c->get_name() == "export.bleed") {
             auto* b = static_cast<Gtk::CheckButton*>(c);
-            b->set_label("Bleed (" + core::inches(m_doc.settings().bleed) + " in)");
+            b->set_label("Bleed (" + core::length_text(m_doc.settings().bleed, m_doc.settings().units) + ")");
             b->set_active(m_pdf_bleed);
         } else if (c->get_name() == "export.marks") {
             static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_marks);
@@ -511,6 +511,14 @@ void Shell::on_go_up() {  // handler
     sync_up();
 }
 
+// s070: the picked frames up / down the stack -- one step.
+void Shell::on_arrange(core::doc::Arrange how) {  // handler
+    auto& cv = m_canvas_view.canvas();
+    if (m_main.get_visible_child_name() != "canvas" || cv.editing() || cv.selection().empty()) return;
+    const bool did = core::doc::arrange(m_journal, m_doc, cv.selection(), how);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("arrange {} on {} frame(s): {}", static_cast<int>(how), cv.selection().size(), did ? "step" : "no change");
+}
+
 // s068: Forward -- back into what Back left, while its section is shown.
 void Shell::on_go_forward() {  // handler
     if (m_fwd_items.empty() || !m_fwd_from || m_pick.segment != m_fwd_from) return;
@@ -564,6 +572,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::set_trim(m_journal, m_doc, k == 0 ? v : st.trim_w, k == 1 ? v : st.trim_h);
         } else if (key == "dbleed") {
             did = core::doc::set_bleed(m_journal, m_doc, std::stod(choice));
+        } else if (key == "dunits") {   // s073
+            did = core::doc::set_units(m_journal, m_doc, static_cast<core::Units>(std::clamp(std::stoi(choice), 0, 3)));
         } else if (key == "dwrap") {   // s069
             did = core::doc::set_wrap_beneath(m_journal, m_doc, choice == "1");
         } else if (key == "ignore_wrap") {   // s069
@@ -811,6 +821,9 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 else if (key == "minside") m.margins.inside = v;
                 else m.margins.outside = v;
             });
+        } else if (key == "pover") {   // s072: every master item on the pages -- overridden / back
+            if (choice == "all") did = !core::doc::override_all(m_journal, m_doc, m_inspected).empty();
+            else did = core::doc::remove_all_overrides(m_journal, m_doc, m_inspected);
         } else if (key == "page") {   // s014: Add page after / Delete / Start section
             did = page_action(choice, m_inspected);
         } else if (key == "fill" || key == "stroke" || key == "stroke_w") {   // s016: frame fill / stroke

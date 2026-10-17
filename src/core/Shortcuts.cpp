@@ -117,6 +117,13 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Edit", "", {}, "Ctrl+Z", "Undo -- anywhere but a text box (which keeps its own)"},
         {"Edit", "", {}, "Ctrl+Shift+Z  /  Ctrl+Y", "Redo"},
 
+        // ── Frames (s070) ─────────────────────────────────────────────────────
+        // Shift turns [ ] into { } on the way in, so the braces are bound too.
+        {"Frames", "win.bring-front",   {"<Ctrl><Shift>bracketright", "<Ctrl><Shift>braceright"}, "Ctrl+Shift+]", "Bring the picked frames to the front"},
+        {"Frames", "win.bring-forward", {"<Ctrl>bracketright"}, "", "Bring the picked frames forward one"},
+        {"Frames", "win.send-backward", {"<Ctrl>bracketleft"}, "", "Send the picked frames backward one"},
+        {"Frames", "win.send-back",     {"<Ctrl><Shift>bracketleft", "<Ctrl><Shift>braceleft"}, "Ctrl+Shift+[", "Send the picked frames to the back"},
+
         // ── General ───────────────────────────────────────────────────────────
         {"General", "win.new",           {"<Ctrl>n"}, "", "New document"},
         {"General", "win.open",          {"<Ctrl>o"}, "", "Open a project"},

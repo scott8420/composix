@@ -2740,6 +2740,167 @@ int main() {
     }
 
     {
+        std::cout << "\n-- units (s073) --\n";
+        using U = core::Units;
+        check("units: points per unit", core::unit_pt(U::Inches) == 72 && core::unit_pt(U::Points) == 1 &&
+                                        core::unit_pt(U::Picas) == 12 && std::abs(core::unit_pt(U::Millimetres) * 25.4 - 72) < 1e-9);
+        check("units: lengths as text", core::length_text(54, U::Inches) == "0.75 in" && core::length_text(54, U::Points) == "54 pt" &&
+                                        core::length_text(54, U::Picas) == "4p6" && core::length_text(72, U::Picas) == "6p" &&
+                                        core::length_text(72, U::Millimetres) == "25.4 mm",
+              core::length_text(54, U::Picas) + " / " + core::length_text(72, U::Millimetres));
+        // Every unit reads back: what's shown, typed with that unit, is the same length.
+        bool round = true;
+        for (U u : {U::Inches, U::Millimetres, U::Picas, U::Points})
+            for (double v : {0.0, 9.0, 54.0, 431.25, 648.0}) {
+                const auto back = core::parse_length(core::length_in(v, u), core::unit_pt(u));
+                round = round && back && std::abs(*back - v) < 0.01 * core::unit_pt(u) + 1e-9;
+            }
+        check("units: what's shown types back to the same length", round);
+        check("units: size text", core::size_text(432, 648, 0, U::Millimetres) == "152.4 × 228.6 mm" &&
+                                  core::size_text(432, 648, 0, U::Picas) == "36p × 54p");
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("units: one step; Millimetres", core::doc::set_units(j, d, U::Millimetres) && d.settings().units == U::Millimetres &&
+                                              !core::doc::set_units(j, d, U::Millimetres));
+        const auto items = core::frame_items(d, {"frame.1"});
+        const core::Field* b = nullptr;
+        for (const auto& f : items.at(0).fields) if (f.edit == "bounds") b = &f;
+        check("inspector: Bounds in mm, a bare number in mm", b && b->label == "Bounds (mm)" && std::abs(b->unit - 72.0 / 25.4) < 1e-9 &&
+                                                              b->value.rfind("19.05\t", 0) == 0, b ? b->value : "");
+        const auto o = core::project(d, "");
+        bool trim = false, units = false;
+        for (const auto& f : o.find("doc")->fields) {
+            trim = trim || (f.edit == "dtrim" && f.label == "Trim (mm)" && f.value == "152.4\t228.6");
+            units = units || (f.edit == "dunits" && f.value == "Millimetres" && f.choices.size() == 4);
+        }
+        check("inspector: Trim in mm, Units offered", trim && units);
+        std::string err;
+        core::Doc e;
+        check("json: units kept", core::from_json(e, core::to_json(d), &err) && e.settings().units == U::Millimetres, err);
+        j.undo();
+        check("units: undo -- inches again", d.settings().units == U::Inches);
+    }
+
+    {
+        std::cout << "\n-- override all (s072) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // Two pages with master items showing (the sample's folios: one each).
+        std::vector<core::Doc::Id> pages;
+        for (const auto& p : d.pages())
+            if (!core::doc::overridable_items(d, p).empty() && pages.size() < 2) pages.push_back(p);
+        check("sample: two pages with master items", pages.size() == 2);
+        if (pages.size() == 2) {
+            const auto open0 = core::doc::overridable_items(d, pages[0]);
+            const auto open1 = core::doc::overridable_items(d, pages[1]);
+            const auto steps = j.size();
+            const auto made = D::override_all(j, d, pages);
+            check("override all: both pages, ONE step, a copy each", j.size() == steps + 1 && made.size() == open0.size() + open1.size());
+            bool linked = made.size() == open0.size() + open1.size();
+            for (std::size_t k = 0; linked && k < open0.size(); ++k)
+                linked = d.as<core::Frame>(made[k])->overrides == open0[k] && d.as<core::Frame>(made[k])->owner == pages[0];
+            check("override all: each copy on its page, overriding its item", linked);
+            check("override all: none left to override", core::doc::overridable_items(d, pages[0]).empty() &&
+                                                         core::doc::overridable_items(d, pages[1]).empty() && D::override_all(j, d, pages).empty());
+            const auto o = core::project(d, "");
+            bool row = false, back = false;
+            for (const auto& f : o.find(pages[0])->fields) {
+                row = row || (f.label == "Master items" && f.value.find("overridden") != std::string::npos);
+                if (f.edit == "pover") for (const auto& c : f.choices) back = back || c.id == "none";
+            }
+            check("inspector: the page counts them, offers Remove overrides", row && back);
+            check("remove all: one step, all back", D::remove_all_overrides(j, d, pages) &&
+                                                    core::doc::overridable_items(d, pages[0]) == open0 && core::doc::overridable_items(d, pages[1]) == open1);
+            j.undo();
+            check("undo: overridden again", core::doc::overridable_items(d, pages[0]).empty());
+            j.undo();
+            check("undo: as it was", core::doc::overridable_items(d, pages[0]) == open0 && core::doc::overridable_items(d, pages[1]) == open1);
+        }
+    }
+
+    {
+        std::cout << "\n-- typed tints (s071) --\n";
+        check("percent: 40, 40%, 40 %, 12.5%", core::parse_percent("40") == 40.0 && core::parse_percent("40%") == 40.0 &&
+                                                core::parse_percent(" 40 % ") == 40.0 && core::parse_percent("12.5%") == 12.5);
+        check("percent: not a percentage", !core::parse_percent("") && !core::parse_percent("%") && !core::parse_percent("4o") &&
+                                           !core::parse_percent("-5") && !core::parse_percent("1.2.3") && !core::parse_percent("12pt"));
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto field = [](const std::vector<core::Field>& fs, const std::string& key) -> const core::Field* {
+            for (const auto& f : fs) if (f.edit == key) return &f;
+            return nullptr;
+        };
+        core::doc::edit_frames(j, d, {"frame.1"}, "Fill", [&](core::Frame& f) { f.fill = d.ids_of<core::Swatch>().front(); });
+        const auto items = core::frame_items(d, {"frame.1"});
+        const auto* ft = field(items.at(0).fields, "fill_tint");
+        const auto* op = field(items.at(0).fields, "opacity");
+        check("inspector: Fill tint typed, a percentage, presets kept", ft && ft->percent && ft->unit == 0 && ft->lo == 1 && ft->hi == 100 &&
+                                                                      !ft->choices.empty() && core::parse_percent(ft->value));
+        check("inspector: Opacity typed down to 0", op && op->percent && op->lo == 0);
+        std::vector<const core::Item*> one{&items.at(0)};
+        const auto sh = core::shared_fields(one);
+        check("inspector: percent survives the shared view", field(sh, "fill_tint") && field(sh, "fill_tint")->percent);
+        const auto o = core::project(d, "");
+        bool style_tint = false;
+        for (const auto& it : o.items())
+            for (const auto& f : it.fields) style_tint = style_tint || (f.edit == "color_tint" && f.percent);
+        check("inspector: a style's tint typed too", style_tint);
+    }
+
+    {
+        std::cout << "\n-- arrange (s070) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto owner = d.as<core::Frame>("frame.1")->owner;
+        const auto order = [&] { return d.frames_on(owner); };
+        const auto at = [&](const std::string& id) {
+            const auto o = order();
+            return static_cast<int>(std::find(o.begin(), o.end(), id) - o.begin());
+        };
+        const auto n = static_cast<int>(order().size());
+        check("sample: page 1 has several frames", n >= 3);
+        check("to front: one step, on top", D::arrange(j, d, {"frame.1"}, D::Arrange::Front) && j.size() == 1 && at("frame.1") == n - 1);
+        check("to front again: nothing moves", !D::arrange(j, d, {"frame.1"}, D::Arrange::Front));
+        check("backward: one down", D::arrange(j, d, {"frame.1"}, D::Arrange::Backward) && at("frame.1") == n - 2);
+        check("to back: at the bottom", D::arrange(j, d, {"frame.1"}, D::Arrange::Back) && at("frame.1") == 0);
+        check("forward: one up", D::arrange(j, d, {"frame.1"}, D::Arrange::Forward) && at("frame.1") == 1);
+        // Two picked keep their order among themselves.
+        const auto o0 = order();
+        const auto a = o0[0], b = o0[1];
+        check("two to front: both on top, in order", D::arrange(j, d, {b, a}, D::Arrange::Front) && at(a) == n - 2 && at(b) == n - 1);
+        bool z = true;
+        const auto o1 = order();
+        for (std::size_t k = 0; k < o1.size(); ++k) z = z && d.as<core::Frame>(o1[k])->z == static_cast<double>(k);
+        check("z renumbered 0..n-1", z);
+        // Stacking drives "text beneath" (s069): the lighthouse sent back stops pushing.
+        D::set_wrap_beneath(j, d, true);
+        D::arrange(j, d, {"frame.11"}, D::Arrange::Front);
+        const bool pushes = !core::wrap_rects(d, "frame.1").empty();
+        D::arrange(j, d, {"frame.11"}, D::Arrange::Back);
+        check("beneath: in front pushes, at the back doesn't", pushes && core::wrap_rects(d, "frame.1").empty());
+        const auto steps = j.size();
+        j.undo();
+        check("undo: the lighthouse back in front", at("frame.11") == n - 1 && j.size() == steps);
+        bool keys = true;
+        for (const char* act : {"win.bring-front", "win.bring-forward", "win.send-backward", "win.send-back"}) {
+            bool found = false;
+            for (const auto& r : core::shortcut_registry()) found = found || (r.action == act && !r.accels.empty());
+            keys = keys && found;
+        }
+        check("arrange: four keys in the registry", keys);
+    }
+
+    {
         std::cout << "\n-- wrap options (s069) --\n";
         namespace D = core::doc;
         namespace L = composix::layout;

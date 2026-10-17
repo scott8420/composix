@@ -2025,6 +2025,11 @@ void CanvasView::set_rulers(bool on) {
     if (auto* c = m_grid.get_child_at(1, 0)) c->set_visible(on);
 }
 
+void CanvasView::queue_rulers() {   // s073
+    if (m_top) m_top->queue_draw();
+    if (m_left) m_left->queue_draw();
+}
+
 void CanvasView::set_title(const std::string& t, std::size_t n) {
     m_title.set_text(t);
     m_count.set_text(std::to_string(n));

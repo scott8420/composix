@@ -57,7 +57,9 @@ std::string folios(const Doc& d, const std::vector<Doc::Id>& pages) {
 
 // s041: the fields whose values can be typed -- by key: the unit a bare
 // number is in (points: 1, inches: 72) and the range it must fall in.
-void mark_typed(std::vector<Field>& fields) {
+// s073: `doc_unit` -- points per the document's unit; the entries marked
+// 72 (inches, before s073) take it.
+void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
     struct T { const char* key; double unit, lo, hi; };
     static const T typed[] = {
         {"ssize", 1, 0, 1296}, {"leading", 1, 0, 1296}, {"before", 1, 0, 1000}, {"after", 1, 0, 1000},
@@ -71,7 +73,14 @@ void mark_typed(std::vector<Field>& fields) {
         {"ptop", 72, 0, 5000}, {"pbottom", 72, 0, 5000}, {"pinside", 72, 0, 5000}, {"poutside", 72, 0, 5000}};   // s062
     for (auto& f : fields)
         for (const auto& t : typed)
-            if (f.edit == t.key) { f.unit = t.unit; f.lo = t.lo; f.hi = t.hi; }
+            if (f.edit == t.key) { f.unit = t.unit == 72 ? doc_unit : t.unit; f.lo = t.lo; f.hi = t.hi; }
+    // s071: tints and opacity -- percentages typed, the presets beside.
+    struct P { const char* key; double lo; };
+    static const P pct[] = {{"fill_tint", 1}, {"stroke_tint", 1}, {"color_tint", 1}, {"col_rule_tint", 1},
+                            {"rule_a_t", 1}, {"rule_b_t", 1}, {"opacity", 0}};
+    for (auto& f : fields)
+        for (const auto& p : pct)
+            if (f.edit == p.key) { f.percent = true; f.lo = p.lo; f.hi = 100; }
 }
 
 std::string style_name(const Doc& d, const Doc::Id& id) {
@@ -120,6 +129,16 @@ std::string pts(double v) {
     return o.str();
 }
 
+// s073: a unit as the Units dropdown reads it.
+std::string unit_label(Units u) {
+    switch (u) {
+    case Units::Millimetres: return "Millimetres";
+    case Units::Picas:       return "Picas";
+    case Units::Points:      return "Points";
+    default:                 return "Inches";
+    }
+}
+
 // s067: four sides as a typed compact row, T R B L, with the link.
 Field sides_row(const std::string& label, const Sides& s, const std::string& key, std::vector<Choice> presets) {
     Field f{label, pts(s.top) + "\t" + pts(s.right) + "\t" + pts(s.bottom) + "\t" + pts(s.left), key, std::move(presets)};
@@ -160,18 +179,22 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         const auto& st = d.settings();
         Field title{"Title", st.title, "dtitle"};
         title.text = true;
-        Field trim{"Trim (in)", inches(st.trim_w) + "\t" + inches(st.trim_h)};
+        const auto U = st.units;   // s073
+        Field trim{"Trim (" + unit_name(U) + ")", length_in(st.trim_w, U) + "\t" + length_in(st.trim_h, U)};
         trim.cols = {"W", "H"};
         trim.edit = "dtrim";
         std::vector<Choice> bc;
-        for (double v : {0.0, 0.0625, 0.125, 0.25}) bc.push_back({pts(v * kPt), inches(v * kPt) + " in"});
+        for (double v : {0.0, 0.0625, 0.125, 0.25}) bc.push_back({pts(v * kPt), length_text(v * kPt, U)});
         std::vector<Field> f{title, trim,
-                             {"Bleed", inches(st.bleed) + " in", "dbleed", bc},
+                             {"Bleed", length_text(st.bleed, U), "dbleed", bc},
                              {"Pages", st.facing ? "Facing" : "Single", "dfacing", {{"1", "Facing"}, {"0", "Single"}}},
+                             {"Units", unit_label(U), "dunits",   // s073
+                              {{"0", unit_label(Units::Inches)}, {"1", unit_label(Units::Millimetres)},
+                               {"2", unit_label(Units::Picas)}, {"3", unit_label(Units::Points)}}},
                              {"Text wrap", st.wrap_beneath ? "Text beneath" : "All text", "dwrap",   // s069
                               {{"0", "All text"}, {"1", "Text beneath"}}},
                              {"Length", std::to_string(d.pages().size()) + (d.pages().size() == 1 ? " page" : " pages")}};
-        mark_typed(f);
+        mark_typed(f, unit_pt(d.settings().units));
         o.add({"doc", G::Document, "Document settings", "", {K::Section, 6, 9, 0x9a8f88}, f});
     }
     {
@@ -215,7 +238,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         if (!starts) acts.choices.push_back({"section", "Start section"});
         acts.buttons = true;
         std::vector<Field> pf{{"Folio", d.folio(pid)},
-                              {"Size", size_text(p.w, p.h, p.folds.size()), "size", size_choices},
+                              {"Size", size_text(p.w, p.h, p.folds.size(), d.settings().units), "size", size_choices},
                               {"Master", master_label(d, p.master), "master", master_choices},
                               {"Section", sec.empty() ? "—" : d.as<Section>(sec)->name},
                               {"Side", side_text(d.side_of(pid))}};
@@ -225,15 +248,31 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             if (const auto* mg = margins_of(d, pid); mg && p.margins) {
                 static const double ms[] = {0, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1, 1.25, 1.5, 2};
                 std::vector<Choice> mc;
-                for (double v : ms) mc.push_back({pts(v * kPt), inches(v * kPt) + " in"});
-                pf.push_back({"Top", inches(mg->top) + " in", "ptop", mc});
-                pf.push_back({"Bottom", inches(mg->bottom) + " in", "pbottom", mc});
-                pf.push_back({"Inside", inches(mg->inside) + " in", "pinside", mc});
-                pf.push_back({"Outside", inches(mg->outside) + " in", "poutside", mc});
+                const auto U = d.settings().units;   // s073
+                for (double v : ms) mc.push_back({pts(v * kPt), length_text(v * kPt, U)});
+                pf.push_back({"Top", length_text(mg->top, U), "ptop", mc});
+                pf.push_back({"Bottom", length_text(mg->bottom, U), "pbottom", mc});
+                pf.push_back({"Inside", length_text(mg->inside, U), "pinside", mc});
+                pf.push_back({"Outside", length_text(mg->outside, U), "poutside", mc});
+            }
+        }
+        {   // s072: its master's items -- how many show, how many it has made its own.
+            const auto open = doc::overridable_items(d, pid);
+            int own = 0;
+            for (const auto& f : d.frames_on(pid)) own += d.as<Frame>(f)->overrides.empty() ? 0 : 1;
+            if (!open.empty() || own > 0) {
+                std::string v = open.empty() ? std::string{} : std::to_string(open.size()) + " from the master";
+                if (own) v += (v.empty() ? "" : ", ") + std::to_string(own) + " overridden";
+                pf.push_back({"Master items", v});
+                Field mi{"", "", "pover", {}};
+                if (!open.empty()) mi.choices.push_back({"all", "Override all"});
+                if (own > 0) mi.choices.push_back({"none", "Remove overrides"});
+                mi.buttons = true;
+                pf.push_back(mi);
             }
         }
         pf.push_back(acts);
-        mark_typed(pf);
+        mark_typed(pf, unit_pt(d.settings().units));
         o.add({pid, G::Pages, "Page " + d.folio(pid), p.folds.empty() ? "" : "Foldout", th, pf});
     }
 
@@ -248,12 +287,13 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         // s014: margins and columns, editable.
         static const double margins[] = {0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1, 1.25, 1.5, 2, 2.5, 3};
         std::vector<Choice> mc;
-        for (double v : margins) mc.push_back({pts(v * kPt), inches(v * kPt) + " in"});
+        const auto U = d.settings().units;   // s073
+        for (double v : margins) mc.push_back({pts(v * kPt), length_text(v * kPt, U)});
         std::vector<Choice> cc, gc;
         for (int k = 1; k <= 6; ++k) cc.push_back({std::to_string(k), std::to_string(k)});
         for (double g : {6.0, 9.0, 12.0, 14.0, 18.0, 24.0, 36.0}) gc.push_back({pts(g), pts(g) + " pt"});
-        const auto in = [](double v) { return inches(v) + " in"; };
-        std::vector<Field> f{{"Size", size_text(m.w, m.h, m.folds.size())},
+        const auto in = [U](double v) { return length_text(v, U); };
+        std::vector<Field> f{{"Size", size_text(m.w, m.h, m.folds.size(), U)},
                              {"Columns", std::to_string(m.columns), "mcolumns", cc}};
         if (m.columns > 1) f.push_back({"Gutter", pts(m.gutter) + " pt", "mgutter", gc});
         {   // s036: the baseline grid, from the top margin.
@@ -267,7 +307,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         f.push_back({"Outside", in(m.margins.outside), "moutside", mc});
         f.push_back({"Based on", m.based_on.empty() ? "—" : master_label(d, m.based_on)});
         f.push_back({"Used by", n == 1 ? "1 page" : std::to_string(n) + " pages"});
-        mark_typed(f);   // s041
+        mark_typed(f, unit_pt(d.settings().units));   // s041
         o.add({mid, G::Masters, master_label(d, mid), m.folds.empty() ? "" : "Foldout", th, f});
     }
 
@@ -460,7 +500,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             if (!uses) act.choices.push_back({"delete", "Delete"});
             act.buttons = true;
             f.push_back(act);
-            mark_typed(f);   // s041
+            mark_typed(f, unit_pt(d.settings().units));   // s041
             o.add({sid, G::Styles, s.name, uses ? "" : "Unused", th, f});
         }
     }
@@ -582,7 +622,9 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         std::string on = d.as<Page>(f->owner) ? "Page " + d.folio(f->owner) : master_label(d, f->owner);
         std::vector<Field> fields{{"Kind", kind}, {"On", on}};
         // One compact row (Scott): X Y W H over their values, inches.
-        Field box{"Bounds (in)", inches(f->x) + "\t" + inches(f->y) + "\t" + inches(f->w) + "\t" + inches(f->h)};
+        const auto U = d.settings().units;   // s073
+        Field box{"Bounds (" + unit_name(U) + ")", length_in(f->x, U) + "\t" + length_in(f->y, U) + "\t" + length_in(f->w, U) + "\t" +
+                                                       length_in(f->h, U)};
         box.cols = {"X", "Y", "W", "H"};
         box.edit = "bounds";   // s041: each typed
         fields.push_back(box);
@@ -714,7 +756,7 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             back.buttons = true;
             fields.push_back(back);
         }
-        mark_typed(fields);   // s041
+        mark_typed(fields, unit_pt(d.settings().units));   // s041
         out.push_back({id, Segment::Pages, title, "", {}, fields});
     }
     return out;
@@ -785,7 +827,7 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
         const auto* sw = d.as<Swatch>(l.color);
         out.push_back({"Size", l.size > 0 ? pt(l.size) : "Style's", "lsize", sz});
         out.push_back({"Colour", sw ? sw->name : "Style's", "lcolor", co});
-        mark_typed(out);   // s041: Size typed
+        mark_typed(out, unit_pt(d.settings().units));   // s041: Size typed
         Field fx{"", "", "local", {{"bold", "Bold"}, {"italic", "Italic"}, {"clear", "Clear overrides"}}};
         fx.buttons = true;
         out.push_back(fx);

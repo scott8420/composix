@@ -38,6 +38,7 @@ public:
     // s008: what a drag on empty space does.
     enum class Tool { Select, Text, Image, Shape };
     Canvas(core::Doc& d, core::DocJournal& j);
+    const core::Doc& doc() const { return m_doc; }   // s073: the rulers read its unit
     ~Canvas() override;
 
     // Show these pages / masters. A different set re-fits; the same set (a
@@ -267,6 +268,7 @@ public:
     ~CanvasView() override;
     Canvas& canvas() { return m_canvas; }
     void set_rulers(bool on);
+    void queue_rulers();   // s073: redraw them (the unit changed)
     void set_title(const std::string& t, std::size_t n);
     // s068: where back / forward before the title go ("Document").
     void set_nav(const std::string& back_to, const std::string& fwd_to) { m_nav_btns.set(back_to, fwd_to); }

@@ -123,6 +123,7 @@ private:
     void on_about();                             // category: handler: the About window
     void on_shortcuts();                         // category: handler: keyboard reference
     void on_go_up();                             // category: handler: s068 -- Alt+Up / the header's Up: the section's tiles
+    void on_arrange(core::doc::Arrange how);     // category: handler: s070 -- the canvas's picked frames, up / down the stack
     void on_go_forward();                        // category: handler: s068 -- Alt+Right / Forward: back into what Back left
     void sync_up();                              // category: helper: s068 -- the Up button: shown, named, enabled
     void on_undo();                              // category: handler: Ctrl+Z / menu
@@ -236,6 +237,7 @@ private:
     // s005: the page canvas -- after the document and journal it edits.
     views::CanvasView  m_canvas_view{m_doc, m_journal};
     Glib::RefPtr<Gio::Menu>         m_edit_menu;
+    Glib::RefPtr<Gio::Menu>         m_arrange_menu;   // s070: kept, so the Edit section's rebuild keeps it
     Glib::RefPtr<Gio::SimpleAction> m_act_undo, m_act_redo;
 
     // s013: the Export PDF sheet, and its choices for the session.

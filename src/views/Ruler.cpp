@@ -4,6 +4,7 @@
 #include <pangomm/layout.h>
 
 #include <cmath>
+#include <vector>
 #include <cstdio>
 
 namespace composix::views {
@@ -45,13 +46,23 @@ void Ruler::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     translate_coordinates(m_canvas, 0, 0, offx, offy);
     const double origin = m_horizontal ? vp.ox() - offx : vp.oy() - offy;   // screen px of doc 0
 
-    // Major step: the smallest of these (inches) at least 56 px apart.
-    static const double steps[] = {0.125, 0.25, 0.5, 1, 2, 4, 6, 12, 24};
-    double major = steps[std::size(steps) - 1];
-    for (double st : steps) if (st * 72 * s >= 56) { major = st; break; }
-    const double px_major = major * 72 * s;
-    int subs = 8;
-    while (subs > 1 && px_major / subs < 5) subs /= 2;
+    // Major step: the smallest of these (in the document's unit -- s073) at
+    // least 56 px apart; each split into as many of its parts as fit.
+    const auto units = m_canvas.doc().settings().units;
+    const double upt = core::unit_pt(units);
+    std::vector<double> steps;
+    std::vector<int> parts;
+    switch (units) {
+    case core::Units::Millimetres: steps = {1, 2, 5, 10, 20, 50, 100, 200, 500}; parts = {10, 5, 2, 1}; break;
+    case core::Units::Picas:       steps = {1, 2, 3, 6, 12, 24, 48, 96};        parts = {12, 6, 3, 1}; break;
+    case core::Units::Points:      steps = {6, 12, 18, 36, 72, 144, 288, 576};  parts = {12, 6, 2, 1}; break;
+    default:                       steps = {0.125, 0.25, 0.5, 1, 2, 4, 6, 12, 24}; parts = {8, 4, 2, 1}; break;
+    }
+    double major = steps.back();
+    for (double st : steps) if (st * upt * s >= 56) { major = st; break; }
+    const double px_major = major * upt * s;
+    int subs = 1;
+    for (int p : parts) if (px_major / p >= 5) { subs = p; break; }
 
     cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.55);
     cr->set_line_width(1);
@@ -60,7 +71,7 @@ void Ruler::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
         for (int i = 0; i < subs; ++i) {
             const double at = std::round(origin + (k + static_cast<double>(i) / subs) * px_major) + 0.5;
             if (at < 0 || at > len) continue;
-            const double tick = i == 0 ? 20 : (i == subs / 2 ? 9 : (subs >= 4 && i % (subs / 4) == 0 ? 6 : 3));
+            const double tick = i == 0 ? 20 : (subs % 2 == 0 && i == subs / 2 ? 9 : (subs >= 4 && subs % 4 == 0 && i % (subs / 4) == 0 ? 6 : 3));
             if (m_horizontal) { cr->move_to(at, 20); cr->line_to(at, 20 - tick); }
             else              { cr->move_to(20, at); cr->line_to(20 - tick, at); }
         }

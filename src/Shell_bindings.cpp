@@ -97,6 +97,11 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     add_action("save",          sigc::mem_fun(*this, &Shell::on_save));
     add_action("save-as",       sigc::mem_fun(*this, &Shell::on_save_as));
     add_action("place",         sigc::mem_fun(*this, &Shell::on_place));   // s009
+    // s070: stacking order of the frames picked on the canvas.
+    add_action("bring-front",   [this] { on_arrange(core::doc::Arrange::Front); });
+    add_action("bring-forward", [this] { on_arrange(core::doc::Arrange::Forward); });
+    add_action("send-backward", [this] { on_arrange(core::doc::Arrange::Backward); });
+    add_action("send-back",     [this] { on_arrange(core::doc::Arrange::Back); });
     add_action("export-pdf",    sigc::mem_fun(*this, &Shell::on_export_pdf));   // s013
     add_action("color-report",  sigc::mem_fun(*this, &Shell::on_color_report));   // s053
     add_action("dump-registry", sigc::mem_fun(*this, &Shell::on_dump_registry));

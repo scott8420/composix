@@ -1,5 +1,6 @@
 #include "core/Doc.hpp"
 
+#include <map>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -192,6 +193,23 @@ std::string format_folio(int n, Numbering how) {
     return std::to_string(n);
 }
 
+std::optional<double> parse_percent(std::string_view text) {   // s071
+    std::string t;
+    for (char c : text) if (!std::isspace(static_cast<unsigned char>(c))) t += c;
+    if (!t.empty() && t.back() == '%') t.pop_back();
+    if (t.empty()) return std::nullopt;
+    std::size_t i = 0;
+    if (t[i] == '+') ++i;
+    bool digits = false, dot = false;
+    for (std::size_t k = i; k < t.size(); ++k) {
+        if (std::isdigit(static_cast<unsigned char>(t[k]))) digits = true;
+        else if (t[k] == '.' && !dot) dot = true;
+        else return std::nullopt;
+    }
+    if (!digits) return std::nullopt;
+    return std::stod(t.substr(i));
+}
+
 std::optional<double> parse_length(std::string_view text, double unit) {
     std::string t;
     for (char c : text) if (!std::isspace(static_cast<unsigned char>(c))) t += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -249,8 +267,60 @@ std::string inches(double pt) {
     return s;
 }
 
-std::string size_text(double w, double h, std::size_t folds) {
-    std::string s = inches(w) + " × " + inches(h) + " in";
+double unit_pt(Units u) {   // s073
+    switch (u) {
+    case Units::Millimetres: return 72.0 / 25.4;
+    case Units::Picas:       return 12;
+    case Units::Points:      return 1;
+    default:                 return kPt;
+    }
+}
+std::string unit_name(Units u) {
+    switch (u) {
+    case Units::Millimetres: return "mm";
+    case Units::Picas:       return "picas";
+    case Units::Points:      return "pt";
+    default:                 return "in";
+    }
+}
+namespace {
+std::string trimmed(double v, int places) {
+    char buf[48];
+    std::snprintf(buf, sizeof buf, "%.*f", places, v);
+    std::string s = buf;
+    if (s.find('.') != std::string::npos) {
+        while (!s.empty() && s.back() == '0') s.pop_back();
+        if (!s.empty() && s.back() == '.') s.pop_back();
+    }
+    if (s == "-0") s = "0";
+    return s;
+}
+}  // namespace
+std::string length_in(double pt, Units u) {
+    switch (u) {
+    case Units::Millimetres: return trimmed(pt / unit_pt(u), 2);
+    case Units::Points:      return trimmed(pt, 2);
+    case Units::Picas: {   // "4p6": picas and points
+        const bool neg = pt < 0;
+        const double a = std::abs(pt);
+        double p = std::floor(a / 12 + 1e-9);
+        double rest = a - p * 12;
+        if (rest > 12 - 0.005) { p += 1; rest = 0; }
+        std::string s = (neg ? "-" : "") + trimmed(p, 0) + "p";
+        if (rest > 0.005) s += trimmed(rest, 2);
+        return s;
+    }
+    default:                 return inches(pt);
+    }
+}
+std::string length_text(double pt, Units u) {
+    const auto n = length_in(pt, u);
+    return u == Units::Picas ? n : n + " " + unit_name(u);
+}
+
+std::string size_text(double w, double h, std::size_t folds, Units u) {
+    std::string s = u == Units::Picas ? length_in(w, u) + " × " + length_in(h, u)
+                                      : length_in(w, u) + " × " + length_in(h, u) + " " + unit_name(u);
     if (folds > 0) s += " (" + std::to_string(folds + 1) + "-panel)";
     return s;
 }
@@ -685,10 +755,10 @@ bool edit_sections(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const
 std::vector<SizePreset> size_presets(const Settings& s) {
     const double tuck = 0.125 * kPt;   // a fold-in panel is narrower so it clears the spine
     return {
-        {"Trim (" + size_text(s.trim_w, s.trim_h, 0) + ")", s.trim_w, s.trim_h, {}},
-        {"2-panel foldout (" + size_text(2 * s.trim_w - tuck, s.trim_h, 1) + ")",
+        {"Trim (" + size_text(s.trim_w, s.trim_h, 0, s.units) + ")", s.trim_w, s.trim_h, {}},
+        {"2-panel foldout (" + size_text(2 * s.trim_w - tuck, s.trim_h, 1, s.units) + ")",
          2 * s.trim_w - tuck, s.trim_h, {s.trim_w}},
-        {"3-panel foldout (" + size_text(3 * s.trim_w - 2 * tuck, s.trim_h, 2) + ")",
+        {"3-panel foldout (" + size_text(3 * s.trim_w - 2 * tuck, s.trim_h, 2, s.units) + ")",
          3 * s.trim_w - 2 * tuck, s.trim_h, {s.trim_w, 2 * s.trim_w}},
     };
 }
@@ -1104,6 +1174,15 @@ bool set_wrap_beneath(DocJournal& j, Doc& d, bool on) {   // s069
     });
 }
 
+bool set_units(DocJournal& j, Doc& d, Units u) {   // s073
+    if (u == d.settings().units) return false;
+    return j.run("Units", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.units = u;
+        d.put("doc", s);
+    });
+}
+
 bool set_export(DocJournal& j, Doc& d, const ExportPrefs& e) {
     if (d.settings().exp == e) return false;
     return j.run("Export settings", {"doc"}, [&] {
@@ -1111,6 +1190,40 @@ bool set_export(DocJournal& j, Doc& d, const ExportPrefs& e) {
         s.exp = e;
         d.put("doc", s);
     });
+}
+
+namespace {
+// s025 / s072: the page's own copy of master item `mf`, made inside a step;
+// its records (the frame, a text frame's story) go on `ids`.
+Doc::Id copy_master_item(Doc& d, const Doc::Id& page, const Doc::Id& mf, std::vector<Doc::Id>& ids) {
+    Frame c = *d.as<Frame>(mf);
+    c.owner = page;
+    c.overrides = mf;
+    c.side = Side::Any;
+    c.next.clear();
+    c.z = 0;
+    for (const auto& o : d.frames_on(page)) c.z = std::max(c.z, d.as<Frame>(o)->z + 1);
+    if (const auto* st = d.as<Story>(c.story)) {   // its own words from here on
+        Story s = *st;
+        s.name += " (page " + d.folio(page) + ")";
+        c.story = d.fresh_id("story");
+        d.put(c.story, s);
+        ids.push_back(c.story);
+    }
+    const auto made = d.fresh_id("frame");
+    d.put(made, c);
+    ids.push_back(made);
+    return made;
+}
+}  // namespace
+
+std::vector<Doc::Id> overridable_items(const Doc& d, const Doc::Id& page) {
+    std::vector<Doc::Id> out;
+    if (!d.as<Page>(page)) return out;
+    for (const auto& m : master_chain(d, page))
+        for (const auto& fid : d.frames_on(m))
+            if (master_item_on(d, fid, page)) out.push_back(fid);
+    return out;
 }
 
 Doc::Id override_master_item(DocJournal& j, Doc& d, const Doc::Id& page, const Doc::Id& mf) {
@@ -1121,26 +1234,33 @@ Doc::Id override_master_item(DocJournal& j, Doc& d, const Doc::Id& page, const D
     Doc::Id made;
     j.run("Override master item", {}, [&] {
         std::vector<Doc::Id> ids;   // what's made: the step's records
-        Frame c = *d.as<Frame>(mf);
-        c.owner = page;
-        c.overrides = mf;
-        c.side = Side::Any;
-        c.next.clear();
-        c.z = 0;
-        for (const auto& o : d.frames_on(page)) c.z = std::max(c.z, d.as<Frame>(o)->z + 1);
-        if (const auto* st = d.as<Story>(c.story)) {   // its own words from here on
-            Story s = *st;
-            s.name += " (page " + d.folio(page) + ")";
-            c.story = d.fresh_id("story");
-            d.put(c.story, s);
-            ids.push_back(c.story);
-        }
-        made = d.fresh_id("frame");
-        d.put(made, c);
-        ids.push_back(made);
+        made = copy_master_item(d, page, mf, ids);
         return ids;
     });
     return made;
+}
+
+std::vector<Doc::Id> override_all(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages) {
+    std::vector<std::pair<Doc::Id, Doc::Id>> plan;   // page, master item
+    for (const auto& p : pages)
+        for (const auto& mf : overridable_items(d, p)) plan.push_back({p, mf});
+    std::vector<Doc::Id> made;
+    if (plan.empty()) return made;
+    j.run(plan.size() == 1 ? "Override master item" : "Override all master items", {}, [&] {
+        std::vector<Doc::Id> ids;
+        for (const auto& [p, mf] : plan) made.push_back(copy_master_item(d, p, mf, ids));
+        return ids;
+    });
+    return made;
+}
+
+bool remove_all_overrides(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages) {
+    std::vector<Doc::Id> copies;
+    for (const auto& p : pages)
+        if (d.as<Page>(p))
+            for (const auto& f : d.frames_on(p))
+                if (!d.as<Frame>(f)->overrides.empty()) copies.push_back(f);
+    return remove_overrides(j, d, copies);
 }
 
 bool remove_overrides(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
@@ -1196,6 +1316,66 @@ bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const s
             f(t);
             d.put(id, t);
         }
+    });
+}
+
+// ── stacking order (s070) ───────────────────────────────────────────────────
+namespace {
+// The owner's frames bottom up, rearranged.
+std::vector<Doc::Id> arranged(std::vector<Doc::Id> order, const std::set<Doc::Id>& picked, Arrange how) {
+    const auto is = [&](const Doc::Id& id) { return picked.count(id) > 0; };
+    if (how == Arrange::Front || how == Arrange::Back) {
+        std::vector<Doc::Id> in, out;
+        for (const auto& id : order) (is(id) ? in : out).push_back(id);
+        if (how == Arrange::Front) { out.insert(out.end(), in.begin(), in.end()); return out; }
+        in.insert(in.end(), out.begin(), out.end());
+        return in;
+    }
+    // Forward: from the top down, a picked frame swaps with the unpicked one above it.
+    const int n = static_cast<int>(order.size());
+    if (how == Arrange::Forward) {
+        for (int i = n - 2; i >= 0; --i)
+            if (is(order[static_cast<std::size_t>(i)]) && !is(order[static_cast<std::size_t>(i + 1)]))
+                std::swap(order[static_cast<std::size_t>(i)], order[static_cast<std::size_t>(i + 1)]);
+    } else {
+        for (int i = 1; i < n; ++i)
+            if (is(order[static_cast<std::size_t>(i)]) && !is(order[static_cast<std::size_t>(i - 1)]))
+                std::swap(order[static_cast<std::size_t>(i)], order[static_cast<std::size_t>(i - 1)]);
+    }
+    return order;
+}
+}  // namespace
+
+bool arrange(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, Arrange how) {
+    std::map<Doc::Id, std::vector<Doc::Id>> plan;   // owner -> new order, bottom up
+    std::set<Doc::Id> picked;
+    for (const auto& id : frames) if (d.as<Frame>(id)) picked.insert(id);
+    std::vector<Doc::Id> touched;
+    for (const auto& id : picked) {
+        const auto& owner = d.as<Frame>(id)->owner;
+        if (plan.count(owner)) continue;
+        const auto now = d.frames_on(owner);
+        auto next = arranged(now, picked, how);
+        bool changed = next != now;
+        // Renumbered z must differ somewhere too (ties read as an order already).
+        for (std::size_t k = 0; !changed && k < next.size(); ++k) changed = d.as<Frame>(next[k])->z != static_cast<double>(k);
+        if (!changed) continue;
+        for (const auto& f : next) touched.push_back(f);
+        plan[owner] = std::move(next);
+    }
+    if (plan.empty()) return false;
+    // Only a real reorder counts as a change (a renumber alone is not the user's).
+    bool moved = false;
+    for (const auto& [owner, next] : plan) moved = moved || next != d.frames_on(owner);
+    if (!moved) return false;
+    static const char* labels[] = {"Bring to Front", "Bring Forward", "Send Backward", "Send to Back"};
+    return j.run(labels[static_cast<int>(how)], touched, [&] {
+        for (const auto& [owner, next] : plan)
+            for (std::size_t k = 0; k < next.size(); ++k) {
+                Frame f = *d.as<Frame>(next[k]);
+                f.z = static_cast<double>(k);
+                d.put(next[k], f);
+            }
     });
 }
 
@@ -2079,6 +2259,9 @@ const std::vector<Verb>& verbs() {
         {"set_bleed", [](DocJournal& j, Doc& d) { set_bleed(j, d, d.settings().bleed + 9); }},
         {"set_facing", [](DocJournal& j, Doc& d) { set_facing(j, d, !d.settings().facing); }},
         {"set_wrap_beneath", [](DocJournal& j, Doc& d) { set_wrap_beneath(j, d, true); }},   // s069
+        {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
+        {"arrange_back", [](DocJournal& j, Doc& d) { arrange(j, d, {"frame.11"}, Arrange::Back); }},   // s070
+        {"arrange_forward", [](DocJournal& j, Doc& d) { arrange(j, d, {"frame.1"}, Arrange::Forward); }},
         {"ignore_wrap", [](DocJournal& j, Doc& d) {
              edit_frames(j, d, {"frame.1"}, "Ignore text wrap", [](Frame& f) { f.ignore_wrap = true; });
          }},
@@ -2096,6 +2279,8 @@ const std::vector<Verb>& verbs() {
         {"delete_frames", [](DocJournal& j, Doc& d) { delete_frames(j, d, {"frame.2", "frame.4"}); }},  // mid-thread
         {"override_master_item", [](DocJournal& j, Doc& d) { override_master_item(j, d, "page.7", "frame.13"); }},   // s025
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
+        {"override_all", [](DocJournal& j, Doc& d) { override_all(j, d, {"page.7", "page.8"}); }},   // s072
+        {"remove_all_overrides", [](DocJournal& j, Doc& d) { remove_all_overrides(j, d, d.pages()); }},
         {"set_export", [](DocJournal& j, Doc& d) {   // s032
              auto e = d.settings().exp;
              e.marks = true;

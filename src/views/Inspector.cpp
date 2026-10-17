@@ -21,7 +21,7 @@ namespace composix::views {
 // typed, in points, through `send`; what doesn't read as a length in
 // [lo, hi] is marked and not sent.
 Gtk::Entry* Inspector::typed_entry(const std::string& name, const std::string& value, double unit, double lo, double hi,
-                                   std::function<void(const std::string&)> send) {
+                                   std::function<void(const std::string&)> send, bool percent) {
     auto en = Gtk::make_managed<Gtk::Entry>();
     en->set_name(name);
     en->add_css_class("cx-field-typed");
@@ -31,14 +31,15 @@ Gtk::Entry* Inspector::typed_entry(const std::string& name, const std::string& v
     else en->set_text(value);
     // What it last showed or sent: Enter, then leaving, sends once.
     auto shown = std::make_shared<std::string>(value == core::kMixed ? std::string{} : value);
-    auto commit = [this, en, shown, unit, lo, hi, send] {
+    auto commit = [this, en, shown, unit, lo, hi, send, percent] {
         if (m_painting) return;
         const std::string text = en->get_text();
         if (text == *shown || text.empty()) { en->remove_css_class("error"); return; }
-        const auto v = core::parse_length(text, unit);
+        const auto v = percent ? core::parse_percent(text) : core::parse_length(text, unit);
         if (!v || *v < lo - 1e-9 || *v > hi + 1e-9) {
             en->add_css_class("error");
-            en->set_tooltip_text("Type a length -- 12, 12 pt, 1.5 in, 3p6, 10 mm");
+            en->set_tooltip_text(percent ? "Type a percentage -- " + core::num_text(lo) + " to " + core::num_text(hi) + ", as 40 or 40%"
+                                         : std::string("Type a length -- 12, 12 pt, 1.5 in, 3p6, 10 mm"));
             return;
         }
         en->remove_css_class("error");
@@ -262,14 +263,14 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             ++row;
             continue;
         }
-        if (!f.edit.empty() && f.unit > 0) {
-            // s041: a typed value, its presets in a menu beside it.
+        if (!f.edit.empty() && (f.unit > 0 || f.percent)) {
+            // s041: a typed value, its presets in a menu beside it (s071: or a percentage).
             auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
             box->add_css_class("linked");
             box->set_hexpand(true);
             const std::string key = f.edit;
             box->append(*typed_entry("inspector.edit." + key, f.value, f.unit, f.lo, f.hi,
-                                     [this, key](const std::string& v) { m_edit.emit(key, v); }));
+                                     [this, key](const std::string& v) { m_edit.emit(key, v); }, f.percent));
             if (!f.choices.empty()) box->append(*presets_button(key, f.choices));
             m_fields.attach(*box, 1, row);
         } else if (!f.edit.empty()) {

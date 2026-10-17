@@ -116,6 +116,7 @@ void Shell::refresh() {  // helper
     show_pick(m_pick, keep);
     if (on_start) { m_main.set_visible_child("start"); sync_up(); }
     m_story_ed.model_changed();   // s033
+    m_canvas_view.queue_rulers();   // s073: the unit may have changed (an undo too)
     update_title();
     update_preflight();   // s024
 }
@@ -317,7 +318,7 @@ void Shell::update_title() {  // helper
     std::string where = m_project_dir.empty() ? "not saved" : m_project_dir;
     const std::string home = Glib::get_home_dir();
     if (!home.empty() && where.rfind(home, 0) == 0) where = "~" + where.substr(home.size());
-    m_subtitle.set_text(core::size_text(s.trim_w, s.trim_h, 0) + " \u00b7 " + std::to_string(n) +
+    m_subtitle.set_text(core::size_text(s.trim_w, s.trim_h, 0, s.units) + " \u00b7 " + std::to_string(n) +
                         (n == 1 ? " page" : " pages") + " \u00b7 " + where);
     set_title(s.title + (m_dirty ? " \u2022" : "") + " \u2014 Composix");
 }
@@ -348,6 +349,7 @@ void Shell::update_undo_ui() {  // helper
         m_edit_menu->append(r.empty() ? "Redo" : "Redo " + r, "win.redo");
         m_edit_menu->append("Find / Change\u2026", "win.find");   // s022
         m_edit_menu->append_submenu("Insert Special Character", special_menu());   // s023
+        if (m_arrange_menu) m_edit_menu->append_submenu("Arrange", m_arrange_menu);   // s070
     }
 }
 
