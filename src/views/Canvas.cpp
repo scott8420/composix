@@ -1370,6 +1370,43 @@ bool Canvas::insert_break(core::ParaStart kind) {
     return true;
 }
 
+bool Canvas::insert_note(int& p, int& k) {   // s109
+    if (!editing() || !edit_story()) return false;
+    if (m_anchor != m_caret) edit_insert("", "", "Delete text");
+    const core::TextPos at = m_caret;
+    m_caret = core::doc::insert_note(m_journal, m_doc, m_edit_story, at, "");
+    m_anchor = m_caret;
+    m_goal_x = NAN;
+    m_burst_kind.clear();
+    p = m_caret.para;
+    k = m_caret.byte >= 3 ? core::doc::note_index_at(*edit_story(), {m_caret.para, m_caret.byte - 3}) : -1;
+    m_sig_edited.emit();
+    follow_caret();
+    blink_restart();
+    m_sig_caret.emit();
+    return k >= 0;
+}
+
+bool Canvas::note_at_caret(int& p, int& k) const {   // s109
+    if (!editing() || !edit_story()) return false;
+    const auto& s = *edit_story();
+    for (const int b : {m_caret.byte - 3, m_caret.byte}) {
+        const int i = core::doc::note_index_at(s, {m_caret.para, b});
+        if (i >= 0) { p = m_caret.para; k = i; return true; }
+    }
+    return false;
+}
+
+Rect Canvas::caret_screen() const {   // s109
+    if (!editing()) return {};
+    const auto& flow = flows().get(m_doc, m_edit_story);
+    const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
+    if (!c.ok) return {};
+    const Rect fr = core::frame_in_layout(m_doc, m_placed, c.frame);
+    if (fr.w <= 0) return {};
+    return m_vp.to_screen(Rect{fr.x + c.x, fr.y + c.y, 1, c.h});
+}
+
 void Canvas::end_edit() {
     if (!editing()) return;
     gtk_im_context_focus_out(m_im);

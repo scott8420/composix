@@ -117,6 +117,25 @@ json to(const Record& r) {
                     if (p.over.hyphenate) o["hyphenate"] = *p.over.hyphenate;
                     jp["own"] = o;
                 }
+                if (!p.notes.empty()) {   // s109
+                    json ns = json::array();
+                    for (const auto& n : p.notes) {
+                        json jn = {{"text", n.text}};
+                        if (!n.runs.empty()) {
+                            json runs = json::array();
+                            for (const auto& r : n.runs) {
+                                json jr = {{"start", r.start}, {"end", r.end}, {"style", r.style}};
+                                if (!r.local.empty())
+                                    jr["local"] = {{"bold", r.local.bold}, {"italic", r.local.italic},
+                                                   {"size", r.local.size}, {"color", r.local.color}};
+                                runs.push_back(jr);
+                            }
+                            jn["runs"] = runs;
+                        }
+                        ns.push_back(jn);
+                    }
+                    jp["notes"] = ns;
+                }
                 paras.push_back(jp);
             }
             j = {{"kind", "story"}, {"name", v.name}, {"paras", paras}};
@@ -310,6 +329,21 @@ std::optional<Record> from(const json& j) {
                     if (o.contains("hyphenate") && o.at("hyphenate").is_boolean()) para.over.hyphenate = o.at("hyphenate").get<bool>();
                     if (o.contains("keep_lines") && o.at("keep_lines").is_number_integer()) para.over.keep_lines = o.at("keep_lines").get<int>();
                 }
+                if (p.contains("notes") && p.at("notes").is_array())   // s109
+                    for (const auto& n : p.at("notes")) {
+                        Note note{val<std::string>(n, "text", ""), {}};
+                        if (n.contains("runs"))
+                            for (const auto& r : n.at("runs")) {
+                                Run run{val(r, "start", 0), val(r, "end", 0), val<std::string>(r, "style", "")};
+                                if (r.contains("local")) {
+                                    const auto& l = r.at("local");
+                                    run.local = {val(l, "bold", -1), val(l, "italic", -1), val(l, "size", 0.0), val<std::string>(l, "color", "")};
+                                }
+                                note.runs.push_back(run);
+                            }
+                        para.notes.push_back(std::move(note));
+                    }
+                fit_notes(para);   // a mark without its note (or the other way): made to match
                 v.paras.push_back(std::move(para));
             }
         return v;

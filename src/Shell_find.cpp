@@ -25,6 +25,10 @@ Glib::RefPtr<Gio::Menu> Shell::special_menu() {  // zone
     m->append("Next Page Number", "win.insert-next-page");
     m->append("Previous Page Number", "win.insert-prev-page");
     m->append("Discretionary Hyphen", "win.insert-shy");   // s065
+    auto notes = Gio::Menu::create();   // s110
+    notes->append("Footnote", "win.insert-footnote");
+    notes->append("Edit Footnote", "win.edit-footnote");
+    m->append_section(notes);
     auto breaks = Gio::Menu::create();   // s055
     breaks->append("Column Break", "win.insert-column-break");
     breaks->append("Frame Break", "win.insert-frame-break");

@@ -164,7 +164,8 @@ private:
     void build_preflight();                       // category: zone: s024 -- the header's Preflight button + list
     void update_preflight();                      // category: helper: s024 -- the checks again; the count, the list
     void finish_flows();
-    void poll_work();                             // category: helper: s108 -- the header's "working" pill                          // category: helper: s106 -- a provisional flow's whole, on a worker
+    void poll_work();
+    void edit_note(const std::string& story, int p, int k);   // category: helper: s110 -- a footnote's words, in a popover at the caret                             // category: helper: s108 -- the header's "working" pill                          // category: helper: s106 -- a provisional flow's whole, on a worker
     void go_to_issue(const layout::Issue& i);     // category: helper: s024 -- its page, its frame picked
     void find_refresh();                          // category: helper: s022 -- the hits again, from the bar's settings
     void find_go(int dir);                        // category: helper: s022 -- next / previous hit, shown on the canvas
@@ -279,6 +280,7 @@ private:
     Glib::RefPtr<Gio::Menu>         m_arrange_menu;
     // s074: the canvas's right-click menu, and what it was opened on.
     std::unique_ptr<Gtk::PopoverMenu> m_ctx_menu;
+    std::unique_ptr<Gtk::Popover>     m_note_pop;   // s110: a footnote's words, edited at the caret
     views::Canvas::ContextHit         m_ctx;   // s070: kept, so the Edit section's rebuild keeps it
     Glib::RefPtr<Gio::SimpleAction> m_act_undo, m_act_redo;
 

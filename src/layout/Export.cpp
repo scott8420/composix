@@ -148,6 +148,22 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
                         if (r.end > l.start && r.start < l.end)
                             line += std::to_string(r.start - l.start) + "-" + std::to_string(r.end - l.start) + r.style + ",";
                     line += "|" + p.text.substr(static_cast<std::size_t>(l.start), static_cast<std::size_t>(l.end - l.start));
+                    // s109: a footnote mark's number (it moves when one is added before).
+                    for (std::size_t i = p.text.find(core::kMarkNote, static_cast<std::size_t>(l.start));
+                         i != std::string::npos && static_cast<int>(i) < l.end; i = p.text.find(core::kMarkNote, i + 3))
+                        line += "#" + std::to_string(core::note_number(*st, l.para, core::notes_in(p.text, 0, i)));
+                    k.lines.push_back(std::move(line));
+                }
+                for (const auto& np : ft.notes) {   // s109: the notes at the foot
+                    if (np.para < 0 || np.para >= static_cast<int>(st->paras.size())) continue;
+                    const auto& p = st->paras[static_cast<std::size_t>(np.para)];
+                    std::string line = fid + "|note|" + std::to_string(np.number) + "|" + std::to_string(np.col) + "|" +
+                                       std::to_string(np.y) + "|" + p.style + "|";
+                    if (np.k < static_cast<int>(p.notes.size())) {
+                        const auto& n = p.notes[static_cast<std::size_t>(np.k)];
+                        for (const auto& r : n.runs) line += std::to_string(r.start) + "-" + std::to_string(r.end) + r.style + ",";
+                        line += "|" + n.text;
+                    }
                     k.lines.push_back(std::move(line));
                 }
             }

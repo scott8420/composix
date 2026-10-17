@@ -236,6 +236,15 @@ struct ParaLocal {
     bool operator==(const ParaLocal&) const = default;
 };
 
+// s109: a footnote -- its words, kept with the paragraph its reference
+// mark is in (kMarkNote in the text: the k-th mark is notes[k]). Numbered
+// through the story, in order.
+struct Note {
+    std::string      text;
+    std::vector<Run> runs;               // character styles in the note, as a paragraph's
+    bool operator==(const Note&) const = default;
+};
+
 struct Para {
     std::string      style;              // a paragraph style id
     std::string      text;
@@ -245,6 +254,7 @@ struct Para {
     // as a style's Start would -- this paragraph only. Anywhere = none.
     ParaStart        brk = ParaStart::Anywhere;
     ParaLocal        over;               // s093: its own settings over the style's
+    std::vector<Note> notes;             // s109: one for each kMarkNote in text, in order
     bool operator==(const Para&) const = default;
 };
 
@@ -764,6 +774,14 @@ bool set_column_width(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames,
 // after the inserted text); `a` (clamped) when nothing changed.
 TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& text,
                   const std::string& label = "Typing", const std::string& merge_key = {});
+// s109: a footnote at `at` -- its mark in the text, its words `text`. One
+// step. Returns the place just after the mark.
+TextPos insert_note(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& text);
+// The words of paragraph p's k-th note. A merge key folds a burst of typing.
+bool set_note_text(DocJournal& j, Doc& d, const Doc::Id& story, int p, int k, const std::string& text,
+                   const std::string& merge_key = {});
+// The note at mark `at` (a mark's first byte): its paragraph and index; -1 none.
+int note_index_at(const Story& s, TextPos at);
 
 // ── styles (s011) ───────────────────────────────────────────────────────────
 // The paragraphs [a.para .. b.para] take a paragraph style. One step.
@@ -1037,6 +1055,15 @@ inline constexpr const char* kMarkPage    = "\xEE\x80\x80";   // U+E000: this pa
 inline constexpr const char* kMarkSection = "\xEE\x80\x81";   // U+E001: this page's section name
 inline constexpr const char* kMarkNext    = "\xEE\x80\x82";   // U+E002: the next frame's page number (jump lines)
 inline constexpr const char* kMarkPrev    = "\xEE\x80\x83";   // U+E003: the previous frame's page number
+// s109: a footnote's reference: drawn as its number, raised; the note is the
+// paragraph's notes[k] for the k-th of these in its text.
+inline constexpr const char* kMarkNote    = "\xEE\x80\x84";   // U+E004
+bool note_at(const std::string& text, std::size_t i);
+int  notes_in(const std::string& text, std::size_t from = 0, std::size_t to = std::string::npos);   // the marks in [from, to)
+// The number the k-th note of paragraph p takes (1-based, through the story).
+int  note_number(const Story& s, int p, int k);
+// The paragraph's notes made to match its marks (missing ones empty, extras dropped).
+void fit_notes(Para& p);
 // Which marker starts at text[i] (0 page, 1 section, 2 next, 3 previous;
 // -1 none).
 int marker_at(const std::string& text, std::size_t i);

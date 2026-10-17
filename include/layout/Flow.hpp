@@ -57,9 +57,17 @@ struct Line {
     bool   hyphen = false;
 };
 
+// s109: a footnote set at the foot of a column: the k-th note of paragraph
+// `para`, its number, and its box (frame coordinates).
+struct NotePlace {
+    int    para = 0, k = 0, number = 0, col = 0;
+    double x = 0, y = 0, w = 0, h = 0;
+};
+
 struct FrameText {
     std::string       frame;
     std::vector<Line> lines;
+    std::vector<NotePlace> notes;   // s109: in column order, top to bottom
     // s105: where the flow stood when it came to this frame -- the paragraph
     // and byte (from_p -1: the story ended before it) and the page of the
     // last frame that took lines. A re-flow starts at a frame from these.

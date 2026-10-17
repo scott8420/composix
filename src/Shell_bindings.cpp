@@ -64,6 +64,25 @@ void Shell::bind_actions() {  // bindings: actions + recents group
                 alert("Click into text first", "A break goes in at the text cursor: double-click a text frame, then insert.");
         });
     }
+    // s110: footnotes -- the mark at the caret, its words in a popover there.
+    add_action("insert-footnote", [this] {
+        int p = 0, k = 0;
+        auto& c = m_canvas_view.canvas();
+        if (!c.insert_note(p, k)) {
+            alert("Click into text first", "A footnote goes in at the text cursor: double-click a text frame, then insert.");
+            return;
+        }
+        edit_note(c.edit_story_id(), p, k);
+    });
+    add_action("edit-footnote", [this] {
+        int p = 0, k = 0;
+        auto& c = m_canvas_view.canvas();
+        if (!c.note_at_caret(p, k)) {
+            alert("No footnote here", "Put the text cursor beside a footnote's number in the text, then Edit Footnote.");
+            return;
+        }
+        edit_note(c.edit_story_id(), p, k);
+    });
     add_action("open-sample",   sigc::mem_fun(*this, &Shell::on_sample));   // s019
     add_action("open-big-book", sigc::mem_fun(*this, &Shell::on_big_book)); // s100
     add_action("open",          sigc::mem_fun(*this, &Shell::on_open));

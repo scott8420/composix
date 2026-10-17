@@ -39,6 +39,23 @@ PangoContext* measure_context() {
 struct LayoutDel { void operator()(PangoLayout* l) const { g_object_unref(l); } };
 using LayoutPtr = std::unique_ptr<PangoLayout, LayoutDel>;
 
+// s109: the story being flowed or drawn on this thread, so a paragraph's
+// footnote marks know their numbers (counted through the story).
+thread_local const core::Story* tl_story = nullptr;
+struct StoryScope {
+    const core::Story* prev;
+    explicit StoryScope(const core::Story* s) : prev(tl_story) { tl_story = s; }
+    ~StoryScope() { tl_story = prev; }
+};
+int first_note_of(const core::Para& p) {
+    if (tl_story && !tl_story->paras.empty() && &p >= tl_story->paras.data() &&
+        &p < tl_story->paras.data() + tl_story->paras.size())
+        return core::note_number(*tl_story, static_cast<int>(&p - tl_story->paras.data()), 0);
+    return 1;
+}
+// A footnote's number as it is set by its mark: smaller, raised.
+constexpr double kRefSize = 0.62, kRefRise = 0.36;
+
 // The style a paragraph is set in (Body 11/14 when it names none).
 core::Style style_of(const core::Doc& d, const std::string& id) {
     if (const auto* s = d.as<core::Style>(id)) return *s;
@@ -52,8 +69,12 @@ double leading_of(const core::Style& s) { return s.leading > 0 ? s.leading : std
 
 // s011: a paragraph's character styles, as Pango attributes over the part of
 // its text this layout holds (bytes from `from`).
+void add_mark_shapes(PangoLayout* l, PangoAttrList* attrs, const core::Para& p, int from);
+
 void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int from) {
-    if (p.runs.empty()) return;
+    // s109: a footnote's mark holds the room its number takes.
+    const bool marks = p.text.find(core::kMarkNote, static_cast<std::size_t>(std::max(0, from))) != std::string::npos;
+    if (p.runs.empty() && !marks) return;
     PangoAttrList* attrs = pango_attr_list_new();
     const int n = static_cast<int>(p.text.size());
     for (const auto& r : p.runs) {
@@ -85,8 +106,41 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
         if (l.size > 0) add(pango_attr_size_new(static_cast<int>(std::lround(l.size * PANGO_SCALE))));
         if (const auto* sw = d.as<core::Swatch>(l.color)) colour(sw, 1);
     }
+    if (marks) add_mark_shapes(l, attrs, p, from);
     pango_layout_set_attributes(l, attrs);
     pango_attr_list_unref(attrs);
+}
+
+// s109: the number's layout -- the paragraph's face, smaller.
+LayoutPtr ref_layout(const PangoFontDescription* base, const std::string& digits) {
+    LayoutPtr l(pango_layout_new(measure_context()));
+    PangoFontDescription* fd = base ? pango_font_description_copy(base) : pango_font_description_from_string("Serif 11");
+    const double size = pango_font_description_get_size(fd) / static_cast<double>(PANGO_SCALE);
+    pango_font_description_set_size(fd, static_cast<int>(std::lround(std::max(4.0, size * kRefSize) * PANGO_SCALE)));
+    pango_layout_set_font_description(l.get(), fd);
+    pango_font_description_free(fd);
+    pango_layout_set_text(l.get(), digits.c_str(), static_cast<int>(digits.size()));
+    return l;
+}
+
+void add_mark_shapes(PangoLayout* l, PangoAttrList* attrs, const core::Para& p, int from) {
+    const PangoFontDescription* fd = pango_layout_get_font_description(l);
+    const double size = fd ? pango_font_description_get_size(fd) / static_cast<double>(PANGO_SCALE) : 11;
+    const int first = first_note_of(p);
+    const auto& t = p.text;
+    for (std::size_t i = t.find(core::kMarkNote, static_cast<std::size_t>(std::max(0, from))); i != std::string::npos;
+         i = t.find(core::kMarkNote, i + 3)) {
+        const std::string digits = std::to_string(first + core::notes_in(t, 0, i));
+        auto rl = ref_layout(fd, digits);
+        PangoRectangle ext;
+        pango_layout_get_extents(rl.get(), nullptr, &ext);
+        PangoRectangle r{0, static_cast<int>(-size * 0.75 * PANGO_SCALE), ext.width + PANGO_SCALE / 4,
+                         static_cast<int>(size * PANGO_SCALE)};
+        PangoAttribute* a = pango_attr_shape_new(&r, &r);
+        a->start_index = static_cast<guint>(static_cast<int>(i) - from);
+        a->end_index = a->start_index + 3;
+        pango_attr_list_insert(attrs, a);
+    }
 }
 
 // s026: a paragraph's indents, where it is in its story (the first-line
@@ -398,6 +452,85 @@ void apply_keeps(const core::Doc& d, const core::Story& st, const core::Frame& f
     }
 }
 
+// s109: the style a paragraph's footnotes are set in -- a paragraph style
+// named "Footnote" when there is one, else the paragraph's own, smaller.
+core::Style note_style_of(const core::Doc& d, const core::Style& body) {
+    for (const auto& id : d.ids_of<core::Style>()) {
+        const auto* s = d.as<core::Style>(id);
+        if (s->kind != core::StyleKind::Paragraph) continue;
+        std::string n = s->name;
+        for (auto& ch : n) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (n == "footnote" || n == "footnotes") return *s;
+    }
+    core::Style n = body;
+    n.size = std::max(6.0, (body.size > 0 ? body.size : 11) * 0.8);
+    n.leading = n.size * 1.25;
+    n.first_indent = n.left_indent = n.right_indent = n.space_before = n.space_after = 0;
+    n.drop_lines = 0;
+    n.align = core::Align::Left;
+    n.list = {};
+    n.tabs.clear();
+    return n;
+}
+
+// The note's words, after its number, at width w.
+LayoutPtr note_layout(const core::Doc& d, const core::Story& st, int p, int k, int number, double w) {
+    const auto& para = st.paras[static_cast<std::size_t>(p)];
+    const auto ns = note_style_of(d, style_of(d, para));
+    const core::Note* note = k >= 0 && k < static_cast<int>(para.notes.size()) ? &para.notes[static_cast<std::size_t>(k)] : nullptr;
+    const std::string prefix = std::to_string(number) + "\u2002";   // the number, an en space
+    core::Para np{para.style, prefix + (note ? note->text : std::string{}), {}};
+    if (note)
+        for (auto r : note->runs) {
+            r.start += static_cast<int>(prefix.size());
+            r.end += static_cast<int>(prefix.size());
+            np.runs.push_back(r);
+        }
+    auto lay = make_layout(ns, np.text.c_str(), static_cast<int>(np.text.size()), w, false);
+    apply_runs(lay.get(), d, np, 0);
+    return lay;
+}
+
+double note_height(const core::Doc& d, const core::Story& st, int p, int k, int number, double w) {
+    auto lay = note_layout(d, st, p, k, number, w);
+    PangoRectangle ext;
+    pango_layout_get_extents(lay.get(), nullptr, &ext);
+    return ext.height / static_cast<double>(PANGO_SCALE);
+}
+
+// The room above a column's first note (its rule sits in it).
+double note_gap(const core::Doc& d, const core::Story& st, int p) {
+    const auto ns = note_style_of(d, style_of(d, st.paras[static_cast<std::size_t>(p)]));
+    return std::max(4.0, (ns.size > 0 ? ns.size : 9) * 0.9);
+}
+
+// s109: the column's notes -- those its lines (as kept) refer to, in order,
+// stacked up from its foot.
+void place_notes(const core::Doc& d, const core::Story& st, const core::Frame& fr, int col, double cx, double cw,
+                 double hmax, FrameText& ft) {
+    (void)fr;
+    std::vector<NotePlace> here;
+    for (const auto& l : ft.lines) {
+        if (l.col != col || l.para < 0 || l.para >= static_cast<int>(st.paras.size())) continue;
+        const auto& t = st.paras[static_cast<std::size_t>(l.para)].text;
+        for (std::size_t i = t.find(core::kMarkNote, static_cast<std::size_t>(l.start)); i != std::string::npos &&
+             static_cast<int>(i) < l.end; i = t.find(core::kMarkNote, i + 3)) {
+            const int k = core::notes_in(t, 0, i);
+            const int num = core::note_number(st, l.para, k);
+            here.push_back({l.para, k, num, col, cx, 0, cw, note_height(d, st, l.para, k, num, cw)});
+        }
+    }
+    if (here.empty()) return;
+    double total = 0;
+    for (const auto& n : here) total += n.h;
+    double y = hmax - total;
+    for (auto& n : here) {
+        n.y = y;
+        y += n.h;
+        ft.notes.push_back(n);
+    }
+}
+
 // Fill one frame's columns from `c`, each column at most `hmax` tall. True
 // when the story ended inside this frame.
 bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr, const std::vector<core::WrapRect>& wraps,
@@ -411,6 +544,22 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
         const bool wrapped = touches(wraps, cx, cx + cw);
         const double top = std::max(0.0, fr.inset.top);   // s040: the text starts below the top inset
         double y = top;
+        // s109: footnotes -- the room the column's notes take from its foot.
+        double notes_h = 0;
+        int in_col = 0;   // lines set in this column
+        const auto need_for = [&](int p, int a, int b) {   // the notes a line [a, b) of paragraph p brings
+            const auto& t = st.paras[static_cast<std::size_t>(p)].text;
+            if (t.find(core::kMarkNote, static_cast<std::size_t>(a)) == std::string::npos) return 0.0;
+            double h = 0;
+            for (std::size_t i = t.find(core::kMarkNote, static_cast<std::size_t>(a)); i != std::string::npos && static_cast<int>(i) < b;
+                 i = t.find(core::kMarkNote, i + 3)) {
+                const int k = core::notes_in(t, 0, i);
+                h += note_height(d, st, p, k, core::note_number(st, p, k), cw);
+            }
+            if (h > 0 && notes_h <= 0) h += note_gap(d, st, p);
+            return h;
+        };
+        const auto lim = [&] { return hmax - notes_h; };
         while (c.p < paras) {
             const auto& para = st.paras[static_cast<std::size_t>(c.p)];
             const auto style = style_of(d, para);
@@ -419,7 +568,10 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             // s055: or a break typed before it (its own, over the style's).
             if (const auto sa = c.start == 0 ? core::doc::start_of(d, para) : core::ParaStart::Anywhere; sa != core::ParaStart::Anywhere) {
                 if (sa == core::ParaStart::NextColumn && y > top) break;
-                if (sa != core::ParaStart::NextColumn && !ft.lines.empty()) return false;   // flow_text finds the frame
+                if (sa != core::ParaStart::NextColumn && !ft.lines.empty()) {   // flow_text finds the frame
+                    place_notes(d, st, fr, col, cx, cw, hmax, ft);   // s109
+                    return false;
+                }
             }
             // s011: space before a paragraph -- not at the top of a column.
             const double before = (c.start == 0 && y > top) ? style.space_before : 0;
@@ -444,7 +596,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             if (drop) {
                 const int n = std::min(style.drop_lines, 8);
                 yy = snap(yy);
-                if (yy + n * lead > hmax + 0.01 && y > top) break;   // no room for it here: the next column
+                if (yy + n * lead > lim() + 0.01 && y > top) break;   // no room for it here: the next column
                 const char* t = para.text.c_str();
                 int k = 0;
                 for (int ch = 0; ch < std::max(1, style.drop_chars) && k < len; ++ch)
@@ -461,6 +613,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 const double off = baseline_in_box(style, lead);   // where a body line's baseline sits
                 const double capx = cx + ind.left, gap = std::max(3.0, body * 0.3);
                 ft.lines.push_back({c.p, 0, k, yy, n * lead, col, capx, wc, cs.size, yy + (n - 1) * lead + off});
+                ++in_col;
                 local = wraps;
                 local.push_back({cx - 1, yy, capx + wc + gap, yy + n * lead - 0.01, false});
                 cap_bottom = yy + n * lead;
@@ -472,11 +625,11 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             if (wrapped || drop || style.hyphenate || !nobreak.empty()) {   // s018: line by line, each at the width the wraps leave
                 const auto& wraps_here = drop ? local : wraps;
                 int pos = c.start;
-                bool ended = false, full = false;
+                bool ended = false, full = false, stop = false;
                 int hy_run = 0;   // s065: hyphenated lines in a row
                 while (!ended) {
                     yy = snap(yy);
-                    if (yy + lead > hmax + 0.01) { full = true; break; }
+                    if (yy + lead > lim() + 0.01) { full = true; break; }
                     double next = 0;
                     const auto spans = free_spans(wraps_here, cx, cx + cw, yy, yy + lead, &next);
                     if (spans.empty()) { yy = next; continue; }
@@ -503,12 +656,18 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                                             std::isalpha(static_cast<unsigned char>(para.text[static_cast<std::size_t>(pos + took - 3)])) &&
                                             static_cast<unsigned char>(para.text[static_cast<std::size_t>(pos + took - 2)]) == 0xC2 &&
                                             static_cast<unsigned char>(para.text[static_cast<std::size_t>(pos + took - 1)]) == 0xAD;
+                        // s109: its notes must fit at the foot too (the column's first line always goes).
+                        const double need = need_for(c.p, pos, pos + took);
+                        if (need > 0 && in_col > 0 && yy + lead > lim() - need + 0.01) { stop = true; break; }
+                        notes_h += need;
+                        ++in_col;
                         hy_run = cut > 0 || at_shy ? hy_run + 1 : 0;
                         ft.lines.push_back({c.p, pos, pos + took, yy, lead, col, x0, w});
                         ft.lines.back().hyphen = cut > 0 || at_shy;
                         pos += took;
                         if (pos >= len) { ended = true; break; }
                     }
+                    if (stop) { full = true; break; }
                     yy += lead;
                 }
                 if (ended) {
@@ -528,9 +687,13 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             int placed = 0;
             for (int i = 0; i < nl; ++i) {
                 yy = snap(yy);
-                if (yy + lead > hmax + 0.01) break;   // the column is full
+                if (yy + lead > lim() + 0.01) break;   // the column is full
                 PangoLayoutLine* line = pango_layout_get_line_readonly(lay.get(), i);
                 const int a = c.start + line->start_index;
+                const double need = need_for(c.p, a, a + line->length);   // s109
+                if (need > 0 && in_col > 0 && yy + lead > lim() - need + 0.01) break;
+                notes_h += need;
+                ++in_col;
                 ft.lines.push_back({c.p, a, a + line->length, yy, lead, col, cx + g.dx});
                 yy += lead;
                 ++placed;
@@ -545,8 +708,12 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             c.start += pango_layout_get_line_readonly(lay.get(), placed)->start_index;
             break;
         }
-        if (c.p >= paras) return true;
+        if (c.p >= paras) {
+            place_notes(d, st, fr, col, cx, cw, hmax, ft);   // s109
+            return true;
+        }
         apply_keeps(d, st, fr, col, c, ft);   // s039
+        place_notes(d, st, fr, col, cx, cw, hmax, ft);
     }
     return false;
 }
@@ -560,6 +727,7 @@ namespace {
 void vertical_justify(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                       const std::vector<core::WrapRect>& wraps, FrameText& ft) {
     if (fr.valign == core::VAlign::Top || ft.lines.empty() || fr.kind != core::FrameKind::Text) return;
+    if (!ft.notes.empty()) return;   // s109: the notes hold the foot
     if (!wraps.empty() || (fr.balance && core::column_count(fr) > 1)) return;
     if (fr.rot == 0 && core::baseline_grid(d, fr.owner).step > 0)
         for (const auto& l : ft.lines)
@@ -660,6 +828,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
                     const std::map<std::string, double>* heights, const FlowTick* tick, const Prev* prev) {
     StoryFlow out;
     const auto* st = &text;
+    const StoryScope scope(st);   // s109: notes numbered through this text
     const auto chain = thread_frames(d, story);
     for (const auto& f : chain) out.frames.push_back({f, {}});
     if (chain.empty()) return out;   // not placed: nothing flows, nothing is "over"
@@ -672,7 +841,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
     // s105: from an earlier flow of this story -- the paragraphs changed are
     // [k0, k1) now (they were [k0, k1 - delta)); the frames before the one
     // where paragraph k0 - 1 starts are kept as they were.
-    int k1 = 0, delta = 0;
+    int k1 = 0, delta = 0, note_delta = 0;
     bool resume = false;
     if (prev && !heights && !done && prev->flow->frames.size() == chain.size()) {
         bool same_chain = true;
@@ -687,6 +856,11 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
             while (suf < lim - k0 && op[op.size() - 1 - suf] == np[np.size() - 1 - suf]) ++suf;
             k1 = static_cast<int>(np.size() - suf);
             delta = static_cast<int>(np.size()) - static_cast<int>(op.size());
+            // s109: footnotes added or taken away renumber every note after --
+            // the old frames can't be taken as they were (their numbers, and
+            // the room a number takes in its line, may differ).
+            for (std::size_t i = k0; i < np.size() - suf; ++i) note_delta += static_cast<int>(np[i].notes.size());
+            for (std::size_t i = k0; i < op.size() - suf; ++i) note_delta -= static_cast<int>(op[i].notes.size());
             const int back = k0 > 0 ? static_cast<int>(k0) - 1 : 0;
             // The last frame the old flow came to at or before paragraph `back`'s start.
             std::size_t fi0 = 0;
@@ -715,12 +889,13 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         out.frames[fi].page_before = last_page;
         // s105: come to this frame just as before, past what changed: the
         // rest is the old flow, its paragraphs moved by delta.
-        if (resume && fi > first && c.p > k1) {
+        if (resume && fi > first && c.p > k1 && note_delta == 0) {
             const auto& old = prev->flow->frames[fi];
             if (old.from_p >= 0 && old.from_p + delta == c.p && old.from_b == c.start && old.page_before == last_page) {
                 for (std::size_t i = fi; i < chain.size(); ++i) {
                     FrameText ft = prev->flow->frames[i];
                     for (auto& l : ft.lines) l.para += delta;
+                    for (auto& nt : ft.notes) nt.para += delta;   // s109 (numbers: the same notes come before)
                     if (ft.from_p >= 0) ft.from_p += delta;
                     out.frames[i] = std::move(ft);
                 }
@@ -736,7 +911,12 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
             for (std::size_t i = fi; i < chain.size(); ++i) {
                 FrameText ft = prev->flow->frames[i];
                 std::erase_if(ft.lines, [&](const Line& l) { return l.para < keep_from; });
+                std::erase_if(ft.notes, [&](const NotePlace& nt) { return nt.para < keep_from; });
                 for (auto& l : ft.lines) l.para += delta;
+                for (auto& nt : ft.notes) {
+                    nt.para += delta;
+                    nt.number += note_delta;   // (the stand-in's numbers, as they will be)
+                }
                 if (ft.from_p >= 0) ft.from_p += delta;
                 out.frames[i] = std::move(ft);
             }
@@ -763,6 +943,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         const double fh = measuring ? hit->second : fr.h;
         const double floor = fh - std::max(0.0, fr.inset.bottom);   // s040: above the bottom inset
         out.frames[fi].lines.clear();
+        out.frames[fi].notes.clear();
         done = fill_frame(d, *st, fr, wraps, c, floor, out.frames[fi]);
         if (done && fr.balance && core::column_count(fr) > 1) {
             // The shortest column height that still holds the rest.
@@ -775,6 +956,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
             }
             c = at;
             out.frames[fi].lines.clear();
+        out.frames[fi].notes.clear();
             fill_frame(d, *st, fr, wraps, c, hi, out.frames[fi]);
         }
         if (!measuring) vertical_justify(d, *st, fr, wraps, out.frames[fi]);   // s042
@@ -869,6 +1051,7 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
     const auto* fr = d.as<core::Frame>(frame);
     const FrameText* ft = frame_text(flow, frame);
     if (!st || !fr || !ft || ft->lines.empty()) return;
+    const StoryScope scope(st);   // s109
     std::size_t i = 0;
     while (i < ft->lines.size()) {
         const int p = ft->lines[i].para;
@@ -926,6 +1109,41 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
         }
         pango_layout_iter_free(it);
         i = j;
+    }
+}
+
+// s109: a placed line's footnote numbers -- each where its mark is, raised.
+template <class F>
+void each_ref(const core::Story& st, const Placed& pl, F&& f) {
+    const Line& ln = *pl.line;
+    if (ln.cap > 0 || ln.para < 0 || ln.para >= static_cast<int>(st.paras.size())) return;
+    const auto& t = st.paras[static_cast<std::size_t>(ln.para)].text;
+    const PangoFontDescription* fd = pango_layout_get_font_description(pl.lay);
+    const double size = fd ? pango_font_description_get_size(fd) / static_cast<double>(PANGO_SCALE) : 11;
+    for (std::size_t i = t.find(core::kMarkNote, static_cast<std::size_t>(ln.start)); i != std::string::npos &&
+         static_cast<int>(i) < ln.end; i = t.find(core::kMarkNote, i + 3)) {
+        PangoRectangle r;
+        pango_layout_index_to_pos(pl.lay, static_cast<int>(i) - pl.from, &r);
+        const std::string digits = std::to_string(core::note_number(st, ln.para, core::notes_in(t, 0, i)));
+        auto rl = ref_layout(fd, digits);
+        f(rl.get(), ln.x + r.x / static_cast<double>(PANGO_SCALE), pl.base - size * kRefRise);
+    }
+}
+
+// s109: a frame's notes, line by line: (line, x, baseline, the note).
+template <class F>
+void each_note_line(const core::Doc& d, const core::Story& st, const FrameText& ft, F&& f) {
+    for (const auto& np : ft.notes) {
+        if (np.para < 0 || np.para >= static_cast<int>(st.paras.size())) continue;
+        auto lay = note_layout(d, st, np.para, np.k, np.number, np.w);
+        PangoLayoutIter* it = pango_layout_get_iter(lay.get());
+        do {
+            PangoRectangle logical;
+            pango_layout_iter_get_line_extents(it, nullptr, &logical);
+            const double base = np.y + pango_layout_iter_get_baseline(it) / static_cast<double>(PANGO_SCALE);
+            f(pango_layout_iter_get_line_readonly(it), np.x + logical.x / static_cast<double>(PANGO_SCALE), base, np);
+        } while (pango_layout_iter_next_line(it));
+        pango_layout_iter_free(it);
     }
 }
 
@@ -1088,7 +1306,20 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
             cairo_move_to(cr, ox + pl.marker_x, oy + pl.base);
             pango_cairo_show_layout_line(cr, pango_layout_get_line_readonly(ml.get(), 0));
         }
+        if (st)   // s109: footnote numbers at their marks
+            each_ref(*st, pl, [&](PangoLayout* rl, double x, double base) {
+                cairo_move_to(cr, ox + x, oy + base);
+                pango_cairo_show_layout_line(cr, pango_layout_get_line_readonly(rl, 0));
+            });
     }, text);
+    // s109: the footnotes at the columns' feet, in the ink.
+    if (const FrameText* ft = frame_text(flow, frame); st && ft && !ft->notes.empty()) {
+        cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
+        each_note_line(d, *st, *ft, [&](PangoLayoutLine* l, double x, double base, const NotePlace&) {
+            cairo_move_to(cr, ox + x, oy + base);
+            pango_cairo_show_layout_line(cr, l);
+        });
+    }
     cairo_restore(cr);
 }
 
@@ -1130,11 +1361,23 @@ std::vector<RuleMark> paragraph_rules(const core::Doc& d, const std::string& sto
             out.push_back({{x0, t, x1 - x0, style.rule_below.weight}, style.rule_below.color, style.rule_below.tint});
         }
     }, text);
+    // s109: a short rule above each column's footnotes.
+    if (const FrameText* ft = frame_text(flow, frame); st && ft) {
+        std::map<int, const NotePlace*> first;
+        for (const auto& np : ft->notes)
+            if (!first.count(np.col) || np.y < first[np.col]->y) first[np.col] = &np;
+        for (const auto& [col, np] : first) {
+            if (np->para < 0 || np->para >= static_cast<int>(st->paras.size())) continue;
+            const double gap = note_gap(d, *st, np->para);
+            out.push_back({{np->x, np->y - gap / 2 - 0.25, np->w / 3, 0.5}, std::string{}, 1});
+        }
+    }
     return out;
 }
 
 void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
                  const std::function<void(const LineVisit&)>& f, const core::Story* text) {
+    const auto* st = text ? text : d.as<core::Story>(story);
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         f(LineVisit{pl.pl, pl.x, pl.base, pl.line->para, pl.from});
         for (const auto& g : pl.leaders)   // s026: each leader as a line of its own (from = -1)
@@ -1145,7 +1388,16 @@ void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& 
             auto ml = make_layout(*pl.style, pl.marker.c_str(), static_cast<int>(pl.marker.size()), 1e6, false);
             f(LineVisit{pango_layout_get_line_readonly(ml.get(), 0), pl.marker_x, pl.base, pl.line->para, -2});
         }
+        if (st)   // s109: a footnote's number at its mark (from = -3)
+            each_ref(*st, pl, [&](PangoLayout* rl, double x, double base) {
+                f(LineVisit{pango_layout_get_line_readonly(rl, 0), x, base, pl.line->para, -3});
+            });
     }, text);
+    // s109: the footnotes' lines (from = -4).
+    if (const FrameText* ft = frame_text(flow, frame); st && ft)
+        each_note_line(d, *st, *ft, [&](PangoLayoutLine* l, double x, double base, const NotePlace& np) {
+            f(LineVisit{l, x, base, np.para, -4});
+        });
 }
 
 // ── s023: markers filled in ─────────────────────────────────────────────────

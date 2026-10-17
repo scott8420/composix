@@ -1705,6 +1705,19 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     const ParaLocal over = pa.over;   // s093: and its own settings
     std::size_t head_len = 0;
     for (const auto& sp : head) head_len += sp.text.size();
+    // s109: the notes ride along with their marks -- those before a and after
+    // b kept, in order; a mark typed or pasted gets an empty note.
+    std::vector<Note> notes;
+    {
+        Para fa = pa, fb = pb;
+        fit_notes(fa);
+        fit_notes(fb);
+        const int nh = notes_in(fa.text, 0, static_cast<std::size_t>(a.byte));
+        notes.assign(fa.notes.begin(), fa.notes.begin() + nh);
+        for (int i = 0; i < notes_in(text); ++i) notes.emplace_back();
+        const int nt = notes_in(fb.text, static_cast<std::size_t>(b.byte));
+        notes.insert(notes.end(), fb.notes.end() - nt, fb.notes.end());
+    }
 
     std::vector<Para> made;
     std::string prev = style;
@@ -1724,6 +1737,13 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         prev = ps;
         if (i == 0) { made.back().restart = restart; made.back().brk = brk; }
         if (i == 0 || (last && !tail.empty())) made.back().over = over;   // s093: the paragraph's own pieces keep its settings
+    }
+    {   // s109: each new paragraph its notes, in mark order
+        std::size_t at = 0;
+        for (auto& m : made) {
+            const auto n = static_cast<std::size_t>(notes_in(m.text));
+            for (std::size_t k = 0; k < n; ++k) m.notes.push_back(at < notes.size() ? notes[at++] : Note{});
+        }
     }
     s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
     s.paras.insert(s.paras.begin() + a.para, made.begin(), made.end());
@@ -2167,6 +2187,46 @@ Doc::Id duplicate_style(DocJournal& j, Doc& d, const Doc::Id& style) {
         return {made};
     });
     return made;
+}
+
+// ── footnotes (s109) ────────────────────────────────────────────────────────
+TextPos insert_note(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& text) {
+    static int serial = 0;
+    const std::string key = "insert-note." + std::to_string(++serial);
+    const TextPos after = edit_text(j, d, story, at, at, kMarkNote, "Insert Footnote", key);
+    // The mark is just before `after`: its note takes the words (the same step).
+    const auto* st = d.as<Story>(story);
+    if (!st || after.byte < 3) return after;
+    const int k = note_index_at(*st, {after.para, after.byte - 3});
+    if (k >= 0 && !text.empty()) set_note_text(j, d, story, after.para, k, text, key);
+    return after;
+}
+
+bool set_note_text(DocJournal& j, Doc& d, const Doc::Id& story, int p, int k, const std::string& text,
+                   const std::string& merge_key) {
+    const auto* st = d.as<Story>(story);
+    if (!st || p < 0 || p >= static_cast<int>(st->paras.size())) return false;
+    Story s = *st;
+    auto& para = s.paras[static_cast<std::size_t>(p)];
+    fit_notes(para);
+    if (k < 0 || k >= static_cast<int>(para.notes.size())) return false;
+    auto& n = para.notes[static_cast<std::size_t>(k)];
+    std::string t = text;
+    std::replace(t.begin(), t.end(), '\n', ' ');   // one paragraph
+    if (n.text == t) return false;
+    n.text = t;
+    const int len = static_cast<int>(t.size());
+    std::erase_if(n.runs, [&](const Run& r) { return r.start >= len; });
+    for (auto& r : n.runs) r.end = std::min(r.end, len);
+    j.run(merge_key.empty() ? "Footnote" : "Insert Footnote", {story}, [&] { d.put(story, s); }, merge_key);
+    return true;
+}
+
+int note_index_at(const Story& s, TextPos at) {
+    if (at.para < 0 || at.para >= static_cast<int>(s.paras.size())) return -1;
+    const auto& t = s.paras[static_cast<std::size_t>(at.para)].text;
+    if (!note_at(t, static_cast<std::size_t>(at.byte))) return -1;
+    return notes_in(t, 0, static_cast<std::size_t>(at.byte));
 }
 
 // ── swatches (s058) ─────────────────────────────────────────────────────────
@@ -2726,6 +2786,8 @@ const std::vector<Verb>& verbs() {
         {"enter", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 5}, {1, 5}, "\n"); }},
         {"paste_lines", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {0, 2}, {2, 4}, "one\ntwo\nthree", "Paste"); }},
         {"cut", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 0}, {3, 0}, "", "Cut"); }},
+        {"insert_note", [](DocJournal& j, Doc& d) { insert_note(j, d, "story.1", {1, 4}, "A note."); }},   // s109
+
         // s014: master margins / columns.
         {"edit_masters", [](DocJournal& j, Doc& d) {
              edit_masters(j, d, {"master.2", "master.3"}, "Margins", [](Master& m) { m.margins.top = 72; m.columns = 2; });
@@ -2954,6 +3016,29 @@ int marker_at(const std::string& t, std::size_t i) {
     if (static_cast<unsigned char>(t[i]) != 0xEE || static_cast<unsigned char>(t[i + 1]) != 0x80) return -1;
     const int k = static_cast<unsigned char>(t[i + 2]) - 0x80;
     return k >= 0 && k <= 3 ? k : -1;
+}
+
+bool note_at(const std::string& t, std::size_t i) {   // s109
+    return i + 3 <= t.size() && static_cast<unsigned char>(t[i]) == 0xEE && static_cast<unsigned char>(t[i + 1]) == 0x80 &&
+           static_cast<unsigned char>(t[i + 2]) == 0x84;
+}
+
+int notes_in(const std::string& t, std::size_t from, std::size_t to) {
+    to = std::min(to, t.size());
+    int n = 0;
+    for (std::size_t i = t.find(kMarkNote, from); i != std::string::npos && i + 3 <= to; i = t.find(kMarkNote, i + 3)) ++n;
+    return n;
+}
+
+int note_number(const Story& s, int p, int k) {
+    int n = 0;
+    for (int i = 0; i < p && i < static_cast<int>(s.paras.size()); ++i) n += static_cast<int>(s.paras[static_cast<std::size_t>(i)].notes.size());
+    return n + k + 1;
+}
+
+void fit_notes(Para& p) {
+    const auto n = static_cast<std::size_t>(notes_in(p.text));
+    if (p.notes.size() != n) p.notes.resize(n);
 }
 
 bool has_markers(const Story& s) {

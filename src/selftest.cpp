@@ -5920,6 +5920,16 @@ int main() {
                     why = "frame " + std::to_string(i) + " start";
                     return false;
                 }
+                const auto& na = a.frames[i].notes;   // s109
+                const auto& nb = b.frames[i].notes;
+                bool notes_same = na.size() == nb.size();
+                for (std::size_t k = 0; notes_same && k < na.size(); ++k)
+                    notes_same = na[k].para == nb[k].para && na[k].k == nb[k].k && na[k].number == nb[k].number &&
+                                 na[k].col == nb[k].col && std::abs(na[k].y - nb[k].y) < 1e-9 && std::abs(na[k].h - nb[k].h) < 1e-9;
+                if (!notes_same) {
+                    why = "frame " + std::to_string(i) + " notes";
+                    return false;
+                }
             }
             return true;
         };
@@ -5937,7 +5947,7 @@ int main() {
             // flow must be the whole flow, line for line.
             std::uint32_t seed = 7;
             const auto rnd = [&](std::uint32_t n) { seed = seed * 1103515245u + 12345u; return (seed >> 8) % std::max(1u, n); };
-            const char* inserts[] = {"x", "Lorem ipsum dolor sit amet, ", "\n", "a much longer run of words to push a line or two on, and more words still to make it so ", "", "\nA new paragraph.\n"};
+            const char* inserts[] = {"x", "Lorem ipsum dolor sit amet, ", "\n", "a much longer run of words to push a line or two on, and more words still to make it so ", core::kMarkNote, "\nA new paragraph.\n"};
             int bad = 0, reflowed = 0, kept = 0, partial = 0;
             std::string why;
             for (int n = 0; n < 40; ++n) {
@@ -6081,6 +6091,161 @@ int main() {
                 }
             }
             check("the sample: every paragraph of every story edited -- re-flow == whole", bad == 0, first);
+        }
+    }
+
+    {
+        std::cout << "\n-- footnotes: the model (s109) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = d.records();
+        const auto p1 = d.as<core::Story>("story.1")->paras[1].text;
+        const auto after = core::doc::insert_note(j, d, "story.1", {1, 4}, "A first note.");
+        const auto* st = d.as<core::Story>("story.1");
+        const auto& para = st->paras[1];
+        check("insert: the mark in the text, its note with it",
+              core::note_at(para.text, 4) && para.notes.size() == 1 && para.notes[0].text == "A first note." &&
+              after.para == 1 && after.byte == 7 && para.text.size() == p1.size() + 3);
+        check("insert: one step", j.can_undo() && d.strays() == 0);
+        j.undo();
+        check("insert: undone exactly", d.records() == before);
+        j.redo();
+        core::doc::insert_note(j, d, "story.1", {3, 0}, "A later note.");
+        core::doc::insert_note(j, d, "story.1", {1, 0}, "An earlier one.");
+        st = d.as<core::Story>("story.1");
+        check("numbered through the story, in order",
+              core::note_number(*st, 1, 0) == 1 && core::note_number(*st, 1, 1) == 2 && core::note_number(*st, 3, 0) == 3 &&
+              st->paras[1].notes[0].text == "An earlier one." && st->paras[1].notes[1].text == "A first note.");
+        check("set_note_text: changes the words",
+              core::doc::set_note_text(j, d, "story.1", 1, 1, "Changed.") && d.as<core::Story>("story.1")->paras[1].notes[1].text == "Changed.");
+        // Enter before the second mark: that note goes with its mark to the new paragraph.
+        core::doc::edit_text(j, d, "story.1", {1, 5}, {1, 5}, "\n", "Typing", "");
+        st = d.as<core::Story>("story.1");
+        check("a paragraph split: each note goes with its mark",
+              st->paras[1].notes.size() == 1 && st->paras[1].notes[0].text == "An earlier one." &&
+              st->paras[2].notes.size() == 1 && st->paras[2].notes[0].text == "Changed.");
+        // Deleting the mark deletes its note; the others keep theirs.
+        const int at = static_cast<int>(st->paras[2].text.find(core::kMarkNote));
+        core::doc::edit_text(j, d, "story.1", {2, at}, {2, at + 3}, "", "Delete", "");
+        st = d.as<core::Story>("story.1");
+        check("a mark deleted: its note goes", st->paras[2].notes.empty() && st->paras[1].notes.size() == 1 &&
+                                                core::note_number(*st, 4, 0) == 2);
+        // A mark pasted in: an empty note.
+        core::doc::edit_text(j, d, "story.1", {0, 0}, {0, 0}, std::string("x") + core::kMarkNote, "Paste", "");
+        st = d.as<core::Story>("story.1");
+        check("a pasted mark: an empty note, numbered first", st->paras[0].notes.size() == 1 && st->paras[0].notes[0].text.empty() &&
+                                                              core::note_number(*st, 1, 0) == 2);
+        // Saved and read back.
+        core::Doc e;
+        std::string err;
+        check("json: notes round-trip", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        // Every step undone: the document as it was.
+        while (j.can_undo()) j.undo();
+        check("undo all: as it was", d.records() == before && d.strays() == 0);
+        core::Para lone{"", std::string("a") + core::kMarkNote + "b" + core::kMarkNote, {}};
+        core::fit_notes(lone);
+        check("fit_notes: a note for each mark", lone.notes.size() == 2);
+    }
+
+    {
+        std::cout << "\n-- footnotes: set at the column's foot (s109) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        core::doc::insert_note(j, d, "story.1", {1, 4}, "The harbour master's log for that year is lost.");
+        core::doc::insert_note(j, d, "story.1", {2, 6}, "See the chart of 1871, in the second drawer.");
+        L::FlowCache flows;
+        const auto& f = flows.get(d, "story.1");
+        int placed = 0;
+        bool clear = true, inside = true, numbered = true;
+        std::string why;
+        for (const auto& ft : f.frames) {
+            const auto* fr = d.as<core::Frame>(ft.frame);
+            for (const auto& np : ft.notes) {
+                ++placed;
+                numbered = numbered && np.number == placed;
+                inside = inside && np.y >= 0 && np.y + np.h <= fr->h - std::max(0.0, fr->inset.bottom) + 0.01 && np.h > 0;
+                // No line of the column runs into the notes (or their rule).
+                for (const auto& l : ft.lines)
+                    if (l.col == np.col && l.y + l.h > np.y + 0.01) { clear = false; why = ft.frame; }
+            }
+        }
+        check("two notes placed, numbered 1, 2", placed == 2 && numbered, std::to_string(placed));
+        check("each inside its frame, at the foot", inside);
+        check("no line runs into the notes", clear, why);
+        check("a note's reference is in its column",
+              [&] {
+                  for (const auto& ft : f.frames)
+                      for (const auto& np : ft.notes) {
+                          bool found = false;
+                          for (const auto& l : ft.lines) {
+                              if (l.para != np.para || l.col != np.col) continue;
+                              const auto& t = d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(l.para)].text;
+                              for (std::size_t i = t.find(core::kMarkNote); i != std::string::npos; i = t.find(core::kMarkNote, i + 3))
+                                  if (core::notes_in(t, 0, i) == np.k && static_cast<int>(i) >= l.start && static_cast<int>(i) < l.end) found = true;
+                          }
+                          if (!found) return false;
+                      }
+                  return true;
+              }());
+        // A note too long for the room left: its line goes on (to where it fits), never under the notes.
+        std::string longer;
+        for (int k = 0; k < 30; ++k) longer += "A long note, set in the smaller size, running on for many lines. ";
+        core::doc::set_note_text(j, d, "story.1", 2, 0, longer);
+        const auto& g = flows.get(d, "story.1");
+        bool ok = true;
+        for (const auto& ft : g.frames)
+            for (const auto& np : ft.notes)
+                for (const auto& l : ft.lines)
+                    if (l.col == np.col && l.y + l.h > np.y + 0.01) {
+                        // allowed only when the line is the column's first (it always goes)
+                        bool first = true;
+                        for (const auto& m : ft.lines) if (m.col == l.col && m.y < l.y) first = false;
+                        ok = ok && first;
+                    }
+        check("a long note: the lines stay above it", ok);
+        {   // The page's key moves with its note's words (its picture is drawn again).
+            std::string page;
+            for (const auto& ft : g.frames) if (!ft.notes.empty()) { page = d.as<core::Frame>(ft.frame)->owner; break; }
+            const auto k0 = L::page_key(d, flows, page);
+            core::doc::set_note_text(j, d, "story.1", 1, 0, "Reworded.");
+            check("page key: a note's words change it", !page.empty() && !(L::page_key(d, flows, page) == k0));
+        }
+        // Re-flowed after an edit near a note: the whole flow, notes and all.
+        L::FlowCache inc;
+        (void)inc.get(d, "story.1");
+        core::doc::edit_text(j, d, "story.1", {1, 0}, {1, 0}, "Then, ", "Typing", "");
+        const auto& r = inc.get(d, "story.1");
+        const auto w = L::flow_story(d, "story.1");
+        bool same = r.frames.size() == w.frames.size();
+        for (std::size_t i = 0; same && i < r.frames.size(); ++i) {
+            same = r.frames[i].notes.size() == w.frames[i].notes.size() && r.frames[i].lines.size() == w.frames[i].lines.size();
+            for (std::size_t k = 0; same && k < r.frames[i].notes.size(); ++k)
+                same = r.frames[i].notes[k].para == w.frames[i].notes[k].para && r.frames[i].notes[k].number == w.frames[i].notes[k].number &&
+                       std::abs(r.frames[i].notes[k].y - w.frames[i].notes[k].y) < 1e-9;
+        }
+        check("re-flow with notes == whole flow", same);
+        // Drawn and exported: the notes' lines are visited; both PDFs write.
+        int note_lines = 0, refs = 0;
+        for (const auto& ft : w.frames)
+            L::visit_lines(d, "story.1", w, ft.frame, [&](const L::LineVisit& v) {
+                note_lines += v.from == -4;
+                refs += v.from == -3;
+            });
+        check("visited: the numbers at their marks, the notes' lines", refs == 2 && note_lines >= 3,
+              std::to_string(refs) + " / " + std::to_string(note_lines));
+        const auto dir = std::filesystem::temp_directory_path();
+        for (const bool print : {false, true}) {
+            std::string err;
+            const auto path = (dir / (print ? "cx_notes_print.pdf" : "cx_notes_screen.pdf")).string();
+            const bool done = print ? L::export_print_pdf(d, path, {}, {}, nullptr, &err) : L::export_pdf(d, path, {}, {}, nullptr, &err);
+            check(std::string(print ? "print" : "screen") + " PDF with footnotes: written",
+                  done && std::filesystem::file_size(path) > 1000, err);
+            std::filesystem::remove(path);
         }
     }
 

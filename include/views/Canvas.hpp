@@ -106,6 +106,13 @@ public:
     // one step. False when not editing.
     bool insert_special(const std::string& text, const std::string& label);
     bool insert_break(core::ParaStart kind);   // s055: column / frame / page break at the caret
+    // s109: a footnote at the caret (its words come after, edit_note); false
+    // when not editing. Its paragraph and index in p / k.
+    bool insert_note(int& p, int& k);
+    // The footnote whose mark is just before (or after) the caret.
+    bool note_at_caret(int& p, int& k) const;
+    const std::string& edit_story_id() const { return m_edit_story; }
+    core::Rect caret_screen() const;   // the caret, widget coordinates (w 0: not shown)
     // s061: the caret put at `p` (an undo's place), and the view follows it.
     void place_caret(core::TextPos p);
     // s061: the caret's frame is on a page not shown -- show that page (the
@@ -113,7 +120,6 @@ public:
     sigc::signal<void(const std::string&)>& signal_follow() { return m_sig_follow; }
     // s062: a master dropped on a page: (master, {page}).
     sigc::signal<void(const std::string&, const std::vector<std::string>&)>& signal_master_drop() { return m_sig_master_drop; }
-    const std::string& edit_story_id() const { return m_edit_story; }
     // The selection, in reading order (equal = just the caret).
     std::pair<core::TextPos, core::TextPos> edit_range() const {
         return {std::min(m_anchor, m_caret), std::max(m_anchor, m_caret)};
