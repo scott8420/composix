@@ -93,6 +93,14 @@ std::vector<Field> shared_fields(const std::vector<const Item*>& sel) {
             g.cols = f.cols;
         }
         if (editable) { g.edit = f.edit; g.choices = f.choices; g.buttons = f.buttons; g.unit = f.unit; g.lo = f.lo; g.hi = f.hi; g.text = f.text; g.link = f.link; g.percent = f.percent; }
+        if (!f.own.empty()) {   // s092: marked when it's every picked style's own
+            bool all = true;
+            for (std::size_t i = 1; i < sel.size() && all; ++i) {
+                const auto& fs = sel[i]->fields;
+                all = std::any_of(fs.begin(), fs.end(), [&](const Field& h) { return h.label == f.label && h.own == f.own; });
+            }
+            if (all) g.own = f.own;
+        }
         out.push_back(std::move(g));
     }
     return out;

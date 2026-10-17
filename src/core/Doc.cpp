@@ -1921,6 +1921,46 @@ bool reset_to_base(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     });
 }
 
+bool reset_style_fields(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const std::vector<std::string>& keys) {   // s092
+    std::vector<Doc::Id> styles;
+    for (const auto& id : ids)
+        if (const auto* s = d.as<Style>(id); s && d.as<Style>(s->based_on))
+            for (const auto& k : keys)
+                if (owns(*s, k)) { styles.push_back(id); break; }
+    if (styles.empty()) return false;
+    std::string label = "Reset";
+    for (const auto& k : keys) label += " " + style_field_label(k);
+    return j.run(label, with_descendants(d, styles), [&] {
+        for (const auto& id : styles) {
+            Style t = *d.as<Style>(id);
+            const Style& base = *d.as<Style>(t.based_on);
+            for (const auto& k : keys) {
+                std::erase(t.own, k);
+                for (const auto& sf : style_fields())
+                    if (k == sf.key) sf.copy(t, base);
+            }
+            d.put(id, t);
+        }
+        write_through(d, styles);
+    });
+}
+
+std::string style_key_of_edit(const std::string& e) {   // s092
+    static const std::map<std::string, std::string> m{
+        {"font", "family"}, {"ssize", "size"}, {"leading", "leading"}, {"bold", "bold"}, {"italic", "italic"},
+        {"nobreak", "no_break"}, {"color", "color"}, {"color_tint", "color_tint"}, {"align", "align"},
+        {"before", "space_before"}, {"after", "space_after"}, {"lindent", "left_indent"}, {"rindent", "right_indent"},
+        {"findent", "first_indent"}, {"indent_after", "skip_after_heading"}, {"tabs", "tabs"}, {"drop_lines", "drop_lines"},
+        {"drop_chars", "drop_chars"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"hyph_limit", "hyph_limit"},
+        {"hyph_shortest", "hyph_shortest"}, {"hyph_last_word", "hyph_last_word"}, {"keep_next", "keep_next"},
+        {"keep_lines", "keep_lines"}, {"pstart", "start"}};
+    if (const auto it = m.find(e); it != m.end()) return it->second;
+    if (e.rfind("rule_a", 0) == 0) return "rule_above";
+    if (e.rfind("rule_b", 0) == 0) return "rule_below";
+    if (e.rfind("list_", 0) == 0) return "list";
+    return {};
+}
+
 int list_number(const Doc& d, const Story& s, int para) {
     if (para < 0 || para >= static_cast<int>(s.paras.size())) return 0;
     const auto& style = s.paras[static_cast<std::size_t>(para)].style;
@@ -2523,6 +2563,7 @@ const std::vector<Verb>& verbs() {
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
         {"override_all", [](DocJournal& j, Doc& d) { override_all(j, d, {"page.7", "page.8"}); }},   // s072
         {"remove_all_overrides", [](DocJournal& j, Doc& d) { remove_all_overrides(j, d, d.pages()); }},
+        {"reset_style_fields", [](DocJournal& j, Doc& d) { reset_style_fields(j, d, {"style.10"}, {"first_indent"}); }},   // s092
         {"set_list_entry_style", [](DocJournal& j, Doc& d) { set_list_entry_style(j, d, "list.1", 1, "style.3"); }},   // s090
         {"set_list_numbers", [](DocJournal& j, Doc& d) { set_list_numbers(j, d, "list.1", false); }},                 // s090
         {"set_list_styles", [](DocJournal& j, Doc& d) { set_list_styles(j, d, "list.1", {"style.2", "style.3"}); }},   // s088

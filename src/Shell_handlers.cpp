@@ -1021,6 +1021,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 for (const auto& id : m_inspected) did = layout::build_list(m_journal, m_doc, id) || did;
         } else if (key == "based_on") {   // s037
             if (m_inspected.size() == 1) did = core::doc::set_style_base(m_journal, m_doc, m_inspected.front(), choice);
+        } else if (key == "style_reset") {   // s092: one setting back to the base's
+            did = core::doc::reset_style_fields(m_journal, m_doc, m_inspected, {choice});
         } else if (key == "style_base") {   // s037: Reset to base
             did = core::doc::reset_to_base(m_journal, m_doc, m_inspected);
         } else if (key == "next_style") {   // s037

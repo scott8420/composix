@@ -87,6 +87,9 @@ struct Field {
     bool link = false;
     // s071: a percentage typed ("40", "40%") -- sends the number, in [lo, hi].
     bool percent = false;
+    // s092: a style's row that is its OWN (not from its base): the style
+    // field's key ("size"), so the inspector can mark it and offer a reset.
+    std::string own;
     bool operator==(const Field&) const = default;
 };
 

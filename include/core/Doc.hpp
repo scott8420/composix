@@ -761,6 +761,12 @@ bool can_base_on(const Doc& d, const Doc::Id& style, const Doc::Id& base);
 bool set_style_base(DocJournal& j, Doc& d, const Doc::Id& style, const Doc::Id& base);
 // Styles' own settings dropped: all of it from the base again. One step.
 bool reset_to_base(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles);
+// s092: just these settings back to the base's (keys from style_field_keys);
+// styles that don't own them are left alone. One step; nothing -> no step.
+bool reset_style_fields(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles, const std::vector<std::string>& keys);
+// s092: the style setting an inspector row edits ("ssize" -> "size",
+// "rule_a_w" -> "rule_above"); "" when it isn't one.
+std::string style_key_of_edit(const std::string& edit);
 // s045: a list paragraph's number (1 + the paragraphs of the same style
 // just before it), and its marker ("•", "3.", "iv."; "" not a list).
 // s047: paragraphs of other styles: with the list's `continues`, the count
@@ -859,7 +865,13 @@ bool    delete_swatch(DocJournal& j, Doc& d, const Doc::Id& id);
 // What to look for: text (in one paragraph), optionally only in a
 // paragraph style and / or wholly in a character style. No text and a
 // style: each paragraph in that style (or each run of that character
-// style) is a hit. Case folding is ASCII (other letters match exactly).
+// style) is a hit. s091: case folds beyond ASCII -- fold_char's letters
+// (Latin, Greek, Cyrillic, Armenian, fullwidth), one for one.
+// s091: a character's simple case fold (lower case, one for one): ASCII,
+// Latin-1, Latin Extended-A / B / Additional, Greek (final sigma as sigma),
+// Cyrillic, Armenian, fullwidth A-Z. Anything else is itself.
+char32_t fold_char(char32_t c);
+
 struct FindOpts {
     std::string what;
     bool        match_case = false;
@@ -875,7 +887,8 @@ struct FindOpts {
     // s056: how `what` reads -- plain text; Wildcards (^9 a digit, ^$ a
     // letter, ^w white space, ^? any character, ^^ a caret; the rest
     // plain); or a regular expression (ECMAScript; "." is one character;
-    // case folding ASCII only). A pattern finds within one paragraph.
+    // s091: case folded as fold_char, both sides). A pattern finds within
+    // one paragraph.
     enum class Mode { Text, Wildcards, Regex };
     Mode        mode = Mode::Text;
     // s056: where -- every story (""), one story, or a stretch of it

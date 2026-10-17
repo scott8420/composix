@@ -503,6 +503,10 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             act.buttons = true;
             f.push_back(act);
             mark_typed(f, unit_pt(d.settings().units));   // s041
+            if (d.as<Style>(s.based_on))   // s092: mark the rows that are its own
+                for (auto& fl : f)
+                    if (const auto k = doc::style_key_of_edit(fl.edit); !k.empty() && std::find(s.own.begin(), s.own.end(), k) != s.own.end())
+                        fl.own = k;
             o.add({sid, G::Styles, s.name, uses ? "" : "Unused", th, f});
         }
     }

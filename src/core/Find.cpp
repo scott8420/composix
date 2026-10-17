@@ -10,7 +10,6 @@ namespace composix::core::doc {
 
 namespace {
 
-char fold(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
 
 bool word_byte(unsigned char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c >= 0x80;
@@ -56,6 +55,57 @@ std::vector<Stretch> format_stretches(const Doc& d, const Para& para, const Find
     return out;
 }
 
+}  // namespace
+
+char32_t fold_char(char32_t c) {   // s091
+    const auto pair_even = [](char32_t x) { return (x % 2 == 0) ? x + 1 : x; };   // upper even, lower odd
+    const auto pair_odd = [](char32_t x) { return (x % 2 == 1) ? x + 1 : x; };    // upper odd, lower even
+    if (c < 0x80) return (c >= 'A' && c <= 'Z') ? c + 32 : c;
+    if (c >= 0xC0 && c <= 0xDE && c != 0xD7) return c + 32;
+    if (c >= 0x100 && c <= 0x17F) {
+        if (c == 0x130) return 'i';
+        if (c == 0x178) return 0xFF;
+        if (c == 0x17F) return 's';
+        if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) return pair_odd(c);
+        if (c == 0x131 || c == 0x138 || c == 0x149) return c;
+        return pair_even(c);
+    }
+    if ((c >= 0x1CD && c <= 0x1DC)) return pair_odd(c);
+    if ((c >= 0x1DE && c <= 0x1EF) || (c >= 0x1F8 && c <= 0x21F) || (c >= 0x222 && c <= 0x233) || (c >= 0x246 && c <= 0x24F))
+        return pair_even(c);
+    if (c >= 0x391 && c <= 0x3AB && c != 0x3A2) return c + 32;
+    if (c == 0x386) return 0x3AC;
+    if (c >= 0x388 && c <= 0x38A) return c + 37;
+    if (c == 0x38C) return 0x3CC;
+    if (c == 0x38E || c == 0x38F) return c + 63;
+    if (c == 0x3C2) return 0x3C3;   // final sigma
+    if (c >= 0x400 && c <= 0x40F) return c + 80;
+    if (c >= 0x410 && c <= 0x42F) return c + 32;
+    if ((c >= 0x460 && c <= 0x481) || (c >= 0x48A && c <= 0x4BF) || (c >= 0x4D0 && c <= 0x52F)) return pair_even(c);
+    if (c == 0x4C0) return 0x4CF;
+    if (c >= 0x4C1 && c <= 0x4CE) return pair_odd(c);
+    if (c >= 0x531 && c <= 0x556) return c + 48;
+    if (c == 0x1E9E) return 0xDF;   // capital sharp s
+    if (c >= 0x1E00 && c <= 0x1EFF && !(c >= 0x1E96 && c <= 0x1E9F)) return pair_even(c);
+    if (c >= 0xFF21 && c <= 0xFF3A) return c + 32;
+    return c;
+}
+
+namespace {
+// s091: a wide string folded, char for char (indices unchanged).
+std::wstring folded(std::wstring w) {
+    for (auto& c : w) c = static_cast<wchar_t>(fold_char(static_cast<char32_t>(c)));
+    return w;
+}
+// ... a pattern folded, leaving what follows an escape (\D, \W, \S mean
+// something else in upper case) -- `esc`: the escape character.
+std::wstring folded_pattern(const std::wstring& w, wchar_t esc) {
+    std::wstring r;
+    for (std::size_t i = 0; i < w.size(); ++i) {
+        r += (i > 0 && w[i - 1] == esc && (i < 2 || w[i - 2] != esc)) ? w[i] : static_cast<wchar_t>(fold_char(static_cast<char32_t>(w[i])));
+    }
+    return r;
+}
 }  // namespace
 
 namespace {
@@ -117,9 +167,9 @@ std::wstring wild_to_regex(const std::wstring& w) {
 
 bool make_regex(const FindOpts& f, std::wregex& re, std::string* err) {
     try {
-        auto flags = std::regex::ECMAScript;
-        if (!f.match_case) flags |= std::regex::icase;
-        const auto w = widen(f.what);
+        const auto flags = std::regex::ECMAScript;   // s091: case by folding both sides, not icase (ASCII only)
+        auto w = widen(f.what);
+        if (!f.match_case) w = folded_pattern(w, f.mode == FindOpts::Mode::Regex ? L'\\' : L'^');
         re = std::wregex(f.mode == FindOpts::Mode::Regex ? w : wild_to_regex(w), flags);
         return true;
     } catch (const std::regex_error& e) {
@@ -161,8 +211,7 @@ std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
     const bool pattern = f.mode != FindOpts::Mode::Text && !f.what.empty();
     std::wregex re;
     if (pattern && !make_regex(f, re, nullptr)) return out;
-    std::string what = f.what;
-    if (!f.match_case) for (auto& c : what) c = fold(c);
+    const std::wstring what = f.match_case ? widen(f.what) : folded(widen(f.what));   // s091: by characters
     TextPos lo = f.from, hi = f.to;
     if (hi < lo) std::swap(lo, hi);
     for (const auto& sid : reading_order(d)) {
@@ -211,24 +260,31 @@ std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
             if (pattern) {
                 std::vector<int> at;
                 const auto wide = widen(para.text, &at);
-                for (auto it = std::wsregex_iterator(wide.begin(), wide.end(), re); it != std::wsregex_iterator(); ++it) {
+                const auto look = f.match_case ? wide : folded(wide);   // s091: same indices
+                for (auto it = std::wsregex_iterator(look.begin(), look.end(), re); it != std::wsregex_iterator(); ++it) {
                     const auto& m = *it;
                     if (m.length(0) == 0) continue;   // an empty match finds nothing
                     const auto p0 = static_cast<std::size_t>(m.position(0)), p1 = p0 + static_cast<std::size_t>(m.length(0));
                     M x{at[p0], at[p1], {}};
-                    for (std::size_t k = 0; k < m.size(); ++k) x.g.push_back(m[k].matched ? narrow(m[k].str()) : std::string{});
+                    for (std::size_t k = 0; k < m.size(); ++k)   // the groups as written, not folded
+                        x.g.push_back(m[k].matched ? narrow(wide.substr(static_cast<std::size_t>(m.position(k)),
+                                                                        static_cast<std::size_t>(m.length(k))))
+                                                   : std::string{});
                     ms.push_back(std::move(x));
                 }
             } else {
-                if (!f.match_case) for (auto& c : hay) c = fold(c);
-                const int w = static_cast<int>(what.size());
-                for (std::size_t at = hay.find(what); at != std::string::npos; at = hay.find(what, at + 1)) {
-                    const int a = static_cast<int>(at), b = a + w;
-                    if (f.whole_word && ((a > 0 && word_byte(static_cast<unsigned char>(hay[a - 1]))) ||
-                                         (b < n && word_byte(static_cast<unsigned char>(hay[b])))))
+                // s091: by characters, folded both sides; the byte offsets mapped back.
+                std::vector<int> bat;
+                auto wh = widen(hay, &bat);
+                if (!f.match_case) wh = folded(wh);
+                const std::size_t w = what.size();
+                for (std::size_t at = wh.find(what); at != std::wstring::npos; at = wh.find(what, at + 1)) {
+                    const int a = bat[at], b = bat[at + w];
+                    if (f.whole_word && ((a > 0 && word_byte(static_cast<unsigned char>(hay[static_cast<std::size_t>(a - 1)]))) ||
+                                         (b < n && word_byte(static_cast<unsigned char>(hay[static_cast<std::size_t>(b)])))))
                         continue;
                     ms.push_back({a, b, {}});
-                    at += static_cast<std::size_t>(w) - 1;   // no overlapping hits
+                    at += w - 1;   // no overlapping hits
                 }
             }
             for (auto& m : ms) {

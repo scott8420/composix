@@ -2747,6 +2747,90 @@ int main() {
     }
 
     {
+        std::cout << "\n-- own settings, row by row (s092) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto rows = [&](const std::string& id) {
+            std::map<std::string, std::string> m;   // label -> own key
+            const auto o = core::project(d, "");
+            for (const auto* it : o.in(core::Segment::Styles))
+                if (it->id == id)
+                    for (const auto& f : it->fields) if (!f.own.empty()) m[f.label] = f.own;
+            return m;
+        };
+        auto m = rows("style.10");
+        check("rows: Body First's own -- First indent and Drop cap, marked", m.size() == 2 && m["First indent"] == "first_indent" &&
+                                                                            m["Drop cap"] == "drop_lines");
+        check("rows: a style on no base -- nothing marked", rows("style.1").empty());
+        check("edit keys -> style keys", core::doc::style_key_of_edit("ssize") == "size" && core::doc::style_key_of_edit("rule_a_w") == "rule_above" &&
+                                         core::doc::style_key_of_edit("list_hang") == "list" && core::doc::style_key_of_edit("pstart") == "start" &&
+                                         core::doc::style_key_of_edit("zoom").empty());
+        const auto base = *d.as<core::Style>("style.1");
+        const auto n0 = j.size();
+        check("reset one: one step", core::doc::reset_style_fields(j, d, {"style.10"}, {"drop_lines"}) && j.size() == n0 + 1);
+        const auto& bf = *d.as<core::Style>("style.10");
+        check("reset one: the base's value, no longer its own; the other kept", bf.drop_lines == base.drop_lines &&
+              bf.own == std::vector<std::string>{"first_indent"});
+        check("reset one: not owned -- no step", !core::doc::reset_style_fields(j, d, {"style.10"}, {"drop_lines"}) &&
+                                                 !core::doc::reset_style_fields(j, d, {"style.1"}, {"size"}));
+        m = rows("style.10");
+        check("rows: the reset row unmarked", m.size() == 1 && m.count("First indent") == 1);
+        j.undo();
+        check("reset one: undone", d.as<core::Style>("style.10")->own.size() == 2 && d.as<core::Style>("style.10")->drop_lines >= 2);
+        // Several picked: marked only where every one owns it.
+        {
+            const auto o = core::project(d, "");
+            std::vector<const core::Item*> sel;
+            for (const auto* it : o.in(core::Segment::Styles)) if (it->id == "style.10" || it->id == "style.1") sel.push_back(it);
+            bool any = false;
+            for (const auto& f : core::shared_fields(sel)) any = any || !f.own.empty();
+            check("several picked: not marked unless all own it", sel.size() == 2 && !any);
+        }
+    }
+
+    {
+        std::cout << "\n-- find: Unicode case (s091) --\n";
+        namespace D = core::doc;
+        check("fold: Latin-1, Extended-A, Greek, Cyrillic, Armenian, fullwidth",
+              D::fold_char(U'É') == U'é' && D::fold_char(U'Ž') == U'ž' && D::fold_char(U'Ł') == U'ł' && D::fold_char(U'Σ') == U'σ' &&
+              D::fold_char(U'ς') == U'σ' && D::fold_char(U'Ά') == U'ά' && D::fold_char(U'Ж') == U'ж' && D::fold_char(U'Ё') == U'ё' &&
+              D::fold_char(U'Ա') == U'ա' && D::fold_char(U'Ａ') == U'ａ' && D::fold_char(U'Ẁ') == U'ẁ' && D::fold_char(U'×') == U'×' &&
+              D::fold_char(U'é') == U'é' && D::fold_char(U'7') == U'7');
+        core::Doc d;
+        core::load_sample(d);
+        {
+            core::Doc::Loading load(d);
+            auto st = *d.as<core::Story>("story.3");
+            st.paras.at(0).text = "ÉTÉ à Москва; ΟΔΟΣ and οδος; Łódź";
+            d.put("story.3", st);
+        }
+        const auto hits = [&](const std::string& what, D::FindOpts::Mode m = D::FindOpts::Mode::Text, bool mc = false, bool ww = false) {
+            D::FindOpts f;
+            f.what = what;
+            f.mode = m;
+            f.match_case = mc;
+            f.whole_word = ww;
+            f.story = "story.3";
+            return D::find_all(d, f);
+        };
+        const auto& txt = d.as<core::Story>("story.3")->paras.at(0).text;
+        const auto h1 = hits("été");
+        check("text: été finds ÉTÉ, its bytes", h1.size() == 1 && txt.substr(static_cast<std::size_t>(h1[0].a.byte),
+                                                                           static_cast<std::size_t>(h1[0].b.byte - h1[0].a.byte)) == "ÉTÉ");
+        check("text: Cyrillic and Greek either way", hits("МОСКВА").size() == 1 && hits("οδοσ").size() == 2 && hits("ŁÓDŹ").size() == 1);
+        check("text: match case still matches case", hits("été", D::FindOpts::Mode::Text, true).empty() && hits("ÉTÉ", D::FindOpts::Mode::Text, true).size() == 1);
+        check("text: whole word with letters past ASCII", hits("ét", D::FindOpts::Mode::Text, false, true).empty() &&
+                                                         hits("été", D::FindOpts::Mode::Text, false, true).size() == 1);
+        const auto h2 = hits("(é)t(é)", D::FindOpts::Mode::Regex);
+        check("regex: folded both sides, the groups as written", h2.size() == 1 && h2[0].groups.size() == 3 && h2[0].groups[1] == "É");
+        check("regex: \\W still means not-a-word", hits("\\W\\W", D::FindOpts::Mode::Regex).size() >= 1 &&
+                                                  hits("Москва\\W", D::FindOpts::Mode::Regex).size() == 1);
+        check("wildcards: ^$ and folded letters", hits("Ł^$dź", D::FindOpts::Mode::Wildcards).size() == 1);
+    }
+
+    {
         std::cout << "\n-- level styles, page numbers (s090) --\n";
         namespace L = composix::layout;
         core::Doc d;

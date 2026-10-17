@@ -151,6 +151,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
         if (!f.cols.empty()) {   // a compact row: headers over values, under the label
             auto l = Gtk::make_managed<Gtk::Label>(f.label);
             l->add_css_class("cx-field-label");
+            if (!f.own.empty()) l->add_css_class("cx-field-own");   // s092: marked (Reset to base clears it)
             l->set_xalign(1.0f);
             l->set_valign(Gtk::Align::END);
             m_fields.attach(*l, 0, row);
@@ -235,7 +236,25 @@ void Inspector::fill(const std::string& title, const std::string& sub,
         l->add_css_class("cx-field-label");
         l->set_xalign(1.0f);
         l->set_valign(f.edit.empty() ? Gtk::Align::START : Gtk::Align::CENTER);
-        m_fields.attach(*l, 0, row);
+        if (!f.own.empty()) {   // s092: the style's own setting -- marked, with a way back to the base's
+            l->add_css_class("cx-field-own");
+            l->set_tooltip_text("Its own setting \u2014 not from the style it's based on");
+            auto lb = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 2);
+            lb->set_halign(Gtk::Align::END);
+            lb->set_valign(Gtk::Align::CENTER);
+            auto rb = Gtk::make_managed<Gtk::Button>("\u21ba");   // a glyph, not a theme icon: shows on any desktop
+            rb->set_name("inspector.own_reset." + f.own);
+            rb->add_css_class("flat");
+            rb->add_css_class("cx-own-reset");
+            rb->set_tooltip_text("Take " + f.label + " from the base style again");
+            const std::string k = f.own;
+            rb->signal_clicked().connect([this, k] { m_edit.emit("style_reset", k); });
+            lb->append(*rb);
+            lb->append(*l);
+            m_fields.attach(*lb, 0, row);
+        } else {
+            m_fields.attach(*l, 0, row);
+        }
 
         if (!f.edit.empty() && f.text) {
             // s060: typed text -- sent as typed on Enter or leaving it.
