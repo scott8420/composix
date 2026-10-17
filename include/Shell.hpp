@@ -290,6 +290,8 @@ private:
     bool                             m_pdf_convert = false;
     std::vector<std::string>         m_pdf_only;            // s054: the range's pages (empty = all)
     bool                             m_pdf_bookmarks = true;
+    std::vector<std::string>         m_pdf_mark_lists;      // s082: the lists the outline comes from (empty = default)
+    bool                             m_pdf_spreads = false; // s084: facing pages as one sheet
     std::string                      m_pdf_range;   // s077: as typed, "" = all
     int                              m_pdf_standard = 0;   // s017: 0 none, 1 PDF/X-1a, 2 PDF/X-4
     std::vector<std::string>         m_profiles;           // the sheet's list, as paths

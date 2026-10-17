@@ -42,6 +42,8 @@ json to(const Record& r) {
                  {"export", {{"print", v.exp.print}, {"bleed", v.exp.bleed}, {"marks", v.exp.marks},
                              {"profile", v.exp.profile}, {"convert", v.exp.convert}, {"standard", v.exp.standard},
                              {"range", v.exp.range}, {"bookmarks", v.exp.bookmarks}}}};
+            if (!v.exp.mark_lists.empty()) j["export"]["mark_lists"] = v.exp.mark_lists;   // s082
+            if (v.exp.spreads) j["export"]["spreads"] = true;                              // s084
             if (!v.queries.empty()) {   // s078
                 json qs = json::array();
                 for (const auto& q : v.queries)
@@ -160,6 +162,10 @@ std::optional<Record> from(const json& j) {
             v.exp = {val(e, "print", true), val(e, "bleed", true), val(e, "marks", false),
                      val<std::string>(e, "profile", ""), val(e, "convert", false), val(e, "standard", 0),
                      val<std::string>(e, "range", ""), val(e, "bookmarks", true)};   // s077
+            if (e.contains("mark_lists") && e.at("mark_lists").is_array())   // s082
+                for (const auto& m : e.at("mark_lists"))
+                    if (m.is_string()) v.exp.mark_lists.push_back(m.get<std::string>());
+            v.exp.spreads = val(e, "spreads", false);   // s084
         }
         if (j.contains("queries") && j.at("queries").is_array())   // s078
             for (const auto& q : j.at("queries"))

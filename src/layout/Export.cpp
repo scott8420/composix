@@ -158,22 +158,47 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
     return k;
 }
 
-std::vector<Bookmark> bookmarks(const core::Doc& d, FlowCache& flows) {
-    std::vector<Bookmark> out;
-    const core::GenList* toc = nullptr;
+std::vector<std::string> bookmark_lists(const core::Doc& d) {   // s082
+    std::vector<std::string> out;
     for (const auto& lid : d.ids_of<core::GenList>())
-        if (const auto* l = d.as<core::GenList>(lid); l->kind == core::ListKind::Contents && !l->from_styles.empty()) { toc = l; break; }
-    if (!toc) return out;
+        if (!d.as<core::GenList>(lid)->from_styles.empty()) out.push_back(lid);
+    std::stable_sort(out.begin(), out.end(), [&d](const std::string& a, const std::string& b) {
+        return d.as<core::GenList>(a)->pos < d.as<core::GenList>(b)->pos;
+    });
+    return out;
+}
+
+std::vector<std::string> bookmark_lists_used(const core::Doc& d, const std::vector<std::string>& picked) {   // s082
+    std::vector<std::string> use;
+    for (const auto& lid : bookmark_lists(d))
+        if (std::find(picked.begin(), picked.end(), lid) != picked.end()) use.push_back(lid);
+    if (use.empty())   // s054's default: the first Contents list
+        for (const auto& lid : d.ids_of<core::GenList>())
+            if (const auto* l = d.as<core::GenList>(lid); l->kind == core::ListKind::Contents && !l->from_styles.empty()) {
+                use.push_back(lid);
+                break;
+            }
+    return use;
+}
+
+namespace {
+// One list's entries, where they land, in page-then-y order.
+std::vector<Bookmark> list_marks(const core::Doc& d, FlowCache& flows, const core::GenList& toc,
+                                 const std::vector<std::string>& only) {
     const auto pages = d.pages();
-    struct Keyed { std::size_t page; double y; Bookmark b; };
+    // s082: on a page, a story's entries in story order (columns read down
+    // then across); stories by where their first entry on the page lands.
+    struct Keyed { std::size_t page; double y; std::size_t story; int para; double top = 0; Bookmark b; };
     std::vector<Keyed> all;
+    std::size_t sn = 0;
     for (const auto& sid : d.ids_of<core::Story>()) {
+        ++sn;
         const auto& st = *d.as<core::Story>(sid);
         const auto& flow = flows.get(d, sid);
         for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
             const auto& para = st.paras[static_cast<std::size_t>(p)];
-            const auto lv = std::find(toc->from_styles.begin(), toc->from_styles.end(), para.style);
-            if (lv == toc->from_styles.end()) continue;
+            const auto lv = std::find(toc.from_styles.begin(), toc.from_styles.end(), para.style);
+            if (lv == toc.from_styles.end()) continue;
             std::string title = para.text;
             for (auto& c : title) if (c == '\t') c = ' ';
             if (title.find_first_not_of(' ') == std::string::npos) continue;
@@ -183,14 +208,122 @@ std::vector<Bookmark> bookmarks(const core::Doc& d, FlowCache& flows) {
             if (!f) continue;
             const auto at = std::find(pages.begin(), pages.end(), f->owner);
             if (at == pages.end()) continue;   // on a master: not a place in the book
+            if (!only.empty() && std::find(only.begin(), only.end(), f->owner) == only.end()) continue;
             const double y = f->y + c.y;
-            all.push_back({static_cast<std::size_t>(at - pages.begin()), y,
-                           {title, static_cast<int>(lv - toc->from_styles.begin()) + 1, f->owner, y}});
+            all.push_back({static_cast<std::size_t>(at - pages.begin()), y, sn, p, y,
+                           {title, static_cast<int>(lv - toc.from_styles.begin()) + 1, f->owner, y}});
         }
     }
-    std::stable_sort(all.begin(), all.end(), [](const Keyed& a, const Keyed& b) { return a.page != b.page ? a.page < b.page : a.y < b.y; });
+    for (auto& k : all)
+        for (const auto& o : all)
+            if (o.page == k.page && o.story == k.story) k.top = std::min(k.top, o.y);
+    std::stable_sort(all.begin(), all.end(), [](const Keyed& a, const Keyed& b) {
+        if (a.page != b.page) return a.page < b.page;
+        if (a.story != b.story) return a.top != b.top ? a.top < b.top : a.story < b.story;
+        return a.para < b.para;
+    });
+    std::vector<Bookmark> out;
     for (auto& k : all) out.push_back(std::move(k.b));
     return out;
+}
+}  // namespace
+
+std::vector<Bookmark> bookmarks(const core::Doc& d, FlowCache& flows, const std::vector<std::string>& lists,
+                                const std::vector<std::string>& only) {
+    const auto use = bookmark_lists_used(d, lists);
+    std::vector<Bookmark> out;
+    for (std::size_t n = 0; n < use.size(); ++n) {
+        const auto& l = *d.as<core::GenList>(use[n]);
+        auto marks = list_marks(d, flows, l, only);
+        if (marks.empty()) continue;
+        if (out.empty()) { out = std::move(marks); continue; }   // the first with entries: the top level
+        out.push_back({l.name.empty() ? std::string("List") : l.name, 1, marks.front().page, marks.front().y});
+        for (auto& m : marks) { ++m.level; out.push_back(std::move(m)); }
+    }
+    return out;
+}
+
+std::vector<Bookmark> bookmarks(const core::Doc& d, FlowCache& flows) { return bookmarks(d, flows, {}); }
+
+namespace {
+std::string trimmed(std::string t) {
+    for (auto& c : t) if (c == '\t') c = ' ';
+    const auto a = t.find_first_not_of(' ');
+    if (a == std::string::npos) return {};
+    return t.substr(a, t.find_last_not_of(' ') - a + 1);
+}
+}  // namespace
+
+std::vector<PdfLink> contents_links(const core::Doc& d, FlowCache& flows) {   // s083
+    std::vector<PdfLink> out;
+    for (const auto& lid : bookmark_lists(d)) {
+        const auto& l = *d.as<core::GenList>(lid);
+        if (l.kind != core::ListKind::Contents || l.placed_on.empty() || !d.as<core::Page>(l.placed_on)) continue;
+        auto heads = list_marks(d, flows, l, {});
+        std::vector<bool> used(heads.size(), false);
+        for (const auto& sid : d.ids_of<core::Story>()) {
+            const auto& st = *d.as<core::Story>(sid);
+            const auto& flow = flows.get(d, sid);
+            for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+                const auto& para = st.paras[static_cast<std::size_t>(p)];
+                if (std::find(l.from_styles.begin(), l.from_styles.end(), para.style) != l.from_styles.end()) continue;
+                const auto title = trimmed(para.text.substr(0, para.text.find('\t')));
+                if (title.empty()) continue;
+                const auto c = caret_at(d, sid, flow, {p, 0});
+                if (!c.ok) continue;
+                const auto* f = d.as<core::Frame>(c.frame);
+                if (!f || f->owner != l.placed_on || f->rot != 0) continue;
+                std::size_t k = 0;
+                while (k < heads.size() && (used[k] || trimmed(heads[k].title) != title)) ++k;
+                if (k == heads.size()) continue;
+                const auto rs = selection_rects(d, sid, flow, c.frame, {p, 0}, {p, static_cast<int>(para.text.size())});
+                if (rs.empty()) continue;
+                double x0 = rs.front().x, y0 = rs.front().y, x1 = rs.front().r(), y1 = rs.front().b();
+                for (const auto& r : rs) {
+                    x0 = std::min(x0, r.x); y0 = std::min(y0, r.y);
+                    x1 = std::max(x1, r.r()); y1 = std::max(y1, r.b());
+                }
+                used[k] = true;
+                out.push_back({f->owner, {f->x + x0, f->y + y0, x1 - x0, y1 - y0}, heads[k].page, heads[k].y});
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<Sheet> pdf_sheets(const core::Doc& d, const std::vector<std::string>& pages, bool spreads) {   // s084
+    std::vector<std::vector<std::string>> groups;
+    if (spreads) {
+        for (const auto& sp : core::spreads(d)) {
+            std::vector<std::string> g;
+            for (const auto& p : sp) if (std::find(pages.begin(), pages.end(), p) != pages.end()) g.push_back(p);
+            if (!g.empty()) groups.push_back(std::move(g));
+        }
+    } else {
+        for (const auto& p : pages) groups.push_back({p});
+    }
+    std::vector<Sheet> out;
+    for (auto& g : groups) {
+        Sheet sh;
+        for (const auto& p : g) {
+            const auto* pg = d.as<core::Page>(p);
+            if (!pg) continue;
+            sh.pages.push_back(p);
+            sh.x.push_back(sh.w);
+            sh.w += pg->w;
+            sh.h = std::max(sh.h, pg->h);
+            sh.label += (sh.label.empty() ? "" : "\u2013") + d.folio(p);
+        }
+        if (!sh.pages.empty()) out.push_back(std::move(sh));
+    }
+    return out;
+}
+
+SheetAt sheet_of(const std::vector<Sheet>& sheets, const std::string& page) {   // s084
+    for (std::size_t s = 0; s < sheets.size(); ++s)
+        for (std::size_t k = 0; k < sheets[s].pages.size(); ++k)
+            if (sheets[s].pages[k] == page) return {static_cast<int>(s), sheets[s].x[k]};
+    return {};
 }
 
 namespace {
@@ -210,8 +343,8 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
     const double bleed = opt.bleed ? std::max(0.0, d.settings().bleed) : 0;
     const double off = bleed + (opt.marks ? kSlug : 0);
 
-    const auto* first = d.as<core::Page>(pages.front());
-    cairo_surface_t* surf = cairo_pdf_surface_create(path.c_str(), first->w + 2 * off, first->h + 2 * off);
+    const auto sheets = pdf_sheets(d, pages, opt.spreads);   // s084
+    cairo_surface_t* surf = cairo_pdf_surface_create(path.c_str(), sheets.front().w + 2 * off, sheets.front().h + 2 * off);
     if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
         if (err) *err = std::string("Can't write the PDF: ") + cairo_status_to_string(cairo_surface_status(surf));
         cairo_surface_destroy(surf);
@@ -226,34 +359,53 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
 
     cairo_t* cr = cairo_create(surf);
     FlowCache flows;
+    const auto links = contents_links(d, flows);   // s083
     std::set<std::string> missing;
     int n = 0;
-    for (const auto& pid : pages) {
-        const auto& pg = *d.as<core::Page>(pid);
-        cairo_pdf_surface_set_size(surf, pg.w + 2 * off, pg.h + 2 * off);   // before anything is drawn on it
-        cairo_pdf_surface_set_page_label(surf, d.folio(pid).c_str());
-        cairo_save(cr);
-        cairo_translate(cr, off, off);
-        cairo_save(cr);
-        cairo_rectangle(cr, -bleed, -bleed, pg.w + 2 * bleed, pg.h + 2 * bleed);   // nothing past the bleed
-        cairo_clip(cr);
-        draw_page(cr, d, pid, flows, images, &missing);
-        cairo_restore(cr);
-        if (opt.marks) crop_marks(cr, pg.w, pg.h, bleed);
-        cairo_restore(cr);
+    for (const auto& sh : sheets) {
+        cairo_pdf_surface_set_size(surf, sh.w + 2 * off, sh.h + 2 * off);   // before anything is drawn on it
+        cairo_pdf_surface_set_page_label(surf, sh.label.c_str());
+        for (std::size_t k = 0; k < sh.pages.size(); ++k) {
+            const auto& pid = sh.pages[k];
+            const auto& pg = *d.as<core::Page>(pid);
+            // s084: the bleed on the spread's outer edges only.
+            const double x0 = k == 0 ? -bleed : 0, x1 = k + 1 == sh.pages.size() ? pg.w + bleed : pg.w;
+            cairo_save(cr);
+            cairo_translate(cr, off + sh.x[k], off);
+            cairo_rectangle(cr, x0, -bleed, x1 - x0, pg.h + 2 * bleed);   // nothing past the bleed
+            cairo_clip(cr);
+            draw_page(cr, d, pid, flows, images, &missing);
+            cairo_restore(cr);
+            ++n;
+            for (const auto& l : links) {   // s083: the contents page's entries, clickable
+                if (l.page != pid) continue;
+                const auto to = sheet_of(sheets, l.to);
+                if (to.sheet < 0) continue;
+                char attr[160];
+                std::snprintf(attr, sizeof attr, "rect=[%g %g %g %g] page=%d pos=[%g %g]", off + sh.x[k] + l.box.x, off + l.box.y,
+                              l.box.w, l.box.h, to.sheet + 1, off + to.x, off + l.to_y);
+                cairo_tag_begin(cr, CAIRO_TAG_LINK, attr);
+                cairo_tag_end(cr, CAIRO_TAG_LINK);
+            }
+        }
+        if (opt.marks) {
+            cairo_save(cr);
+            cairo_translate(cr, off, off);
+            crop_marks(cr, sh.w, sh.h, bleed);
+            cairo_restore(cr);
+        }
         cairo_show_page(cr);
-        ++n;
     }
     // s054: bookmarks, each nested under the last one a level up.
     if (opt.bookmarks) {
         std::vector<int> parent_at{CAIRO_PDF_OUTLINE_ROOT};   // [level-1] -> the id to nest under
-        for (const auto& b : bookmarks(d, flows)) {
-            const auto at = std::find(pages.begin(), pages.end(), b.page);
-            if (at == pages.end()) continue;
+        for (const auto& b : bookmarks(d, flows, opt.mark_lists, pages)) {
+            const auto at = sheet_of(sheets, b.page);   // s084: its sheet
+            if (at.sheet < 0) continue;
             const int lv = std::clamp(b.level, 1, static_cast<int>(parent_at.size()));
             parent_at.resize(static_cast<std::size_t>(lv));
             char dest[96];
-            std::snprintf(dest, sizeof dest, "page=%d pos=[%g %g]", static_cast<int>(at - pages.begin()) + 1, off, off + b.y);
+            std::snprintf(dest, sizeof dest, "page=%d pos=[%g %g]", at.sheet + 1, off + at.x, off + b.y);
             parent_at.push_back(cairo_pdf_surface_add_outline(surf, parent_at[static_cast<std::size_t>(lv - 1)], b.title.c_str(), dest,
                                                               CAIRO_PDF_OUTLINE_FLAG_OPEN));
         }

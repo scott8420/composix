@@ -184,6 +184,11 @@ public:
     // a page (0-based, as added) and a height on it (points from the top).
     // Written as the document's /Outlines, the reader opening with them shown.
     void add_bookmark(const std::string& title, int level, std::size_t page, double y);
+    // s083: a link -- a box on a page (points, from its top-left) that goes
+    // to another page (0-based) at a height. An invisible /Link annotation.
+    // Not written under PDF/X (annotations inside the bleed are refused), nor
+    // when either page isn't there.
+    void add_link(std::size_t page, double x, double y, double w, double h, std::size_t to_page, double to_y);
 
     bool save(const std::string& path, std::string* err = nullptr);
 
@@ -197,6 +202,8 @@ private:
     std::string m_title, m_creator = "Plate", m_author;
     struct Mark { std::string title; int level; std::size_t page; double y; };
     std::vector<Mark> m_marks;   // s054
+    struct Link { std::size_t page; double x, y, w, h; std::size_t to; double to_y; };
+    std::vector<Link> m_links;   // s083
     bool m_compress = true;
 
     // s016

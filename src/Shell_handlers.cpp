@@ -27,6 +27,7 @@
 #include <tuple>
 
 #include "views/Images.hpp"
+#include "layout/Export.hpp"
 
 // Shell_handlers.cpp -- HANDLERS. Slot bodies: what a user action actually does.
 // Each is small and single-concern; orchestration it shares lives in helpers.
@@ -233,6 +234,11 @@ void Shell::on_export_pdf() {  // handler
         box->append(*screen);
         box->append(*bleed);
         box->append(*marks);
+        // s084: facing pages as one sheet each.
+        auto spreads = Gtk::make_managed<Gtk::CheckButton>("Spreads \u2014 facing pages as one sheet");
+        spreads->set_name("export.spreads");
+        spreads->set_tooltip_text("Each spread one wide page, bleed on its outer edges; for viewing a book as it opens");
+        box->append(*spreads);
         // s016: the press's profile (CMYK output profiles found on this
         // computer), and whether RGB is converted to it.
         auto prow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
@@ -303,11 +309,17 @@ void Shell::on_export_pdf() {  // handler
         rrow->append(*rlab);
         rrow->append(*range);
         box->append(*rrow);
-        auto marksb = Gtk::make_managed<Gtk::CheckButton>("Bookmarks from the contents");
+        auto marksb = Gtk::make_managed<Gtk::CheckButton>("Bookmarks from");
         marksb->set_name("export.bookmarks");
-        marksb->set_tooltip_text("The headings the Contents list gathers, as the PDF's outline");
+        marksb->set_tooltip_text("The entries these lists gather, as the PDF's outline -- the first list on top, each further one under its name");
         marksb->set_active(true);
         box->append(*marksb);
+        // s082: which generated lists -- refilled each time the sheet opens.
+        auto lists = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 2);
+        lists->set_name("export.lists");
+        lists->set_margin_start(24);
+        box->append(*lists);
+        marksb->signal_toggled().connect([marksb, lists] { lists->set_sensitive(marksb->get_active()); });
         auto note = Gtk::make_managed<Gtk::Label>("Every page at its own size, fonts embedded,\nimages at full resolution.");
         note->set_name("export.note");
         note->add_css_class("cx-export-note");
@@ -333,7 +345,7 @@ void Shell::on_export_pdf() {  // handler
         }, false);
         w.add_controller(keys);
         w.set_default_widget(*go);
-        go->signal_clicked().connect([this, bleed, marks, print, prof, conv, stdd, range, marksb, note] {
+        go->signal_clicked().connect([this, bleed, marks, spreads, print, prof, conv, stdd, range, marksb, lists, note] {
             // s054: the range first -- a bad one keeps the sheet open, saying why.
             {
                 std::string why;
@@ -346,10 +358,22 @@ void Shell::on_export_pdf() {  // handler
                 }
                 m_pdf_only = only.size() == m_doc.pages().size() ? std::vector<std::string>{} : only;
                 m_pdf_bookmarks = marksb->get_active();
+                {   // s082: the ticked lists; none ticked (with lists to tick) = no bookmarks
+                    std::vector<std::string> picked;
+                    bool any = false;
+                    for (auto* k = lists->get_first_child(); k; k = k->get_next_sibling())
+                        if (auto* cb = dynamic_cast<Gtk::CheckButton*>(k)) {
+                            any = true;
+                            if (cb->get_active()) picked.push_back(std::string(k->get_name()).substr(std::string("export.list.").size()));
+                        }
+                    if (any && picked.empty()) m_pdf_bookmarks = false;
+                    if (!picked.empty()) m_pdf_mark_lists = picked;
+                }
                 m_pdf_range = text;   // s077: kept with the document below
             }
             m_pdf_bleed = bleed->get_active();
             m_pdf_marks = marks->get_active();
+            m_pdf_spreads = spreads->get_active() && m_doc.settings().facing;   // s084
             m_pdf_print = print->get_active();
             const auto i = prof->get_selected();
             m_pdf_profile = (i > 0 && i - 1 < m_profiles.size()) ? m_profiles[i - 1] : std::string{};
@@ -358,7 +382,7 @@ void Shell::on_export_pdf() {  // handler
             // s032: kept with the document, the profile by its name.
             {
                 core::ExportPrefs e{m_pdf_print, m_pdf_bleed, m_pdf_marks, {}, m_pdf_convert, m_pdf_standard,
-                                    m_pdf_range, m_pdf_bookmarks};   // s077: the range and bookmarks too
+                                    m_pdf_range, m_pdf_bookmarks, m_pdf_mark_lists, m_pdf_spreads};   // s077: the range and bookmarks too; s082 the lists
                 for (std::size_t k = 0; k < m_profiles.size(); ++k)
                     if (m_profiles[k] == m_pdf_profile) e.profile = m_profile_names[k];
                 m_profile_missing.clear();
@@ -390,6 +414,10 @@ void Shell::on_export_pdf() {  // handler
             b->set_active(m_pdf_bleed);
         } else if (c->get_name() == "export.marks") {
             static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_marks);
+        } else if (c->get_name() == "export.spreads") {   // s084: only a book with facing pages has spreads
+            auto* b = static_cast<Gtk::CheckButton*>(c);
+            b->set_sensitive(m_doc.settings().facing);
+            b->set_active(m_pdf_spreads && m_doc.settings().facing);
         } else if (c->get_name() == "export.print") {
             static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_print);
         } else if (c->get_name() == "export.screen") {
@@ -398,6 +426,26 @@ void Shell::on_export_pdf() {  // handler
             static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_convert);
         } else if (c->get_name() == "export.bookmarks") {   // s077
             static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_bookmarks);
+        } else if (c->get_name() == "export.lists") {   // s082: the document's lists, as they are now
+            auto* lb = static_cast<Gtk::Box*>(c);
+            while (auto* k = lb->get_first_child()) lb->remove(*k);
+            const auto all = layout::bookmark_lists(m_doc);
+            const auto used = layout::bookmark_lists_used(m_doc, m_pdf_mark_lists);
+            for (const auto& lid : all) {
+                const auto* l = m_doc.as<core::GenList>(lid);
+                auto* cb = Gtk::make_managed<Gtk::CheckButton>(l->name.empty() ? std::string("List") : l->name);
+                cb->set_name("export.list." + lid);
+                cb->set_active(std::find(used.begin(), used.end(), lid) != used.end());
+                lb->append(*cb);
+            }
+            if (all.empty()) {
+                auto* none = Gtk::make_managed<Gtk::Label>("No list gathers headings yet");
+                none->set_name("export.lists.none");
+                none->add_css_class("dim-label");
+                none->set_xalign(0);
+                lb->append(*none);
+            }
+            lb->set_sensitive(m_pdf_bookmarks);
         } else if (c->get_name() == "export.range.row") {   // s077: the range the document keeps
             for (auto* k = static_cast<Gtk::Box*>(c)->get_first_child(); k; k = k->get_next_sibling())
                 if (k->get_name() == "export.range") {

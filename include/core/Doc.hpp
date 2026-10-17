@@ -80,6 +80,8 @@ struct ExportPrefs {
     int         standard = 0;     // 0 none, 1 PDF/X-1a:2003, 2 PDF/X-4
     std::string range;            // s077: the pages as typed ("" = all)
     bool        bookmarks = true; // s077: the contents' headings as the PDF's outline
+    std::vector<std::string> mark_lists;   // s082: the lists the outline comes from (ids; empty = the first Contents)
+    bool        spreads = false;  // s084: facing pages as one sheet each
     bool operator==(const ExportPrefs&) const = default;
 };
 

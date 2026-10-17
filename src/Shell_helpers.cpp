@@ -255,6 +255,8 @@ void Shell::load_export_prefs() {  // helper
     m_pdf_convert = e.convert;
     m_pdf_range = e.range;            // s077
     m_pdf_bookmarks = e.bookmarks;
+    m_pdf_mark_lists = e.mark_lists;   // s082
+    m_pdf_spreads = e.spreads;         // s084
     m_pdf_profile.clear();
     m_profile_missing.clear();
     if (!e.profile.empty()) {
@@ -482,6 +484,8 @@ void Shell::export_pdf_to(const std::string& path) {  // helper
     opt.convert = m_pdf_convert;
     opt.only = m_pdf_only;              // s054
     opt.bookmarks = m_pdf_bookmarks;
+    opt.mark_lists = m_pdf_mark_lists;   // s082
+    opt.spreads = m_pdf_spreads;         // s084
     opt.standard = m_pdf_standard == 1 ? layout::plate_standard::X1a
                  : m_pdf_standard == 2 ? layout::plate_standard::X4 : layout::plate_standard::None;
     const std::string dir = m_project_dir;

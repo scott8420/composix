@@ -2110,7 +2110,7 @@ int main() {
                                                         pdf.find("/Type /Outlines") != std::string::npos);
         check("print: the chapters in it, each going to its page", pdf.find("(Chapter One)") != std::string::npos &&
                                                                    pdf.find("(Chapter Two)") != std::string::npos &&
-                                                                   count(pdf, "/XYZ 0 ") == static_cast<int>(bm.size()));
+                                                                   count(pdf, "/XYZ 0 ") - count(pdf, "/Subtype /Link") == static_cast<int>(bm.size()));   // s083: less the links' own
         opt.only = core::pages_in_range(d, "1-3");
         check("print: a range -- just those pages", L::export_print_pdf(d, out, opt, src, &rep, &err) && rep.pages == 3 &&
                                                     count(slurp(out), "/Type /Page /Parent") == 3, err);
@@ -2737,6 +2737,268 @@ int main() {
         const auto* it = o.find("doc");
         check("inspector: the document's settings in Document", it && it->segment == core::Segment::Document && !it->fields.empty() &&
                                                                it->fields[0].text && it->fields[0].value == "The Outer Ports");
+    }
+
+    {
+        std::cout << "\n-- PDF spreads (s084) --\n";
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto pages = d.pages();
+        const auto singles = L::pdf_sheets(d, pages, false);
+        check("sheets: one a page without spreads", singles.size() == pages.size() && singles[1].label == d.folio(pages[1]) &&
+                                                    singles[1].pages.size() == 1 && singles[1].x[0] == 0);
+        const auto sp = L::pdf_sheets(d, pages, true);
+        const auto pw = [&](const std::string& p) { return d.as<core::Page>(p)->w; };
+        bool same = sp.size() == core::spreads(d).size();
+        for (std::size_t k = 0; same && k < sp.size(); ++k) same = sp[k].pages == core::spreads(d)[k];
+        check("sheets: one a spread, as the Pages view pairs them", same);
+        check("sheets: the first page alone", !sp.empty() && sp[0].pages.size() == 1 && sp[0].label == "i");
+        check("sheets: side by side, widths added, labelled", sp.size() > 1 && sp[1].pages.size() == 2 &&
+              sp[1].x[1] == pw(sp[1].pages[0]) && sp[1].w == pw(sp[1].pages[0]) + pw(sp[1].pages[1]) &&
+              sp[1].label == "ii–iii");
+        bool wide = false;   // the foldout's spread is wider than two plain pages
+        for (const auto& s : sp) wide = wide || s.w > 2 * pw(pages[0]) + 1;
+        check("sheets: a foldout widens its spread", wide);
+        const auto cut = L::pdf_sheets(d, core::pages_in_range(d, "iii-1"), true);
+        check("sheets: a range keeps just its pages of each spread", cut.size() == 2 && cut[0].label == "iii" &&
+                                                                     cut[1].label == "iv–1");
+        const auto at = L::sheet_of(sp, core::pages_in_range(d, "1").front());
+        check("sheet_of: page 1 -- the iv-1 sheet, right of iv", at.sheet >= 0 && sp[static_cast<std::size_t>(at.sheet)].label == "iv–1" &&
+                                                                 at.x == pw(core::pages_in_range(d, "iv").front()));
+        check("sheet_of: a page not written", L::sheet_of(cut, pages[0]).sheet == -1);
+        {
+            core::Doc e = d;
+            auto st = e.settings();
+            st.facing = false;
+            e.put("doc", st);
+            check("sheets: no facing pages -- one a page anyway", L::pdf_sheets(e, e.pages(), true).size() == e.pages().size());
+        }
+        const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+        const auto base = fs::temp_directory_path() / "composix_selftest_s084";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        const auto slurp = [](const std::string& f) {
+            std::ifstream in(f, std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            return ss.str();
+        };
+        const auto count = [](const std::string& hay, const std::string& n) {
+            int k = 0;
+            for (auto at2 = hay.find(n); at2 != std::string::npos; at2 = hay.find(n, at2 + 1)) ++k;
+            return k;
+        };
+        L::PdfOptions opt;
+        opt.compress = false;
+        opt.spreads = true;
+        L::PdfReport rep;
+        std::string err;
+        const auto out = (base / "spreads.pdf").string();
+        const bool ok = L::export_print_pdf(d, out, opt, src, &rep, &err);
+        const auto pdf = slurp(out);
+        const double b = d.settings().bleed;
+        char box[96];
+        std::snprintf(box, sizeof box, "/MediaBox [0 0 %g %g]", 2 * pw(pages[1]) + 2 * b, d.as<core::Page>(pages[1])->h + 2 * b);
+        check("print: one PDF page a spread, its pages still counted", ok && count(pdf, "/Type /Page /Parent") == static_cast<int>(sp.size()) &&
+                                                                     rep.pages == static_cast<int>(pages.size()), err);
+        check("print: a spread's media is both pages and the outer bleed", pdf.find(box) != std::string::npos);
+        L::FlowCache flows;
+        const auto lk = L::contents_links(d, flows);
+        const auto iii = L::sheet_of(sp, lk.empty() ? std::string() : lk[0].page);
+        char rect[48];
+        std::snprintf(rect, sizeof rect, "/Rect [%g ", b + iii.x + (lk.empty() ? 0 : lk[0].box.x));
+        check("print: the contents links moved with their page", !lk.empty() && iii.x > 0 && count(pdf, "/Subtype /Link") == 2 &&
+                                                                pdf.find(rect) != std::string::npos);
+        check("print: the outline still there", pdf.find("(Chapter One)") != std::string::npos);
+        L::PdfOptions so;
+        so.spreads = true;
+        const auto sout = (base / "spreads_screen.pdf").string();
+        check("screen: spreads too", L::export_pdf(d, sout, so, src, &rep, &err) && rep.pages == static_cast<int>(pages.size()), err);
+        fs::remove_all(base, ec);
+        // Kept with the document.
+        auto e = d.settings().exp;
+        check("export: spreads off by default", !e.spreads);
+        e.spreads = true;
+        const auto n0 = j.size();
+        check("export: spreads kept, one step", core::doc::set_export(j, d, e) && j.size() == n0 + 1 && d.settings().exp.spreads);
+        core::Doc f;
+        check("json: spreads kept", core::from_json(f, core::to_json(d), &err) && f.settings().exp.spreads, err);
+        core::Doc g, h;
+        core::load_sample(g);
+        const auto js = core::to_json(g);
+        check("json: off -> no key, read back off", js.find("\"spreads\"") == std::string::npos && core::from_json(h, js, &err) &&
+                                                    !h.settings().exp.spreads, err);
+    }
+
+    {
+        std::cout << "\n-- contents links (s083) --\n";
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::load_sample(d);
+        L::FlowCache flows;
+        const auto links = L::contents_links(d, flows);
+        const auto toc = L::bookmarks(d, flows, {"list.1"});
+        const auto* fr = d.as<core::Frame>("frame.16");
+        check("links: the two chapter entries (Sources names no heading)", links.size() == 2 && toc.size() == 2);
+        bool on_page = links.size() == 2, inside = on_page, to_heads = on_page;
+        for (std::size_t k = 0; k < links.size(); ++k) {
+            const auto& b = links[k].box;
+            on_page = on_page && links[k].page == d.as<core::GenList>("list.1")->placed_on && d.folio(links[k].page) == "iii";
+            inside = inside && b.w > 0 && b.h > 0 && b.x >= fr->x - 0.01 && b.r() <= fr->x + fr->w + 0.01 &&
+                     b.y >= fr->y - 0.01 && b.b() <= fr->y + fr->h + 0.01;
+            to_heads = to_heads && links[k].to == toc[k].page && links[k].to_y == toc[k].y;
+        }
+        check("links: on the contents page, inside its frame", on_page && inside);
+        check("links: each to where its heading lands", to_heads && d.folio(links[0].to) == "1" && d.folio(links[1].to) == "3");
+        check("links: in order down the page", links.size() == 2 && links[0].box.b() <= links[1].box.y + 0.01);
+        {   // A second "Chapter One" entry: one heading, so one link.
+            auto st = *d.as<core::Story>("story.9");
+            st.paras.push_back(st.paras.at(1));
+            core::Doc e = d;
+            e.put("story.9", st);
+            L::FlowCache f2;
+            check("links: the k-th entry to the k-th heading -- no second target", L::contents_links(e, f2).size() == 2);
+            auto l = *e.as<core::GenList>("list.1");
+            l.placed_on.clear();
+            e.put("list.1", l);
+            L::FlowCache f3;
+            check("links: a list not placed -- none", L::contents_links(e, f3).empty());
+        }
+        const auto base = fs::temp_directory_path() / "composix_selftest_s083";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        const auto slurp = [](const std::string& f) {
+            std::ifstream in(f, std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            return ss.str();
+        };
+        const auto count = [](const std::string& hay, const std::string& n) {
+            int k = 0;
+            for (auto at = hay.find(n); at != std::string::npos; at = hay.find(n, at + 1)) ++k;
+            return k;
+        };
+        {   // Plate: an invisible /Link annotation, a missing page dropped.
+            plate::Document pd;
+            pd.set_compress(false);
+            pd.add_page(100, 200);
+            pd.add_page(100, 200);
+            pd.add_link(0, 10, 20, 30, 12, 1, 50);
+            pd.add_link(0, 10, 40, 30, 12, 7, 0);   // no such page
+            const auto f = (base / "link.pdf").string();
+            std::string err;
+            const bool ok = pd.save(f, &err);
+            const auto p = slurp(f);
+            check("plate: a link -- its box flipped, going to the page", ok && count(p, "/Subtype /Link") == 1 &&
+                  p.find("/Rect [10 168 40 180]") != std::string::npos && p.find("/XYZ 0 150 null") != std::string::npos &&
+                  p.find("/Border [0 0 0]") != std::string::npos && p.find("/Annots [") != std::string::npos, err);
+        }
+        const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+        L::PdfOptions opt;
+        opt.compress = false;
+        L::PdfReport rep;
+        std::string err;
+        const auto out = (base / "toc.pdf").string();
+        check("print: the contents page's two links", L::export_print_pdf(d, out, opt, src, &rep, &err) &&
+                                                      count(slurp(out), "/Subtype /Link") == 2, err);
+        opt.only = core::pages_in_range(d, "iii");
+        check("print: the targets not written -- no links", L::export_print_pdf(d, out, opt, src, &rep, &err) &&
+                                                            count(slurp(out), "/Subtype /Link") == 0, err);
+        L::PdfOptions so;
+        const auto sout = (base / "toc_screen.pdf").string();
+        check("screen: the links too", L::export_pdf(d, sout, so, src, &rep, &err) && count(slurp(sout), "/Link") >= 2, err);
+        fs::remove_all(base, ec);
+    }
+
+    {
+        std::cout << "\n-- bookmarks from several lists (s082) --\n";
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        L::FlowCache flows;
+        check("lists: the ones gathering styles, in list order", L::bookmark_lists(d) == std::vector<std::string>{"list.1", "list.2"});
+        const auto toc = L::bookmarks(d, flows, {"list.1"});
+        check("default (none picked) = the contents, as s054", L::bookmarks(d, flows, {}) == L::bookmarks(d, flows) &&
+                                                               L::bookmarks(d, flows, {}) == toc && !toc.empty());
+        check("a list that's gone -> the default", L::bookmarks(d, flows, {"list.99"}) == toc);
+        const auto bib = L::bookmarks(d, flows, {"list.2"});
+        const bool bib_flat = !bib.empty() && std::all_of(bib.begin(), bib.end(), [](const L::Bookmark& b) { return b.level == 1; });
+        bool chap = false;
+        for (const auto& b : bib) chap = chap || b.title.find("Chapter") != std::string::npos;
+        check("just the bibliography: its entries, at the top level", bib_flat && !chap && bib.size() == 3);
+        check("two columns: in story order, not by height", bib.size() == 3 && bib[0].title.find("Almanac") == 0 &&
+                                                            bib[1].title.find("Harbor") == 0 && bib[2].title.find("Letters") == 0);
+        const auto both = L::bookmarks(d, flows, {"list.1", "list.2"});
+        const bool grouped = both.size() == toc.size() + 1 + bib.size() &&
+                             std::equal(toc.begin(), toc.end(), both.begin()) &&
+                             both[toc.size()].title == "Bibliography" && both[toc.size()].level == 1 &&
+                             both[toc.size()].page == bib.front().page && both[toc.size()].y == bib.front().y;
+        bool nested = grouped;
+        for (std::size_t k = 0; grouped && k < bib.size(); ++k)
+            nested = nested && both[toc.size() + 1 + k].title == bib[k].title && both[toc.size() + 1 + k].level == 2;
+        check("both: the contents on top, the bibliography under its name", grouped && nested);
+        check("the lists' order, not the picking order", L::bookmarks(d, flows, {"list.2", "list.1"}) == both);
+        d.put("list.3", core::GenList{"Index", core::ListKind::Index, 3, {}, "", -1});
+        check("a list gathering no styles isn't offered", L::bookmark_lists(d).size() == 2);
+        // A range without the bibliography's page: no empty group.
+        std::vector<std::string> early;
+        for (const auto& p : d.pages()) if (p != bib.front().page) early.push_back(p);
+        const auto cut = L::bookmarks(d, flows, {"list.1", "list.2"}, early);
+        bool no_bib = true;
+        for (const auto& b : cut) no_bib = no_bib && b.page != bib.front().page;
+        check("a range: entries off it left out, a group only where it has some", no_bib &&
+              (cut.empty() || cut.back().title != "Bibliography"));
+        // Into the PDFs.
+        const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+        const auto base = fs::temp_directory_path() / "composix_selftest_s082";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        const auto slurp = [](const std::string& f) {
+            std::ifstream in(f, std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            return ss.str();
+        };
+        L::PdfOptions opt;
+        opt.compress = false;
+        opt.mark_lists = {"list.1", "list.2"};
+        L::PdfReport rep;
+        std::string err;
+        const auto out = (base / "lists.pdf").string();
+        const bool okp = L::export_print_pdf(d, out, opt, src, &rep, &err);
+        const auto pdf = slurp(out);
+        check("print: the group and its entries in the outline", okp && pdf.find("(Bibliography)") != std::string::npos &&
+                                                                 pdf.find("(Chapter One)") != std::string::npos &&
+                                                                 pdf.find("(Letters of the Surveyor General.)") != std::string::npos, err);
+        L::PdfOptions so;
+        so.mark_lists = {"list.2"};
+        const auto sout = (base / "lists_screen.pdf").string();
+        check("screen: exports from the bibliography alone", L::export_pdf(d, sout, so, src, &rep, &err) &&
+                                                             slurp(sout).find("/Outlines") != std::string::npos, err);
+        fs::remove_all(base, ec);
+        // Kept with the document: one step, and in the file.
+        auto e = d.settings().exp;
+        check("export: no lists picked by default", e.mark_lists.empty());
+        e.mark_lists = {"list.1", "list.2"};
+        const auto n0 = j.size();
+        check("export: the lists kept, one step", core::doc::set_export(j, d, e) && j.size() == n0 + 1 &&
+                                                  d.settings().exp.mark_lists == e.mark_lists);
+        core::Doc f;
+        check("json: the lists kept", core::from_json(f, core::to_json(d), &err) && f.settings().exp.mark_lists == e.mark_lists, err);
+        core::Doc g;
+        core::load_sample(g);
+        const auto js = core::to_json(g);
+        core::Doc h;
+        check("json: none picked -> no key, read back as none", js.find("mark_lists") == std::string::npos &&
+                                                                core::from_json(h, js, &err) && h.settings().exp.mark_lists.empty(), err);
     }
 
     {

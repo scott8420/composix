@@ -43,7 +43,28 @@ struct PdfOptions {
     // bookmarks from the contents list.
     std::vector<std::string> only;
     bool bookmarks = true;
+    // s082: the generated lists the outline comes from (ids; empty = the
+    // first Contents list, as s054).
+    std::vector<std::string> mark_lists;
+    // s084: facing pages as one sheet each (a spread's written pages side by
+    // side, tops aligned; bleed on the outer edges only, the trim around the
+    // whole spread).
+    bool spreads = false;
 };
+
+// s084: the PDF's sheets -- each one page, or (spreads) a spread's pages
+// from `pages`, in order: each page's x on the sheet, the sheet's size
+// (trim, no bleed), and its label ("ii\u2013iii").
+struct Sheet {
+    std::vector<std::string> pages;
+    std::vector<double>      x;
+    double                   w = 0, h = 0;
+    std::string              label;
+};
+std::vector<Sheet> pdf_sheets(const core::Doc& d, const std::vector<std::string>& pages, bool spreads);
+// Where a page went: its sheet (index) and x there; sheet -1 = not written.
+struct SheetAt { int sheet = -1; double x = 0; };
+SheetAt sheet_of(const std::vector<Sheet>& sheets, const std::string& page);
 
 // s054: the reader's outline -- each paragraph in a contents list's styles
 // (the first Contents list; its first style level 1, the next level 2 ...),
@@ -57,6 +78,31 @@ struct Bookmark {
     bool operator==(const Bookmark&) const = default;
 };
 std::vector<Bookmark> bookmarks(const core::Doc& d, FlowCache& flows);
+// s082: from these lists (ids; empty or none still there = the first
+// Contents list), in the document's list order. The first with entries gives the
+// top level as above; each further list nests under one bookmark named for it
+// (pointing where its first entry lands). `only`: just entries on these
+// pages (empty = every page) -- so a group points at a page that's written.
+std::vector<Bookmark> bookmarks(const core::Doc& d, FlowCache& flows, const std::vector<std::string>& lists,
+                                const std::vector<std::string>& only = {});
+// s082: the lists that can give bookmarks (they gather styles), in order.
+std::vector<std::string> bookmark_lists(const core::Doc& d);
+// s082: of those, the ones `picked` names -- or, when none, the default.
+std::vector<std::string> bookmark_lists_used(const core::Doc& d, const std::vector<std::string>& picked);
+
+// s083: the contents page's links. On the page a Contents list is placed
+// on, each paragraph whose text before its first tab (trimmed) is the title
+// of a heading the list gathers -- the k-th such entry to the k-th such
+// heading -- is a box (its lines, on that page) going to where the heading
+// lands. Paragraphs in the list's own heading styles are not entries.
+struct PdfLink {
+    std::string page;            // the entry's page
+    core::Rect  box;             // on it, points from its top-left
+    std::string to;              // the heading's page
+    double      to_y = 0;        // ... how far down
+    bool operator==(const PdfLink&) const = default;
+};
+std::vector<PdfLink> contents_links(const core::Doc& d, FlowCache& flows);
 
 struct PdfReport {
     int                      pages = 0;

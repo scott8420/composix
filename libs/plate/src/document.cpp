@@ -258,6 +258,10 @@ void Document::add_bookmark(const std::string& title, int level, std::size_t pag
     m_marks.push_back({title, level, page, y});
 }
 
+void Document::add_link(std::size_t page, double x, double y, double w, double h, std::size_t to_page, double to_y) {
+    m_links.push_back({page, x, y, w, h, to_page, to_y});
+}
+
 bool Document::save(const std::string& path, std::string* err) {
     if (m_pages.empty()) { if (err) *err = "no pages"; return false; }
     if (m_standard != Standard::None) {
@@ -401,6 +405,7 @@ bool Document::save(const std::string& path, std::string* err) {
     // Pages.
     std::string kids, labels;
     std::vector<int> page_obj;   // s054: for bookmarks' destinations
+    for (std::size_t i = 0; i < m_pages.size(); ++i) page_obj.push_back(o.reserve());   // s083: links point ahead
     for (std::size_t i = 0; i < m_pages.size(); ++i) {
         const auto& pg = *m_pages[i];
         std::string res = "<< /ProcSet [/PDF /Text /ImageB /ImageC]";
@@ -431,10 +436,23 @@ bool Document::save(const std::string& path, std::string* err) {
         std::string boxes = " /MediaBox [0 0 " + num(pg.m_w) + " " + num(pg.m_h) + "]";
         if (pg.m_has_bleed) boxes += " /BleedBox " + pg.flip_box(pg.m_bleed);
         if (pg.m_has_trim) boxes += " /TrimBox " + pg.flip_box(pg.m_trim);
-        const int id = o.add("<< /Type /Page /Parent " + std::to_string(pages) + " 0 R" + boxes + " /Resources " + res +
-                             " /Contents " + std::to_string(content) + " 0 R >>");
+        // s083: links -- invisible boxes going to a page (never under PDF/X).
+        std::string annots;
+        if (m_standard == Standard::None)
+            for (const auto& l : m_links) {
+                if (l.page != i || l.to >= m_pages.size() || l.w <= 0 || l.h <= 0) continue;
+                const auto& to = *m_pages[l.to];
+                const int a = o.add("<< /Type /Annot /Subtype /Link /Rect [" + num(l.x) + " " + num(pg.m_h - l.y - l.h) + " " +
+                                    num(l.x + l.w) + " " + num(pg.m_h - l.y) + "] /Border [0 0 0] /P " +
+                                    std::to_string(page_obj[i]) + " 0 R /Dest [" + std::to_string(page_obj[l.to]) +
+                                    " 0 R /XYZ 0 " + num(std::clamp(to.m_h - l.to_y, 0.0, to.m_h)) + " null] >>");
+                annots += std::to_string(a) + " 0 R ";
+            }
+        if (!annots.empty()) annots = " /Annots [" + annots.substr(0, annots.size() - 1) + "]";
+        const int id = page_obj[i];
+        o.set(id, "<< /Type /Page /Parent " + std::to_string(pages) + " 0 R" + boxes + " /Resources " + res +
+                      " /Contents " + std::to_string(content) + " 0 R" + annots + " >>");
         kids += std::to_string(id) + " 0 R ";
-        page_obj.push_back(id);
         if (!pg.m_label.empty()) labels += std::to_string(i) + " << /P " + detail::text_string(pg.m_label) + " >> ";
     }
     o.set(pages, "<< /Type /Pages /Kids [" + kids + "] /Count " + std::to_string(m_pages.size()) + " >>");

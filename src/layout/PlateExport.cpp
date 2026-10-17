@@ -241,27 +241,45 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         doc.set_convert_rgb(opt.convert);
     }
     Ctx c{d, doc, images, {}, {}, {}};
-    for (const auto& pid : pages) {
-        const auto& p = *d.as<core::Page>(pid);
-        auto& pg = doc.add_page(p.w + 2 * off, p.h + 2 * off);
-        pg.set_trim_box({off, off, p.w, p.h});
-        pg.set_bleed_box({off - bleed, off - bleed, p.w + 2 * bleed, p.h + 2 * bleed});
-        pg.set_label(d.folio(pid));
-        pg.save();
-        pg.translate(off, off);
-        pg.save();
-        pg.clip_rect({-bleed, -bleed, p.w + 2 * bleed, p.h + 2 * bleed});   // nothing past the bleed
-        for (const auto& m : core::master_chain(d, pid)) draw_frames(c, pg, m, pid);
-        draw_frames(c, pg, pid, pid);
-        pg.restore();
-        if (opt.marks) crop_marks(pg, p.w, p.h, bleed);
-        pg.restore();
+    const auto sheets = pdf_sheets(d, pages, opt.spreads);   // s084
+    for (const auto& sh : sheets) {
+        auto& pg = doc.add_page(sh.w + 2 * off, sh.h + 2 * off);
+        pg.set_trim_box({off, off, sh.w, sh.h});
+        pg.set_bleed_box({off - bleed, off - bleed, sh.w + 2 * bleed, sh.h + 2 * bleed});
+        pg.set_label(sh.label);
+        for (std::size_t k = 0; k < sh.pages.size(); ++k) {
+            const auto& pid = sh.pages[k];
+            const auto& p = *d.as<core::Page>(pid);
+            // s084: the bleed on the spread's outer edges only.
+            const double x0 = k == 0 ? -bleed : 0, x1 = k + 1 == sh.pages.size() ? p.w + bleed : p.w;
+            pg.save();
+            pg.translate(off + sh.x[k], off);
+            pg.clip_rect({x0, -bleed, x1 - x0, p.h + 2 * bleed});   // nothing past the bleed
+            for (const auto& m : core::master_chain(d, pid)) draw_frames(c, pg, m, pid);
+            draw_frames(c, pg, pid, pid);
+            pg.restore();
+        }
+        if (opt.marks) {
+            pg.save();
+            pg.translate(off, off);
+            crop_marks(pg, sh.w, sh.h, bleed);
+            pg.restore();
+        }
+    }
+    {   // s083: the contents page's entries, clickable (Plate leaves them out under PDF/X)
+        FlowCache flows;
+        for (const auto& l : contents_links(d, flows)) {
+            const auto at = sheet_of(sheets, l.page), to = sheet_of(sheets, l.to);   // s084: by sheet
+            if (at.sheet >= 0 && to.sheet >= 0)
+                doc.add_link(static_cast<std::size_t>(at.sheet), off + at.x + l.box.x, off + l.box.y, l.box.w, l.box.h,
+                             static_cast<std::size_t>(to.sheet), off + l.to_y);
+        }
     }
     if (opt.bookmarks) {   // s054
         FlowCache flows;
-        for (const auto& b : bookmarks(d, flows))
-            if (const auto at = std::find(pages.begin(), pages.end(), b.page); at != pages.end())
-                doc.add_bookmark(b.title, b.level, static_cast<std::size_t>(at - pages.begin()), off + b.y);
+        for (const auto& b : bookmarks(d, flows, opt.mark_lists, pages))
+            if (const auto at = sheet_of(sheets, b.page); at.sheet >= 0)
+                doc.add_bookmark(b.title, b.level, static_cast<std::size_t>(at.sheet), off + b.y);
     }
     if (!doc.save(path, err)) return false;
     preflight(d, std::vector<std::string>(c.missing.begin(), c.missing.end()), static_cast<int>(pages.size()), report);
