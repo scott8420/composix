@@ -1688,7 +1688,7 @@ int main() {
                   std::abs(f1->h - (9 * in - 1.75 * in)) < 1e-9 && f1->columns == 2 && f1->gutter == 18);
         check("threaded page to page", L::thread_frames(d, "story.1").size() == 8 && d.as<core::Frame>("frame.8")->next.empty());
         check("the story flows, nothing over", !L::flow_story(d, "story.1").overset);
-        check("styles + swatches to start with", d.ids_of<core::Style>().size() == 5 && d.ids_of<core::Swatch>().size() == 2);
+        check("styles + swatches to start with", d.ids_of<core::Style>().size() == 6 && d.ids_of<core::Swatch>().size() == 2);
         check("a folio on the master: the page number", d.as<core::Frame>("frame.9") &&
                                                         d.as<core::Frame>("frame.9")->owner == "master.1" &&
                                                         d.as<core::Story>("story.2")->paras[0].text == core::kMarkPage);
@@ -4746,7 +4746,7 @@ int main() {
         core::doc::edit_styles(j, d, {"style.1"}, "Font", [](core::Style& s) { s.family = "Sans"; });
         check("chain: a change two levels up reaches the end", S("style.10").family == "Sans" && S("style.6").family == "Sans");
         check("chain: descendants in order",
-              core::doc::style_descendants(d, "style.1") == std::vector<core::Doc::Id>{"style.10", "style.6"});
+              core::doc::style_descendants(d, "style.1") == std::vector<core::Doc::Id>{"style.12", "style.10", "style.6"});   // s114: Footnote on Body (by position)
         j.undo();
         check("no loops: Body can't be based on what's based on it",
               !core::doc::can_base_on(d, "style.1", "style.6") && !core::doc::can_base_on(d, "style.1", "style.1") &&
@@ -6174,7 +6174,7 @@ int main() {
                     if (l.col == np.col && l.y + l.h > np.y + 0.01) { clear = false; why = ft.frame; }
             }
         }
-        check("two notes placed, numbered 1, 2", placed == 2 && numbered, std::to_string(placed));
+        check("two notes placed (and the sample's), numbered 1, 2, 3", placed == 3 && numbered, std::to_string(placed));
         check("each inside its frame, at the foot", inside);
         check("no line runs into the notes", clear, why);
         check("a note's reference is in its column",
@@ -6236,7 +6236,7 @@ int main() {
                 note_lines += v.from == -4;
                 refs += v.from == -3;
             });
-        check("visited: the numbers at their marks, the notes' lines", refs == 2 && note_lines >= 3,
+        check("visited: the numbers at their marks, the notes' lines", refs == 3 && note_lines >= 4,
               std::to_string(refs) + " / " + std::to_string(note_lines));
         const auto dir = std::filesystem::temp_directory_path();
         for (const bool print : {false, true}) {
@@ -6327,6 +6327,129 @@ int main() {
         std::string err;
         check("json: numbering kept", core::from_json(e, core::to_json(d), &err) &&
                                       e.settings().note_restart == core::NoteRestart::Page && e.settings().note_style == NS::Symbols, err);
+    }
+
+    {
+        std::cout << "\n-- find / change in footnotes (s113) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = d.records();
+        // "qqx" at the paragraph's start, in a note at byte 4+, and at its end.
+        D::edit_text(j, d, "story.1", {1, 0}, {1, 0}, "qqx ", "Typing", "");
+        D::insert_note(j, d, "story.1", {1, 8}, "Logged by the zebrafinch qqx master.");
+        const int end1 = static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size());
+        D::edit_text(j, d, "story.1", {1, end1}, {1, end1}, " qqx", "Typing", "");
+        const auto* st = d.as<core::Story>("story.1");
+        check("note_mark_byte: where the mark is", core::doc::note_mark_byte(*st, 1, 0) == 8 && core::doc::note_mark_byte(*st, 1, 1) < 0);
+        const auto zh = D::find_all(d, {"zebrafinch"});
+        const auto& nt = st->paras[1].notes[0].text;
+        check("find: a word only in a note -- one hit, in it",
+              zh.size() == 1 && zh[0].note == 0 && zh[0].a.para == 1 &&
+                  nt.substr(static_cast<std::size_t>(zh[0].a.byte), static_cast<std::size_t>(zh[0].b.byte - zh[0].a.byte)) == "zebrafinch");
+        const auto qh = D::find_all(d, {"qqx"});
+        check("find: text, note, text -- in reading order at the mark",
+              qh.size() == 3 && qh[0].note < 0 && qh[0].a.byte == 0 && qh[1].note == 0 && qh[2].note < 0 && qh[2].a.byte > 8);
+        check("find: case and whole word reach notes", D::find_all(d, {"ZEBRAFINCH", true}).empty() &&
+                                                       D::find_all(d, {"zebra", false, true}).empty() && D::find_all(d, {"ZEBRA"}).size() == 1);
+        D::FindOpts rx{"zebra(\\w+)"};
+        rx.mode = D::FindOpts::Mode::Regex;
+        const auto rh = D::find_all(d, rx);
+        check("find: a pattern in a note, its groups", rh.size() == 1 && rh[0].note == 0 && rh[0].groups.size() == 2 && rh[0].groups[1] == "finch");
+        check("find: a paragraph style asked (not Footnote) -- notes not looked in",
+              D::find_all(d, {"zebrafinch", false, false, "style.2"}).empty());
+        D::FindOpts in{"zebrafinch"};
+        in.story = "story.1";
+        in.in_range = true;
+        in.from = {1, 0};
+        in.to = {1, 8};
+        check("find: a range short of the mark -- not its note", D::find_all(d, in).empty());
+        in.to = {1, 11};
+        check("find: a range holding the mark -- its note", D::find_all(d, in).size() == 1);
+        // Change one, in the note.
+        const auto pre = d.records();
+        check("change: in a note, one hit", D::change_hits(j, d, zh, {true, "heron"}, "Change") == 1 &&
+                                            d.as<core::Story>("story.1")->paras[1].notes[0].text == "Logged by the heron qqx master.");
+        j.undo();
+        check("change: one step, undone exactly", d.records() == pre);
+        // Change All across text and notes: one step; the note kept with its mark.
+        check("change all: text and note, one step",
+              D::change_hits(j, d, qh, {true, "yy"}, "Change All (3)") == 3 && D::find_all(d, {"qqx"}).empty() &&
+                  D::find_all(d, {"yy", false, true}).size() == 3 && d.as<core::Story>("story.1")->paras[1].notes.size() == 1);
+        j.undo();
+        check("change all: undone in one", d.records() == pre);
+        check("change: a line break in a note reads as a space",
+              D::change_hits(j, d, zh, {true, "big\nheron"}, "Change") == 1 &&
+                  d.as<core::Story>("story.1")->paras[1].notes[0].text == "Logged by the big heron qqx master.");
+        j.undo();
+        // A character style onto a note's words.
+        D::ChangeOpts cs{false, "", "", "style.5"};
+        st = d.as<core::Story>("story.1");
+        const auto& note = st->paras[1].notes[0];
+        check("change: a character style onto words in a note",
+              D::change_hits(j, d, zh, cs, "Change") == 1 && d.as<core::Story>("story.1")->paras[1].notes[0].text == note.text &&
+                  [&] {
+                      const auto& r = d.as<core::Story>("story.1")->paras[1].notes[0].runs;
+                      return r.size() == 1 && r[0].style == "style.5" && r[0].start == zh[0].a.byte && r[0].end == zh[0].b.byte;
+                  }());
+        check("find: in a character style -- in the note", D::find_all(d, {"zebrafinch", false, false, "", "style.5"}).size() == 1);
+        j.undo();
+        // s113 fix: a character style (or bold) over text with a note kept the note's words.
+        const auto words = d.as<core::Story>("story.1")->paras[1].notes[0].text;
+        D::set_char_style(j, d, "story.1", {1, 0}, {1, 12}, "style.5");
+        check("fix: a character style over a footnote's mark keeps its words",
+              d.as<core::Story>("story.1")->paras[1].notes.size() == 1 && d.as<core::Story>("story.1")->paras[1].notes[0].text == words);
+        D::set_local(j, d, "story.1", {1, 0}, {1, 12}, "Bold", [](core::Local& l) { l.bold = 1; });
+        check("fix: bold over a footnote's mark keeps its words", d.as<core::Story>("story.1")->paras[1].notes[0].text == words);
+        while (j.can_undo()) j.undo();
+        check("undo all: as it was", d.records() == before && d.strays() == 0);
+    }
+
+    {
+        std::cout << "\n-- footnote defaults (s114) --\n";
+        namespace L = composix::layout;
+        core::Doc n;
+        core::new_document(n, core::NewDoc{});
+        bool has = false;
+        for (const auto& id : n.ids_of<core::Style>()) {
+            const auto* s = n.as<core::Style>(id);
+            has = has || (s->name == "Footnote" && s->kind == core::StyleKind::Paragraph && s->based_on == "style.1");
+        }
+        check("a new document has a Footnote style (on Body)", has);
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto* st = d.as<core::Story>("story.1");
+        check("the sample has a note (Chapter Two's map)", st->paras[5].notes.size() == 1 && !st->paras[5].notes[0].text.empty() &&
+                                                         core::doc::note_mark_byte(*st, 5, 0) >= 0);
+        L::FlowCache flows;
+        const auto& f = flows.get(d, "story.1");
+        const L::NotePlace* np = nullptr;
+        std::string fr;
+        for (const auto& ft : f.frames)
+            for (const auto& x : ft.notes) { np = &x; fr = ft.frame; }
+        check("the sample's note is set at a foot", np != nullptr);
+        if (np) {
+            const auto* hit = L::note_hit(f, fr, np->x + np->w / 2, np->y + np->h / 2);
+            check("note_hit: on the note -- it", hit && hit->para == 5 && hit->k == 0);
+            check("note_hit: above it -- none", L::note_hit(f, fr, np->x + np->w / 2, np->y - 2) == nullptr);
+            // Set in the Footnote style: its size, not the paragraph's.
+            int lines = 0;
+            double h1 = 0, body = 0;
+            for (const auto& ft : f.frames)
+                L::visit_lines(d, "story.1", f, ft.frame, [&](const L::LineVisit& v) {
+                    PangoRectangle r;
+                    pango_layout_line_get_extents(v.line, nullptr, &r);
+                    const double h = r.height / static_cast<double>(PANGO_SCALE);
+                    if (v.from == -4) { ++lines; h1 = std::max(h1, h); }
+                    else if (v.from >= 0 && v.para == 2) body = std::max(body, h);   // Body, 11 pt
+                });
+            check("the note's lines drawn, smaller than Body's", lines >= 1 && h1 > 0 && body > 0 && h1 < body * 0.9,
+                  std::to_string(h1) + " / " + std::to_string(body));
+        }
     }
 
     std::cout << "-----------------------------------------------\n";

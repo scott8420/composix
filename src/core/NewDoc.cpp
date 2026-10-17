@@ -140,6 +140,11 @@ bool new_document(Doc& d, const NewDoc& n) {
         c.based_on = "style.1";
         c.own = doc::style_differences(c, *d.as<Style>("style.1"));
         d.put("style.3", c);
+        // s114: footnotes are set in this (the flow finds it by its name).
+        Style fn{"Footnote", StyleKind::Paragraph, 3.5, "Serif", 9, 11, false, false, Align::Left};
+        fn.based_on = "style.1";
+        fn.own = doc::style_differences(fn, *d.as<Style>("style.1"));
+        d.put("style.6", fn);
     }
     d.put("style.4", Style{"Emphasis", StyleKind::Character, 4, "", 0, 0, false, true, Align::Left});
     d.put("style.5", Style{"Folio", StyleKind::Paragraph, 5, "Serif", 9, 11, false, false, Align::Center});

@@ -1813,11 +1813,12 @@ bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
         for (auto x : spans_of(para, from, to)) { x.style = style; sp.push_back(x); }
         const auto rest = spans_of(para, to, n);
         sp.insert(sp.end(), rest.begin(), rest.end());
-        const int restart = para.restart;   // s047
-        const ParaStart brk = para.brk;     // s055
-        para = para_of(para.style, sp);
-        para.restart = restart;
-        para.brk = brk;
+        Para was = std::move(para);
+        para = para_of(was.style, sp);
+        para.restart = was.restart;            // s047
+        para.brk = was.brk;                    // s055
+        para.over = was.over;                  // s113: its own settings (were dropped)
+        para.notes = std::move(was.notes);     // s113: and its footnotes (were dropped)
     }
     if (s == *st) return false;
     return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
@@ -1841,11 +1842,12 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
         for (auto x : spans_of(para, from, to)) { f(x.local); sp.push_back(x); }
         const auto rest = spans_of(para, to, n);
         sp.insert(sp.end(), rest.begin(), rest.end());
-        const int restart = para.restart;   // s047
-        const ParaStart brk = para.brk;     // s055
-        para = para_of(para.style, sp);
-        para.restart = restart;
-        para.brk = brk;
+        Para was = std::move(para);
+        para = para_of(was.style, sp);
+        para.restart = was.restart;            // s047
+        para.brk = was.brk;                    // s055
+        para.over = was.over;                  // s113: its own settings (were dropped)
+        para.notes = std::move(was.notes);     // s113: and its footnotes (were dropped)
     }
     if (s == *st) return false;
     return j.run(label, {story}, [&] { d.put(story, s); });
@@ -2254,6 +2256,79 @@ int note_index_at(const Story& s, TextPos at) {
     const auto& t = s.paras[static_cast<std::size_t>(at.para)].text;
     if (!note_at(t, static_cast<std::size_t>(at.byte))) return -1;
     return notes_in(t, 0, static_cast<std::size_t>(at.byte));
+}
+
+int note_mark_byte(const Story& s, int p, int k) {   // s113
+    if (p < 0 || p >= static_cast<int>(s.paras.size()) || k < 0) return -1;
+    const auto& t = s.paras[static_cast<std::size_t>(p)].text;
+    int i = 0;
+    for (std::size_t at = t.find(kMarkNote); at != std::string::npos; at = t.find(kMarkNote, at + 3), ++i)
+        if (i == k) return static_cast<int>(at);
+    return -1;
+}
+
+int change_note_words(DocJournal& j, Doc& d, const Doc::Id& story, int p, int k, int a, int b, bool set_text,
+                      const std::string& text, const Doc::Id& cstyle, const std::string& label,
+                      const std::function<void(Local&)>& fold) {   // s113
+    const auto* st = d.as<Story>(story);
+    if (!st || p < 0 || p >= static_cast<int>(st->paras.size())) return -1;
+    const auto* sty = cstyle.empty() ? nullptr : d.as<Style>(cstyle);
+    if (!cstyle.empty() && (!sty || sty->kind != StyleKind::Character)) return -1;
+    Story s = *st;
+    auto& para = s.paras[static_cast<std::size_t>(p)];
+    fit_notes(para);
+    if (k < 0 || k >= static_cast<int>(para.notes.size())) return -1;
+    auto& note = para.notes[static_cast<std::size_t>(k)];
+    const Para np{{}, note.text, note.runs};
+    const int n = static_cast<int>(np.text.size());
+    a = std::clamp(a, 0, n);
+    b = std::clamp(b, 0, n);
+    if (b < a) std::swap(a, b);
+    std::vector<Span> sp = spans_of(np, 0, a);
+    int end = b;
+    if (set_text) {
+        std::string t = text;
+        std::replace(t.begin(), t.end(), '\r', ' ');
+        std::replace(t.begin(), t.end(), '\n', ' ');   // one paragraph
+        const int at = (b != a && a < n) ? a + 1 : a;  // the first replaced character's style, else the one before
+        sp.push_back({t, char_style_at(np, at), local_at(np, at)});
+        end = a + static_cast<int>(t.size());
+    } else {
+        const auto mid = spans_of(np, a, b);
+        sp.insert(sp.end(), mid.begin(), mid.end());
+    }
+    if (!cstyle.empty() && end > a) {   // the stretch as it now is, in the style
+        std::vector<Span> head;
+        int at = 0;
+        for (auto x : sp) {
+            const int x0 = at, x1 = at + static_cast<int>(x.text.size());
+            at = x1;
+            if (x1 <= a || x0 >= end) { head.push_back(x); continue; }
+            // Split at a and end.
+            const auto piece = [&](int u, int v, bool styled) {
+                if (v <= u) return;
+                Span y = x;
+                y.text = x.text.substr(static_cast<std::size_t>(u - x0), static_cast<std::size_t>(v - u));
+                if (styled) {
+                    y.style = cstyle;
+                    if (fold) fold(y.local);
+                }
+                head.push_back(y);
+            };
+            piece(x0, std::max(x0, a), false);
+            piece(std::max(x0, a), std::min(x1, end), true);
+            piece(std::min(x1, end), x1, false);
+        }
+        sp = std::move(head);
+    }
+    const auto rest = spans_of(np, b, n);
+    sp.insert(sp.end(), rest.begin(), rest.end());
+    const Para made = para_of({}, sp);
+    if (made.text == note.text && made.runs == note.runs) return -1;
+    note.text = made.text;
+    note.runs = made.runs;
+    j.run(label, {story}, [&] { d.put(story, s); });
+    return end;
 }
 
 // ── swatches (s058) ─────────────────────────────────────────────────────────
@@ -2815,6 +2890,10 @@ const std::vector<Verb>& verbs() {
         {"paste_lines", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {0, 2}, {2, 4}, "one\ntwo\nthree", "Paste"); }},
         {"cut", [](DocJournal& j, Doc& d) { edit_text(j, d, "story.1", {1, 0}, {3, 0}, "", "Cut"); }},
         {"insert_note", [](DocJournal& j, Doc& d) { insert_note(j, d, "story.1", {1, 4}, "A note."); }},   // s109
+        {"set_note_text", [](DocJournal& j, Doc& d) { set_note_text(j, d, "story.1", 5, 0, "The foldout opens left."); }},   // s114: the sample's note
+        {"change_note_words", [](DocJournal& j, Doc& d) {   // s113
+             change_note_words(j, d, "story.1", 5, 0, 4, 11, true, "map", "style.5", "Change");
+         }},
 
         // s014: master margins / columns.
         {"edit_masters", [](DocJournal& j, Doc& d) {

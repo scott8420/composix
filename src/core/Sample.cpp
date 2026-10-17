@@ -91,6 +91,12 @@ void load_sample(Doc& d) {
         d.put("style.2", h);
     }
     d.put("style.3", Style{"Caption", StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, Align::Left});
+    {   // s114: the style footnotes are set in (the flow finds it by its name), built on Body.
+        Style fn{"Footnote", StyleKind::Paragraph, 3.5, "Serif", 8.5, 10.5, false, false, Align::Left};
+        fn.based_on = "style.1";
+        fn.own = doc::style_differences(fn, *d.as<Style>("style.1"));
+        d.put("style.12", fn);
+    }
     {   // s026: sources hang: the first line out, the rest in.
         Style src{"Source", StyleKind::Paragraph, 4, "Serif", 10, 12, false, false, Align::Left};
         src.left_indent = 12;
@@ -120,8 +126,10 @@ void load_sample(Doc& d) {
                     "been torn down twice."},
         {"style.2", "Chapter Two"},
         {"style.10", "The map came out of its tube in three panels, each a little narrower "
-                    "than the last, so it would fold inside the book."},
+                    "than the last, so it would fold inside the book." + std::string(kMarkNote)},
     };
+    // s114: a footnote on the map (its mark at the paragraph's end).
+    ch.paras.back().notes = {Note{"The foldout opens to the right, past the page\u2019s edge.", {}}};
     d.put("story.1", ch);
     d.put("story.2", Story{"Map caption",
                            {{"style.3", "Fig. 1 — The trade routes, as surveyed in the third year."}}});

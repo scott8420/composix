@@ -2,6 +2,7 @@
 #include "core/Doc.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <regex>
 #include <string_view>
@@ -273,6 +274,21 @@ std::vector<Hit> find_across(const Doc& d, const FindOpts& f, const std::vector<
 }
 }  // namespace
 
+namespace {
+// s113: the paragraph style a story's notes are set in, for "Any style /
+// this style" -- a paragraph style named Footnote (as the flow finds it).
+Doc::Id note_style_id(const Doc& d) {
+    for (const auto& id : d.ids_of<Style>()) {
+        const auto* s = d.as<Style>(id);
+        if (s->kind != StyleKind::Paragraph) continue;
+        std::string n = s->name;
+        for (auto& ch : n) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (n == "footnote" || n == "footnotes") return id;
+    }
+    return {};
+}
+}  // namespace
+
 std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
     if (spans_breaks(f)) return find_across(d, f, reading_order(d));   // s095
     std::vector<Hit> out;
@@ -284,12 +300,100 @@ std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
     const std::wstring what = f.match_case ? widen(f.what) : folded(widen(f.what));   // s091: by characters
     TextPos lo = f.from, hi = f.to;
     if (hi < lo) std::swap(lo, hi);
+    // s113: notes are looked in with no paragraph style asked for, or the
+    // one they're set in (Footnote).
+    const Doc::Id nstyle = note_style_id(d);
+    const bool in_notes = f.pstyle.empty() || (!nstyle.empty() && f.pstyle == nstyle);
+
+    // The hits in one paragraph's text (or a note's words, `note` >= 0),
+    // in [lo_b, hi_b), paragraph p.
+    const auto search = [&](const Doc::Id& sid, const Para& para, int p, int note, int lo_b, int hi_b, std::vector<Hit>& into) {
+        const int n = static_cast<int>(para.text.size());
+        const auto inside = [&](int a, int b) { return a >= lo_b && b <= hi_b; };
+        const auto hit = [&](int a, int b, std::vector<std::string> g = {}) {
+            Hit h{sid, {p, a}, {p, b}, std::move(g)};
+            h.note = note;
+            into.push_back(std::move(h));
+        };
+        std::vector<Stretch> fs;
+        if (fmt) {
+            fs = format_stretches(d, para, f);
+            if (fs.empty()) return;
+        }
+        if (what.empty() && fmt) {   // each stretch so set
+            for (const auto& x : fs) {
+                const int a = std::max(x.a, lo_b), b = std::min(x.b, hi_b);
+                if (b > a) hit(a, b);
+            }
+            return;
+        }
+        if (what.empty()) {
+            if (!f.cstyle.empty()) {   // each run of the character style
+                for (const auto& r : para.runs) {
+                    const int a = std::max(r.start, lo_b), b = std::min(r.end, hi_b);
+                    if (r.style == f.cstyle && b > a) hit(a, b);
+                }
+            } else if (hi_b > lo_b) {  // the whole paragraph (its part in the range)
+                hit(lo_b, hi_b);
+            }
+            return;
+        }
+        // The matches: [a, b) and their groups.
+        struct M { int a, b; std::vector<std::string> g; };
+        std::vector<M> ms;
+        const std::string& hay = para.text;
+        if (pattern) {
+            std::vector<int> at;
+            const auto wide = widen(para.text, &at);
+            const auto look = f.match_case ? wide : folded(wide);   // s091: same indices
+            for (auto it = std::wsregex_iterator(look.begin(), look.end(), re); it != std::wsregex_iterator(); ++it) {
+                const auto& m = *it;
+                if (m.length(0) == 0) continue;   // an empty match finds nothing
+                const auto p0 = static_cast<std::size_t>(m.position(0)), p1 = p0 + static_cast<std::size_t>(m.length(0));
+                M x{at[p0], at[p1], {}};
+                for (std::size_t k = 0; k < m.size(); ++k)   // the groups as written, not folded
+                    x.g.push_back(m[k].matched ? narrow(wide.substr(static_cast<std::size_t>(m.position(k)),
+                                                                    static_cast<std::size_t>(m.length(k))))
+                                               : std::string{});
+                ms.push_back(std::move(x));
+            }
+        } else {
+            // s091: by characters, folded both sides; the byte offsets mapped back.
+            std::vector<int> bat;
+            auto wh = widen(hay, &bat);
+            if (!f.match_case) wh = folded(wh);
+            const std::size_t w = what.size();
+            for (std::size_t at = wh.find(what); at != std::wstring::npos; at = wh.find(what, at + 1)) {
+                const int a = bat[at], b = bat[at + w];
+                if (f.whole_word && ((a > 0 && word_byte(static_cast<unsigned char>(hay[static_cast<std::size_t>(a - 1)]))) ||
+                                     (b < n && word_byte(static_cast<unsigned char>(hay[static_cast<std::size_t>(b)])))))
+                    continue;
+                ms.push_back({a, b, {}});
+                at += w - 1;   // no overlapping hits
+            }
+        }
+        for (auto& m : ms) {
+            const int a = m.a, b = m.b;
+            if (pattern && f.whole_word && ((a > 0 && word_byte(static_cast<unsigned char>(para.text[a - 1]))) ||
+                                            (b < n && word_byte(static_cast<unsigned char>(para.text[b])))))
+                continue;
+            if (!inside(a, b)) continue;
+            if (!f.cstyle.empty()) {   // wholly inside a run of it
+                bool in = false;
+                for (const auto& r : para.runs) in = in || (r.style == f.cstyle && r.start <= a && r.end >= b);
+                if (!in) continue;
+            }
+            if (fmt && std::none_of(fs.begin(), fs.end(), [&](const Stretch& x) { return x.a <= a && x.b >= b; }))
+                continue;
+            hit(a, b, std::move(m.g));
+        }
+    };
+
     for (const auto& sid : reading_order(d)) {
         if (!f.story.empty() && sid != f.story) continue;   // s056
         const auto& st = *d.as<Story>(sid);
         for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
             const auto& para = st.paras[static_cast<std::size_t>(p)];
-            if (!f.pstyle.empty() && para.style != f.pstyle) continue;
             const int n = static_cast<int>(para.text.size());
             // s056: the stretch searched -- the range's part of this paragraph.
             int lo_b = 0, hi_b = n;
@@ -299,79 +403,29 @@ std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
                 if (p == hi.para) hi_b = std::clamp(hi.byte, 0, n);
                 if (hi_b <= lo_b) continue;
             }
-            const auto inside = [&](int a, int b) { return a >= lo_b && b <= hi_b; };
-            std::vector<Stretch> fs;
-            if (fmt) {
-                fs = format_stretches(d, para, f);
-                if (fs.empty()) continue;
-            }
-            if (what.empty() && fmt) {   // each stretch so set
-                for (const auto& x : fs) {
-                    const int a = std::max(x.a, lo_b), b = std::min(x.b, hi_b);
-                    if (b > a) out.push_back({sid, {p, a}, {p, b}});
+            std::vector<Hit> here;
+            if (f.pstyle.empty() || para.style == f.pstyle) search(sid, para, p, -1, lo_b, hi_b, here);
+            // s113: its notes' words -- each read at its mark (a note in the
+            // range when its mark is).
+            if (in_notes && !para.notes.empty()) {
+                std::vector<std::pair<int, Hit>> keyed;   // (the mark's byte, the hit)
+                for (const auto& h : here) keyed.emplace_back(h.a.byte, h);
+                int k = 0;
+                for (std::size_t i = para.text.find(kMarkNote); i != std::string::npos && k < static_cast<int>(para.notes.size());
+                     i = para.text.find(kMarkNote, i + 3), ++k) {
+                    const int m = static_cast<int>(i);
+                    if (m < lo_b || m + 3 > hi_b) continue;
+                    const auto& note = para.notes[static_cast<std::size_t>(k)];
+                    Para np{para.style, note.text, note.runs};
+                    std::vector<Hit> in;
+                    search(sid, np, p, k, 0, static_cast<int>(note.text.size()), in);
+                    for (auto& h : in) keyed.emplace_back(m + 1, std::move(h));   // after a hit beginning at the mark
                 }
-                continue;
+                std::stable_sort(keyed.begin(), keyed.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+                here.clear();
+                for (auto& [key, h] : keyed) here.push_back(std::move(h));
             }
-            if (what.empty()) {
-                if (!f.cstyle.empty()) {   // each run of the character style
-                    for (const auto& r : para.runs) {
-                        const int a = std::max(r.start, lo_b), b = std::min(r.end, hi_b);
-                        if (r.style == f.cstyle && b > a) out.push_back({sid, {p, a}, {p, b}});
-                    }
-                } else if (hi_b > lo_b) {  // the whole paragraph (its part in the range)
-                    out.push_back({sid, {p, lo_b}, {p, hi_b}});
-                }
-                continue;
-            }
-            // The matches in this paragraph: [a, b) and their groups.
-            struct M { int a, b; std::vector<std::string> g; };
-            std::vector<M> ms;
-            std::string hay = para.text;
-            if (pattern) {
-                std::vector<int> at;
-                const auto wide = widen(para.text, &at);
-                const auto look = f.match_case ? wide : folded(wide);   // s091: same indices
-                for (auto it = std::wsregex_iterator(look.begin(), look.end(), re); it != std::wsregex_iterator(); ++it) {
-                    const auto& m = *it;
-                    if (m.length(0) == 0) continue;   // an empty match finds nothing
-                    const auto p0 = static_cast<std::size_t>(m.position(0)), p1 = p0 + static_cast<std::size_t>(m.length(0));
-                    M x{at[p0], at[p1], {}};
-                    for (std::size_t k = 0; k < m.size(); ++k)   // the groups as written, not folded
-                        x.g.push_back(m[k].matched ? narrow(wide.substr(static_cast<std::size_t>(m.position(k)),
-                                                                        static_cast<std::size_t>(m.length(k))))
-                                                   : std::string{});
-                    ms.push_back(std::move(x));
-                }
-            } else {
-                // s091: by characters, folded both sides; the byte offsets mapped back.
-                std::vector<int> bat;
-                auto wh = widen(hay, &bat);
-                if (!f.match_case) wh = folded(wh);
-                const std::size_t w = what.size();
-                for (std::size_t at = wh.find(what); at != std::wstring::npos; at = wh.find(what, at + 1)) {
-                    const int a = bat[at], b = bat[at + w];
-                    if (f.whole_word && ((a > 0 && word_byte(static_cast<unsigned char>(hay[static_cast<std::size_t>(a - 1)]))) ||
-                                         (b < n && word_byte(static_cast<unsigned char>(hay[static_cast<std::size_t>(b)])))))
-                        continue;
-                    ms.push_back({a, b, {}});
-                    at += w - 1;   // no overlapping hits
-                }
-            }
-            for (auto& m : ms) {
-                const int a = m.a, b = m.b;
-                if (pattern && f.whole_word && ((a > 0 && word_byte(static_cast<unsigned char>(para.text[a - 1]))) ||
-                                                (b < n && word_byte(static_cast<unsigned char>(para.text[b])))))
-                    continue;
-                if (!inside(a, b)) continue;
-                if (!f.cstyle.empty()) {   // wholly inside a run of it
-                    bool in = false;
-                    for (const auto& r : para.runs) in = in || (r.style == f.cstyle && r.start <= a && r.end >= b);
-                    if (!in) continue;
-                }
-                if (fmt && std::none_of(fs.begin(), fs.end(), [&](const Stretch& x) { return x.a <= a && x.b >= b; }))
-                    continue;
-                out.push_back({sid, {p, a}, {p, b}, std::move(m.g)});
-            }
+            for (auto& h : here) out.push_back(std::move(h));
         }
     }
     return out;
@@ -404,9 +458,15 @@ int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& 
     std::erase_if(hits, [&](const Hit& h) { return !d.as<Story>(h.story); });
     if (hits.empty()) return 0;
     if (!c.set_text && c.pstyle.empty() && c.cstyle.empty()) return 0;
-    // Last to first within each story: earlier places stay put.
+    // Last to first within each story: earlier places stay put. s113: the
+    // notes' hits first (a change in the text can't then move a note out
+    // from under its hit), each note's last to first.
     std::stable_sort(hits.begin(), hits.end(), [](const Hit& x, const Hit& y) {
-        return x.story != y.story ? x.story < y.story : y.a < x.a;
+        if (x.story != y.story) return x.story < y.story;
+        if ((x.note >= 0) != (y.note >= 0)) return x.note >= 0;
+        if (x.note >= 0 && (x.a.para != y.a.para || x.note != y.note))
+            return x.a.para != y.a.para ? y.a.para < x.a.para : y.note < x.note;
+        return y.a < x.a;
     });
     hits.erase(std::unique(hits.begin(), hits.end()), hits.end());
     std::vector<Doc::Id> stories;
@@ -416,6 +476,19 @@ int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& 
     // An unchanged run leaves no step (the journal drops it): 0 then.
     const bool did = j.run(label, stories, [&] {
         for (const auto& h : hits) {
+            if (h.note >= 0) {   // s113: in a note's words -- the text and / or a character style
+                if (!c.set_text && c.cstyle.empty()) continue;
+                const auto* sty = c.cstyle.empty() ? nullptr : d.as<Style>(c.cstyle);
+                const std::function<void(Local&)> fold = [&](Local& l) {
+                    if (!sty || !c.fold_local) return;
+                    if (l.bold >= 0 && (l.bold == 1) == sty->bold) l.bold = -1;
+                    if (l.italic >= 0 && (l.italic == 1) == sty->italic) l.italic = -1;
+                };
+                if (change_note_words(j, d, h.story, h.a.para, h.note, h.a.byte, h.b.byte, c.set_text, change_text(c, h), c.cstyle,
+                                      label, fold) >= 0)
+                    ++n;
+                continue;
+            }
             TextPos a = h.a, b = h.b;
             if (c.set_text) b = edit_text(j, d, h.story, a, b, change_text(c, h));   // inside this step: just writes
             if (!c.pstyle.empty()) set_para_style(j, d, h.story, a, b, c.pstyle);

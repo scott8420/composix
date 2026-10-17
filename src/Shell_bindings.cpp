@@ -320,6 +320,9 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_tiles.signal_delete().connect([this](const std::vector<std::string>& ids) { page_action("delete", ids); });
     cv.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));
     cv.signal_context().connect(sigc::mem_fun(*this, &Shell::on_canvas_context));   // s074
+    cv.signal_note().connect([this](int p, int k) {   // s114: a note at the foot double-clicked
+        Glib::signal_idle().connect_once([this, p, k] { edit_note(m_canvas_view.canvas().edit_story_id(), p, k); });
+    });
     cv.signal_caret().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));   // s011: the text inspector
     cv.signal_edited().connect([this] { queue_refresh(); });
     // s009: files change behind our back (an image edited in another app):

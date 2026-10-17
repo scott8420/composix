@@ -191,6 +191,9 @@ Caret caret_at(const core::Doc& d, const std::string& story, const StoryFlow& fl
 // s105: the same frame, top and height, without the x -- read off the flow's
 // lines, no text laid out (the contents check asks it per heading).
 Caret caret_line(const core::Doc& d, const std::string& story, const StoryFlow& flow, core::TextPos p);
+// s114: the footnote set at (x, y) in a frame (frame coordinates, as
+// hit_text); nullptr: none there.
+const NotePlace* note_hit(const StoryFlow& flow, const std::string& frame, double x, double y);
 // The place nearest (x, y) in a frame of the story (clamped to its lines).
 core::TextPos hit_text(const core::Doc& d, const std::string& story, const StoryFlow& flow,
                        const std::string& frame, double x, double y);

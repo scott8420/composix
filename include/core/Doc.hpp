@@ -793,6 +793,17 @@ bool set_note_text(DocJournal& j, Doc& d, const Doc::Id& story, int p, int k, co
                    const std::string& merge_key = {});
 // The note at mark `at` (a mark's first byte): its paragraph and index; -1 none.
 int note_index_at(const Story& s, TextPos at);
+// s113: where paragraph p's k-th note's mark is (its first byte); -1 none.
+int note_mark_byte(const Story& s, int p, int k);
+// s113: a stretch [a, b) of paragraph p's k-th note's words -- replaced by
+// `text` (when `set_text`; a line break reads as a space; it takes the style
+// of the first character replaced), then given character style `cstyle`
+// (when not empty; `fold` then runs over the stretch's local formatting).
+// One step (or part of the one it runs in). Returns where the stretch ends
+// now; -1 when nothing changed.
+int change_note_words(DocJournal& j, Doc& d, const Doc::Id& story, int p, int k, int a, int b, bool set_text,
+                      const std::string& text, const Doc::Id& cstyle, const std::string& label,
+                      const std::function<void(Local&)>& fold = {});
 
 // ── styles (s011) ───────────────────────────────────────────────────────────
 // The paragraphs [a.para .. b.para] take a paragraph style. One step.
@@ -987,6 +998,9 @@ struct Hit {
     TextPos a, b;
     // s056: a pattern's groups ($0 the whole match, $1 ...), for Change to.
     std::vector<std::string> groups;
+    // s113: a hit in a footnote's words -- paragraph a.para's note-th note,
+    // a.byte .. b.byte in its words. -1: in the text.
+    int note = -1;
     bool operator==(const Hit&) const = default;
 };
 // s056: is `f.what` a pattern that reads (Wildcards / Regex)? `err` says

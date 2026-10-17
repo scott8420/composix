@@ -199,6 +199,9 @@ void Shell::build_find_bar() {  // zone
     change->signal_clicked().connect([this] { find_change(false); });
     all->signal_clicked().connect([this] { find_change(true); });
     close->signal_clicked().connect([this] { m_find_rev->set_reveal_child(false); });
+    m_find_rev->property_reveal_child().signal_changed().connect([this] {   // s113: the bar goes, so does its note
+        if (!m_find_rev->get_reveal_child()) close_find_note();
+    });
     auto keys = Gtk::EventControllerKey::create();
     keys->signal_key_pressed().connect([this](guint kv, guint, Gdk::ModifierType st) {
         if (kv == GDK_KEY_Escape) {
@@ -314,9 +317,21 @@ void Shell::find_show(int i, bool focus) {  // helper
     // Showing the page moves the keyboard (the navigator, the canvas); put
     // it back where it was unless asked to take it.
     Gtk::Widget* had = focus ? nullptr : get_focus();
+    // s113: a hit in a note -- its mark, on the page; its words then open.
+    core::TextPos a = h.a, b = h.b;
+    if (h.note >= 0) {
+        const auto* st = m_doc.as<core::Story>(h.story);
+        const int m = st ? core::doc::note_mark_byte(*st, h.a.para, h.note) : -1;
+        if (m < 0) return;
+        a = {h.a.para, m};
+        b = {h.a.para, m + 3};
+    } else {
+        close_find_note();
+    }
     const auto flow = layout::flow_story(m_doc, h.story);
-    const auto c = layout::caret_at(m_doc, h.story, flow, h.a);
+    const auto c = layout::caret_at(m_doc, h.story, flow, a);
     if (!c.ok) {
+        close_find_note();
         find_status(std::to_string(i + 1) + " of " + std::to_string(m_hits.size()) +
                     (flow.frames.empty() ? " (not placed)" : " (overset)"));
         return;
@@ -324,13 +339,14 @@ void Shell::find_show(int i, bool focus) {  // helper
     const auto* f = m_doc.as<core::Frame>(c.frame);
     auto& cv = m_canvas_view.canvas();
     m_nav.select_items({f->owner});   // its page (or master) on the canvas
-    cv.select_text(c.frame, h.a, h.b, focus);
+    cv.select_text(c.frame, a, b, focus);
+    if (h.note >= 0) edit_note(h.story, h.a.para, h.note, h.a.byte, h.b.byte, focus);
     if (had) {   // an entry: back WITHOUT selecting all (typing would replace it)
         if (had == m_find_what || had->is_ancestor(*m_find_what)) m_find_what->grab_focus_without_selecting();
         else if (had == m_find_with || had->is_ancestor(*m_find_with)) m_find_with->grab_focus_without_selecting();
         else had->grab_focus();
     }
-    find_status();
+    find_status(h.note >= 0 ? std::to_string(i + 1) + " of " + std::to_string(m_hits.size()) + " \u00b7 in a note" : std::string{});
 }
 
 void Shell::find_go(int dir) {  // helper
@@ -341,6 +357,7 @@ void Shell::find_go(int dir) {  // helper
 }
 
 void Shell::find_change(bool all) {  // helper
+    close_find_note();   // s113: what was typed in it goes in first
     find_refresh();
     if (m_hits.empty()) return;
     core::doc::ChangeOpts c;
@@ -368,6 +385,25 @@ void Shell::find_change(bool all) {  // helper
     // Change: the hit on show (else the first one, shown -- look before changing).
     if (m_hit < 0) { find_show(0, false); return; }
     const auto h = m_hits[static_cast<std::size_t>(m_hit)];
+    if (h.note >= 0) {   // s113: in a note -- on to the next hit after what was put there
+        const int end = c.set_text ? h.a.byte + static_cast<int>(core::doc::change_text(c, h).size()) : h.b.byte;
+        core::doc::change_hits(m_journal, m_doc, {h}, c, "Change");
+        m_hits_rev = ~0ull;
+        find_refresh();
+        if (m_hits.empty()) { cv.end_edit(); m_hit = -1; find_status("Done"); return; }
+        // The hits read in order, the note's at its mark: the first one past
+        // this note's (from `end`), else the one that came after it.
+        int next = -1;
+        for (int i = 0; i < static_cast<int>(m_hits.size()) && next < 0; ++i) {
+            const auto& x = m_hits[static_cast<std::size_t>(i)];
+            if (x.story == h.story && x.a.para == h.a.para && x.note == h.note && x.a.byte >= end) next = i;
+        }
+        if (next < 0) next = std::min(m_hit, static_cast<int>(m_hits.size()) - 1);
+        // ... still the same one (the text put back matched): one on.
+        if (next >= 0 && m_hits[static_cast<std::size_t>(next)] == h) next = (next + 1) % static_cast<int>(m_hits.size());
+        find_show(next, false);
+        return;
+    }
     core::doc::change_hits(m_journal, m_doc, {h}, c, "Change");
     // On to the next one after what was put there.
     const auto put = core::doc::change_text(c, h);   // s056 groups; s095 ^p breaks
@@ -383,7 +419,10 @@ void Shell::find_change(bool all) {  // helper
         const auto& x = m_hits[static_cast<std::size_t>(i)];
         if (x.story != h.story) continue;
         last_of_story = i;
-        if (next < 0 && (x.a.para > end_para || (x.a.para == end_para && x.a.byte >= end))) next = i;
+        int xb = x.a.byte;   // s113: a note's hit reads at its mark
+        if (x.note >= 0)
+            if (const auto* st = m_doc.as<core::Story>(x.story)) xb = core::doc::note_mark_byte(*st, x.a.para, x.note) + 1;
+        if (next < 0 && (x.a.para > end_para || (x.a.para == end_para && xb >= end))) next = i;
     }
     if (next < 0) next = last_of_story + 1;
     if (m_hits.empty()) { cv.end_edit(); m_hit = -1; find_status("Done"); return; }

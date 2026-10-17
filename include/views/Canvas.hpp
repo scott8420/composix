@@ -138,6 +138,7 @@ public:
         double x = 0, y = 0;
     };
     sigc::signal<void(const ContextHit&)>& signal_context() { return m_sig_context; }
+    sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
     enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture };
@@ -193,6 +194,7 @@ private:
     // kind: "type" / "erase" merge into a burst; "" is a step of its own.
     void edit_insert(const std::string& text, const std::string& kind, const std::string& label);
     void set_caret(core::TextPos p, bool extend, bool keep_goal = false);
+    bool note_click(const std::string& frame, double px, double py);   // s114: a double-click on a note at the foot
     core::TextPos hit_story(const std::string& frame, double lx, double ly);   // layout coords
     void draw_edit(const Cairo::RefPtr<Cairo::Context>& cr);
     void blink_restart();
@@ -286,6 +288,7 @@ private:
     std::vector<double> m_col0;                 // every column's width (points) at press
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool, m_sig_caret;
     sigc::signal<void(const ContextHit&)> m_sig_context;   // s074
+    sigc::signal<void(int, int)> m_sig_note;   // s114
 
     // s104: the pages as images at the current zoom, drawn on a worker (last:
     // it stops its worker first, while the dispatcher is still there).

@@ -730,6 +730,7 @@ void Canvas::on_drag_begin(double x, double y) {
                     m_anchor = {at.para, 0};
                     set_caret({at.para, static_cast<int>(para.text.size())}, true);
                 } else if (m_clicks >= 2) {
+                    if (note_click(under, px0, py0)) return;   // s114
                     const auto [a, b] = core::word_at(*edit_story(), at);
                     m_anchor = a;
                     set_caret(b, true);
@@ -745,6 +746,7 @@ void Canvas::on_drag_begin(double x, double y) {
         if (m_thread_from.empty() && m_load.empty() && text_frame && !m_mods_alt && out_port_hit(x, y).empty() &&
             ((m_tool == Tool::Select && m_clicks >= 2) || m_tool == Tool::Text)) {
             begin_edit(under, hit_story(under, px0, py0));
+            if (m_clicks >= 2 && note_click(under, px0, py0)) return;   // s114
             m_drag = Drag::Text;
             return;
         }
@@ -1372,8 +1374,8 @@ bool Canvas::insert_break(core::ParaStart kind) {
 
 bool Canvas::insert_note(int& p, int& k) {   // s109
     if (!editing() || !edit_story()) return false;
-    if (m_anchor != m_caret) edit_insert("", "", "Delete text");
-    const core::TextPos at = m_caret;
+    // s113: words selected -- the mark goes after them (as Word), not over them.
+    const core::TextPos at = std::max(m_anchor, m_caret);
     m_caret = core::doc::insert_note(m_journal, m_doc, m_edit_story, at, "");
     m_anchor = m_caret;
     m_goal_x = NAN;
@@ -1430,6 +1432,23 @@ void Canvas::blink_restart() {
         return editing();
     }, 530);
     queue_draw();
+}
+
+// s114: (px, py) on a note set at the column's foot -- the caret after its
+// mark, and the Shell opens its words. False: not on a note.
+bool Canvas::note_click(const std::string& frame, double px, double py) {
+    if (!editing() || !edit_story()) return false;
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
+    const auto* np = layout::note_hit(flows().get(m_doc, m_edit_story), frame, px - lr.x, py - lr.y);
+    if (!np) return false;
+    const int m = core::doc::note_mark_byte(*edit_story(), np->para, np->k);
+    if (m < 0) return false;
+    m_edit_frame = frame;
+    set_caret({np->para, m + 3}, false);
+    m_drag = Drag::None;
+    const int p = np->para, k = np->k;
+    m_sig_note.emit(p, k);
+    return true;
 }
 
 core::TextPos Canvas::hit_story(const std::string& frame, double lx, double ly) {

@@ -144,8 +144,11 @@ void add_mark_shapes(PangoLayout* l, PangoAttrList* attrs, const core::Doc& d, c
         auto rl = ref_layout(fd, digits);
         PangoRectangle ext;
         pango_layout_get_extents(rl.get(), nullptr, &ext);
-        PangoRectangle r{0, static_cast<int>(-size * 0.75 * PANGO_SCALE), ext.width + PANGO_SCALE / 4,
-                         static_cast<int>(size * PANGO_SCALE)};
+        // s114: above the baseline only -- reaching below it (deeper than the
+        // font's descent) made the line a hair taller, and the lines after it
+        // left the baseline grid. The number is raised; it needs no descent.
+        PangoRectangle r{0, static_cast<int>(-size * 0.7 * PANGO_SCALE), ext.width + PANGO_SCALE / 4,
+                         static_cast<int>(size * 0.7 * PANGO_SCALE)};
         PangoAttribute* a = pango_attr_shape_new(&r, &r);
         a->start_index = static_cast<guint>(static_cast<int>(i) - from);
         a->end_index = a->start_index + 3;
@@ -1562,6 +1565,14 @@ Caret caret_line(const core::Doc& d, const std::string& story, const StoryFlow& 
         for (const auto& l : ft.lines)
             if (on_line(*st, l, p)) return {true, ft.frame, 0, l.y, l.h};
     return c;
+}
+
+const NotePlace* note_hit(const StoryFlow& flow, const std::string& frame, double x, double y) {   // s114
+    const FrameText* ft = frame_text(flow, frame);
+    if (!ft) return nullptr;
+    for (const auto& n : ft->notes)
+        if (x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h) return &n;
+    return nullptr;
 }
 
 core::TextPos hit_text(const core::Doc& d, const std::string& story, const StoryFlow& flow,
