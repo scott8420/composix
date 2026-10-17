@@ -2747,6 +2747,69 @@ int main() {
     }
 
     {
+        std::cout << "\n-- break marks (s098) --\n";
+        namespace L = composix::layout;
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::insert_break(j, d, "story.1", {2, 0}, core::ParaStart::NextPage);
+        L::FlowCache flows;
+        const auto& flow = flows.get(d, "story.1");
+        const L::HiddenMark* brk = nullptr;
+        std::vector<L::HiddenMark> all;
+        for (const auto& fid : d.ids_of<core::Frame>())
+            if (d.as<core::Frame>(fid)->story == "story.1")
+                for (const auto& m : L::hidden_marks(d, "story.1", flow, fid)) all.push_back(m);
+        for (const auto& m : all) if (m.kind == L::HiddenMark::Kind::Break) brk = &m;
+        const auto* f1 = d.as<core::Frame>("frame.1");
+        check("mark: the page break, its rule to the column's edge", brk && brk->brk == 3 && brk->edge > brk->x0 &&
+                                                                     std::abs(brk->edge - core::column_width(*f1, 0) - core::column_x(*f1, 0)) < 0.01);
+        check("names", std::string(L::break_name(1)) == "Column break" && std::string(L::break_name(3)) == "Page break" &&
+                       std::string(L::break_name(4)) == "Right-page break");
+    }
+
+    {
+        std::cout << "\n-- unused asset files (s097) --\n";
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto dir = (fs::temp_directory_path() / "composix_selftest_s097").string();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        std::string err;
+        core::save_project(d, dir, &err);
+        const auto put = [&](const std::string& name, std::size_t n) {
+            std::ofstream o(fs::path(dir) / "assets" / name, std::ios::binary);
+            o << std::string(n, 'x');
+        };
+        put("guild-map.tif", 10);      // the sample's embedded files
+        put("fleuron.svg", 10);
+        put("old-scan.png", 2000);     // nothing uses these
+        put("draft.jpg", 3000);
+        put("undone.png", 100);        // an asset only undo could bring back
+        fs::create_directories(fs::path(dir) / "assets" / "sub", ec);   // a folder: left alone
+        const auto held = std::vector<std::string>{"assets/undone.png"};
+        const auto u = core::unused_asset_files(d, dir, held);
+        check("unused: what nothing uses, sorted, with sizes", u.size() == 2 && fs::path(u[0].path).filename() == "draft.jpg" &&
+                                                              u[0].bytes == 3000 && fs::path(u[1].path).filename() == "old-scan.png");
+        check("unused: without the undo history, the undone one too", core::unused_asset_files(d, dir).size() == 3);
+        check("unused: an unsaved document -- none", core::unused_asset_files(d, "").empty());
+        // The journal: what undo could bring back.
+        core::doc::embed_assets(j, d, {{"asset.2", "assets/harbor-copy.psd"}});
+        j.undo();
+        std::vector<std::string> paths;
+        j.each_value([&](const core::Record& r) { if (const auto* a = std::get_if<core::Asset>(&r)) paths.push_back(a->path); });
+        check("journal: the undone embed's path is still held", std::find(paths.begin(), paths.end(), "assets/harbor-copy.psd") != paths.end());
+        check("bytes: in words", core::bytes_text(512) == "512 bytes" && core::bytes_text(12 * 1024) == "12 KB" &&
+                                 core::bytes_text(2516582) == "2.4 MB");
+        fs::remove_all(dir, ec);
+    }
+
+    {
         std::cout << "\n-- small fixes (s096) --\n";
         namespace fs = std::filesystem;
         namespace L = composix::layout;

@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <cstdio>
+#include <set>
 #include <fstream>
 #include <ctime>
 #include <chrono>
@@ -490,6 +492,37 @@ bool load_project(Doc& d, const std::string& dir, std::string* err) {
     std::stringstream ss;
     ss << f.rdbuf();
     return from_json(d, ss.str(), err);
+}
+
+std::vector<UnusedFile> unused_asset_files(const Doc& d, const std::string& dir, const std::vector<std::string>& also_used) {   // s097
+    std::vector<UnusedFile> out;
+    if (dir.empty()) return out;
+    std::error_code ec;
+    const fs::path folder = fs::path(dir) / "assets";
+    if (!fs::is_directory(folder, ec)) return out;
+    std::set<std::string> used;
+    const auto norm = [&](const std::string& p) {
+        fs::path q(p);
+        if (q.is_relative()) q = fs::path(dir) / q;
+        return fs::weakly_canonical(q, ec).string();
+    };
+    for (const auto& id : d.ids_of<Asset>()) used.insert(norm(d.as<Asset>(id)->path));
+    for (const auto& p : also_used) used.insert(norm(p));
+    for (const auto& e : fs::directory_iterator(folder, ec)) {
+        if (!e.is_regular_file(ec)) continue;
+        if (used.count(norm(e.path().string()))) continue;
+        out.push_back({e.path().string(), e.file_size(ec)});
+    }
+    std::sort(out.begin(), out.end(), [](const UnusedFile& a, const UnusedFile& b) { return a.path < b.path; });
+    return out;
+}
+
+std::string bytes_text(std::uintmax_t n) {   // s097
+    char b[32];
+    if (n < 1024) return std::to_string(n) + " bytes";
+    if (n < 1024 * 1024) { std::snprintf(b, sizeof b, "%.0f KB", static_cast<double>(n) / 1024); return b; }
+    std::snprintf(b, sizeof b, "%.1f MB", static_cast<double>(n) / (1024.0 * 1024.0));
+    return b;
 }
 
 ProjectSummary summarize_project(const std::string& dir, Doc* keep) {

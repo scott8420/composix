@@ -93,6 +93,7 @@ private:
     // ── handlers ───────────────────────────────────────────────────────────
     void on_nav_pick(const views::Pick& p);      // category: handler: section -> tiles, items -> open
     void on_tiles_selection(const std::vector<std::string>& ids);  // category: handler: -> inspector
+    std::vector<core::Field> section_fields(core::Segment s) const;   // s097: a section's own Inspector rows
     void on_tiles_open(const std::vector<std::string>& ids);       // category: handler: -> navigator selects them
     void on_inspector_edit(const std::string& key, const std::string& choice);  // category: handler: -> one verb
     void on_canvas_selection();                  // category: handler: frames picked -> inspector

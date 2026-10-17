@@ -129,7 +129,10 @@ struct HiddenMark {
     double x0 = 0, x1 = 0;   // the character's span (a paragraph end: x0 only)
     double base = 0, h = 0;  // its line's baseline and leading
     int    brk = 0;          // Break: 1 column, 2 frame, 3 page, 4 right-hand page
+    double edge = 0;         // s098: Break -- the column's right edge (frame coords), where its rule ends
 };
+// s098: a break's name, as the canvas labels it ("Page break").
+const char* break_name(int brk);
 std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& story, const StoryFlow& flow,
                                      const std::string& frame, const core::Story* text = nullptr);
 

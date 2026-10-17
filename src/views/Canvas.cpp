@@ -567,6 +567,28 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
                         cr->line_to(x + w, bot + k * m.h * 0.08);
                     }
                     cr->stroke();
+                    // s098: a dashed rule on to the column's edge, the break named at its end.
+                    const double from = x + w + m.h * 0.25, to = std::max(from, m.edge - 1);
+                    const double size = std::max(3.0, m.h * 0.42);
+                    cr->set_font_size(size);
+                    Cairo::TextExtents te;
+                    const char* name = layout::break_name(m.brk);
+                    cr->get_text_extents(name, te);
+                    const double label_x = to - te.x_advance;
+                    if (label_x > from + m.h * 0.5) {
+                        const std::vector<double> dash{m.h * 0.18, m.h * 0.12};
+                        cr->save();
+                        cr->set_dash(dash, 0);
+                        cr->move_to(from, mid);
+                        cr->line_to(label_x - m.h * 0.2, mid);
+                        cr->stroke();
+                        cr->restore();
+                        cr->move_to(label_x, mid + te.height / 2);
+                        cr->show_text(name);
+                    } else {   // no room on the line: the name alone, after the arrow
+                        cr->move_to(from, mid + te.height / 2);
+                        cr->show_text(name);
+                    }
                 }
             }
             cr->restore();

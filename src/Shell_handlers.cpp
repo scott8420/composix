@@ -809,7 +809,7 @@ void Shell::on_go_forward() {  // handler
 
 void Shell::on_tiles_selection(const std::vector<std::string>& ids) {  // handler
     m_inspected = ids;
-    if (ids.empty() && m_segment) m_inspector.show_section(m_outline, *m_segment);
+    if (ids.empty() && m_segment) m_inspector.show_section(m_outline, *m_segment, section_fields(*m_segment));
     else                          m_inspector.show_items(resolve(ids));
 }
 
@@ -824,7 +824,54 @@ void Shell::on_tiles_open(const std::vector<std::string>& ids) {  // handler
 // An inspector edit is ONE verb across everything the inspector shows -- one
 // journal step, one Ctrl+Z (REQUIREMENTS §10). The views repaint from the
 // document's change (queue_refresh), not from here.
+// s097: Links & Assets, nothing picked -- the files in assets/ nothing uses
+// (not the document, not what undo could bring back), and a way to clear
+// them: the desktop's Trash, so a mistake can be fetched back.
+std::vector<core::Field> Shell::section_fields(core::Segment s) const {  // helper
+    std::vector<core::Field> out;
+    if (s != core::Segment::Assets || m_project_dir.empty()) return out;
+    std::vector<std::string> held;
+    m_journal.each_value([&](const core::Record& r) {
+        if (const auto* a = std::get_if<core::Asset>(&r)) held.push_back(a->path);
+    });
+    const auto files = core::unused_asset_files(m_doc, m_project_dir, held);
+    if (files.empty()) {
+        out.push_back({"Unused files", "None in assets/"});
+        return out;
+    }
+    std::uintmax_t total = 0;
+    std::string names;
+    for (std::size_t k = 0; k < files.size(); ++k) {
+        total += files[k].bytes;
+        if (k < 6) names += (names.empty() ? "" : "\n") + std::filesystem::path(files[k].path).filename().string();
+    }
+    if (files.size() > 6) names += "\n\u2026 and " + std::to_string(files.size() - 6) + " more";
+    out.push_back({"Unused files", std::to_string(files.size()) + " \u2014 " + core::bytes_text(total)});
+    out.push_back({"In assets/", names});
+    core::Field act{"", "", "assets_unused", {{"trash", "Move to Trash"}}};
+    act.buttons = true;
+    out.push_back(act);
+    return out;
+}
+
 void Shell::on_inspector_edit(const std::string& key, const std::string& choice) {  // handler
+    if (key == "assets_unused" && choice == "trash") {   // s097: not a document edit -- files on disk
+        std::vector<std::string> held;
+        m_journal.each_value([&](const core::Record& r) {
+            if (const auto* a = std::get_if<core::Asset>(&r)) held.push_back(a->path);
+        });
+        int moved = 0;
+        for (const auto& f : core::unused_asset_files(m_doc, m_project_dir, held)) {
+            try {
+                if (Gio::File::create_for_path(f.path)->trash()) ++moved;
+            } catch (const Glib::Error& e) {
+                if (auto lg = log::get(log::Area::Io)) lg->warn("assets: can't trash {} ({})", f.path, e.what());
+            }
+        }
+        if (auto lg = log::get(log::Area::Io)) lg->info("assets: {} unused file(s) to the Trash", moved);
+        on_tiles_selection(m_inspected);
+        return;
+    }
     if (m_inspected.empty()) return;
     bool did = false;
     try {

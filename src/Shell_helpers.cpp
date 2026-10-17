@@ -160,7 +160,7 @@ void Shell::show_pick_now(const views::Pick& p, const std::vector<std::string>& 
         m_main.set_visible_child("tiles");
         const auto kept = m_tiles.selected();
         m_inspected = kept;
-        if (kept.empty()) m_inspector.show_section(m_outline, *p.segment);
+        if (kept.empty()) m_inspector.show_section(m_outline, *p.segment, section_fields(*p.segment));   // s097
         else              m_inspector.show_items(resolve(kept));
         return;
     }

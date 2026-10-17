@@ -362,9 +362,9 @@ void Inspector::show_items(const std::vector<const core::Item*>& sel) {
     fill(core::selection_title(sel), sub, core::shared_fields(sel));
 }
 
-void Inspector::show_section(const core::Outline& o, core::Segment s) {
+void Inspector::show_section(const core::Outline& o, core::Segment s, const std::vector<core::Field>& extra) {
     const auto n = o.in(s).size();
-    fill(core::segment_info(s).title, std::to_string(n) + (n == 1 ? " item" : " items"), {});
+    fill(core::segment_info(s).title, std::to_string(n) + (n == 1 ? " item" : " items"), extra);
 }
 
 void Inspector::clear() {

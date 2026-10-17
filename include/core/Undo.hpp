@@ -71,6 +71,15 @@ public:
         std::optional<Value> before;
         std::optional<Value> after;
     };
+    // s097: every record value the steps hold (before and after) -- what
+    // undo or redo could bring back. Read only.
+    template <class F> void each_value(F&& f) const {
+        for (const auto& st : m_steps)
+            for (const auto& e : st.entries) {
+                if (e.before) f(*e.before);
+                if (e.after) f(*e.after);
+            }
+    }
     struct Step {
         std::string        label;       // "Delete “Ruby”" -- what the menu says
         std::vector<Entry> entries;     // in the order the ids were given

@@ -883,6 +883,16 @@ std::vector<RuleMark> column_rules(const core::Frame& f) {
     return out;
 }
 
+const char* break_name(int brk) {   // s098
+    switch (brk) {
+        case 1: return "Column break";
+        case 2: return "Frame break";
+        case 3: return "Page break";
+        case 4: return "Right-page break";
+        default: return "Break";
+    }
+}
+
 std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& story, const StoryFlow& flow,
                                      const std::string& frame, const core::Story* text) {
     std::vector<HiddenMark> out;
@@ -911,6 +921,10 @@ std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& stor
         else if (const auto b = st->paras[static_cast<std::size_t>(ln.para + 1)].brk; b != core::ParaStart::Anywhere) {
             m.kind = HiddenMark::Kind::Break;
             m.brk = static_cast<int>(b);
+            if (const auto* fr = d.as<core::Frame>(frame)) {   // s098: the rule runs to the column's edge
+                const int col = core::column_at(*fr, m.x0);
+                m.edge = core::column_x(*fr, col) + core::column_width(*fr, col);
+            }
         }
         m.x1 = m.x0;
         out.push_back(m);

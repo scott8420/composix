@@ -25,7 +25,8 @@ public:
     Inspector();
 
     void show_items(const std::vector<const core::Item*>& sel);
-    void show_section(const core::Outline& o, core::Segment s);   // no tile selected
+    void show_section(const core::Outline& o, core::Segment s,
+                      const std::vector<core::Field>& extra = {});   // no tile selected (s097: plus the section's own rows)
     void clear();
     // Any fields under any title (s005: frames picked on the canvas).
     void show(const std::string& title, const std::string& sub, const std::vector<core::Field>& fields) {

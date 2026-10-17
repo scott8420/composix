@@ -1144,6 +1144,18 @@ struct ProjectSummary {
     Units       units = Units::Inches;   // s096: the document's own (its card says its size in them)
 };
 ProjectSummary summarize_project(const std::string& dir, Doc* keep = nullptr);
+// s097: files in a project's assets/ folder no asset uses -- not the
+// document's, nor any path in `also_used` (what undo could bring back) --
+// by path ("<dir>/assets/x.png") and size, sorted. Folders inside are left
+// alone. No folder: none.
+struct UnusedFile {
+    std::string   path;
+    std::uintmax_t bytes = 0;
+    bool operator==(const UnusedFile&) const = default;
+};
+std::vector<UnusedFile> unused_asset_files(const Doc& d, const std::string& dir, const std::vector<std::string>& also_used = {});
+// "512 bytes", "12 KB", "2.4 MB".
+std::string bytes_text(std::uintmax_t n);
 // "just now", "12 minutes ago", "3 hours ago", "yesterday", "4 days ago",
 // then the date ("Oct 3, 2026"). Local time for the date.
 std::string ago_text(long long now, long long then);
