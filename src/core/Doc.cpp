@@ -1659,6 +1659,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     const std::string style = pa.style;
     const int restart = pa.restart;   // s047: the first paragraph keeps its restart
     const ParaStart brk = pa.brk;     // s055: and its break
+    const ParaLocal over = pa.over;   // s093: and its own settings
     std::size_t head_len = 0;
     for (const auto& sp : head) head_len += sp.text.size();
 
@@ -1679,6 +1680,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         made.push_back(para_of(ps, sp));
         prev = ps;
         if (i == 0) { made.back().restart = restart; made.back().brk = brk; }
+        if (i == 0 || (last && !tail.empty())) made.back().over = over;   // s093: the paragraph's own pieces keep its settings
     }
     s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
     s.paras.insert(s.paras.begin() + a.para, made.begin(), made.end());
@@ -1942,6 +1944,51 @@ bool reset_style_fields(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, 
             d.put(id, t);
         }
         write_through(d, styles);
+    });
+}
+
+Style para_style(const Doc& d, const Para& p) {   // s093
+    Style s;
+    if (const auto* st = d.as<Style>(p.style)) s = *st;
+    const auto& o = p.over;
+    if (o.align) s.align = *o.align;
+    if (o.left_indent) s.left_indent = *o.left_indent;
+    if (o.right_indent) s.right_indent = *o.right_indent;
+    if (o.first_indent) s.first_indent = *o.first_indent;
+    if (o.space_before) s.space_before = *o.space_before;
+    if (o.space_after) s.space_after = *o.space_after;
+    if (o.keep_next) s.keep_next = *o.keep_next;     // s094
+    if (o.keep_lines) s.keep_lines = *o.keep_lines;
+    if (o.hyphenate) s.hyphenate = *o.hyphenate;
+    return s;
+}
+
+bool set_para_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
+                    const std::function<void(ParaLocal&)>& f) {   // s093
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return false;
+    a = clamp_pos(*st, a);
+    b = clamp_pos(*st, b);
+    if (b < a) std::swap(a, b);
+    Story s = *st;
+    for (int p = a.para; p <= b.para; ++p) f(s.paras[static_cast<std::size_t>(p)].over);
+    if (s == *st) return false;
+    return j.run(label, {story}, [&] { d.put(story, s); });
+}
+
+bool clear_para_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::vector<std::string>& keys) {   // s093
+    return set_para_local(j, d, story, a, b, "Paragraph's own settings off", [&](ParaLocal& o) {
+        for (const auto& k : keys) {
+            if (k == "align") o.align.reset();
+            else if (k == "left_indent") o.left_indent.reset();
+            else if (k == "right_indent") o.right_indent.reset();
+            else if (k == "first_indent") o.first_indent.reset();
+            else if (k == "space_before") o.space_before.reset();
+            else if (k == "space_after") o.space_after.reset();
+            else if (k == "keep_next") o.keep_next.reset();     // s094
+            else if (k == "keep_lines") o.keep_lines.reset();
+            else if (k == "hyphenate") o.hyphenate.reset();
+        }
     });
 }
 
@@ -2563,6 +2610,12 @@ const std::vector<Verb>& verbs() {
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
         {"override_all", [](DocJournal& j, Doc& d) { override_all(j, d, {"page.7", "page.8"}); }},   // s072
         {"remove_all_overrides", [](DocJournal& j, Doc& d) { remove_all_overrides(j, d, d.pages()); }},
+        {"set_para_local", [](DocJournal& j, Doc& d) {   // s093
+             set_para_local(j, d, "story.1", {1, 0}, {2, 0}, "Align", [](ParaLocal& o) { o.align = Align::Center; });
+         }},
+        {"clear_para_local", [](DocJournal& j, Doc& d) {   // s093: the sample's centred dedication
+             clear_para_local(j, d, "story.3", {0, 0}, {0, 0}, {"align"});
+         }},
         {"reset_style_fields", [](DocJournal& j, Doc& d) { reset_style_fields(j, d, {"style.10"}, {"first_indent"}); }},   // s092
         {"set_list_entry_style", [](DocJournal& j, Doc& d) { set_list_entry_style(j, d, "list.1", 1, "style.3"); }},   // s090
         {"set_list_numbers", [](DocJournal& j, Doc& d) { set_list_numbers(j, d, "list.1", false); }},                 // s090

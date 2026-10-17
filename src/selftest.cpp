@@ -2747,6 +2747,88 @@ int main() {
     }
 
     {
+        std::cout << "\n-- a paragraph's keeps, hyphenation (s094) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto body = *d.as<core::Style>("style.1");
+        check("set: keep with next, keep lines, hyphenate -- one step",
+              core::doc::set_para_local(j, d, "story.1", {3, 0}, {3, 0}, "Keeps", [&](core::ParaLocal& o) {
+                  o.keep_next = !body.keep_next; o.keep_lines = -1; o.hyphenate = !body.hyphenate; }));
+        const auto& p3 = d.as<core::Story>("story.1")->paras.at(3);
+        const auto e = core::doc::para_style(d, p3);
+        check("para_style: its own keeps and hyphenation", e.keep_next == !body.keep_next && e.keep_lines == -1 && e.hyphenate == !body.hyphenate);
+        const auto f = core::text_fields(d, "story.1", {3, 0}, {3, 0});
+        std::string kl, kl_own, hy_own = "?";
+        for (const auto& x : f) {
+            if (x.edit == "pkeep_lines") { kl = x.value; kl_own = x.own; }
+            if (x.edit == "phyphenate") hy_own = x.own;
+        }
+        check("inspector: Keep lines All together, its own; Hyphenate its own", kl == "All together" && kl_own == "para.keep_lines" &&
+                                                                               hy_own == "para.hyphenate");
+        check("clear: keep lines back to the style's", core::doc::clear_para_local(j, d, "story.1", {3, 0}, {3, 0}, {"keep_lines"}) &&
+                                                      !d.as<core::Story>("story.1")->paras.at(3).over.keep_lines &&
+                                                      d.as<core::Story>("story.1")->paras.at(3).over.keep_next.has_value());
+        std::string err;
+        core::Doc g;
+        check("json: keeps and hyphenation kept", core::from_json(g, core::to_json(d), &err) &&
+                                                 g.as<core::Story>("story.1")->paras.at(3).over == d.as<core::Story>("story.1")->paras.at(3).over, err);
+    }
+
+    {
+        std::cout << "\n-- a paragraph's own settings (s093) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto& ded = d.as<core::Story>("story.3")->paras.at(0);
+        check("sample: the dedication -- Body, centred on its own", ded.style == "style.1" && ded.over.align == core::Align::Center &&
+                                                                    core::doc::para_style(d, ded).align == core::Align::Center &&
+                                                                    d.as<core::Style>("style.1")->align != core::Align::Center);
+        const auto x_of = [&](int para) {
+            L::FlowCache f;
+            return L::caret_at(d, "story.1", f.get(d, "story.1"), {para, 0}).x;
+        };
+        const double x0 = x_of(3);
+        const auto n0 = j.size();
+        check("set: one step over a range", core::doc::set_para_local(j, d, "story.1", {3, 0}, {4, 0}, "Left indent",
+                                                                      [](core::ParaLocal& o) { o.left_indent = 36; }) &&
+                                            j.size() == n0 + 1 && d.as<core::Story>("story.1")->paras.at(4).over.left_indent == 36.0);
+        check("set: the same again -- no step", !core::doc::set_para_local(j, d, "story.1", {3, 0}, {4, 0}, "Left indent",
+                                                                           [](core::ParaLocal& o) { o.left_indent = 36; }));
+        check("layout: the paragraph set in 36 pt", std::abs(x_of(3) - x0 - 36) < 0.5);
+        // Enter in the middle: both halves keep it; Enter at the end: the next paragraph (Next style) doesn't.
+        core::doc::edit_text(j, d, "story.1", {3, 4}, {3, 4}, "\n");
+        const auto& ps = d.as<core::Story>("story.1")->paras;
+        check("Enter mid-paragraph: both halves keep their own settings", ps.at(3).over.left_indent == 36.0 && ps.at(4).over.left_indent == 36.0);
+        const int e = static_cast<int>(ps.at(4).text.size());
+        core::doc::edit_text(j, d, "story.1", {4, e}, {4, e}, "\n");
+        check("Enter at the end: a fresh paragraph, its style's", d.as<core::Story>("story.1")->paras.at(5).over.empty());
+        check("clear: one setting back to the style's", core::doc::clear_para_local(j, d, "story.1", {3, 0}, {3, 0}, {"left_indent"}) &&
+                                                       !d.as<core::Story>("story.1")->paras.at(3).over.left_indent &&
+                                                       d.as<core::Story>("story.1")->paras.at(4).over.left_indent == 36.0);
+        check("clear: nothing set -- no step", !core::doc::clear_para_local(j, d, "story.1", {3, 0}, {3, 0}, {"left_indent"}));
+        // The inspector while typing: effective values, the own ones marked.
+        {
+            const auto f = core::text_fields(d, "story.3", {0, 0}, {0, 0});
+            std::string align_own, align_val, lind_own = "?";
+            for (const auto& x : f) {
+                if (x.edit == "palign") { align_own = x.own; align_val = x.value; }
+                if (x.edit == "plindent") lind_own = x.own;
+            }
+            check("inspector: Align Center, its own; Left indent the style's", align_val == "Center" && align_own == "para.align" &&
+                                                                              lind_own.empty());
+        }
+        std::string err;
+        core::Doc g;
+        check("json: a paragraph's own settings kept", core::from_json(g, core::to_json(d), &err) &&
+                                                      g.as<core::Story>("story.1")->paras.at(4).over == d.as<core::Story>("story.1")->paras.at(4).over &&
+                                                      g.as<core::Story>("story.3")->paras.at(0).over.align == core::Align::Center, err);
+    }
+
+    {
         std::cout << "\n-- own settings, row by row (s092) --\n";
         core::Doc d;
         core::DocJournal j{d};

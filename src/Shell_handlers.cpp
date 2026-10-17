@@ -1021,6 +1021,42 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 for (const auto& id : m_inspected) did = layout::build_list(m_journal, m_doc, id) || did;
         } else if (key == "based_on") {   // s037
             if (m_inspected.size() == 1) did = core::doc::set_style_base(m_journal, m_doc, m_inspected.front(), choice);
+        } else if (key == "style_reset" && choice.rfind("para.", 0) == 0) {   // s093: a paragraph's own setting off
+            auto& cv = m_canvas_view.canvas();
+            if (!cv.editing()) return;
+            const auto [a, b] = cv.edit_range();
+            did = core::doc::clear_para_local(m_journal, m_doc, cv.edit_story_id(), a, b, {choice.substr(5)});
+            cv.grab_focus();
+        } else if (key == "pkeep_next" || key == "pkeep_lines" || key == "phyphenate") {   // s094
+            auto& cv = m_canvas_view.canvas();
+            if (!cv.editing()) return;
+            const auto [a, b] = cv.edit_range();
+            const int v = std::stoi(choice);
+            did = core::doc::set_para_local(m_journal, m_doc, cv.edit_story_id(), a, b,
+                                            key == "pkeep_next" ? "Keep with next" : key == "pkeep_lines" ? "Keep lines" : "Hyphenate",
+                                            [&](core::ParaLocal& o) {
+                                                if (key == "pkeep_next") o.keep_next = v != 0;
+                                                else if (key == "phyphenate") o.hyphenate = v != 0;
+                                                else o.keep_lines = v;
+                                            });
+            cv.grab_focus();
+        } else if (key == "palign" || key == "plindent" || key == "prindent" || key == "pfindent" || key == "pbefore" ||
+                   key == "pafter") {   // s093: the paragraph's own settings
+            auto& cv = m_canvas_view.canvas();
+            if (!cv.editing()) return;
+            const auto [a, b] = cv.edit_range();
+            static const std::map<std::string, std::string> labels{{"palign", "Align"}, {"plindent", "Left indent"},
+                {"prindent", "Right indent"}, {"pfindent", "First indent"}, {"pbefore", "Space before"}, {"pafter", "Space after"}};
+            const double v = std::stod(choice);
+            did = core::doc::set_para_local(m_journal, m_doc, cv.edit_story_id(), a, b, labels.at(key), [&](core::ParaLocal& o) {
+                if (key == "palign") o.align = static_cast<core::Align>(std::clamp(static_cast<int>(v), 0, 3));
+                else if (key == "plindent") o.left_indent = v;
+                else if (key == "prindent") o.right_indent = v;
+                else if (key == "pfindent") o.first_indent = v;
+                else if (key == "pbefore") o.space_before = v;
+                else o.space_after = v;
+            });
+            cv.grab_focus();
         } else if (key == "style_reset") {   // s092: one setting back to the base's
             did = core::doc::reset_style_fields(m_journal, m_doc, m_inspected, {choice});
         } else if (key == "style_base") {   // s037: Reset to base

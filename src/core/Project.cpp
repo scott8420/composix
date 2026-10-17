@@ -71,6 +71,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
         {"dtrim", 72, 36, 5000}, {"dbleed", 72, 0, 72},   // s066
         {"pic_off", 72, -20000, 20000},   // s076
+        {"plindent", 1, 0, 1000}, {"prindent", 1, 0, 1000}, {"pfindent", 1, -1000, 1000}, {"pbefore", 1, 0, 1000}, {"pafter", 1, 0, 1000},   // s093
         {"ptop", 72, 0, 5000}, {"pbottom", 72, 0, 5000}, {"pinside", 72, 0, 5000}, {"poutside", 72, 0, 5000}};   // s062
     for (auto& f : fields)
         for (const auto& t : typed)
@@ -868,6 +869,68 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
                                                       : "Counted (" + doc::list_marker(d, *st, a.para) + ")",
                            "list_from", nc});
         }
+    }
+    // s093: the paragraph's own settings over its style -- the effective
+    // value (Mixed across a selection that differs), marked when it's the
+    // paragraph's own (the first paragraph's), with a reset.
+    {
+        const auto ptx = [](double v) { return pts(v) + " pt"; };
+        std::vector<Choice> al;
+        for (int i = 0; i < 4; ++i) al.push_back({std::to_string(i), align_text(static_cast<Align>(i))});
+        std::vector<Choice> len;
+        for (double v : {0.0, 6.0, 12.0, 18.0, 24.0, 36.0}) len.push_back({pts(v), ptx(v)});
+        struct Row { const char* label; const char* edit; const char* key; };
+        static const Row rows[] = {{"Align", "palign", "align"}, {"Left indent", "plindent", "left_indent"},
+                                   {"Right indent", "prindent", "right_indent"}, {"First indent", "pfindent", "first_indent"},
+                                   {"Space before", "pbefore", "space_before"}, {"Space after", "pafter", "space_after"}};
+        const auto value = [&](const Para& p, const std::string& key) -> std::string {
+            const Style e = doc::para_style(d, p);
+            if (key == "align") return align_text(e.align);
+            return ptx(key == "left_indent" ? e.left_indent : key == "right_indent" ? e.right_indent
+                     : key == "first_indent" ? e.first_indent : key == "space_before" ? e.space_before : e.space_after);
+        };
+        const auto has = [](const ParaLocal& o, const std::string& key) {
+            return key == "align" ? o.align.has_value() : key == "left_indent" ? o.left_indent.has_value()
+                 : key == "right_indent" ? o.right_indent.has_value() : key == "first_indent" ? o.first_indent.has_value()
+                 : key == "space_before" ? o.space_before.has_value() : o.space_after.has_value();
+        };
+        const auto& p0 = st->paras[static_cast<std::size_t>(a.para)];
+        // s094: keeps and hyphenation too (choices, not lengths).
+        static const std::vector<Choice> onoff{{"0", "Off"}, {"1", "On"}};
+        static const std::vector<Choice> keeps{{"0", "Off"}, {"2", "2 at start and end"}, {"3", "3 at start and end"}, {"-1", "All together"}};
+        const auto choice_text = [](const std::vector<Choice>& ch, const std::string& id) {
+            for (const auto& c : ch) if (c.id == id) return c.label;
+            return id;
+        };
+        struct Row2 { const char* label; const char* edit; const char* key; const std::vector<Choice>* ch; };
+        const Row2 rows2[] = {{"Keep with next", "pkeep_next", "keep_next", &onoff}, {"Keep lines", "pkeep_lines", "keep_lines", &keeps},
+                              {"Hyphenate", "phyphenate", "hyphenate", &onoff}};
+        const auto value2 = [&](const Para& p, const std::string& key, const std::vector<Choice>& ch) {
+            const Style e = doc::para_style(d, p);
+            return choice_text(ch, key == "keep_next" ? std::to_string(e.keep_next ? 1 : 0)
+                                 : key == "hyphenate" ? std::to_string(e.hyphenate ? 1 : 0) : std::to_string(e.keep_lines));
+        };
+        const auto has2 = [](const ParaLocal& o, const std::string& key) {
+            return key == "keep_next" ? o.keep_next.has_value() : key == "hyphenate" ? o.hyphenate.has_value() : o.keep_lines.has_value();
+        };
+        std::vector<Field> extra;
+        for (const auto& r : rows2) {
+            std::string v = value2(p0, r.key, *r.ch);
+            for (int p = a.para + 1; p <= b.para; ++p)
+                if (value2(st->paras[static_cast<std::size_t>(p)], r.key, *r.ch) != v) { v = kMixed; break; }
+            Field f{r.label, v, r.edit, *r.ch};
+            if (has2(p0.over, r.key)) f.own = std::string("para.") + r.key;
+            extra.push_back(f);
+        }
+        for (const auto& r : rows) {
+            std::string v = value(p0, r.key);
+            for (int p = a.para + 1; p <= b.para; ++p)
+                if (value(st->paras[static_cast<std::size_t>(p)], r.key) != v) { v = kMixed; break; }
+            Field f{r.label, v, r.edit, std::string(r.key) == "align" ? al : len};
+            if (has(p0.over, r.key)) f.own = std::string("para.") + r.key;
+            out.push_back(f);
+        }
+        out.insert(out.end(), extra.begin(), extra.end());
     }
     out.push_back({"Character style", name(cs, "None"), "cstyle", cc});
     const std::string sel = text_between(*st, a, b);

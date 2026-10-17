@@ -102,6 +102,19 @@ json to(const Record& r) {
                 }
                 if (p.restart > 0) jp["restart"] = p.restart;   // s047
                 if (p.brk != ParaStart::Anywhere) jp["brk"] = en(p.brk);   // s055
+                if (!p.over.empty()) {   // s093
+                    json o = json::object();
+                    if (p.over.align) o["align"] = en(*p.over.align);
+                    if (p.over.left_indent) o["left_indent"] = *p.over.left_indent;
+                    if (p.over.right_indent) o["right_indent"] = *p.over.right_indent;
+                    if (p.over.first_indent) o["first_indent"] = *p.over.first_indent;
+                    if (p.over.space_before) o["space_before"] = *p.over.space_before;
+                    if (p.over.space_after) o["space_after"] = *p.over.space_after;
+                    if (p.over.keep_next) o["keep_next"] = *p.over.keep_next;     // s094
+                    if (p.over.keep_lines) o["keep_lines"] = *p.over.keep_lines;
+                    if (p.over.hyphenate) o["hyphenate"] = *p.over.hyphenate;
+                    jp["own"] = o;
+                }
                 paras.push_back(jp);
             }
             j = {{"kind", "story"}, {"name", v.name}, {"paras", paras}};
@@ -284,6 +297,17 @@ std::optional<Record> from(const json& j) {
                     }
                 para.restart = val(p, "restart", 0);   // s047
                 para.brk = de(p, "brk", ParaStart::Anywhere);   // s055
+                if (p.contains("own") && p.at("own").is_object()) {   // s093
+                    const auto& o = p.at("own");
+                    if (o.contains("align")) para.over.align = de(o, "align", Align::Left);
+                    for (const auto& [k, slot] : {std::pair<const char*, std::optional<double>*>{"left_indent", &para.over.left_indent},
+                                                  {"right_indent", &para.over.right_indent}, {"first_indent", &para.over.first_indent},
+                                                  {"space_before", &para.over.space_before}, {"space_after", &para.over.space_after}})
+                        if (o.contains(k) && o.at(k).is_number()) *slot = o.at(k).get<double>();
+                    if (o.contains("keep_next") && o.at("keep_next").is_boolean()) para.over.keep_next = o.at("keep_next").get<bool>();   // s094
+                    if (o.contains("hyphenate") && o.at("hyphenate").is_boolean()) para.over.hyphenate = o.at("hyphenate").get<bool>();
+                    if (o.contains("keep_lines") && o.at("keep_lines").is_number_integer()) para.over.keep_lines = o.at("keep_lines").get<int>();
+                }
                 v.paras.push_back(std::move(para));
             }
         return v;

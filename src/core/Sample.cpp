@@ -125,7 +125,11 @@ void load_sample(Doc& d) {
     d.put("story.1", ch);
     d.put("story.2", Story{"Map caption",
                            {{"style.3", "Fig. 1 — The trade routes, as surveyed in the third year."}}});
-    d.put("story.3", Story{"Dedication", {{"style.1", "For everyone who ever finished a manuscript."}}});
+    {   // s093: the dedication centred on its own (Body, with its own alignment)
+        Story ded{"Dedication", {{"style.1", "For everyone who ever finished a manuscript."}}};
+        ded.paras.front().over.align = Align::Center;
+        d.put("story.3", ded);
+    }
     d.put("story.4", Story{"Sources",
                            {{"style.4", "Almanac of the Outer Ports, 3rd ed.", {{0, 26, "style.5"}}},   // the title in Emphasis
                             {"style.4", "Harbor Registers, vols. II–IV."},

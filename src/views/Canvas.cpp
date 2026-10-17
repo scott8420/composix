@@ -1741,8 +1741,9 @@ Canvas::TabStrip Canvas::tab_strip() const {
     const auto* st = m_doc.as<core::Story>(m_edit_story);
     if (!st || st->paras.empty()) return t;
     const auto& para = st->paras[static_cast<std::size_t>(std::min<int>(m_caret.para, static_cast<int>(st->paras.size()) - 1))];
-    const auto* ps = m_doc.as<core::Style>(para.style);
-    if (!ps) return t;
+    if (!m_doc.as<core::Style>(para.style)) return t;
+    const core::Style eff = core::doc::para_style(m_doc, para);   // s094: the paragraph's own indents count
+    const auto* ps = &eff;
     const auto& flow = const_cast<layout::FlowCache&>(m_flows).get(m_doc, m_edit_story);
     const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
     const auto* f = m_doc.as<core::Frame>(c.ok ? c.frame : m_edit_frame);

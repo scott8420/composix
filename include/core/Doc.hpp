@@ -221,6 +221,20 @@ struct Run {
     bool operator==(const Run&) const = default;
 };
 
+// s093: a paragraph's own settings over its style's -- each unset (the
+// style's) or set. Kept when the style changes; cleared one by one.
+struct ParaLocal {
+    std::optional<Align>  align;
+    std::optional<double> left_indent, right_indent, first_indent, space_before, space_after;
+    std::optional<bool>   keep_next, hyphenate;   // s094
+    std::optional<int>    keep_lines;             // s094: 0 off, 2 / 3, -1 all together
+    bool empty() const {
+        return !align && !left_indent && !right_indent && !first_indent && !space_before && !space_after && !keep_next &&
+               !hyphenate && !keep_lines;
+    }
+    bool operator==(const ParaLocal&) const = default;
+};
+
 struct Para {
     std::string      style;              // a paragraph style id
     std::string      text;
@@ -229,6 +243,7 @@ struct Para {
     // s055: a break typed before it (column / frame / page break): it starts
     // as a style's Start would -- this paragraph only. Anywhere = none.
     ParaStart        brk = ParaStart::Anywhere;
+    ParaLocal        over;               // s093: its own settings over the style's
     bool operator==(const Para&) const = default;
 };
 
@@ -764,6 +779,17 @@ bool reset_to_base(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles);
 // s092: just these settings back to the base's (keys from style_field_keys);
 // styles that don't own them are left alone. One step; nothing -> no step.
 bool reset_style_fields(DocJournal& j, Doc& d, const std::vector<Doc::Id>& styles, const std::vector<std::string>& keys);
+// s093: a paragraph's style with its own settings over it (a missing style:
+// the default Style). What the layout sets it in.
+Style para_style(const Doc& d, const Para& p);
+// s093: the paragraphs a..b's own settings -- `f` edits each; or the named
+// ones ("align", "left_indent", "right_indent", "first_indent",
+// "space_before", "space_after"; s094: "keep_next", "keep_lines",
+// "hyphenate") cleared back to the style's. One step;
+// no change -> no step.
+bool set_para_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
+                    const std::function<void(ParaLocal&)>& f);
+bool clear_para_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::vector<std::string>& keys);
 // s092: the style setting an inspector row edits ("ssize" -> "size",
 // "rule_a_w" -> "rule_above"); "" when it isn't one.
 std::string style_key_of_edit(const std::string& edit);

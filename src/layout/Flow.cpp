@@ -39,6 +39,9 @@ core::Style style_of(const core::Doc& d, const std::string& id) {
     return core::Style{};
 }
 
+// s093: ... with the paragraph's own settings over it.
+core::Style style_of(const core::Doc& d, const core::Para& p) { return core::doc::para_style(d, p); }
+
 double leading_of(const core::Style& s) { return s.leading > 0 ? s.leading : std::max(1.0, s.size * 1.2); }
 
 // s011: a paragraph's character styles, as Pango attributes over the part of
@@ -89,7 +92,7 @@ Indents indents_of(const core::Doc& d, const core::Style& st, const core::Story&
     if (st.skip_after_heading) {
         bool heading = p == 0;   // the story's start counts as one
         if (p > 0) {
-            const auto prev = style_of(d, s.paras[static_cast<std::size_t>(p - 1)].style);
+            const auto prev = style_of(d, s.paras[static_cast<std::size_t>(p - 1)]);
             heading = (prev.size > 0 ? prev.size : 11) > (st.size > 0 ? st.size : 11) + 0.01;
         }
         if (heading) in.first = 0;
@@ -348,7 +351,7 @@ void apply_keeps(const core::Doc& d, const core::Story& st, const core::Frame& f
     // The paragraph split here.
     if (c.start > 0) {
         const int q = c.p;
-        const auto style = style_of(d, st.paras[static_cast<std::size_t>(q)].style);
+        const auto style = style_of(d, st.paras[static_cast<std::size_t>(q)]);
         const std::size_t a = here_of(q);
         if (style.keep_lines != 0 && a < L.size()) {
             const bool starts_here = L[a].start == 0;
@@ -384,7 +387,7 @@ void apply_keeps(const core::Doc& d, const core::Story& st, const core::Frame& f
         const int prev = c.p - 1;
         const std::size_t a = here_of(prev);
         if (a == L.size() || L[a].start != 0 || a == begin) break;   // not wholly here, or all the column holds
-        if (!style_of(d, st.paras[static_cast<std::size_t>(prev)].style).keep_next) break;
+        if (!style_of(d, st.paras[static_cast<std::size_t>(prev)]).keep_next) break;
         send_on(a, prev, 0);
     }
 }
@@ -404,7 +407,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
         double y = top;
         while (c.p < paras) {
             const auto& para = st.paras[static_cast<std::size_t>(c.p)];
-            const auto style = style_of(d, para.style);
+            const auto style = style_of(d, para);
             const double lead = leading_of(style);
             // s043: a paragraph that starts afresh -- not where something is set already.
             // s055: or a break typed before it (its own, over the style's).
@@ -555,7 +558,7 @@ void vertical_justify(const core::Doc& d, const core::Story& st, const core::Fra
     if (fr.rot == 0 && core::baseline_grid(d, fr.owner).step > 0)
         for (const auto& l : ft.lines)
             if (l.para < static_cast<int>(st.paras.size()) &&
-                style_of(d, st.paras[static_cast<std::size_t>(l.para)].style).align_grid) return;
+                style_of(d, st.paras[static_cast<std::size_t>(l.para)]).align_grid) return;
     const double bottom = fr.h - std::max(0.0, fr.inset.bottom);
     for (int col = 0; col < core::column_count(fr); ++col) {
         std::vector<Line*> ls;
@@ -766,7 +769,7 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
             while (j < ft->lines.size() && ft->lines[j].para == p && ft->lines[j].col == col && ft->lines[j].w <= 0) ++j;
         if (p >= static_cast<int>(st->paras.size())) break;
         const auto& text = st->paras[static_cast<std::size_t>(p)].text;
-        const auto style = style_of(d, st->paras[static_cast<std::size_t>(p)].style);
+        const auto style = style_of(d, st->paras[static_cast<std::size_t>(p)]);
         const int from = std::min(ft->lines[i].start, static_cast<int>(text.size()));
         const bool solo = ft->lines[i].w > 0;
         const bool continues = !solo && ft->lines[j - 1].end < static_cast<int>(text.size());
@@ -976,7 +979,7 @@ std::vector<RuleMark> paragraph_rules(const core::Doc& d, const std::string& sto
         const auto& ln = *pl.line;
         if (ln.para >= static_cast<int>(st->paras.size())) return;
         const auto& para = st->paras[static_cast<std::size_t>(ln.para)];
-        const auto style = style_of(d, para.style);
+        const auto style = style_of(d, para);
         if (ln.cap > 0) { after_cap = ln.para; return; }
         const bool first = (ln.start == 0) || after_cap == ln.para;
         after_cap = -1;
