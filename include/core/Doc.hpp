@@ -953,6 +953,9 @@ struct ChangeOpts {
     // s056: `with` takes the hit's groups ($1 ...) -- a pattern's Change to.
     bool        expand = false;
 };
+// s095: what a hit is changed to -- `with`, its groups put in (expand),
+// "^p" as a paragraph break.
+std::string change_text(const ChangeOpts& c, const Hit& h);
 // Change the hits -- ONE step ("Change" / "Change All (n)"). The hits are
 // done last to first, so the earlier ones keep their places. Returns how
 // many changed.
@@ -1138,6 +1141,7 @@ struct ProjectSummary {
     double      trim_w = 0, trim_h = 0;
     int         pages = 0;
     long long   saved = 0;
+    Units       units = Units::Inches;   // s096: the document's own (its card says its size in them)
 };
 ProjectSummary summarize_project(const std::string& dir, Doc* keep = nullptr);
 // "just now", "12 minutes ago", "3 hours ago", "yesterday", "4 days ago",

@@ -181,7 +181,8 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                                               m_edit.emit(key, (*linked ? std::string("a") : idx) + ":" + v);
                                           });
                     // Room for the link / presets beside them without widening the panel.
-                    en->set_width_chars(f.link || !f.choices.empty() ? 3 : 4);
+                    en->set_width_chars(1);   // s096: share the column -- a wider minimum widened the panel
+                    en->add_css_class("cx-insp-col-entry");
                     if (f.link && k < 4) en->set_tooltip_text(side_names[k]);
                     g->attach(*en, static_cast<int>(k), 1);
                     continue;

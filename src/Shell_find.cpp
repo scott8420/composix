@@ -366,8 +366,12 @@ void Shell::find_change(bool all) {  // helper
     const auto h = m_hits[static_cast<std::size_t>(m_hit)];
     core::doc::change_hits(m_journal, m_doc, {h}, c, "Change");
     // On to the next one after what was put there.
-    const auto put = c.expand ? core::doc::expand_groups(c.with, h.groups) : c.with;   // s056
-    const int end = c.set_text ? h.a.byte + static_cast<int>(put.size()) : (h.b.para == h.a.para ? h.b.byte : 0);
+    const auto put = core::doc::change_text(c, h);   // s056 groups; s095 ^p breaks
+    const auto nl = put.rfind('\n');
+    const int put_paras = static_cast<int>(std::count(put.begin(), put.end(), '\n'));
+    const int end = c.set_text ? (nl == std::string::npos ? h.a.byte + static_cast<int>(put.size()) : static_cast<int>(put.size() - nl - 1))
+                               : (h.b.para == h.a.para ? h.b.byte : 0);
+    const int end_para = c.set_text ? h.a.para + put_paras : h.b.para;
     m_hits_rev = ~0ull;
     find_refresh();
     int next = -1, last_of_story = -1;
@@ -375,7 +379,7 @@ void Shell::find_change(bool all) {  // helper
         const auto& x = m_hits[static_cast<std::size_t>(i)];
         if (x.story != h.story) continue;
         last_of_story = i;
-        if (next < 0 && (x.a.para > h.a.para || (x.a.para == h.a.para && x.a.byte >= end))) next = i;
+        if (next < 0 && (x.a.para > end_para || (x.a.para == end_para && x.a.byte >= end))) next = i;
     }
     if (next < 0) next = last_of_story + 1;
     if (m_hits.empty()) { cv.end_edit(); m_hit = -1; find_status("Done"); return; }

@@ -2747,6 +2747,84 @@ int main() {
     }
 
     {
+        std::cout << "\n-- small fixes (s096) --\n";
+        namespace fs = std::filesystem;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        core::doc::set_units(j, d, core::Units::Millimetres);
+        const auto dir = (fs::temp_directory_path() / "composix_selftest_s096").string();
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        std::string err;
+        const bool saved = core::save_project(d, dir, &err);
+        const auto sum = core::summarize_project(dir);
+        check("start screen: a card knows its document's units", saved && sum.ok && sum.units == core::Units::Millimetres &&
+                                                                core::size_text(sum.trim_w, sum.trim_h, 0, sum.units).find("mm") != std::string::npos, err);
+        fs::remove_all(dir, ec);
+        // A level's picked entry style, not yet written: stale.
+        L::build_list(j, d, "list.1");
+        const auto why = [&]() -> std::string {
+            L::FlowCache f;
+            const auto v = L::stale_lists(d, f);
+            return v.empty() ? std::string("current") : v.front().why;
+        };
+        check("stale: built -- current", why() == "current");
+        core::doc::set_list_entry_style(j, d, "list.1", 1, "style.3");
+        check("stale: a picked entry style not yet written", why() == "Entries not in Caption");
+        L::build_list(j, d, "list.1");
+        check("stale: rebuilt in it -- current", why() == "current");
+    }
+
+    {
+        std::cout << "\n-- find across paragraphs (s095) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        {   // three short paragraphs to search
+            core::Doc::Loading load(d);
+            auto st = *d.as<core::Story>("story.3");
+            st.paras = {{"style.1", "alpha end"}, {"style.1", "Begin beta end"}, {"style.4", "begin gamma"}};
+            d.put("story.3", st);
+        }
+        const auto find = [&](const std::string& what, D::FindOpts::Mode m = D::FindOpts::Mode::Text) {
+            D::FindOpts f;
+            f.what = what;
+            f.mode = m;
+            f.story = "story.3";
+            return D::find_all(d, f);
+        };
+        auto h = find("end^pbegin");
+        check("text ^p: over each break, case folded", h.size() == 2 && h[0].a == core::TextPos{0, 6} && h[0].b == core::TextPos{1, 5} &&
+                                                       h[1].a == core::TextPos{1, 11} && h[1].b == core::TextPos{2, 5});
+        check("wildcards ^p: three letters, the break, a b (either case)", find("^$^$^$^pB", D::FindOpts::Mode::Wildcards).size() == 2);
+        h = find("(\\w+)\\n(\\w+)", D::FindOpts::Mode::Regex);
+        check("regex \\n: across, groups as written", h.size() == 2 && h[0].groups.size() == 3 && h[0].groups[1] == "end" &&
+                                                     h[0].groups[2] == "Begin");
+        {
+            D::FindOpts f;
+            f.what = "end^pbegin";
+            f.story = "story.3";
+            f.pstyle = "style.4";
+            check("a paragraph style: the one the hit starts in", D::find_all(d, f).empty());
+        }
+        // Change across: join the paragraphs, or break one.
+        D::ChangeOpts c;
+        c.with = "end / begin";
+        const auto n = D::change_hits(j, d, find("end^pbegin"), c, "Change All");
+        const auto& ps = d.as<core::Story>("story.3")->paras;
+        check("change: the breaks taken out, one step", n == 2 && ps.size() == 1 && ps[0].text == "alpha end / begin beta end / begin gamma");
+        c.with = "^p";
+        D::change_hits(j, d, find(" / "), c, "Change All");
+        check("change to ^p: broken back into paragraphs", d.as<core::Story>("story.3")->paras.size() == 3);
+        check("plain text without ^p: within a paragraph, as before", find("beta").size() == 1);
+    }
+
+    {
         std::cout << "\n-- a paragraph's keeps, hyphenation (s094) --\n";
         core::Doc d;
         core::DocJournal j{d};

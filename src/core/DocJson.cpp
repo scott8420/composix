@@ -499,6 +499,7 @@ ProjectSummary summarize_project(const std::string& dir, Doc* keep) {
     out.ok = true;
     out.title = d.settings().title.empty() ? fs::path(dir).filename().string() : d.settings().title;
     out.trim_w = d.settings().trim_w;
+    out.units = d.settings().units;   // s096
     out.trim_h = d.settings().trim_h;
     out.pages = static_cast<int>(d.pages().size());
     std::error_code ec;

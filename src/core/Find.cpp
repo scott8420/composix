@@ -155,6 +155,7 @@ std::wstring wild_to_regex(const std::wstring& w) {
             else if (k == L'$') r += L"[A-Za-zÀ-ÖØ-öø-ɏͰ-ϿЀ-ӿ]";
             else if (k == L'w') r += L"[ \t  -​ ]";
             else if (k == L'?') r += L".";
+            else if (k == L'p') r += L"\n";   // s095: a paragraph break
             else if (k == L'^') r += L"\\^";
             else { r += L"\\^"; --i; }
             continue;
@@ -204,7 +205,76 @@ std::string expand_groups(const std::string& with, const std::vector<std::string
     return out;
 }
 
+namespace {
+// s095: does the search hold a paragraph break? "^p" (Text, Wildcards) or
+// "\n" (Regex). Not with character-level filters (a character style, bold
+// / italic), which belong to one paragraph.
+bool spans_breaks(const FindOpts& f) {
+    if (!f.cstyle.empty() || f.bold || f.italic || f.what.empty()) return false;
+    return f.mode == FindOpts::Mode::Regex ? f.what.find("\\n") != std::string::npos : f.what.find("^p") != std::string::npos;
+}
+
+// s095: each story as one text, its paragraphs joined by '\n'; every
+// character's place (paragraph, byte) kept, and one past the end.
+std::vector<Hit> find_across(const Doc& d, const FindOpts& f, const std::vector<Doc::Id>& order) {
+    std::vector<Hit> out;
+    std::wregex re;
+    const bool pattern = f.mode != FindOpts::Mode::Text;
+    if (pattern && !make_regex(f, re, nullptr)) return out;
+    std::wstring what;
+    if (!pattern) {
+        std::string w = f.what;
+        for (std::size_t at = w.find("^p"); at != std::string::npos; at = w.find("^p", at + 1)) w.replace(at, 2, "\n");
+        what = f.match_case ? widen(w) : folded(widen(w));
+    }
+    TextPos lo = f.from, hi = f.to;
+    if (hi < lo) std::swap(lo, hi);
+    for (const auto& sid : order) {
+        if (!f.story.empty() && sid != f.story) continue;
+        const auto& st = *d.as<Story>(sid);
+        std::wstring all;
+        std::vector<TextPos> place;
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            std::vector<int> at;
+            const auto w = widen(st.paras[static_cast<std::size_t>(p)].text, &at);
+            for (std::size_t k = 0; k < w.size(); ++k) { all.push_back(w[k]); place.push_back({p, at[k]}); }
+            if (p + 1 < static_cast<int>(st.paras.size())) { all.push_back(L'\n'); place.push_back({p, at.back()}); }
+            else place.push_back({p, at.back()});   // one past the end
+        }
+        const auto look = f.match_case ? all : folded(all);
+        struct M { std::size_t a, b; std::vector<std::string> g; };
+        std::vector<M> ms;
+        if (pattern) {
+            for (auto it = std::wsregex_iterator(look.begin(), look.end(), re); it != std::wsregex_iterator(); ++it) {
+                const auto& m = *it;
+                if (m.length(0) == 0) continue;
+                M x{static_cast<std::size_t>(m.position(0)), static_cast<std::size_t>(m.position(0) + m.length(0)), {}};
+                for (std::size_t k = 0; k < m.size(); ++k)
+                    x.g.push_back(m[k].matched ? narrow(all.substr(static_cast<std::size_t>(m.position(k)), static_cast<std::size_t>(m.length(k))))
+                                               : std::string{});
+                ms.push_back(std::move(x));
+            }
+        } else if (!what.empty()) {
+            for (std::size_t at = look.find(what); at != std::wstring::npos; at = look.find(what, at + 1)) {
+                ms.push_back({at, at + what.size(), {}});
+                at += what.size() - 1;
+            }
+        }
+        const auto wordc = [](wchar_t c) { return c != L'\n' && word_byte(c < 0x80 ? static_cast<unsigned char>(c) : 0x80); };
+        for (auto& m : ms) {
+            if (f.whole_word && ((m.a > 0 && wordc(all[m.a - 1])) || (m.b < all.size() && wordc(all[m.b])))) continue;
+            const TextPos a = place[m.a], b = place[m.b];
+            if (!f.pstyle.empty() && st.paras[static_cast<std::size_t>(a.para)].style != f.pstyle) continue;
+            if (f.in_range && (a < lo || hi < b)) continue;
+            out.push_back({sid, a, b, std::move(m.g)});
+        }
+    }
+    return out;
+}
+}  // namespace
+
 std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
+    if (spans_breaks(f)) return find_across(d, f, reading_order(d));   // s095
     std::vector<Hit> out;
     const bool fmt = f.bold || f.italic;
     if (f.what.empty() && f.pstyle.empty() && f.cstyle.empty() && !fmt) return out;
@@ -324,6 +394,12 @@ int swatch_uses(const Doc& d, const Doc::Id& sw) {
     return n;
 }
 
+std::string change_text(const ChangeOpts& c, const Hit& h) {   // s095
+    std::string w = c.expand ? expand_groups(c.with, h.groups) : c.with;
+    for (std::size_t at = w.find("^p"); at != std::string::npos; at = w.find("^p", at + 1)) w.replace(at, 2, "\n");
+    return w;
+}
+
 int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& c, const std::string& label) {
     std::erase_if(hits, [&](const Hit& h) { return !d.as<Story>(h.story); });
     if (hits.empty()) return 0;
@@ -341,7 +417,7 @@ int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& 
     const bool did = j.run(label, stories, [&] {
         for (const auto& h : hits) {
             TextPos a = h.a, b = h.b;
-            if (c.set_text) b = edit_text(j, d, h.story, a, b, c.expand ? expand_groups(c.with, h.groups) : c.with);   // inside this step: just writes
+            if (c.set_text) b = edit_text(j, d, h.story, a, b, change_text(c, h));   // inside this step: just writes
             if (!c.pstyle.empty()) set_para_style(j, d, h.story, a, b, c.pstyle);
             if (!c.cstyle.empty() && a != b) {
                 set_char_style(j, d, h.story, a, b, c.cstyle);

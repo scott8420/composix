@@ -386,6 +386,16 @@ std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows) {   // 
         }
         if (why.empty() && en.size() > had.size()) why = "\u201c" + en[n].text + "\u201d not listed yet";
         if (why.empty() && had.size() > en.size()) why = "\u201c" + had[n].text + "\u201d listed, no such heading";
+        if (why.empty()) {   // s096: a level whose style was picked (s090) -- written in it?
+            const std::size_t t0 = static_cast<std::size_t>(core::doc::list_title_paras(*st));
+            for (std::size_t i = 0; i < en.size() && why.empty(); ++i) {
+                const auto lv = static_cast<std::size_t>(std::max(1, en[i].level));
+                if (lv > l.entry_styles.size() || l.entry_styles[lv - 1].empty()) continue;
+                const auto* want = d.as<core::Style>(l.entry_styles[lv - 1]);
+                if (want && t0 + i < st->paras.size() && st->paras[t0 + i].style != l.entry_styles[lv - 1])
+                    why = "Entries not in " + want->name;
+            }
+        }
         if (!why.empty()) out.push_back({lid, why});
     }
     return out;

@@ -156,7 +156,7 @@ void Shell::show_start() {  // helper
         t->set_max_width_chars(1);
         t->set_hexpand(true);
         card->append(*t);
-        auto meta = Gtk::make_managed<Gtk::Label>(core::size_text(sum.trim_w, sum.trim_h, 0) + " · " + std::to_string(sum.pages) +
+        auto meta = Gtk::make_managed<Gtk::Label>(core::size_text(sum.trim_w, sum.trim_h, 0, sum.units) +   // s096: in its own units " · " + std::to_string(sum.pages) +
                                                   (sum.pages == 1 ? " page" : " pages") +
                                                   (sum.saved ? "\nsaved " + core::ago_text(now, sum.saved) : std::string{}));
         meta->add_css_class("cx-field-value");
