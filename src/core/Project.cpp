@@ -597,11 +597,34 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         const bool stale = !never && l.built_entries != now;
         std::string built = never ? "Never" : stale ? "Stale — built with " + std::to_string(l.built_entries)
                                                     : "Current";
+        // s088: the styles it gathers, by level -- add one (the next level), take one out.
+        std::string levels;
+        for (std::size_t k = 0; k < l.from_styles.size(); ++k)
+            levels += (levels.empty() ? "" : "  ·  ") + (l.from_styles.size() > 1 ? std::to_string(k + 1) + " " : std::string()) +
+                      style_name(d, l.from_styles[k]);
+        std::vector<Choice> add_ch;
+        for (const auto& s : d.ids_of<Style>())
+            if (d.as<Style>(s)->kind == StyleKind::Paragraph &&
+                std::find(l.from_styles.begin(), l.from_styles.end(), s) == l.from_styles.end())
+                add_ch.push_back({s, d.as<Style>(s)->name});
+        Field add{"Add level", "Choose a style…", "list_add", add_ch};
+        Field drop{"", "", "list_remove", {}};
+        drop.buttons = true;
+        for (const auto& s : l.from_styles) drop.choices.push_back({s, "− " + style_name(d, s)});
         o.add({lid, G::Generated, l.name, stale || never ? "Stale" : "", {K::Generated, 6, 9, 0, stale || never},
-               {{"From", from.empty() ? "—" : from},
+               {{"From", from.empty() ? "—" : levels},
                 {"Entries", std::to_string(now)},
                 {"Built", built},
-                {"Placed", l.placed_on.empty() ? "—" : "Page " + d.folio(l.placed_on)}}});
+                {"Placed", l.placed_on.empty() ? "—" : "Page " + d.folio(l.placed_on)},
+                add,
+                drop,
+                [&] {   // s087: Build -- writes the entries, with their folios, into the list's story
+                    Field act{"", "", "genlist", {}};
+                    if (l.kind == ListKind::Contents && (!l.story.empty() || !l.placed_on.empty()))
+                        act.choices.push_back({"build", never ? "Build" : "Rebuild"});
+                    act.buttons = true;
+                    return act;
+                }()}});
     }
 
     return o;

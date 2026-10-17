@@ -1239,6 +1239,127 @@ bool set_export(DocJournal& j, Doc& d, const ExportPrefs& e) {
     });
 }
 
+bool set_list_styles(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Doc::Id>& styles) {   // s088
+    const auto* l = d.as<GenList>(list);
+    if (!l) return false;
+    std::vector<Doc::Id> v;
+    for (const auto& s : styles)
+        if (const auto* st = d.as<Style>(s); st && st->kind == StyleKind::Paragraph && std::find(v.begin(), v.end(), s) == v.end())
+            v.push_back(s);
+    if (v == l->from_styles) return false;
+    return j.run("List styles", {list}, [&] {
+        GenList nl = *d.as<GenList>(list);
+        nl.from_styles = v;
+        d.put(list, nl);
+    });
+}
+
+bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<ListEntry>& entries) {   // s087
+    const auto* l = d.as<GenList>(list);
+    if (!l) return false;
+    const auto* st = l->story.empty() ? nullptr : d.as<Story>(l->story);
+    const auto* pg = l->placed_on.empty() ? nullptr : d.as<Page>(l->placed_on);
+    if (!st && !pg) return false;
+    // Level 1's style, and the title.
+    Doc::Id entry_style;
+    std::vector<Para> paras;
+    if (st) {
+        for (const auto& p : st->paras)
+            if (p.text.find('\t') != std::string::npos) { entry_style = p.style; break; }
+        if (entry_style.empty() && !st->paras.empty()) entry_style = st->paras.front().style;
+        if (!st->paras.empty() && !st->paras.front().text.empty() && st->paras.front().text.find('\t') == std::string::npos)
+            paras.push_back(st->paras.front());   // the title
+    } else {
+        for (const auto& s : d.ids_of<Style>())
+            if (d.as<Style>(s)->kind == StyleKind::Paragraph) { entry_style = s; break; }
+    }
+    const auto set_style = [&](int lv) -> std::string {   // the list's own pick for a level, if it's a paragraph style
+        if (lv < 1 || lv > static_cast<int>(l->entry_styles.size())) return {};
+        const auto& id = l->entry_styles[static_cast<std::size_t>(lv - 1)];
+        const auto* s = d.as<Style>(id);
+        return s && s->kind == StyleKind::Paragraph ? id : std::string{};
+    };
+    if (const auto own = set_style(1); !own.empty()) entry_style = own;
+    // s088: each deeper level's style -- the list's, else by name, else to be made.
+    int deepest = 1;
+    for (const auto& e : entries) deepest = std::max(deepest, e.level);
+    const auto* base = d.as<Style>(entry_style);
+    std::vector<Doc::Id> lv_style(static_cast<std::size_t>(deepest + 1));
+    std::vector<int> to_make;
+    lv_style[1] = entry_style;
+    for (int lv = 2; lv <= deepest; ++lv) {
+        auto id = set_style(lv);
+        if (id.empty() && base) {
+            const std::string want = base->name + " " + std::to_string(lv);
+            for (const auto& s : d.ids_of<Style>())
+                if (const auto* x = d.as<Style>(s); x->kind == StyleKind::Paragraph && x->name == want) { id = s; break; }
+        }
+        if (id.empty() && base) to_make.push_back(lv);
+        if (id.empty()) id = entry_style;   // no base to make one from: level 1's (made ones replace it below)
+        lv_style[static_cast<std::size_t>(lv)] = id;
+    }
+    const std::size_t title = paras.size();
+    for (const auto& e : entries)
+        paras.push_back({lv_style[static_cast<std::size_t>(std::clamp(e.level, 1, deepest))], e.text + "\t" + e.folio});
+    if (paras.empty()) paras.push_back({entry_style, ""});
+    const int n = static_cast<int>(entries.size());
+    if (st && to_make.empty() && st->paras == paras && l->built_entries == n) return false;
+    std::vector<Doc::Id> ids{list};
+    if (st) ids.push_back(l->story);
+    return j.run("Build " + l->name, ids, [&]() -> std::vector<Doc::Id> {
+        std::vector<Doc::Id> made;
+        GenList nl = *d.as<GenList>(list);
+        // s088: the deeper levels' styles, made on first need.
+        if (!to_make.empty()) {
+            double pos = 0;
+            for (const auto& s : d.ids_of<Style>()) pos = std::max(pos, d.as<Style>(s)->pos);
+            for (int lv : to_make) {
+                Style ns = *d.as<Style>(entry_style);
+                ns.name = ns.name + " " + std::to_string(lv);
+                ns.pos = ++pos;
+                ns.based_on = entry_style;
+                ns.next.clear();
+                ns.left_indent += 12.0 * (lv - 1);
+                for (auto& t : ns.tabs) t.pos = std::max(0.0, t.pos - 12.0 * (lv - 1));   // stops count from the indent: same place on the page
+                ns.own = {"left_indent", "tabs"};
+                const Doc::Id sid = d.fresh_id("style");
+                d.put(sid, ns);
+                made.push_back(sid);
+                for (std::size_t k = 0; k < entries.size(); ++k)
+                    if (std::clamp(entries[k].level, 1, deepest) == lv) paras[title + k].style = sid;
+                if (nl.entry_styles.size() < static_cast<std::size_t>(lv)) nl.entry_styles.resize(static_cast<std::size_t>(lv));
+                nl.entry_styles[static_cast<std::size_t>(lv - 1)] = sid;
+            }
+        }
+        if (d.as<Story>(nl.story)) {
+            Story s = *d.as<Story>(nl.story);
+            s.paras = paras;
+            d.put(nl.story, s);
+        } else {
+            const Doc::Id sid = d.fresh_id("story");
+            d.put(sid, Story{nl.name, paras});
+            made.push_back(sid);
+            Rect r = margin_rect(d, nl.placed_on);
+            if (r.w < 1 || r.h < 1) { const auto* p = d.as<Page>(nl.placed_on); r = {36, 36, p->w - 72, p->h - 72}; }
+            Frame f;
+            f.owner = nl.placed_on;
+            f.kind = FrameKind::Text;
+            f.x = r.x; f.y = r.y; f.w = r.w; f.h = r.h;
+            double z = 0;
+            for (const auto& o : d.frames_on(nl.placed_on)) z = std::max(z, d.as<Frame>(o)->z);
+            f.z = z + 1;
+            f.story = sid;
+            const Doc::Id fid = d.fresh_id("frame");
+            d.put(fid, f);
+            made.push_back(fid);
+            nl.story = sid;
+        }
+        nl.built_entries = n;
+        d.put(list, nl);
+        return made;
+    });
+}
+
 namespace {
 // s025 / s072: the page's own copy of master item `mf`, made inside a step;
 // its records (the frame, a text frame's story) go on `ids`.
@@ -2363,6 +2484,10 @@ const std::vector<Verb>& verbs() {
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
         {"override_all", [](DocJournal& j, Doc& d) { override_all(j, d, {"page.7", "page.8"}); }},   // s072
         {"remove_all_overrides", [](DocJournal& j, Doc& d) { remove_all_overrides(j, d, d.pages()); }},
+        {"set_list_styles", [](DocJournal& j, Doc& d) { set_list_styles(j, d, "list.1", {"style.2", "style.3"}); }},   // s088
+        {"build_list", [](DocJournal& j, Doc& d) {   // s087
+             build_list(j, d, "list.1", {{"Chapter One", "1"}, {"Chapter Two", "3"}});
+         }},
         {"set_export", [](DocJournal& j, Doc& d) {   // s032
              auto e = d.settings().exp;
              e.marks = true;

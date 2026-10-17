@@ -104,6 +104,15 @@ struct PdfLink {
 };
 std::vector<PdfLink> contents_links(const core::Doc& d, FlowCache& flows);
 
+// s087: a generated list's entries -- each paragraph it gathers, in reading
+// order: its text (tabs as spaces, trimmed) and the folio of the page it
+// lands on. Overset / master paragraphs left out.
+std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& flows, const std::string& list);
+// s087: Build the list (core::doc::build_list) with entries that hold once
+// written -- worked out on a copy until the folios stop moving (a longer
+// contents page can push the headings on), at most a few rounds. One step.
+bool build_list(core::DocJournal& j, core::Doc& d, const std::string& list);
+
 // s086: what an export will give, in words, for the Export sheet -- worked
 // out from the options as they stand (no file written). `print`: Plate (else
 // the screen writer); `profile_name`: the output profile's ("" = none).

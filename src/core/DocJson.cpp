@@ -142,6 +142,8 @@ json to(const Record& r) {
             j = {{"kind", "list"}, {"name", v.name}, {"type", en(v.kind)}, {"pos", v.pos},
                  {"from_styles", v.from_styles}, {"placed_on", v.placed_on},
                  {"built_entries", v.built_entries}};
+            if (!v.story.empty()) j["story"] = v.story;   // s087
+            if (!v.entry_styles.empty()) j["entry_styles"] = v.entry_styles;   // s088
         }
         return j;
     }, r);
@@ -371,6 +373,9 @@ std::optional<Record> from(const json& j) {
         v.from_styles = val(j, "from_styles", std::vector<std::string>{});
         v.placed_on = val<std::string>(j, "placed_on", "");
         v.built_entries = val(j, "built_entries", -1);
+        v.story = val<std::string>(j, "story", "");   // s087
+        if (j.contains("entry_styles") && j.at("entry_styles").is_array())   // s088
+            for (const auto& e : j.at("entry_styles")) v.entry_styles.push_back(e.is_string() ? e.get<std::string>() : std::string{});
         return v;
     }
     return std::nullopt;   // a kind this Composix doesn't know: skipped

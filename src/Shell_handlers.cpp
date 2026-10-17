@@ -981,6 +981,17 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             } else if (choice == "delete") {
                 for (const auto& id : m_inspected) did = core::doc::delete_swatch(m_journal, m_doc, id) || did;
             }
+        } else if (key == "list_add" || key == "list_remove") {   // s088: the styles a list gathers
+            for (const auto& id : m_inspected)
+                if (const auto* l = m_doc.as<core::GenList>(id)) {
+                    auto v = l->from_styles;
+                    if (key == "list_add") v.push_back(choice);
+                    else std::erase(v, choice);
+                    did = core::doc::set_list_styles(m_journal, m_doc, id, v) || did;
+                }
+        } else if (key == "genlist") {   // s087: Build / Rebuild
+            if (choice == "build")
+                for (const auto& id : m_inspected) did = layout::build_list(m_journal, m_doc, id) || did;
         } else if (key == "based_on") {   // s037
             if (m_inspected.size() == 1) did = core::doc::set_style_base(m_journal, m_doc, m_inspected.front(), choice);
         } else if (key == "style_base") {   // s037: Reset to base

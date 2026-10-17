@@ -365,6 +365,8 @@ struct GenList {
     std::vector<std::string> from_styles;   // paragraph style ids gathered
     std::string              placed_on;     // page id, or ""
     int                      built_entries = -1;   // entries when last built; -1 = never
+    std::string              story;         // s087: the story Build writes into ("" = none yet)
+    std::vector<std::string> entry_styles;  // s088: the style each level's entries take (by level; "" / missing = found or made)
     bool operator==(const GenList&) const = default;
 };
 
@@ -794,6 +796,28 @@ void    guide_begin(DocJournal& j, Doc& d, const Doc::Id& guide);
 void    guide_set(DocJournal& j, Doc& d, const Doc::Id& guide, double pos);
 void    guide_remove_in_gesture(DocJournal& j, Doc& d, const Doc::Id& guide);
 bool    remove_guide(DocJournal& j, Doc& d, const Doc::Id& guide);
+
+// s087: Build a generated list -- its entries (title, folio), worked out by
+// the layout (where each gathered paragraph lands), written into the list's
+// story: the story's first paragraph stays when it's a title (text, no
+// tab); then one paragraph per entry, "title<TAB>folio", in the entry style
+// (the story's first paragraph with a tab, else its first). A list with no
+// story gets one, in a new text frame across its page's margins (no page:
+// nothing). Sets built_entries. One step; no change -> no step.
+// s088: each entry has its level (1 = the list's first style); a level's
+// style is the list's entry_styles[level-1] when it's a paragraph style,
+// else level 1's as found, else (deeper levels) a style "<level 1's name>
+// <n>" -- found by name or made: based on level 1's, indented 12 pt a level
+// (its tab stops pulled in as much, so they stay put on the page).
+struct ListEntry {
+    std::string text, folio;
+    int         level = 1;
+    bool operator==(const ListEntry&) const = default;
+};
+bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<ListEntry>& entries);
+// s088: the paragraph styles a list gathers, in level order (others dropped,
+// each once). One step; the same -> no step.
+bool set_list_styles(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Doc::Id>& styles);
 
 // The verb table the selftest walks: every verb, runnable on the sample.
 struct Verb {

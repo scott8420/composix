@@ -326,6 +326,34 @@ SheetAt sheet_of(const std::vector<Sheet>& sheets, const std::string& page) {   
     return {};
 }
 
+std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& flows, const std::string& list) {   // s087
+    std::vector<core::doc::ListEntry> out;
+    const auto* l = d.as<core::GenList>(list);
+    if (!l || l->from_styles.empty()) return out;
+    for (const auto& m : list_marks(d, flows, *l, {})) out.push_back({trimmed(m.title), d.folio(m.page), m.level});
+    return out;
+}
+
+bool build_list(core::DocJournal& j, core::Doc& d, const std::string& list) {   // s087
+    if (!d.as<core::GenList>(list)) return false;
+    std::vector<core::doc::ListEntry> entries;
+    {
+        FlowCache f0;
+        entries = list_entries(d, f0, list);
+    }
+    for (int round = 0; round < 4; ++round) {   // settle: write on a copy, look again
+        core::Doc scratch = d;
+        core::DocJournal sj{scratch};
+        scratch.set_door([&sj] { return sj.open(); });
+        core::doc::build_list(sj, scratch, list, entries);
+        FlowCache fs;
+        auto again = list_entries(scratch, fs, list);
+        if (again == entries) break;
+        entries = std::move(again);
+    }
+    return core::doc::build_list(j, d, list, entries);
+}
+
 ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOptions& opt, bool print,
                              const std::string& profile_name) {   // s086
     ExportSummary s;

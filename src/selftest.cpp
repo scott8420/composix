@@ -2747,6 +2747,112 @@ int main() {
     }
 
     {
+        std::cout << "\n-- list levels (s088) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto n0 = j.size();
+        check("styles: Caption as level 2, one step", core::doc::set_list_styles(j, d, "list.1", {"style.2", "style.3"}) &&
+                                                      j.size() == n0 + 1 &&
+                                                      d.as<core::GenList>("list.1")->from_styles == std::vector<std::string>{"style.2", "style.3"});
+        check("styles: the same -- no step", !core::doc::set_list_styles(j, d, "list.1", {"style.2", "style.3"}));
+        check("styles: a character style or a repeat is dropped", core::doc::set_list_styles(j, d, "list.1", {"style.2", "style.5", "style.2"}) &&
+                                                                  d.as<core::GenList>("list.1")->from_styles == std::vector<std::string>{"style.2"});
+        j.undo();
+        L::FlowCache flows;
+        const auto en = L::list_entries(d, flows, "list.1");
+        bool fig = false;
+        for (const auto& e : en) fig = fig || (e.level == 2 && e.text.find("Fig. 1") == 0);
+        check("entries: the caption at level 2, in reading order", en.size() == 3 && en[0].level == 1 && en[1].level == 1 && fig &&
+                                                                   en[2].level == 2);
+        const auto entry1 = d.as<core::Story>("story.9")->paras.at(1).style;
+        const auto styles0 = d.ids_of<core::Style>().size();
+        check("build: one step, with a level-2 style made", L::build_list(j, d, "list.1") && d.ids_of<core::Style>().size() == styles0 + 1);
+        const auto& ps = d.as<core::Story>("story.9")->paras;
+        const auto* l = d.as<core::GenList>("list.1");
+        const auto* s2 = l->entry_styles.size() == 2 ? d.as<core::Style>(l->entry_styles[1]) : nullptr;
+        const auto* s1 = d.as<core::Style>(entry1);
+        check("build: the new style -- named for level 2, based on level 1, indented", s2 && s2->name == s1->name + " 2" &&
+              s2->based_on == entry1 && s2->left_indent == s1->left_indent + 12 && s2->own == std::vector<std::string>{"left_indent", "tabs"} &&
+              !s2->tabs.empty() && s2->tabs.front().pos == s1->tabs.front().pos - 12);
+        check("build: level 2's entry in it, level 1's as before", ps.size() == 4 && ps[1].style == entry1 && ps[3].style == l->entry_styles[1] &&
+                                                                   ps[3].text.find("Fig. 1") == 0);
+        const auto styles1 = d.ids_of<core::Style>().size();
+        check("rebuild: the style found again, not made twice", !L::build_list(j, d, "list.1") && d.ids_of<core::Style>().size() == styles1);
+        j.undo();
+        check("undo: the made style goes too", d.ids_of<core::Style>().size() == styles0);
+        j.redo();
+        // Bookmarks nest the same way.
+        L::FlowCache f2;
+        const auto bm = L::bookmarks(d, f2, {"list.1"});
+        check("bookmarks: the caption under its chapter", bm.size() == 3 && bm[2].level == 2);
+        std::string err;
+        core::Doc f;
+        check("json: the levels' styles kept", core::from_json(f, core::to_json(d), &err) &&
+                                               f.as<core::GenList>("list.1")->entry_styles == d.as<core::GenList>("list.1")->entry_styles, err);
+    }
+
+    {
+        std::cout << "\n-- list build (s087) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        L::FlowCache flows;
+        const auto en = L::list_entries(d, flows, "list.1");
+        check("entries: each heading and its folio", en == std::vector<core::doc::ListEntry>{{"Chapter One", "1"}, {"Chapter Two", "3"}});
+        const auto before = d.as<core::Story>("story.9")->paras;
+        const auto n0 = j.size();
+        check("build: one step", L::build_list(j, d, "list.1") && j.size() == n0 + 1);
+        const auto& ps = d.as<core::Story>("story.9")->paras;
+        check("build: the title kept, an entry a heading, in the entry style",
+              ps.size() == 3 && ps[0].text == "Contents" && ps[1].text == "Chapter One\t1" && ps[2].text == "Chapter Two\t3" &&
+              ps[1].style == before[1].style && ps[2].style == before[1].style);
+        check("build: counted -- not stale", d.as<core::GenList>("list.1")->built_entries == 2);
+        check("build: again, no change -- no step", !L::build_list(j, d, "list.1") && j.size() == n0 + 1);
+        L::FlowCache f2;
+        check("build: the contents links still found", L::contents_links(d, f2).size() == 2);
+        j.undo();
+        check("build: undone -- as it was", d.as<core::Story>("story.9")->paras == before);
+        j.redo();
+        // A Contents list with no story: Build makes one, in a frame on its page.
+        {
+            auto l = *d.as<core::GenList>("list.1");
+            l.story.clear();
+            l.placed_on = d.pages()[0];
+            core::Doc e = d;
+            core::DocJournal je{e};
+            e.set_door([&je] { return je.open(); });
+            e.put("list.1", l);
+            const auto frames0 = e.frames_on(l.placed_on).size();
+            check("build, no story: made", L::build_list(je, e, "list.1") && je.size() == 1);
+            const auto* nl = e.as<core::GenList>("list.1");
+            const auto* ns = nl ? e.as<core::Story>(nl->story) : nullptr;
+            check("build, no story: a story with the entries, in a new frame on its page",
+                  ns && ns->paras.size() == 2 && ns->paras[0].text == "Chapter One\t1" &&
+                  e.frames_on(l.placed_on).size() == frames0 + 1);
+            const auto mr = core::margin_rect(e, l.placed_on);
+            bool inside = false;
+            for (const auto& fid : e.frames_on(l.placed_on))
+                if (const auto* f = e.as<core::Frame>(fid); f->story == nl->story)
+                    inside = mr.w < 1 || (f->x == mr.x && f->y == mr.y && f->w == mr.w);
+            check("build, no story: the frame across the margins", inside);
+            je.undo();
+            check("build, no story: undone -- story and frame gone", e.as<core::GenList>("list.1")->story.empty() &&
+                                                                    e.frames_on(l.placed_on).size() == frames0);
+            l.placed_on.clear();
+            e.put("list.1", l);
+            check("build: no story, no page -- nothing", !L::build_list(je, e, "list.1"));
+        }
+        std::string err;
+        core::Doc f;
+        check("json: the list's story kept", core::from_json(f, core::to_json(d), &err) && f.as<core::GenList>("list.1")->story == "story.9", err);
+    }
+
+    {
         std::cout << "\n-- export summary (s086) --\n";
         namespace L = composix::layout;
         core::Doc d;

@@ -234,7 +234,7 @@ void load_sample(Doc& d) {
 
     // ── generated lists ─────────────────────────────────────────────────────
     // The contents list was built before Chapter Two existed: stale.
-    d.put("list.1", GenList{"Table of Contents", ListKind::Contents, 1, {"style.2"}, pg[2], 1});
+    d.put("list.1", GenList{"Table of Contents", ListKind::Contents, 1, {"style.2"}, pg[2], 1, "story.9"});
     d.put("list.2", GenList{"Bibliography", ListKind::Bibliography, 2, {"style.4"}, pg[15], 3});
 }
 
