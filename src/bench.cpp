@@ -17,6 +17,7 @@
 #include "layout/Export.hpp"
 #include "layout/Flow.hpp"
 #include "layout/Preflight.hpp"
+#include "layout/ThumbStore.hpp"
 
 #include <cairo.h>
 
@@ -211,6 +212,32 @@ int main(int argc, char** argv) {
         row("thumbnails, every page (decoding)", cold, 1, std::to_string(pages.size()) + " pages, pictures read");
         row("thumbnails, every page (decoded)", median(t), 3,
             std::to_string(median(t) / std::max<std::size_t>(1, pages.size())).substr(0, 4) + " ms a page");
+    }
+
+    {
+        // s103: the same tiles on the worker, as the app draws them. The UI
+        // thread's share: the keys (look) and one snapshot (flush).
+        const int th = 120, tw = std::max(1, static_cast<int>(120 * d.settings().trim_w / d.settings().trim_h));
+        std::vector<double> ui, snap, worker;
+        for (int r = 0; r < 3; ++r) {
+            L::ThumbStore st;
+            st.set_threaded(true);
+            double tf = 0;
+            const double tl = ms_of([&] {
+                for (const auto& p : pages) (void)st.look(d, flows, img, p, p, tw, th, false);
+            });
+            const double tw0 = ms_of([&] {
+                tf = ms_of([&] { (void)st.flush(d, flows, img); });
+                st.wait_idle();
+            });
+            (void)st.collect();
+            ui.push_back(tl + tf);
+            snap.push_back(tf);
+            worker.push_back(tw0 - tf);
+        }
+        row("thumbnails on the worker: UI thread", median(ui), 3, "keys + one snapshot");
+        row("  the snapshot (records + layout)", median(snap), 3, "once a revision");
+        row("  the worker, every page", median(worker), 3, "off the UI thread");
     }
 
     // ── what runs on every change in the app ───────────────────────────────

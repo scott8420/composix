@@ -192,6 +192,8 @@ public:
     // s102: flows made from a copy with the same records as `d` (loaded on a
     // worker, then copied in): keep them, now as `d`'s.
     void rebase(const core::Doc& d) { m_rev = d.revision(); }
+    // s103: what it holds was laid out for this revision of `d`.
+    bool fresh_for(const core::Doc& d) const { return m_rev == d.revision(); }
 
 private:
     void check(const core::Doc& d);

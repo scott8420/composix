@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <glib-object.h>
 
 namespace composix::views {
 
@@ -140,6 +141,38 @@ void page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Thumb& t, double 
 
 void set_page_painter(PagePainter p) { painter() = std::move(p); }
 
+// s103: the pages a widget has painted; when a newer picture of one comes
+// back from the worker, the widget is drawn again. Kept on the widget itself
+// (GObject data), so it goes when the widget does.
+ThumbsReady& thumbs_ready() {
+    static ThumbsReady s;
+    return s;
+}
+
+void watch_page(Gtk::Widget& wd, const std::string& id) {
+    struct Watch {
+        std::set<std::string> ids;
+        sigc::connection      conn;
+    };
+    if (id.empty()) return;
+    auto* obj = G_OBJECT(wd.gobj());
+    auto* w = static_cast<Watch*>(g_object_get_data(obj, "cx-thumb-watch"));
+    if (!w) {
+        w = new Watch;
+        Gtk::Widget* wp = &wd;
+        w->conn = thumbs_ready().connect([wp, w](const std::set<std::string>& ready) {
+            for (const auto& i : w->ids)
+                if (ready.count(i)) { wp->queue_draw(); return; }
+        });
+        g_object_set_data_full(obj, "cx-thumb-watch", w, [](gpointer p) {
+            auto* x = static_cast<Watch*>(p);
+            x->conn.disconnect();
+            delete x;
+        });
+    }
+    w->ids.insert(id);
+}
+
 void paint_spread(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W, int H,
                   const std::vector<core::Thumb>& pages) {
     if (pages.empty()) return;
@@ -156,7 +189,10 @@ void paint_spread(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int 
         cr->set_source_rgb(1, 1, 1);
         cr->rectangle(x, y, pw, ph);
         cr->fill();
-        if (!t.page.empty() && painter()) painter()(cr, t.page, x, y, pw, ph, false);
+        if (!t.page.empty() && painter()) {
+            watch_page(wd, t.page);
+            painter()(cr, t.page, x, y, pw, ph, false);
+        }
         x += pw;
     }
     // The outline round the spread, and the spine between.
@@ -172,7 +208,6 @@ void paint_spread(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int 
         cr->line_to(sx + 0.5, y + h);
         cr->stroke();
     }
-    (void)wd;
 }
 
 void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W, int H,
@@ -184,6 +219,7 @@ void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W
 
     switch (t.kind) {
     case K::Page:
+        watch_page(wd, t.page);
         page(cr, t, W, H, large);
         break;
 

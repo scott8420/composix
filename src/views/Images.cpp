@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <map>
+#include <mutex>
 
 namespace composix::views::images {
 
@@ -57,6 +58,10 @@ Cairo::RefPtr<Cairo::ImageSurface> to_surface(const Glib::RefPtr<Gdk::Pixbuf>& p
 
 Cairo::RefPtr<Cairo::ImageSurface> get(const std::string& path, std::int64_t stamp, int* w, int* h) {
     if (path.empty()) return {};
+    // s103: the thumbnail worker reads pictures too. One at a time (a decode
+    // holds the other thread up -- once per file).
+    static std::mutex mx;
+    std::lock_guard lk(mx);
     auto& e = cache()[path];
     if (e.stamp != stamp) {
         e = Entry{};

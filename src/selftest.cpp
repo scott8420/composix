@@ -12,9 +12,11 @@
 //   cmake --build build --target composix_selftest && ./build/composix_selftest
 
 #include "core/Doc.hpp"
+#include "layout/ThumbStore.hpp"
 #include "layout/Flow.hpp"
 #include "layout/Preflight.hpp"
 #include "layout/ColorReport.hpp"
+#include <cstring>
 #include <plate/plate.hpp>
 #include "layout/Export.hpp"
 #include "layout/BigBook.hpp"
@@ -5719,6 +5721,111 @@ int main() {
         check("a handed-over layout is the document's own (kept, not flowed again)", after == before && after->lines == nlines && nlines > 0);
     }
 
+
+    {
+        std::cout << "\n-- thumbnails on a worker (s103) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        L::FlowCache flows;
+        const L::ImageSource none;
+        const auto same_pixels = [](const L::Surface& a, const L::Surface& b) {
+            if (!a || !b) return false;
+            const int w = cairo_image_surface_get_width(a.get()), h = cairo_image_surface_get_height(a.get());
+            if (w != cairo_image_surface_get_width(b.get()) || h != cairo_image_surface_get_height(b.get())) return false;
+            const int st = cairo_image_surface_get_stride(a.get());
+            return std::memcmp(cairo_image_surface_get_data(a.get()), cairo_image_surface_get_data(b.get()),
+                               static_cast<std::size_t>(st) * h) == 0;
+        };
+        // What the UI thread would draw, page 5, 120 x 180.
+        const auto here = L::render_thumb(d, flows, "page.5", 120, 180, false, none);
+
+        L::ThumbStore st;
+        st.set_threaded(true);
+        auto lk = st.look(d, flows, none, "page.5", "page.5", 120, 180, false);
+        check("worker: a miss is asked for, nothing to paint yet", !lk.surf && !lk.current && st.asking());
+        (void)st.look(d, flows, none, "page.5", "page.5", 120, 180, false);
+        (void)st.look(d, flows, none, "page.6", "page.6", 120, 180, false);
+        check("worker: asked once per page", st.flush(d, flows, none) && !st.asking());
+        st.wait_idle();
+        auto ids = st.collect();
+        lk = st.look(d, flows, none, "page.5", "page.5", 120, 180, false);
+        check("worker: back, and current", ids.count("page.5") && ids.count("page.6") && lk.current && st.renders() == 2);
+        check("worker: draws the page exactly as the UI thread", same_pixels(lk.surf, here));
+        check("worker: one snapshot for the revision", st.snapshots() == 1);
+
+        // A change: the page's last picture shows (stale) until the new one.
+        core::doc::edit_text(j, d, "story.1", {1, 0}, {1, 0}, "Then ", "Typing", "");
+        lk = st.look(d, flows, none, "page.5", "page.5", 120, 180, false);
+        check("worker: after a change the old picture stands in", lk.surf && !lk.current);
+        // The worker held: two asks for the page, the document changed between.
+        st.hold(true);
+        (void)st.flush(d, flows, none);
+        const auto old_key = L::page_key(d, flows, "page.5");
+        const auto at_old = L::render_thumb(d, flows, "page.5", 120, 180, false, none);
+        core::doc::edit_text(j, d, "story.1", {1, 0}, {1, 0}, "And ", "Typing", "");
+        (void)st.look(d, flows, none, "page.5", "page.5", 120, 180, false);
+        (void)st.flush(d, flows, none);
+        const int before = st.renders();
+        st.hold(false);
+        st.wait_idle();
+        ids = st.collect();
+        lk = st.look(d, flows, none, "page.5", "page.5", 120, 180, false);
+        check("worker: the newest ask wins, the older is dropped", st.renders() == before + 1 && lk.current);
+        check("worker: drawn from the newest revision", !same_pixels(lk.surf, at_old) &&
+                                                       same_pixels(lk.surf, L::render_thumb(d, flows, "page.5", 120, 180, false, none)));
+        // The snapshot is the document as it was: changes after it don't reach it.
+        st.hold(true);
+        core::doc::edit_text(j, d, "story.1", {1, 0}, {1, 0}, "So ", "Typing", "");
+        (void)st.look(d, flows, none, "page.5", "page.5", 120, 180, false);
+        (void)st.flush(d, flows, none);
+        const auto snap_pic = L::render_thumb(d, flows, "page.5", 120, 180, false, none);
+        j.undo();   // the live document moves on while the worker waits
+        st.hold(false);
+        st.wait_idle();
+        (void)st.collect();
+        lk = st.look(d, flows, none, "page.5", "page.5", 120, 180, false);
+        check("worker: reads its snapshot, not the live document", !lk.current && lk.surf && same_pixels(lk.surf, snap_pic));
+        (void)old_key;
+        // Another document: what was asked doesn't come back.
+        st.hold(true);
+        (void)st.flush(d, flows, none);
+        st.forget();
+        st.hold(false);
+        st.wait_idle();
+        check("worker: forget drops what's queued and finished", st.collect().empty() && st.kept() == 0 && st.bytes() == 0);
+
+        // The cap: the least recently looked at go first.
+        L::ThumbStore lru(3 * 120 * 180 * 4);
+        for (const char* p : {"page.1", "page.2", "page.3", "page.4"})
+            (void)lru.look(d, flows, none, p, p, 120, 180, false);
+        check("cap: kept within its bytes", lru.bytes() <= lru.cap() && lru.kept() == 3);
+        check("cap: the oldest let go, the newest kept",
+              lru.look(d, flows, none, "page.4", "page.4", 120, 180, false).current && lru.renders() == 4);
+        (void)lru.look(d, flows, none, "page.1", "page.1", 120, 180, false);
+        check("cap: a page let go is drawn again when looked at", lru.renders() == 5);
+    }
+
+    {
+        std::cout << "\n-- a long book's tiles off the UI thread (s103) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        (void)L::load_big_book(d, {.pages = 40});
+        L::FlowCache flows;
+        L::flow_all(d, flows, {});
+        L::ThumbStore st;
+        st.set_threaded(true);
+        const auto pages = d.pages();
+        for (const auto& p : pages) (void)st.look(d, flows, {}, p, p, 80, 120, false);
+        (void)st.flush(d, flows, {});
+        st.wait_idle();
+        const auto ids = st.collect();
+        bool all = ids.size() == pages.size();
+        for (const auto& p : pages) all = all && st.look(d, flows, {}, p, p, 80, 120, false).current;
+        check("every page of a 40-page book drawn on the worker, current", all && st.renders() == static_cast<int>(pages.size()));
+    }
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

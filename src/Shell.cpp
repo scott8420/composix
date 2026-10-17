@@ -32,6 +32,7 @@ Shell::Shell()
     // a change is flowed once, not once a view.
     m_canvas_view.canvas().share_flows(m_pf_flows);
     m_page_thumbs.share_flows(m_pf_flows);
+    m_page_thumbs.set_threaded(true);   // s103: drawn on a worker, a stand-in until ready
 }
 
 Shell::~Shell() {

@@ -250,7 +250,7 @@ private:
     mutable layout::FlowCache        m_pf_flows;
 
     // s020: the page / master tiles drawn for real, kept per page.
-    views::PageThumbs  m_page_thumbs{m_doc, [this](const core::Asset& a) { return core::resolve_asset(a, m_project_dir); }};
+    views::PageThumbs  m_page_thumbs{m_doc, [this] { return m_project_dir; }};
 
     // s033: the story editor -- words without the page.
     views::StoryEditor m_story_ed{m_doc, m_journal};

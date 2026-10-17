@@ -22,7 +22,7 @@ inline constexpr int kMaxPx = 2048;
 std::optional<core::ImageFile> probe(const std::string& path);
 
 // The decoded picture as a cairo surface, ready to paint (null: missing /
-// unreadable). Re-decoded when the file's time changes. `w` / `h` get the
+// unreadable). Re-decoded when the file's time changes. Any thread (s103). `w` / `h` get the
 // file's own size (pixels; a vector's own size).
 Cairo::RefPtr<Cairo::ImageSurface> get(const std::string& path, std::int64_t stamp,
                                        int* w = nullptr, int* h = nullptr);

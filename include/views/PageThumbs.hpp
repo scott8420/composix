@@ -8,53 +8,65 @@
 // its frames' and their pictures', the styles and swatches, and the lines
 // of text set on it) -- so typing on page 3 redraws page 3 (and any page the
 // text reflows onto), not the book.
+//
+// s103: drawn on a worker thread (layout::ThumbStore) from a snapshot of the
+// document. Until a page's picture is ready, the tile shows its last one
+// (scaled), or the stand-in type bars; when it comes back the tiles that
+// show that page are drawn again (views::thumbs_ready).
 #include "core/Doc.hpp"
 #include "layout/Export.hpp"
 #include "layout/Flow.hpp"
+#include "layout/ThumbStore.hpp"
 
 #include <cairomm/context.h>
 #include <cairomm/surface.h>
+#include <glibmm/dispatcher.h>
+#include <sigc++/connection.h>
 
-#include <cstdint>
+#include <atomic>
+#include <chrono>
 #include <functional>
-#include <map>
 #include <string>
 
 namespace composix::views {
 
 class PageThumbs {
 public:
-    // `resolve` turns an asset into the file to read (the project folder
-    // is the shell's to know).
-    PageThumbs(const core::Doc& d, std::function<std::string(const core::Asset&)> resolve);
+    // `project_dir` -- the folder assets resolve in (the shell's to know);
+    // read on the UI thread, handed to the worker by value.
+    PageThumbs(const core::Doc& d, std::function<std::string()> project_dir);
+    ~PageThumbs();
 
     // Draw page / master `id` into the paper at x, y, w, h (user units of
-    // `cr`). False if `id` isn't a page or master.
+    // `cr`). False if `id` isn't a page or master, or (threaded) nothing of
+    // it is drawn yet -- the caller's stand-in shows.
     bool paint(const Cairo::RefPtr<Cairo::Context>& cr, const std::string& id, double x, double y, double w, double h,
                bool large);
     // Another document (or folder): nothing kept carries over.
     void forget();
     // s101: flow through this cache (the shell's, shared with the canvas).
     void share_flows(layout::FlowCache& f) { m_flowp = &f; }
-    int renders() const { return m_renders; }   // how many times a page was drawn (tests, logs)
+    // s103: on the worker (the app); off, a miss is drawn on the spot.
+    void set_threaded(bool on) { m_store.set_threaded(on); }
+    int renders() const { return m_store.renders(); }   // pages drawn (tests, logs)
+    const layout::ThumbStore& store() const { return m_store; }
 
 private:
-    struct Entry {
-        layout::PageKey                    key;
-        Cairo::RefPtr<Cairo::ImageSurface> surf;
-        int                                pw = 0, ph = 0;
-    };
-    const layout::PageKey& key_of(const std::string& id);
-    Cairo::RefPtr<Cairo::ImageSurface> render(const std::string& id, double pt_w, double pt_h, int pw, int ph, bool large);
+    layout::ImageSource images() const;
+    void                on_worker();   // UI thread, from the dispatcher
 
-    const core::Doc&                                 m_doc;
-    std::function<std::string(const core::Asset&)>  m_resolve;
-    layout::FlowCache                                m_own_flows;
-    layout::FlowCache*                               m_flowp = &m_own_flows;   // s101: the shell's, shared
-    std::map<std::string, Entry>                     m_cache;   // id ("|L" for the preview's size)
-    std::map<std::string, layout::PageKey>           m_keys;    // this revision's
-    std::uint64_t                                    m_keys_rev = ~0ull;
-    int                                              m_renders = 0;
+    const core::Doc&             m_doc;
+    std::function<std::string()> m_dir;
+    layout::FlowCache            m_own_flows;
+    layout::FlowCache*           m_flowp = &m_own_flows;   // s101: the shell's, shared
+    Glib::Dispatcher             m_disp;                   // before m_store: the worker may emit until it stops
+    std::atomic<bool>            m_signalled = false;
+    // The log's line: a run of pictures, from the first ask to the last back.
+    std::chrono::steady_clock::time_point m_run_t0{};
+    int                          m_run_n = 0;
+    bool                         m_running = false;
+    sigc::connection             m_flush_conn, m_collect_conn;
+    layout::ThumbStore           m_store;
 };
 
 }  // namespace composix::views
