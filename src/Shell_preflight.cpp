@@ -60,6 +60,7 @@ void Shell::update_preflight() {  // helper
     o.missing_profile = m_profile_missing;   // s032
     o.profile_path = m_pdf_print ? m_pdf_profile : std::string{};   // s053
     o.convert = m_pdf_convert || o.standard == 1;
+    o.perceptual = m_pdf_perceptual;   // s085
     const std::string dir = m_project_dir;
     o.link = [dir](const core::Asset& a) { return core::link_status(a, dir); };
     m_issues = layout::preflight_issues(m_doc, m_pf_flows, o);

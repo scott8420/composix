@@ -326,6 +326,47 @@ SheetAt sheet_of(const std::vector<Sheet>& sheets, const std::string& page) {   
     return {};
 }
 
+ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOptions& opt, bool print,
+                             const std::string& profile_name) {   // s086
+    ExportSummary s;
+    std::vector<std::string> pages;
+    for (const auto& p : d.pages())
+        if (opt.only.empty() || std::find(opt.only.begin(), opt.only.end(), p) != opt.only.end()) pages.push_back(p);
+    const auto sheets = pdf_sheets(d, pages, opt.spreads);
+    s.pages = static_cast<int>(pages.size());
+    s.sheets = static_cast<int>(sheets.size());
+    const auto units = d.settings().units;
+    s.size = std::to_string(s.pages) + (s.pages == 1 ? " page" : " pages");
+    if (s.sheets != s.pages) s.size += " \u2192 " + std::to_string(s.sheets) + (s.sheets == 1 ? " sheet" : " sheets");
+    if (!pages.empty()) {
+        const auto* pg = d.as<core::Page>(pages.front());
+        s.size += " \u00b7 " + core::size_text(pg->w, pg->h, 0, units);
+        if (opt.bleed && d.settings().bleed > 0) s.size += " + " + core::length_text(d.settings().bleed, units) + " bleed";
+    }
+    const bool x = print && opt.standard != plate_standard::None;
+    if (!print) {
+        s.colour = "RGB, for screen";
+    } else if (profile_name.empty()) {
+        s.colour = "Device CMYK \u2014 RGB left as it is";
+    } else {
+        const bool conv = opt.convert || opt.standard == plate_standard::X1a;
+        s.colour = std::string(x ? (opt.standard == plate_standard::X1a ? "PDF/X-1a \u00b7 " : "PDF/X-4 \u00b7 ") : "") +
+                   "CMYK for " + profile_name + " \u2014 " +
+                   (conv ? std::string("RGB converted, ") + (opt.perceptual ? "perceptual" : "relative colorimetric")
+                         : std::string("RGB kept, tagged"));
+    }
+    if (opt.bookmarks && !pages.empty()) s.bookmarks = static_cast<int>(bookmarks(d, flows, opt.mark_lists, pages).size());
+    if (!x)
+        for (const auto& l : contents_links(d, flows))
+            if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.links;
+    const auto n = [](int k, const char* one, const char* many) {
+        return (k == 0 ? std::string("No") : std::to_string(k)) + " " + (k == 1 ? one : many);
+    };
+    s.nav = n(s.bookmarks, "bookmark", "bookmarks") + " \u00b7 " +
+            (x ? std::string("contents links left out (PDF/X)") : n(s.links, "contents link", "contents links"));
+    return s;
+}
+
 namespace {
 std::vector<std::string> pages_to_export(const core::Doc& d, const PdfOptions& opt) {
     if (opt.only.empty()) return d.pages();

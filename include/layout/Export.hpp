@@ -104,6 +104,18 @@ struct PdfLink {
 };
 std::vector<PdfLink> contents_links(const core::Doc& d, FlowCache& flows);
 
+// s086: what an export will give, in words, for the Export sheet -- worked
+// out from the options as they stand (no file written). `print`: Plate (else
+// the screen writer); `profile_name`: the output profile's ("" = none).
+struct ExportSummary {
+    int pages = 0, sheets = 0, bookmarks = 0, links = 0;
+    std::string size;     // "16 pages \u2192 9 sheets \u00b7 6 \u00d7 9 in + 0.125 in bleed"
+    std::string colour;   // "CMYK for FOGRA39 \u2014 RGB converted, perceptual"
+    std::string nav;      // "5 bookmarks \u00b7 2 contents links"
+};
+ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOptions& opt, bool print,
+                             const std::string& profile_name);
+
 struct PdfReport {
     int                      pages = 0;
     std::vector<std::string> warnings;   // overset text, missing / low-res images

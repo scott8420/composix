@@ -32,6 +32,7 @@ struct PreflightOpts {
     // or PDF/X-1a) -- then an RGB colour that shifts noticeably is a warning.
     std::string profile_path;
     bool        convert = false;
+    bool        perceptual = false;   // s085: the export's intent
     // A picture's link (the shell knows the folder); unset: links not checked.
     std::function<core::LinkStatus(const core::Asset&)> link;
 };

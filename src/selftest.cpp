@@ -2034,6 +2034,13 @@ int main() {
                 return false;
             }());
             check("report: a bad profile -> not ok, why", !L::color_report(d, "/nonexistent.icc", false, blue_px).ok);
+            {   // s085: the intent asked for, and the proof made with it.
+                const auto per = L::color_report(d, icc, true, blue_px);
+                const L::ColorRow* psky = nullptr;
+                for (const auto& r : per.rows) if (r.id == "swatch.4") psky = &r;
+                check("report: proofed perceptually when asked, saying so", per.ok && per.perceptual && !rep.perceptual && psky &&
+                                                                            psky->before == 0x0000ff);
+            }
             // Preflight: converting, the shifting colour is a warning; not converting, nothing.
             L::FlowCache flows;
             L::PreflightOpts o;
@@ -2737,6 +2744,95 @@ int main() {
         const auto* it = o.find("doc");
         check("inspector: the document's settings in Document", it && it->segment == core::Segment::Document && !it->fields.empty() &&
                                                                it->fields[0].text && it->fields[0].value == "The Outer Ports");
+    }
+
+    {
+        std::cout << "\n-- export summary (s086) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::load_sample(d);
+        L::FlowCache flows;
+        L::PdfOptions o;
+        const auto has = [](const std::string& hay, const std::string& n) { return hay.find(n) != std::string::npos; };
+        auto s = L::export_summary(d, flows, o, true, "");
+        check("summary: every page, its size and bleed", s.pages == 16 && s.sheets == 16 && has(s.size, "16 pages · ") &&
+                                                         !has(s.size, "sheet") && has(s.size, "bleed"));
+        check("summary: no profile -- device CMYK", has(s.colour, "Device CMYK"));
+        check("summary: the bookmarks and links counted", s.bookmarks == 2 && s.links == 2 && s.nav == "2 bookmarks · 2 contents links");
+        o.spreads = true;
+        s = L::export_summary(d, flows, o, true, "");
+        check("summary: spreads -- pages to sheets", s.sheets == 9 && has(s.size, "16 pages → 9 sheets"));
+        o.only = core::pages_in_range(d, "ii-7");
+        o.mark_lists = {"list.1", "list.2"};
+        s = L::export_summary(d, flows, o, true, "");
+        check("summary: a range -- its pages, its sheets, its bookmarks", s.pages == 10 && s.sheets == 5 && s.bookmarks == 2);
+        o.only.clear();
+        s = L::export_summary(d, flows, o, true, "");
+        check("summary: both lists -- the group and its entries", s.bookmarks == 6);
+        o.convert = true;
+        o.perceptual = true;
+        s = L::export_summary(d, flows, o, true, "Press");
+        check("summary: converting, and how", s.colour == "CMYK for Press — RGB converted, perceptual");
+        o.convert = false;
+        o.standard = L::plate_standard::X4;
+        s = L::export_summary(d, flows, o, true, "Press");
+        check("summary: PDF/X-4 -- RGB kept, links left out", has(s.colour, "PDF/X-4 · ") && has(s.colour, "RGB kept") &&
+                                                              s.links == 0 && has(s.nav, "left out"));
+        o.standard = L::plate_standard::X1a;
+        check("summary: X-1a always converts", has(L::export_summary(d, flows, o, true, "Press").colour, "RGB converted"));
+        o.standard = L::plate_standard::None;
+        o.bookmarks = false;
+        s = L::export_summary(d, flows, o, false, "Press");
+        check("summary: screen is RGB; bookmarks off -- none", s.colour == "RGB, for screen" && s.bookmarks == 0 &&
+                                                              has(s.nav, "No bookmarks"));
+    }
+
+    {
+        std::cout << "\n-- export intent (s085) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto e = d.settings().exp;
+        check("intent: relative colorimetric by default", !e.perceptual);
+        e.perceptual = true;
+        const auto n0 = j.size();
+        check("intent: kept with the document, one step", core::doc::set_export(j, d, e) && j.size() == n0 + 1 && d.settings().exp.perceptual);
+        j.undo();
+        check("intent: undone", !d.settings().exp.perceptual);
+        j.redo();
+        std::string err;
+        core::Doc f;
+        check("json: the intent kept", core::from_json(f, core::to_json(d), &err) && f.settings().exp.perceptual, err);
+        core::Doc g, h;
+        core::load_sample(g);
+        const auto js = core::to_json(g);
+        check("json: relative -> no key, read back relative", js.find("\"perceptual\"") == std::string::npos &&
+                                                              core::from_json(h, js, &err) && !h.settings().exp.perceptual, err);
+        // The export says which intent it converted with (when a profile is installed).
+        std::string icc;
+        for (const auto& p : plate::find_cmyk_profiles({"/usr/share/color/icc", "/usr/share/ghostscript/iccprofiles",
+                                                        "/usr/share/texlive/texmf-dist/tex/generic/colorprofiles",
+                                                        "/usr/share/texmf/tex/generic/colorprofiles"}))
+            if (icc.empty()) icc = p.path;
+        if (icc.empty()) {
+            std::cout << "  (skip intent export: no CMYK profile installed)\n";
+        } else {
+            namespace L = composix::layout;
+            const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+            L::PdfOptions opt;
+            opt.profile = icc;
+            opt.convert = true;
+            opt.perceptual = true;
+            opt.only = core::pages_in_range(d, "iii");
+            L::PdfReport rep;
+            const auto out = (std::filesystem::temp_directory_path() / "composix_selftest_s085.pdf").string();
+            const bool ok = L::export_print_pdf(d, out, opt, src, &rep, &err);
+            check("export: the report names the intent", ok && !rep.warnings.empty() &&
+                                                         rep.warnings.front().find("perceptual") != std::string::npos, err);
+            std::error_code ec;
+            std::filesystem::remove(out, ec);
+        }
     }
 
     {

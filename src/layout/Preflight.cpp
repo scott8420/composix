@@ -27,13 +27,15 @@ std::string page_of(const core::Doc& d, const core::Frame& f) {
 
 // s053: one proof kept, rebuilt only when the profile changes (Preflight
 // runs on every edit; reading a press profile is not free).
-const plate::Proof* proof_for(const std::string& path) {
+const plate::Proof* proof_for(const std::string& path, bool perceptual) {
     static std::unique_ptr<plate::Proof> p;
     static std::string at;
-    if (!p || at != path) {
+    static bool pc = false;
+    if (!p || at != path || pc != perceptual) {   // s085: per intent
         p = std::make_unique<plate::Proof>();
         at = path;
-        if (!p->load(path)) p.reset();
+        pc = perceptual;
+        if (!p->load(path, perceptual)) p.reset();
     }
     return p.get();
 }
@@ -114,7 +116,7 @@ std::vector<Issue> preflight_issues(const core::Doc& d, FlowCache& flows, const 
         if (s->model == core::ColorModel::Spot)
             out.push_back({L::Info, "spot", "Spot colour " + (s->spot.empty() ? s->name : s->spot) + " \u2014 its own plate", pg, fid});
         if (s->model == core::ColorModel::RGB && o.convert && !o.profile_path.empty()) {   // s053
-            if (const auto* pf = proof_for(o.profile_path); pf) {
+            if (const auto* pf = proof_for(o.profile_path, o.perceptual); pf) {
                 const auto c = [](double v) { return static_cast<std::uint8_t>(std::lround(std::clamp(v, 0.0, 255.0))); };
                 const auto r = pf->check(c(s->v[0]), c(s->v[1]), c(s->v[2]));
                 if (shift_of(r.delta_e) >= Shift::Noticeable) {

@@ -150,6 +150,11 @@ void Shell::on_color_report() {  // handler
         }
         row->append(*lab);
         row->append(*m_report_profile);
+        // s085: the intent -- Export's when the report opens; pick the other to compare.
+        m_report_intent = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Relative colorimetric", "Perceptual"}));
+        m_report_intent->set_name("report.intent");
+        m_report_intent->set_tooltip_text("Starts as Export's intent; change it here to compare (Export keeps its own)");
+        row->append(*m_report_intent);
         box->append(*row);
         m_report_note = Gtk::make_managed<Gtk::Label>();
         m_report_note->set_name("report.note");
@@ -172,16 +177,18 @@ void Shell::on_color_report() {  // handler
         });
         scroll->set_child(*m_report_list);
         box->append(*scroll);
-        auto legend = Gtk::make_managed<Gtk::Label>(
-            "Before → after: as Export converts (relative colorimetric, black point compensation). "
-            "ΔE 2000 under 2 holds; 5 is plain side by side; 10 and up is out of the press’s gamut. "
-            "A picture is judged on a sample of its pixels.");
+        auto legend = Gtk::make_managed<Gtk::Label>();
+        m_report_legend = legend;
+        legend->set_name("report.legend");
         legend->add_css_class("cx-export-note");
         legend->set_wrap(true);
         legend->set_xalign(0);
         box->append(*legend);
         w.set_child(*box);
         m_report_profile->property_selected().signal_changed().connect([this] {
+            if (!m_report_quiet) report_refresh();
+        });
+        m_report_intent->property_selected().signal_changed().connect([this] {
             if (!m_report_quiet) report_refresh();
         });
     }
@@ -199,6 +206,8 @@ void Shell::on_color_report() {  // handler
     m_report_profile->set_model(Gtk::StringList::create(names));
     m_report_profile->set_selected(at);
     m_report_profile->set_sensitive(!m_report_paths.empty());
+    m_report_intent->set_selected(m_pdf_perceptual ? 1u : 0u);   // s085: Export's
+    m_report_intent->set_sensitive(!m_report_paths.empty());
     m_report_quiet = false;
     report_refresh();
     m_report->set_transient_for(*this);
@@ -208,6 +217,14 @@ void Shell::on_color_report() {  // handler
 void Shell::report_refresh() {  // helper
     if (!m_report) return;
     while (auto* c = m_report_list->get_first_child()) m_report_list->remove(*c);
+    const bool perceptual = m_report_intent && m_report_intent->get_selected() == 1;   // s085
+    if (m_report_legend)
+        m_report_legend->set_text(std::string("Before → after: converted ") +
+                                  (perceptual ? "perceptually (everything eased into the press’s range)"
+                                              : "relative colorimetric, black point compensation") +
+                                  (perceptual == m_pdf_perceptual ? " — as Export will." : " — not Export’s intent; Export PDF sets that.") +
+                                  " ΔE 2000 under 2 holds; 5 is plain side by side; 10 and up is out of the press’s gamut. "
+                                  "A picture is judged on a sample of its pixels.");
     m_report_pages.clear();
     m_report_frames.clear();
     const auto i = m_report_profile->get_selected();
@@ -217,7 +234,7 @@ void Shell::report_refresh() {  // helper
         return;
     }
     const std::string dir = m_project_dir;
-    const auto rep = layout::color_report(m_doc, m_report_paths[i], false,
+    const auto rep = layout::color_report(m_doc, m_report_paths[i], perceptual,
                                           [dir](const core::Asset& a, int& w, int& h, std::vector<std::uint8_t>& rgb) {
                                               return asset_pixels(a, dir, w, h, rgb);
                                           });

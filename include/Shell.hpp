@@ -251,6 +251,7 @@ private:
 
     // s013: the Export PDF sheet, and its choices for the session.
     std::unique_ptr<Gtk::Window>     m_export;
+    std::function<void()>            m_export_sync;   // s086: the sheet's live state and summary card
     // s058: the swatch editor -- the swatch being made / changed, its sheet's widgets.
     // s064: the start screen's recent-project cards and their folders.
     Gtk::FlowBox*                    m_start_grid = nullptr;
@@ -281,6 +282,8 @@ private:
     std::unique_ptr<Gtk::Window>     m_report;
     Gtk::DropDown*                   m_report_profile = nullptr;
     Gtk::Label*                      m_report_note = nullptr;
+    Gtk::DropDown*                   m_report_intent = nullptr;   // s085: the report's intent (starts as Export's)
+    Gtk::Label*                      m_report_legend = nullptr;
     Gtk::ListBox*                    m_report_list = nullptr;
     std::vector<std::string>         m_report_paths, m_report_pages, m_report_frames;
     bool                             m_report_quiet = false;
@@ -292,6 +295,7 @@ private:
     bool                             m_pdf_bookmarks = true;
     std::vector<std::string>         m_pdf_mark_lists;      // s082: the lists the outline comes from (empty = default)
     bool                             m_pdf_spreads = false; // s084: facing pages as one sheet
+    bool                             m_pdf_perceptual = false;   // s085: the conversion's intent
     std::string                      m_pdf_range;   // s077: as typed, "" = all
     int                              m_pdf_standard = 0;   // s017: 0 none, 1 PDF/X-1a, 2 PDF/X-4
     std::vector<std::string>         m_profiles;           // the sheet's list, as paths

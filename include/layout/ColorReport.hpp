@@ -47,6 +47,7 @@ struct ColorReportResult {
     std::string           profile_name;
     std::vector<ColorRow> rows;          // swatches (by name), then pictures (page order)
     int worst_count = 0;                 // rows Noticeable or Large
+    bool perceptual = false;             // s085: the intent it was proofed with
 };
 
 // A picture's pixels for the proof: RGB bytes, w * h * 3, any size (the

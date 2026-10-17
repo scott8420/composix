@@ -291,7 +291,8 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
     }
     if (report && doc.has_output_profile())
         report->warnings.insert(report->warnings.begin(), "Output profile: " + doc.output_profile_name() +
-                                                              (doc.convert_rgb() ? " (RGB converted)" : ""));
+                                                              (doc.convert_rgb() ? std::string(" (RGB converted, ") + (opt.perceptual ? "perceptual)" : "relative colorimetric)")
+                                                                                 : std::string()));   // s085
     if (report && doc.standard() != plate::Standard::None)
         report->warnings.insert(report->warnings.begin(), std::string("Standard: ") +
                                                               plate::Document::standard_name(doc.standard()) +

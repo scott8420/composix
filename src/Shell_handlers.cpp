@@ -199,8 +199,44 @@ std::vector<std::string> Shell::profile_dirs() const {  // helper
     return dirs;
 }
 
-// ── PDF (s013) ─────────────────────────────────────────────────────────────
-// A small sheet: Bleed, Crop marks, then Export... names the file.
+// ── PDF (s013; regrouped s086) ─────────────────────────────────────────────
+// The Export sheet: Print / Screen across the top; Pages and Navigation on
+// the left, Colour on the right; a card saying what you'll get (pages ->
+// sheets, the colour path, bookmarks and links), live; Export... names the
+// file. A bad page range says why in the card and holds Export back.
+namespace {
+// A descendant by name (the sheet's widgets live in nested boxes).
+Gtk::Widget* find_named(Gtk::Widget* w, const Glib::ustring& name) {
+    if (!w) return nullptr;
+    if (w->get_name() == name) return w;
+    for (auto* c = w->get_first_child(); c; c = c->get_next_sibling())
+        if (auto* f = find_named(c, name)) return f;
+    return nullptr;
+}
+template <class W> W* named(Gtk::Widget* root, const char* name) { return dynamic_cast<W*>(find_named(root, name)); }
+
+Gtk::Label* section_head(const char* text, const char* name) {
+    auto* h = Gtk::make_managed<Gtk::Label>(text);
+    h->set_name(name);
+    h->add_css_class("cx-export-head");
+    h->set_xalign(0);
+    return h;
+}
+// A labelled row: the label in a fixed column, then the control.
+Gtk::Box* field_row(const char* label, Gtk::Widget& w, const char* name) {
+    auto* row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    row->set_name(name);
+    auto* l = Gtk::make_managed<Gtk::Label>(label);
+    l->add_css_class("cx-field-label");
+    l->set_xalign(0);
+    l->set_size_request(64, -1);
+    row->append(*l);
+    w.set_hexpand(true);
+    row->append(w);
+    return row;
+}
+}  // namespace
+
 void Shell::on_export_pdf() {  // handler
     if (!m_export) {
         m_export = std::make_unique<Gtk::Window>();
@@ -210,40 +246,77 @@ void Shell::on_export_pdf() {  // handler
         w.set_modal(true);
         w.set_resizable(false);
         w.set_hide_on_close(true);
-        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 10);
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 12);
         box->set_name("export.box");
         box->add_css_class("cx-export");
-        box->set_margin(18);
+        box->set_margin(20);
+        box->set_size_request(580, -1);   // steady as the controls change
+        // Title, and the writer: Print (Plate -- page boxes, CMYK, subset
+        // fonts) or Screen (cairo -- RGB), as a switch (s015).
+        auto top = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 12);
         auto head = Gtk::make_managed<Gtk::Label>("Export PDF");
         head->set_name("export.title");
         head->add_css_class("cx-export-title");
         head->set_xalign(0);
-        box->append(*head);
-        auto bleed = Gtk::make_managed<Gtk::CheckButton>();
-        bleed->set_name("export.bleed");
-        auto marks = Gtk::make_managed<Gtk::CheckButton>("Crop marks");
-        marks->set_name("export.marks");
-        // s015: which writer. Print = Plate (page boxes, CMYK, subset fonts);
-        // Screen = cairo (RGB, for viewing and sharing).
-        auto print = Gtk::make_managed<Gtk::CheckButton>("For print \u2014 trim / bleed boxes, CMYK colour");
+        head->set_hexpand(true);
+        top->append(*head);
+        auto mode = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+        mode->add_css_class("linked");
+        auto print = Gtk::make_managed<Gtk::ToggleButton>("For print");
         print->set_name("export.print");
-        auto screen = Gtk::make_managed<Gtk::CheckButton>("For screen \u2014 RGB");
+        print->set_tooltip_text("Trim and bleed boxes, CMYK colour, fonts subset -- for a printer");
+        auto screen = Gtk::make_managed<Gtk::ToggleButton>("For screen");
         screen->set_name("export.screen");
+        screen->set_tooltip_text("RGB, for reading on a screen and sharing");
         screen->set_group(*print);
-        box->append(*print);
-        box->append(*screen);
-        box->append(*bleed);
-        box->append(*marks);
-        // s084: facing pages as one sheet each.
-        auto spreads = Gtk::make_managed<Gtk::CheckButton>("Spreads \u2014 facing pages as one sheet");
+        mode->append(*print);
+        mode->append(*screen);
+        top->append(*mode);
+        box->append(*top);
+
+        auto cols = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 28);
+        cols->set_name("export.cols");
+        cols->set_homogeneous(true);
+        auto left = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+        auto right = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+        cols->append(*left);
+        cols->append(*right);
+        box->append(*cols);
+
+        // ── Pages (s054 range, s084 spreads, s013 bleed / marks).
+        left->append(*section_head("PAGES", "export.head.pages"));
+        auto range = Gtk::make_managed<Gtk::Entry>();
+        range->set_name("export.range");
+        range->set_placeholder_text("All — or iii-7, 12");
+        range->set_tooltip_text("Folios as the pages show them; commas between, a hyphen for a run");
+        left->append(*field_row("Pages", *range, "export.range.row"));
+        auto spreads = Gtk::make_managed<Gtk::CheckButton>("Facing pages as spreads");
         spreads->set_name("export.spreads");
         spreads->set_tooltip_text("Each spread one wide page, bleed on its outer edges; for viewing a book as it opens");
-        box->append(*spreads);
-        // s016: the press's profile (CMYK output profiles found on this
-        // computer), and whether RGB is converted to it.
-        auto prow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
-        auto plab = Gtk::make_managed<Gtk::Label>("Output profile");
-        plab->add_css_class("cx-field-label");
+        left->append(*spreads);
+        auto bleed = Gtk::make_managed<Gtk::CheckButton>();
+        bleed->set_name("export.bleed");
+        left->append(*bleed);
+        auto marks = Gtk::make_managed<Gtk::CheckButton>("Crop marks");
+        marks->set_name("export.marks");
+        left->append(*marks);
+
+        // ── Navigation (s054 / s082 bookmarks; s083 links are automatic).
+        auto navh = section_head("NAVIGATION", "export.head.nav");
+        navh->set_margin_top(8);
+        left->append(*navh);
+        auto marksb = Gtk::make_managed<Gtk::CheckButton>("Bookmarks from");
+        marksb->set_name("export.bookmarks");
+        marksb->set_tooltip_text("The entries these lists gather, as the PDF's outline -- the first list on top, each further one under its name");
+        marksb->set_active(true);
+        left->append(*marksb);
+        auto lists = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 2);   // refilled on each open
+        lists->set_name("export.lists");
+        lists->set_margin_start(24);
+        left->append(*lists);
+
+        // ── Colour (s016 profile / convert, s085 intent, s017 standard).
+        right->append(*section_head("COLOUR", "export.head.colour"));
         std::vector<Glib::ustring> names{"None (device CMYK)"};
         m_profiles.clear();
         m_profile_names.clear();
@@ -254,77 +327,49 @@ void Shell::on_export_pdf() {  // handler
         }
         auto prof = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(names));
         prof->set_name("export.profile");
-        prof->set_hexpand(true);
         {   // a long list: type to find one
             GtkExpression* ex = gtk_property_expression_new(GTK_TYPE_STRING_OBJECT, nullptr, "string");
             gtk_drop_down_set_expression(prof->gobj(), ex);
             gtk_expression_unref(ex);
             gtk_drop_down_set_enable_search(prof->gobj(), TRUE);
         }
-        prow->append(*plab);
-        prow->append(*prof);
-        box->append(*prow);
-        auto conv = Gtk::make_managed<Gtk::CheckButton>("Convert RGB images and colours to CMYK");
+        prof->set_tooltip_text("The press's CMYK profile -- from ~/.local/share/icc and the system's colour folders");
+        right->append(*field_row("Profile", *prof, "export.profile.row"));
+        auto conv = Gtk::make_managed<Gtk::CheckButton>("Convert RGB to the press's CMYK");
         conv->set_name("export.convert");
         conv->set_sensitive(false);   // until a profile is picked
-        box->append(*conv);
-        // s017: PDF/X conformance. Needs the press's profile (the output
-        // intent); X-1a converts all RGB, so the convert box is forced on.
-        auto srow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
-        srow->set_name("export.standard.row");
-        auto slab = Gtk::make_managed<Gtk::Label>("Standard");
-        slab->add_css_class("cx-field-label");
-        auto stdd = Gtk::make_managed<Gtk::DropDown>(
-            Gtk::StringList::create({"None", "PDF/X-1a:2003 \u2014 CMYK + spot only", "PDF/X-4 \u2014 ICC RGB allowed"}));
+        right->append(*conv);
+        auto intent = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Relative colorimetric", "Perceptual"}));
+        intent->set_name("export.intent");
+        intent->set_sensitive(false);   // until converting
+        intent->set_tooltip_text("Relative colorimetric: colours the press can print stay exact, the rest clip to its edge.\n"
+                                 "Perceptual: everything eases in together, keeping their relations.\nThe Colour Report shows either.");
+        right->append(*field_row("Intent", *intent, "export.intent.row"));
+        auto stdd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"None", "PDF/X-1a:2003", "PDF/X-4"}));
         stdd->set_name("export.standard");
-        stdd->set_hexpand(true);
-        stdd->set_tooltip_text("PDF/X needs an output profile");
-        srow->append(*slab);
-        srow->append(*stdd);
-        box->append(*srow);
-        // Only the print writer manages colour.
-        const auto sync = [print, prof, conv, stdd] {
-            const bool on = print->get_active(), pro = on && prof->get_selected() > 0;
-            prof->set_sensitive(on);
-            stdd->set_sensitive(pro);
-            if (!pro && stdd->get_selected() != 0) stdd->set_selected(0);
-            const bool x1a = pro && stdd->get_selected() == 1;
-            if (x1a) conv->set_active(true);
-            conv->set_sensitive(pro && !x1a);
-        };
-        print->signal_toggled().connect(sync);
-        prof->property_selected().signal_changed().connect(sync);
-        stdd->property_selected().signal_changed().connect(sync);
-        // s054: which pages, and bookmarks from the contents list.
-        auto rrow = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
-        rrow->set_name("export.range.row");
-        auto rlab = Gtk::make_managed<Gtk::Label>("Pages");
-        rlab->add_css_class("cx-field-label");
-        auto range = Gtk::make_managed<Gtk::Entry>();
-        range->set_name("export.range");
-        range->set_hexpand(true);
-        range->set_placeholder_text("All \u2014 or as they're numbered: iii-7, 12");
-        range->set_tooltip_text("Folios as the pages show them; commas between, a hyphen for a run");
-        range->signal_changed().connect([range] { range->remove_css_class("error"); });
-        rrow->append(*rlab);
-        rrow->append(*range);
-        box->append(*rrow);
-        auto marksb = Gtk::make_managed<Gtk::CheckButton>("Bookmarks from");
-        marksb->set_name("export.bookmarks");
-        marksb->set_tooltip_text("The entries these lists gather, as the PDF's outline -- the first list on top, each further one under its name");
-        marksb->set_active(true);
-        box->append(*marksb);
-        // s082: which generated lists -- refilled each time the sheet opens.
-        auto lists = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 2);
-        lists->set_name("export.lists");
-        lists->set_margin_start(24);
-        box->append(*lists);
-        marksb->signal_toggled().connect([marksb, lists] { lists->set_sensitive(marksb->get_active()); });
-        auto note = Gtk::make_managed<Gtk::Label>("Every page at its own size, fonts embedded,\nimages at full resolution.");
-        note->set_name("export.note");
-        note->add_css_class("cx-export-note");
-        note->set_xalign(0);
-        box->append(*note);
+        stdd->set_tooltip_text("PDF/X-1a: CMYK and spot only, no transparency.\nPDF/X-4: ICC-tagged RGB allowed.\nEither needs a profile.");
+        right->append(*field_row("Standard", *stdd, "export.standard.row"));
+        auto screen_note = Gtk::make_managed<Gtk::Label>("A screen PDF is RGB: no profile, no conversion.");
+        screen_note->set_name("export.screen_note");
+        screen_note->add_css_class("cx-export-note");
+        screen_note->set_xalign(0);
+        screen_note->set_wrap(true);
+        right->append(*screen_note);
+
+        // ── What you'll get.
+        auto card = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 3);
+        card->set_name("export.summary");
+        card->add_css_class("cx-export-summary");
+        for (const char* n : {"export.summary.size", "export.summary.colour", "export.summary.nav"}) {
+            auto l = Gtk::make_managed<Gtk::Label>();
+            l->set_name(n);
+            l->set_xalign(0);
+            l->set_wrap(true);
+            card->append(*l);
+        }
+        static_cast<Gtk::Label*>(card->get_first_child())->add_css_class("cx-export-summary-lead");
+        box->append(*card);
+
         auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
         row->set_halign(Gtk::Align::END);
         auto cancel = Gtk::make_managed<Gtk::Button>("Cancel");
@@ -336,6 +381,71 @@ void Shell::on_export_pdf() {  // handler
         row->append(*go);
         box->append(*row);
         w.set_child(*box);
+
+        // Which controls are live, and the card -- after any change.
+        m_export_sync = [this, print, prof, conv, intent, stdd, screen_note, range, spreads, bleed, marksb, lists, card, go] {
+            const bool on = print->get_active(), pro = on && prof->get_selected() > 0;
+            prof->set_sensitive(on);
+            stdd->set_sensitive(pro);
+            if (!pro && stdd->get_selected() != 0) stdd->set_selected(0);
+            const bool x1a = pro && stdd->get_selected() == 1;
+            if (x1a && !conv->get_active()) conv->set_active(true);
+            conv->set_sensitive(pro && !x1a);
+            intent->set_sensitive(pro && conv->get_active());   // s085: only a conversion has an intent
+            screen_note->set_visible(!on);
+            lists->set_sensitive(marksb->get_active());
+            spreads->set_sensitive(m_doc.settings().facing);
+            // The card.
+            auto* size = static_cast<Gtk::Label*>(card->get_first_child());
+            auto* colour = static_cast<Gtk::Label*>(size->get_next_sibling());
+            auto* nav = static_cast<Gtk::Label*>(colour->get_next_sibling());
+            std::string why;
+            const auto only = core::pages_in_range(m_doc, std::string(range->get_text()), &why);
+            if (only.empty()) {
+                range->add_css_class("error");
+                size->set_text(why.empty() ? "No pages" : why);
+                size->add_css_class("cx-export-bad");
+                colour->set_visible(false);
+                nav->set_visible(false);
+                go->set_sensitive(false);
+                return;
+            }
+            range->remove_css_class("error");
+            size->remove_css_class("cx-export-bad");
+            colour->set_visible(true);
+            nav->set_visible(true);
+            go->set_sensitive(true);
+            layout::PdfOptions o;
+            o.only = only.size() == m_doc.pages().size() ? std::vector<std::string>{} : only;
+            o.spreads = spreads->get_active() && m_doc.settings().facing;
+            o.bleed = bleed->get_active();
+            o.convert = conv->get_active();
+            o.perceptual = intent->get_selected() == 1;
+            o.standard = !pro ? layout::plate_standard::None
+                       : stdd->get_selected() == 1 ? layout::plate_standard::X1a
+                       : stdd->get_selected() == 2 ? layout::plate_standard::X4 : layout::plate_standard::None;
+            o.bookmarks = marksb->get_active();
+            bool any = false;
+            for (auto* k = lists->get_first_child(); k; k = k->get_next_sibling())
+                if (auto* cb = dynamic_cast<Gtk::CheckButton*>(k)) {
+                    any = true;
+                    if (cb->get_active()) o.mark_lists.push_back(std::string(k->get_name()).substr(std::string("export.list.").size()));
+                }
+            if (any && o.mark_lists.empty()) o.bookmarks = false;
+            const auto i = prof->get_selected();
+            const std::string pname = (pro && i - 1 < m_profile_names.size()) ? m_profile_names[i - 1] : std::string{};
+            const auto s = layout::export_summary(m_doc, m_pf_flows, o, on, pname);
+            size->set_text(s.size);
+            colour->set_text(s.colour);
+            nav->set_text(s.nav);
+        };
+        const auto sync = [this] { if (m_export_sync) m_export_sync(); };
+        for (auto* t : {static_cast<Gtk::CheckButton*>(spreads), bleed, conv, marksb})
+            t->signal_toggled().connect(sync);
+        print->signal_toggled().connect(sync);
+        for (auto* dd : {prof, intent, stdd}) dd->property_selected().signal_changed().connect(sync);
+        range->signal_changed().connect(sync);
+
         cancel->signal_clicked().connect([this] { m_export->set_visible(false); });
         auto keys = Gtk::EventControllerKey::create();   // Esc closes the sheet
         keys->signal_key_pressed().connect([this](guint kv, guint, Gdk::ModifierType) {
@@ -345,17 +455,13 @@ void Shell::on_export_pdf() {  // handler
         }, false);
         w.add_controller(keys);
         w.set_default_widget(*go);
-        go->signal_clicked().connect([this, bleed, marks, spreads, print, prof, conv, stdd, range, marksb, lists, note] {
-            // s054: the range first -- a bad one keeps the sheet open, saying why.
+        range->signal_activate().connect([go] { if (go->get_sensitive()) go->activate(); });
+        go->signal_clicked().connect([this, bleed, marks, spreads, print, prof, conv, stdd, intent, range, marksb, lists] {
+            // s054: the range first (the card has said why if it's bad).
             {
-                std::string why;
                 const auto text = std::string(range->get_text());
-                auto only = core::pages_in_range(m_doc, text, &why);
-                if (only.empty()) {
-                    range->add_css_class("error");
-                    note->set_text(why.empty() ? "No pages" : why);
-                    return;
-                }
+                auto only = core::pages_in_range(m_doc, text);
+                if (only.empty()) return;
                 m_pdf_only = only.size() == m_doc.pages().size() ? std::vector<std::string>{} : only;
                 m_pdf_bookmarks = marksb->get_active();
                 {   // s082: the ticked lists; none ticked (with lists to tick) = no bookmarks
@@ -378,11 +484,13 @@ void Shell::on_export_pdf() {  // handler
             const auto i = prof->get_selected();
             m_pdf_profile = (i > 0 && i - 1 < m_profiles.size()) ? m_profiles[i - 1] : std::string{};
             m_pdf_convert = conv->get_active();
+            m_pdf_perceptual = intent->get_selected() == 1;   // s085
             m_pdf_standard = (m_pdf_print && !m_pdf_profile.empty()) ? static_cast<int>(stdd->get_selected()) : 0;
             // s032: kept with the document, the profile by its name.
             {
                 core::ExportPrefs e{m_pdf_print, m_pdf_bleed, m_pdf_marks, {}, m_pdf_convert, m_pdf_standard,
-                                    m_pdf_range, m_pdf_bookmarks, m_pdf_mark_lists, m_pdf_spreads};   // s077: the range and bookmarks too; s082 the lists
+                                    m_pdf_range, m_pdf_bookmarks, m_pdf_mark_lists, m_pdf_spreads,
+                                    m_pdf_perceptual};
                 for (std::size_t k = 0; k < m_profiles.size(); ++k)
                     if (m_profiles[k] == m_pdf_profile) e.profile = m_profile_names[k];
                 m_profile_missing.clear();
@@ -403,68 +511,51 @@ void Shell::on_export_pdf() {  // handler
             });
         });
     }
-    // Refresh the sheet's state each time (the bleed comes from the document).
-    auto* box = static_cast<Gtk::Box*>(m_export->get_child());
-    for (auto* c = box->get_first_child(); c; c = c->get_next_sibling()) {
-        if (c->get_name() == "export.note") {   // s054: back from a range's complaint
-            static_cast<Gtk::Label*>(c)->set_text("Every page at its own size, fonts embedded,\nimages at full resolution.");
-        } else if (c->get_name() == "export.bleed") {
-            auto* b = static_cast<Gtk::CheckButton*>(c);
-            b->set_label("Bleed (" + core::length_text(m_doc.settings().bleed, m_doc.settings().units) + ")");
-            b->set_active(m_pdf_bleed);
-        } else if (c->get_name() == "export.marks") {
-            static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_marks);
-        } else if (c->get_name() == "export.spreads") {   // s084: only a book with facing pages has spreads
-            auto* b = static_cast<Gtk::CheckButton*>(c);
-            b->set_sensitive(m_doc.settings().facing);
-            b->set_active(m_pdf_spreads && m_doc.settings().facing);
-        } else if (c->get_name() == "export.print") {
-            static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_print);
-        } else if (c->get_name() == "export.screen") {
-            static_cast<Gtk::CheckButton*>(c)->set_active(!m_pdf_print);
-        } else if (c->get_name() == "export.convert") {
-            static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_convert);
-        } else if (c->get_name() == "export.bookmarks") {   // s077
-            static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_bookmarks);
-        } else if (c->get_name() == "export.lists") {   // s082: the document's lists, as they are now
-            auto* lb = static_cast<Gtk::Box*>(c);
-            while (auto* k = lb->get_first_child()) lb->remove(*k);
-            const auto all = layout::bookmark_lists(m_doc);
-            const auto used = layout::bookmark_lists_used(m_doc, m_pdf_mark_lists);
-            for (const auto& lid : all) {
-                const auto* l = m_doc.as<core::GenList>(lid);
-                auto* cb = Gtk::make_managed<Gtk::CheckButton>(l->name.empty() ? std::string("List") : l->name);
-                cb->set_name("export.list." + lid);
-                cb->set_active(std::find(used.begin(), used.end(), lid) != used.end());
-                lb->append(*cb);
-            }
-            if (all.empty()) {
-                auto* none = Gtk::make_managed<Gtk::Label>("No list gathers headings yet");
-                none->set_name("export.lists.none");
-                none->add_css_class("dim-label");
-                none->set_xalign(0);
-                lb->append(*none);
-            }
-            lb->set_sensitive(m_pdf_bookmarks);
-        } else if (c->get_name() == "export.range.row") {   // s077: the range the document keeps
-            for (auto* k = static_cast<Gtk::Box*>(c)->get_first_child(); k; k = k->get_next_sibling())
-                if (k->get_name() == "export.range") {
-                    static_cast<Gtk::Entry*>(k)->set_text(m_pdf_range);
-                    k->remove_css_class("error");
-                }
-        } else if (auto* row = dynamic_cast<Gtk::Box*>(c)) {   // the profile row: re-pick the session's profile
-            for (auto* k = row->get_first_child(); k; k = k->get_next_sibling())
-                if (k->get_name() == "export.profile") {
-                    auto* dd = static_cast<Gtk::DropDown*>(k);
-                    guint at = 0;
-                    for (std::size_t n = 0; n < m_profiles.size(); ++n)
-                        if (m_profiles[n] == m_pdf_profile) at = static_cast<guint>(n + 1);
-                    dd->set_selected(at);
-                } else if (k->get_name() == "export.standard") {
-                    static_cast<Gtk::DropDown*>(k)->set_selected(static_cast<guint>(m_pdf_standard));
-                }
+    // Refresh the sheet from the document each time it opens.
+    auto* root = m_export->get_child();
+    const auto saved = m_export_sync;
+    m_export_sync = nullptr;   // quiet while filling
+    if (auto* b = named<Gtk::CheckButton>(root, "export.bleed")) {
+        b->set_label("Bleed (" + core::length_text(m_doc.settings().bleed, m_doc.settings().units) + ")");
+        b->set_active(m_pdf_bleed);
+    }
+    if (auto* b = named<Gtk::CheckButton>(root, "export.marks")) b->set_active(m_pdf_marks);
+    if (auto* b = named<Gtk::ToggleButton>(root, "export.print")) b->set_active(m_pdf_print);
+    if (auto* b = named<Gtk::ToggleButton>(root, "export.screen")) b->set_active(!m_pdf_print);
+    if (auto* b = named<Gtk::CheckButton>(root, "export.spreads")) b->set_active(m_pdf_spreads && m_doc.settings().facing);
+    if (auto* b = named<Gtk::CheckButton>(root, "export.bookmarks")) b->set_active(m_pdf_bookmarks);
+    if (auto* e = named<Gtk::Entry>(root, "export.range")) e->set_text(m_pdf_range);
+    if (auto* dd = named<Gtk::DropDown>(root, "export.profile")) {
+        guint at = 0;
+        for (std::size_t n = 0; n < m_profiles.size(); ++n)
+            if (m_profiles[n] == m_pdf_profile) at = static_cast<guint>(n + 1);
+        dd->set_selected(at);
+    }
+    if (auto* b = named<Gtk::CheckButton>(root, "export.convert")) b->set_active(m_pdf_convert);
+    if (auto* dd = named<Gtk::DropDown>(root, "export.standard")) dd->set_selected(static_cast<guint>(m_pdf_standard));
+    if (auto* dd = named<Gtk::DropDown>(root, "export.intent")) dd->set_selected(m_pdf_perceptual ? 1u : 0u);   // s085
+    if (auto* lb = named<Gtk::Box>(root, "export.lists")) {   // s082: the document's lists, as they are now
+        while (auto* k = lb->get_first_child()) lb->remove(*k);
+        const auto all = layout::bookmark_lists(m_doc);
+        const auto used = layout::bookmark_lists_used(m_doc, m_pdf_mark_lists);
+        for (const auto& lid : all) {
+            const auto* l = m_doc.as<core::GenList>(lid);
+            auto* cb = Gtk::make_managed<Gtk::CheckButton>(l->name.empty() ? std::string("List") : l->name);
+            cb->set_name("export.list." + lid);
+            cb->set_active(std::find(used.begin(), used.end(), lid) != used.end());
+            cb->signal_toggled().connect([this] { if (m_export_sync) m_export_sync(); });
+            lb->append(*cb);
+        }
+        if (all.empty()) {
+            auto* none = Gtk::make_managed<Gtk::Label>("No list gathers headings yet");
+            none->set_name("export.lists.none");
+            none->add_css_class("cx-export-note");
+            none->set_xalign(0);
+            lb->append(*none);
         }
     }
+    m_export_sync = saved;
+    if (m_export_sync) m_export_sync();
     m_export->set_transient_for(*this);
     m_export->present();
 }

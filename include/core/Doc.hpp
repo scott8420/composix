@@ -82,6 +82,7 @@ struct ExportPrefs {
     bool        bookmarks = true; // s077: the contents' headings as the PDF's outline
     std::vector<std::string> mark_lists;   // s082: the lists the outline comes from (ids; empty = the first Contents)
     bool        spreads = false;  // s084: facing pages as one sheet each
+    bool        perceptual = false;   // s085: the conversion's intent (else relative colorimetric + BPC)
     bool operator==(const ExportPrefs&) const = default;
 };
 

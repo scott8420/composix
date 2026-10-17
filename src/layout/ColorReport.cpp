@@ -38,6 +38,7 @@ constexpr int kSample = 160;   // a picture is judged on at most this many pixel
 ColorReportResult color_report(const core::Doc& d, const std::string& icc, bool perceptual, const PixelSource& pixels) {
     ColorReportResult out;
     plate::Proof proof;
+    out.perceptual = perceptual;   // s085
     if (!proof.load(icc, perceptual, &out.err)) return out;
     out.ok = true;
     out.profile_name = proof.name();
