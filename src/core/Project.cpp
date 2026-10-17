@@ -69,6 +69,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
         {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500},
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
+        {"dnote_rule_w", 1, 0.1, 6}, {"dnote_space", 1, 0, 36},   // s118
         {"dtrim", 72, 36, 5000}, {"dbleed", 72, 0, 72},   // s066
         {"pic_off", 72, -20000, 20000},   // s076
         {"plindent", 1, 0, 1000}, {"prindent", 1, 0, 1000}, {"pfindent", 1, -1000, 1000}, {"pbefore", 1, 0, 1000}, {"pafter", 1, 0, 1000},   // s093
@@ -203,12 +204,30 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                          : st.note_style == NoteStyle::Symbols ? "* \u2020 \u2021" : "1 2 3",
                               "dnote_style", {{"0", "1 2 3"}, {"1", "i ii iii"}, {"2", "a b c"}, {"3", "* \u2020 \u2021"}}},
                              [&] {   // s117: the most of a column the notes may take
-                                 Field a{"Footnote area", st.note_area >= 100 ? "Whole column" : std::to_string(st.note_area) + "% of the column",
+                                 Field a{"Footnote area", st.note_area >= 100 ? "Whole column" : std::to_string(st.note_area) + "%",
                                          "dnote_area", {{"100", "Whole column"}, {"75", "75%"}, {"50", "50%"}, {"33", "33%"}, {"25", "25%"}}};
                                  a.percent = true;
                                  a.lo = 10;
                                  a.hi = 100;
                                  return a;
+                             }(),
+                             [&] {   // s118: the rule over the notes
+                                 Field r{"Footnote rule", st.note_rule <= 0 ? "None" : st.note_rule >= 100 ? "Full width"
+                                                                                  : std::to_string(st.note_rule) + "%",
+                                         "dnote_rule", {{"0", "None"}, {"25", "25%"}, {"33", "33%"}, {"50", "50%"}, {"100", "Full width"}}};
+                                 r.percent = true;
+                                 r.lo = 0;
+                                 r.hi = 100;
+                                 return r;
+                             }(),
+                             {"Rule weight", pts(st.note_rule_w) + " pt", "dnote_rule_w",
+                              {{"0.25", "0.25 pt"}, {"0.5", "0.5 pt"}, {"0.75", "0.75 pt"}, {"1", "1 pt"}, {"2", "2 pt"}}},
+                             {"Between notes", pts(st.note_space) + " pt", "dnote_space",
+                              {{"0", "0 pt"}, {"2", "2 pt"}, {"3", "3 pt"}, {"4", "4 pt"}, {"6", "6 pt"}}},
+                             [&] {
+                                 Field c{"Continued line", st.note_cont, "dnote_cont", {}};
+                                 c.text = true;
+                                 return c;
                              }(),
                              {"Length", std::to_string(d.pages().size()) + (d.pages().size() == 1 ? " page" : " pages")}};
         mark_typed(f, unit_pt(d.settings().units));
@@ -337,7 +356,11 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         for (const auto& p : s.paras) {
             w += words(p.text);
             ++styles[p.style];
-            if (sample.size() < 60) sample += (sample.empty() ? "" : " ") + p.text;
+            if (sample.size() < 60) {
+                std::string t = p.text;   // s119: footnote marks left out (a private-use glyph on the tile)
+                for (std::size_t i = t.find(kMarkNote); i != std::string::npos; i = t.find(kMarkNote, i)) t.erase(i, 3);
+                sample += (sample.empty() ? "" : " ") + t;
+            }
         }
         std::string top;
         int best = 0;

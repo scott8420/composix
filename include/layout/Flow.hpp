@@ -203,6 +203,9 @@ Caret caret_at(const core::Doc& d, const std::string& story, const StoryFlow& fl
 // s105: the same frame, top and height, without the x -- read off the flow's
 // lines, no text laid out (the contents check asks it per heading).
 Caret caret_line(const core::Doc& d, const std::string& story, const StoryFlow& flow, core::TextPos p);
+// s119: the number paragraph p's k-th note was given where it's set (by
+// page / section numbering, the flow's); 0: not set (overset, not placed).
+int laid_note_number(const StoryFlow& flow, int p, int k);
 // s114: the footnote set at (x, y) in a frame (frame coordinates, as
 // hit_text); nullptr: none there.
 const NotePlace* note_hit(const StoryFlow& flow, const std::string& frame, double x, double y);

@@ -6702,6 +6702,115 @@ int main() {
         }
     }
 
+    {
+        std::cout << "\n-- the foot's look (s118) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("footnote look: one step, the same again none",
+              D::set_note_look(j, d, 50, 1, 3, "(continued)") && !D::set_note_look(j, d, 50, 1, 3, "(continued)") && j.size() >= 1);
+        {
+            core::Doc e;
+            std::string err;
+            check("json: the look kept", core::from_json(e, core::to_json(d), &err) && e.settings().note_rule == 50 &&
+                                         e.settings().note_rule_w == 1 && e.settings().note_space == 3 && e.settings().note_cont == "(continued)", err);
+        }
+        // Two short notes in Chapter One's first paragraph, a long one in its second.
+        D::insert_note(j, d, "story.1", {1, 4}, "The first note.");
+        D::insert_note(j, d, "story.1", {1, 20}, "The second note.");
+        std::string longw;
+        for (int i = 1; i <= 40; ++i) longw += "Clause " + std::to_string(i) + " of the harbour ordinance, as amended, applies to every vessel. ";
+        D::insert_note(j, d, "story.1", {2, 6}, longw);
+        D::set_note_area(j, d, 50);
+        const auto f = L::flow_story(d, "story.1");
+        const L::FrameText* ft = nullptr;
+        for (const auto& x : f.frames) if (x.notes.size() >= 2 && !x.notes.front().cont) { ft = &x; break; }
+        check("two notes at a foot", ft != nullptr);
+        if (ft) {
+            const auto& a = ft->notes[0];
+            const auto& b = ft->notes[1];
+            check("3 pt between notes", std::abs(b.y - (a.y + a.h) - 3) < 0.01, std::to_string(b.y - (a.y + a.h)));
+            bool rule = false;
+            for (const auto& r : L::paragraph_rules(d, "story.1", f, ft->frame))
+                if (r.r.y < a.y && r.r.y > a.y - 20 && std::abs(r.r.w - a.w * 0.5) < 0.01 && std::abs(r.r.h - 1) < 0.01) rule = true;
+            check("the rule: half the column, 1 pt", rule);
+            D::set_note_look(j, d, 0, 1, 3, "(continued)");
+            const auto f0 = L::flow_story(d, "story.1");
+            bool none = true;
+            for (const auto& x : f0.frames)
+                if (x.frame == ft->frame)
+                    for (const auto& r : L::paragraph_rules(d, "story.1", f0, x.frame))
+                        if (r.r.y < x.notes.front().y && r.r.y > x.notes.front().y - 20) none = false;
+            check("rule None: no rule over the notes", none);
+            D::set_note_look(j, d, 50, 1, 3, "(continued)");
+        }
+        // The continued line: the last line of a cut piece, and nothing overlaps.
+        bool cut_seen = false, cont_line = false, inside = true, clear = true;
+        for (const auto& x : f.frames) {
+            const auto* fr = d.as<core::Frame>(x.frame);
+            for (const auto& np : x.notes) {
+                inside = inside && np.y >= -0.01 && np.y + np.h <= fr->h - std::max(0.0, fr->inset.bottom) + 0.01;
+                for (const auto& l : x.lines) if (l.col == np.col && l.y + l.h > np.y + 0.01) clear = false;
+                if (np.to >= 0) cut_seen = true;
+            }
+            std::string last;
+            L::visit_lines(d, "story.1", f, x.frame, [&](const L::LineVisit& v) {
+                if (v.from != -4) return;
+                const char* t = pango_layout_get_text(v.line->layout);
+                last = std::string(t + v.line->start_index, static_cast<std::size_t>(v.line->length));
+                if (last == "(continued)") cont_line = true;
+            });
+        }
+        check("a cut note ends in the continued line", cut_seen && cont_line);
+        check("with the look: inside the frames, no line into the notes", inside && clear);
+        D::set_note_look(j, d, 33, 0.5, 0, "");
+        const auto g = L::flow_story(d, "story.1");
+        bool any = false;
+        for (const auto& x : g.frames)
+            L::visit_lines(d, "story.1", g, x.frame, [&](const L::LineVisit& v) {
+                if (v.from != -4) return;
+                const char* t = pango_layout_get_text(v.line->layout);
+                if (std::string(t + v.line->start_index, static_cast<std::size_t>(v.line->length)) == "(continued)") any = true;
+            });
+        check("no continued line set: none drawn", !any);
+    }
+
+    {
+        std::cout << "\n-- the Story Editor's numbers (s119) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::insert_note(j, d, "story.1", {1, 4}, "On page 1.");   // the sample's own is on Chapter Two's page
+        L::FlowCache flows;
+        check("through the story: 1 and 2", L::laid_note_number(flows.get(d, "story.1"), 1, 0) == 1 &&
+                                            L::laid_note_number(flows.get(d, "story.1"), 5, 0) == 2);
+        D::set_note_numbering(j, d, core::NoteRestart::Page, core::NoteStyle::Arabic);
+        check("by page: each the first on its page -- 1 and 1", L::laid_note_number(flows.get(d, "story.1"), 1, 0) == 1 &&
+                                                               L::laid_note_number(flows.get(d, "story.1"), 5, 0) == 1);
+        check("a note not there: 0", L::laid_note_number(flows.get(d, "story.1"), 1, 3) == 0);
+        {
+            const auto o = core::project(d, "");
+            const auto* it = o.find("story.1");
+            check("the story's tile: no footnote mark in its words", it && it->thumb.sample.find(core::kMarkNote) == std::string::npos &&
+                                                                     it->thumb.sample.find("The harbor") != std::string::npos);
+        }
+        // A note running on: its run-on piece isn't another number.
+        std::string longw;
+        for (int i = 1; i <= 40; ++i) longw += "Clause " + std::to_string(i) + " applies to every vessel entering the port. ";
+        D::set_note_text(j, d, "story.1", 1, 0, longw);
+        D::set_note_area(j, d, 25);
+        int pieces = 0;
+        for (const auto& ft : flows.get(d, "story.1").frames)
+            for (const auto& n : ft.notes) pieces += n.para == 1 && n.k == 0;
+        check("running on: the number of its first piece", pieces >= 2 && L::laid_note_number(flows.get(d, "story.1"), 1, 0) == 1);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

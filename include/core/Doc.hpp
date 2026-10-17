@@ -124,6 +124,13 @@ struct Settings {
     // s117: the most of a column its footnotes may take, percent (100: all
     // of it). A note that doesn't fit runs on to the next column's foot.
     int         note_area    = 100;
+    // s118: how the foot looks -- the rule over a column's notes (percent of
+    // the column; 0 none) and its weight, the space between notes, and a
+    // line set under a note that runs on ("" none, e.g. "(continued)").
+    int         note_rule    = 33;
+    double      note_rule_w  = 0.5;
+    double      note_space   = 0;
+    std::string note_cont;
     bool operator==(const Settings&) const = default;
 };
 
@@ -651,6 +658,9 @@ bool set_wrap_beneath(DocJournal& j, Doc& d, bool on);
 bool set_note_numbering(DocJournal& j, Doc& d, NoteRestart restart, NoteStyle style);
 // s117: the footnote area, percent of the column (10 .. 100). One step.
 bool set_note_area(DocJournal& j, Doc& d, int percent);
+// s118: the foot's look -- rule (percent 0..100), its weight (0.1..6 pt),
+// space between notes (0..36 pt), the continued line. One step.
+bool set_note_look(DocJournal& j, Doc& d, int rule, double rule_w, double space, const std::string& cont);
 // s073: the document's display unit. One step.
 bool set_units(DocJournal& j, Doc& d, Units u);
 // s078: keep a query under its name (trimmed, not empty; the same name is

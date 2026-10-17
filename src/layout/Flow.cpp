@@ -502,6 +502,7 @@ LayoutPtr note_layout(const core::Doc& d, const core::Story& st, int p, int k, i
     const int end = to < 0 ? n : std::clamp(to, from, n);
     const std::string prefix = from == 0 ? core::note_label(number, d.settings().note_style) + " " : std::string{};   // the number, an en space
     core::Para np{para.style, prefix + words.substr(static_cast<std::size_t>(from), static_cast<std::size_t>(end - from)), {}};
+    if (to >= 0 && !d.settings().note_cont.empty()) np.text += "\n" + d.settings().note_cont;   // s118: cut -- the continued line
     const int shift = static_cast<int>(prefix.size()) - from;
     if (note)
         for (auto r : note->runs) {
@@ -519,6 +520,17 @@ LayoutPtr note_layout(const core::Doc& d, const core::Story& st, int p, int k, i
 
 double note_height(const core::Doc& d, const core::Story& st, int p, int k, int number, double w, int from = 0, int to = -1) {
     auto lay = note_layout(d, st, p, k, number, w, from, to);
+    PangoRectangle ext;
+    pango_layout_get_extents(lay.get(), nullptr, &ext);
+    return ext.height / static_cast<double>(PANGO_SCALE);
+}
+
+// s118: the continued line's height under a cut piece (0: none set).
+double cont_extra(const core::Doc& d, const core::Story& st, int p, double w) {
+    const auto& c = d.settings().note_cont;
+    if (c.empty()) return 0;
+    const auto ns = note_style_of(d, style_of(d, st.paras[static_cast<std::size_t>(p)]));
+    auto lay = make_layout(ns, c.c_str(), static_cast<int>(c.size()), w, false);
     PangoRectangle ext;
     pango_layout_get_extents(lay.get(), nullptr, &ext);
     return ext.height / static_cast<double>(PANGO_SCALE);
@@ -598,12 +610,13 @@ void place_notes(const core::Doc& d, const core::Story& st, const core::Frame& f
     }
     c.carry = std::move(out);
     if (here.empty()) return;
-    double total = 0;
+    const double space = std::max(0.0, d.settings().note_space);   // s118: between notes
+    double total = space * static_cast<double>(here.size() - 1);
     for (const auto& n : here) total += n.h;
     double y = hmax - total;
     for (auto& n : here) {
         n.y = y;
-        y += n.h;
+        y += n.h + space;
         ft.notes.push_back(n);
     }
 }
@@ -630,6 +643,8 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
         // s117: the most the notes may take (the document's footnote area).
         const double area = std::max(1.0, (hmax - top) * std::clamp(d.settings().note_area, 10, 100) / 100.0);
         ColNotes cn;
+        const double space = std::max(0.0, d.settings().note_space);   // s118: between notes
+        int col_notes = 0;                                               // pieces at this foot so far
         if (!c.carry.empty()) {   // notes running on: first, as much as the area holds (a line at least -- on it goes)
             auto runs = std::move(c.carry);
             c.carry.clear();
@@ -637,18 +652,22 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 const auto& r = runs[i];
                 if (r.para < 0 || r.para >= static_cast<int>(st.paras.size())) continue;
                 const double gap = notes_h <= 0 ? note_gap(d, st, r.para) : 0;
+                const double sp = cn.cont.empty() ? 0 : space;   // s118
                 const auto cuts = note_cuts(d, st, r.para, r.k, r.number, cw, r.from);
-                const double room = area - notes_h - gap;
+                const double extra = cont_extra(d, st, r.para, cw);
+                const double room = area - notes_h - gap - sp;
                 std::size_t take = 0;
-                while (take < cuts.size() && cuts[take].h <= room + 0.01) ++take;
+                while (take < cuts.size() && cuts[take].h + (take + 1 < cuts.size() ? extra : 0) <= room + 0.01) ++take;
                 if (take == 0 && cn.cont.empty()) take = 1;
                 if (take == 0 || cuts.empty()) { cn.left.assign(runs.begin() + static_cast<std::ptrdiff_t>(i), runs.end()); break; }
-                NotePlace np{r.para, r.k, r.number, col, cx, 0, cw, cuts[take - 1].h};
+                NotePlace np{r.para, r.k, r.number, col, cx, 0, cw, 0};
                 np.from = r.from;
                 np.cont = true;
-                notes_h += gap + np.h;
+                if (take < cuts.size()) np.to = cuts[take - 1].at;
+                np.h = note_height(d, st, r.para, r.k, r.number, cw, np.from, np.to);
+                notes_h += gap + sp + np.h;
+                ++col_notes;
                 if (take < cuts.size()) {
-                    np.to = cuts[take - 1].at;
                     cn.cont.push_back(np);
                     cn.left.push_back({r.para, r.k, r.number, np.to});
                     cn.left.insert(cn.left.end(), runs.begin() + static_cast<std::ptrdiff_t>(i) + 1, runs.end());
@@ -677,13 +696,16 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             if (!cn.left.empty() || cn.split) return false;
             const double gap = notes_h <= 0 ? note_gap(d, st, p) : 0;
             const double room = std::min(area, hmax - bottom) - notes_h - gap;
-            double sum = 0;
+            const int n_m = static_cast<int>(ms.size());
+            const double spaces = space * (col_notes > 0 ? n_m : n_m - 1);   // s118
+            double sum = spaces;
             for (const auto& m : ms) sum += m.h;
-            if (sum <= room + 0.01) { notes_h += gap + sum; return true; }
+            if (sum <= room + 0.01) { notes_h += gap + sum; col_notes += n_m; return true; }
             const double others = sum - ms.back().h;
             const auto cuts = note_cuts(d, st, p, ms.back().k, ms.back().num, cw, 0);
+            const double extra = cont_extra(d, st, p, cw);
             std::size_t take = 0;
-            while (take < cuts.size() && cuts[take].h <= room - others + 0.01) ++take;
+            while (take < cuts.size() && cuts[take].h + (take + 1 < cuts.size() ? extra : 0) <= room - others + 0.01) ++take;
             // Cut only with two of its lines on each side -- else, as before, the
             // line goes on with its note.
             if (take < cuts.size()) {
@@ -693,12 +715,13 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             const bool first = in_col == 0;   // the column's first line always goes
             if (take == 0 && !first) return false;
             if (take == 0) take = 1;
+            col_notes += n_m;
             if (take >= cuts.size()) { notes_h += gap + sum; return true; }
             cn.split = true;
             cn.sp = p;
             cn.sk = ms.back().k;
             cn.scut = cuts[take - 1].at;
-            notes_h += gap + others + cuts[take - 1].h;
+            notes_h += gap + others + cuts[take - 1].h + extra;
             return true;
         };
         const auto lim = [&] { return hmax - notes_h; };
@@ -1571,7 +1594,11 @@ std::vector<RuleMark> paragraph_rules(const core::Doc& d, const std::string& sto
             if (np->para < 0 || np->para >= static_cast<int>(st->paras.size())) continue;
             const double gap = note_gap(d, *st, np->para);
             // s117: a note run on from before: the rule across the column.
-            out.push_back({{np->x, np->y - gap / 2 - 0.25, np->cont ? np->w : np->w / 3, 0.5}, std::string{}, 1});
+            // s118: else the document's length (none at 0); its weight.
+            const auto& ds = d.settings();
+            const double len = np->cont ? np->w : np->w * std::clamp(ds.note_rule, 0, 100) / 100.0;
+            const double rw = std::clamp(ds.note_rule_w, 0.1, 6.0);
+            if (len > 0) out.push_back({{np->x, np->y - gap / 2 - rw / 2, len, rw}, std::string{}, 1});
         }
     }
     return out;
@@ -1706,6 +1733,13 @@ Caret caret_line(const core::Doc& d, const std::string& story, const StoryFlow& 
         for (const auto& l : ft.lines)
             if (on_line(*st, l, p)) return {true, ft.frame, 0, l.y, l.h};
     return c;
+}
+
+int laid_note_number(const StoryFlow& flow, int p, int k) {   // s119
+    for (const auto& ft : flow.frames)
+        for (const auto& n : ft.notes)
+            if (n.para == p && n.k == k && !n.cont) return n.number;
+    return 0;
 }
 
 const NotePlace* note_hit(const StoryFlow& flow, const std::string& frame, double x, double y) {   // s114

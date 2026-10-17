@@ -1277,6 +1277,24 @@ bool set_note_area(DocJournal& j, Doc& d, int percent) {   // s117
     });
 }
 
+bool set_note_look(DocJournal& j, Doc& d, int rule, double rule_w, double space, const std::string& cont) {   // s118
+    rule = std::clamp(rule, 0, 100);
+    rule_w = std::clamp(rule_w, 0.1, 6.0);
+    space = std::clamp(space, 0.0, 36.0);
+    std::string c = cont;
+    std::replace(c.begin(), c.end(), '\n', ' ');
+    const auto& o = d.settings();
+    if (rule == o.note_rule && rule_w == o.note_rule_w && space == o.note_space && c == o.note_cont) return false;
+    return j.run("Footnote look", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.note_rule = rule;
+        s.note_rule_w = rule_w;
+        s.note_space = space;
+        s.note_cont = c;
+        d.put("doc", s);
+    });
+}
+
 bool save_query(DocJournal& j, Doc& d, SavedQuery q) {   // s078
     const auto a = q.name.find_first_not_of(" \t"), b = q.name.find_last_not_of(" \t");
     if (a == std::string::npos) return false;
@@ -2843,6 +2861,7 @@ const std::vector<Verb>& verbs() {
         {"set_wrap_beneath", [](DocJournal& j, Doc& d) { set_wrap_beneath(j, d, true); }},   // s069
         {"set_note_numbering", [](DocJournal& j, Doc& d) { set_note_numbering(j, d, NoteRestart::Page, NoteStyle::Symbols); }},   // s111
         {"set_note_area", [](DocJournal& j, Doc& d) { set_note_area(j, d, 50); }},   // s117
+        {"set_note_look", [](DocJournal& j, Doc& d) { set_note_look(j, d, 100, 1, 3, "(continued)"); }},   // s118
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
         {"delete_query", [](DocJournal& j, Doc& d) { delete_query(j, d, "Double spaces"); }},

@@ -20,12 +20,17 @@
 
 #include <string>
 
+namespace composix::layout { class FlowCache; }
+
 namespace composix::views {
 
 class StoryEditor : public widgets::Box {
 public:
     // s068: where back / forward before the title go ("Stories").
     void set_nav(const std::string& back_to, const std::string& fwd_to) { m_nav_btns.set(back_to, fwd_to); }
+    // s119: the window's flows (the canvas's): the overset mark and the
+    // notes' numbers as laid out read them, not a flow of their own.
+    void share_flows(layout::FlowCache& f) { m_flowp = &f; }
     StoryEditor(core::Doc& d, core::DocJournal& j);
     ~StoryEditor() override;
 
@@ -42,6 +47,8 @@ public:
     sigc::signal<void()>& signal_edited() { return m_edited; }
 
 private:
+    layout::FlowCache* m_flowp = nullptr;   // s119
+    int note_shown(const core::Story& st, int p, int k);   // s119: its number as laid out (by page / section), else in the story
     void load();
     void mark_overset();
     void show_looks();   // s049: bold / italic / character styles as tags

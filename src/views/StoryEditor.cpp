@@ -158,6 +158,14 @@ StoryEditor::~StoryEditor() {
     m_note_pop.unparent();   // s112
 }
 
+// s119: a note's number as the reader sees it -- the flow's when numbering
+// starts again by page / section (the window's flows), else the story's.
+int StoryEditor::note_shown(const core::Story& st, int p, int k) {
+    if (m_doc.settings().note_restart != core::NoteRestart::Story && m_flowp)
+        if (const int n = layout::laid_note_number(m_flowp->get(m_doc, m_story), p, k); n > 0) return n;
+    return core::note_number(st, p, k);
+}
+
 // s112: each footnote mark as a chip -- its number; its words on hover;
 // click to edit them. The mark's place in the buffer is an anchor (U+FFFC,
 // three bytes like the mark), so places still map byte for byte.
@@ -181,7 +189,7 @@ void StoryEditor::place_note_chips() {
                 anchor = buf->create_child_anchor(it);
             }
             const std::string words = k < static_cast<int>(para.notes.size()) ? para.notes[static_cast<std::size_t>(k)].text : std::string{};
-            const std::string label = core::note_label(core::note_number(*st, p, k), style);
+            const std::string label = core::note_label(note_shown(*st, p, k), style);
             const std::string tip = "Footnote " + label + (words.empty() ? std::string(" (no words yet)") : ": " + words) +
                                     "\nClick to edit its words";
             const auto widgets = anchor->get_widgets();
@@ -215,7 +223,7 @@ void StoryEditor::edit_note(int para, int k, Gtk::Widget& chip) {
     m_note_pop.set_parent(chip);
     auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
     box->set_margin(8);
-    auto head = Gtk::make_managed<Gtk::Label>("Footnote " + core::note_label(core::note_number(*st, para, k), m_doc.settings().note_style));
+    auto head = Gtk::make_managed<Gtk::Label>("Footnote " + core::note_label(note_shown(*st, para, k), m_doc.settings().note_style));
     head->set_xalign(0);
     head->add_css_class("heading");
     auto entry = Gtk::make_managed<NoteWords>();   // s116: several paragraphs
@@ -320,6 +328,8 @@ void StoryEditor::model_changed() {
         auto b = m_view.get_buffer();   // (the slice: chips' anchors included)
         if (b->get_slice(b->begin(), b->end(), true).raw() != shown_text(*m_doc.as<core::Story>(m_story))) load();
         else place_note_chips();   // a note's words changed: its chip's tooltip
+    } else if (m_doc.settings().note_restart != core::NoteRestart::Story) {
+        place_note_chips();   // s119: typed here -- numbers by page may have moved
     }
     mark_overset();
     show_looks();
@@ -381,7 +391,9 @@ void StoryEditor::mark_overset() {
     buf->remove_tag_by_name("overset", buf->begin(), buf->end());
     const auto* st = m_doc.as<core::Story>(m_story);
     if (!st) { m_info.set_text(""); return; }
-    const auto flow = layout::flow_story(m_doc, m_story);
+    // s119: the window's flows when shared (one flow per story, not one per change).
+    const layout::StoryFlow own = m_flowp ? layout::StoryFlow{} : layout::flow_story(m_doc, m_story);
+    const layout::StoryFlow& flow = m_flowp ? m_flowp->get(m_doc, m_story) : own;
     std::size_t words = 0;
     for (const auto& p : st->paras) {
         bool in = false;

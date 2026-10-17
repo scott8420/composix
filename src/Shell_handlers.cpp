@@ -970,6 +970,16 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             if (key == "dnote_restart") r = static_cast<core::NoteRestart>(std::min(v, 2));
             else st = static_cast<core::NoteStyle>(v);
             did = core::doc::set_note_numbering(m_journal, m_doc, r, st);
+        } else if (key == "dnote_rule" || key == "dnote_rule_w" || key == "dnote_space" || key == "dnote_cont") {   // s118
+            const auto& o = m_doc.settings();
+            int rule = o.note_rule;
+            double w = o.note_rule_w, sp = o.note_space;
+            std::string cont = o.note_cont;
+            if (key == "dnote_rule") rule = static_cast<int>(std::lround(std::stod(choice)));
+            else if (key == "dnote_rule_w") w = std::stod(choice);
+            else if (key == "dnote_space") sp = std::stod(choice);
+            else cont = choice;
+            did = core::doc::set_note_look(m_journal, m_doc, rule, w, sp, cont);
         } else if (key == "dnote_area") {   // s117
             did = core::doc::set_note_area(m_journal, m_doc, static_cast<int>(std::lround(std::stod(choice))));
         } else if (key == "dfacing") {
