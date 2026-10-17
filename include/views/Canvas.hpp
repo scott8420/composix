@@ -16,6 +16,7 @@
 // Ideas from Curvz (viewport, handles, gesture shape), code rewritten: ARC s005.
 #include "core/Doc.hpp"
 #include "layout/Flow.hpp"
+#include <plate/plate.hpp>
 #include "widgets/Widgets.hpp"
 
 #include <gdkmm/rgba.h>
@@ -69,6 +70,10 @@ public:
     void set_show_grid(bool on) { m_show_grid = on; queue_draw(); }   // s036: baseline grid
     bool show_grid() const { return m_show_grid; }
     void set_show_hidden(bool on) { m_show_hidden = on; queue_draw(); }   // s059: hidden characters
+    // s099: proof colours -- the pages drawn as this press profile will
+    // print them (null: off).
+    void set_proof(std::shared_ptr<const plate::Proof> p) { m_proof = std::move(p); queue_draw(); }
+    bool proofing() const { return m_proof != nullptr; }
     bool show_hidden() const { return m_show_hidden; }
 
     // s009: images. The project folder resolves relative / embedded files.
@@ -219,6 +224,7 @@ private:
     bool              m_in = false;                // the pointer is over the canvas
     bool              m_snap = true, m_show_guides = true, m_show_grid = false;
     bool              m_show_hidden = false;   // s059
+    std::shared_ptr<const plate::Proof> m_proof;   // s099
     bool              m_follow_keep_zoom = false;   // s061: a follow shows another spread without fitting
     sigc::signal<void(const std::string&)> m_sig_follow;
     sigc::signal<void(const std::string&, const std::vector<std::string>&)> m_sig_master_drop;
@@ -278,6 +284,7 @@ public:
     void set_rulers(bool on);
     void queue_rulers();   // s073: redraw them (the unit changed)
     void set_title(const std::string& t, std::size_t n);
+    void set_proof_label(const std::string& profile);   // s099: "" hides the header's Proof pill
     // s068: where back / forward before the title go ("Document").
     void set_nav(const std::string& back_to, const std::string& fwd_to) { m_nav_btns.set(back_to, fwd_to); }
 
@@ -291,6 +298,7 @@ private:
     std::vector<Gtk::ToggleButton*> m_tool_buttons;
     widgets::Button m_fit;
     widgets::Label  m_zoom;
+    Gtk::Label*     m_proof_pill = nullptr;   // s099
     widgets::Grid   m_grid;     // [corner][top ruler] / [left ruler][canvas]
     Canvas          m_canvas;
     std::unique_ptr<Ruler> m_top, m_left;

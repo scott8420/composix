@@ -252,6 +252,9 @@ public:
     // Pixels (RGB, 3 bytes each) proofed in place; the Delta E of each to `de`
     // when given (n entries).
     void proof_pixels(std::uint8_t* rgb, std::size_t n, std::vector<float>* de = nullptr) const;
+    // s099: the same look, fast -- one 8-bit sRGB -> press -> sRGB transform
+    // (lcms precomputes it), for a whole screen of pixels. No Delta E.
+    void simulate(std::uint8_t* rgb, std::size_t n) const;
 
 private:
     struct Impl;

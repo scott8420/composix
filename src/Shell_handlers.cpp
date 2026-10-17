@@ -508,6 +508,7 @@ void Shell::on_export_pdf() {  // handler
                 if (any) queue_refresh();
             }
             update_preflight();   // s024: the standard's checks follow
+            if (m_proofing) apply_proof(true);   // s099: the proof follows the export's profile and intent
             m_export->set_visible(false);
             auto dialog = Gtk::FileDialog::create();
             dialog->set_title("Export PDF");
@@ -824,6 +825,29 @@ void Shell::on_tiles_open(const std::vector<std::string>& ids) {  // handler
 // An inspector edit is ONE verb across everything the inspector shows -- one
 // journal step, one Ctrl+Z (REQUIREMENTS §10). The views repaint from the
 // document's change (queue_refresh), not from here.
+// s099: the canvas through the press: the export's profile (else the first
+// installed CMYK one) and its intent. Off: back to screen colours.
+bool Shell::apply_proof(bool on) {  // helper
+    m_proofing = false;
+    if (!on) {
+        m_canvas_view.canvas().set_proof(nullptr);
+        m_canvas_view.set_proof_label("");
+        return true;
+    }
+    std::string path = m_pdf_profile, name;
+    for (const auto& p : plate::find_cmyk_profiles(profile_dirs())) {
+        if (path.empty()) path = p.path;
+        if (p.path == path) { name = p.name; break; }
+    }
+    if (path.empty()) return false;
+    auto proof = std::make_shared<plate::Proof>();
+    if (!proof->load(path, m_pdf_perceptual)) return false;
+    m_proofing = true;
+    m_canvas_view.canvas().set_proof(proof);
+    m_canvas_view.set_proof_label(name.empty() ? proof->name() : name);
+    return true;
+}
+
 // s097: Links & Assets, nothing picked -- the files in assets/ nothing uses
 // (not the document, not what undo could bring back), and a way to clear
 // them: the desktop's Trash, so a mistake can be fetched back.

@@ -266,7 +266,40 @@ void Canvas::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
         m_vp.fit();
         Glib::signal_idle().connect_once([this] { m_sig_zoom.emit(); });
     }
-    for (const auto& p : m_placed) draw_page(cr, p);
+    if (m_proof && w > 0 && h > 0) {   // s099: draw the pages off screen, proof their pixels, then paint
+        auto img = Cairo::ImageSurface::create(Cairo::Surface::Format::ARGB32, w, h);
+        {
+            auto c2 = Cairo::Context::create(img);
+            for (const auto& p : m_placed) draw_page(c2, p);
+        }
+        img->flush();
+        unsigned char* data = img->get_data();
+        const int stride = img->get_stride();
+        std::vector<std::uint8_t> rgb;
+        rgb.reserve(static_cast<std::size_t>(w) * 3);
+        for (int y = 0; y < h; ++y) {   // a row at a time: the opaque pixels (the paper and what's on it)
+            auto* row = reinterpret_cast<std::uint32_t*>(data + static_cast<std::size_t>(y) * stride);
+            rgb.clear();
+            for (int x = 0; x < w; ++x)
+                if ((row[x] >> 24) == 0xFF) {
+                    rgb.push_back(static_cast<std::uint8_t>(row[x] >> 16));
+                    rgb.push_back(static_cast<std::uint8_t>(row[x] >> 8));
+                    rgb.push_back(static_cast<std::uint8_t>(row[x]));
+                }
+            m_proof->simulate(rgb.data(), rgb.size() / 3);
+            std::size_t k = 0;
+            for (int x = 0; x < w; ++x)
+                if ((row[x] >> 24) == 0xFF) {
+                    row[x] = 0xFF000000u | (std::uint32_t(rgb[k]) << 16) | (std::uint32_t(rgb[k + 1]) << 8) | rgb[k + 2];
+                    k += 3;
+                }
+        }
+        img->mark_dirty();
+        cr->set_source(img, 0, 0);
+        cr->paint();
+    } else {
+        for (const auto& p : m_placed) draw_page(cr, p);
+    }
     if (m_show_grid)
         for (const auto& p : m_placed) draw_grid(cr, p);
     if (m_show_guides)
@@ -1985,6 +2018,13 @@ void Canvas::update_cursor() {
 // ─────────────────────────────────────────────────────────────────────────────
 // CanvasView
 // ─────────────────────────────────────────────────────────────────────────────
+void CanvasView::set_proof_label(const std::string& profile) {   // s099
+    if (!m_proof_pill) return;
+    m_proof_pill->set_visible(!profile.empty());
+    m_proof_pill->set_text("Proof: " + profile);
+    m_proof_pill->set_tooltip_text("Colours as " + profile + " will print them (View \u203a Proof Colours)");
+}
+
 CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     : widgets::Box("canvas_view", Gtk::Orientation::VERTICAL),
       m_head("canvas_view.head", Gtk::Orientation::HORIZONTAL, 10),
@@ -2047,6 +2087,13 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
         const int i = static_cast<int>(m_canvas.tool());
         if (i < static_cast<int>(m_tool_buttons.size())) m_tool_buttons[static_cast<std::size_t>(i)]->set_active(true);
     });
+    m_proof_pill = Gtk::make_managed<Gtk::Label>();   // s099: shown while proofing
+    m_proof_pill->set_name("canvas_view.proof");
+    m_proof_pill->add_css_class("cx-count");
+    m_proof_pill->add_css_class("cx-proof-pill");
+    m_proof_pill->set_valign(Gtk::Align::CENTER);
+    m_proof_pill->set_visible(false);
+    m_head.append(*m_proof_pill);
     m_head.append(m_fit);
     m_head.append(m_zoom);
     append(m_head);

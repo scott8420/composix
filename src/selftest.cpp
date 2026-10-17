@@ -2034,6 +2034,21 @@ int main() {
                 return false;
             }());
             check("report: a bad profile -> not ok, why", !L::color_report(d, "/nonexistent.icc", false, blue_px).ok);
+            {   // s099: the fast screen path agrees with check, colour by colour (both intents).
+                bool same = true;
+                for (bool per : {false, true}) {
+                    plate::Proof pf;
+                    pf.load(icc, per);
+                    const std::uint8_t cs[][3] = {{0, 0, 255}, {255, 0, 0}, {30, 200, 90}, {255, 255, 255}, {12, 12, 12}, {180, 120, 60}};
+                    for (const auto& c : cs) {
+                        std::uint8_t px[3] = {c[0], c[1], c[2]};
+                        pf.simulate(px, 1);
+                        const auto r = pf.check(c[0], c[1], c[2]);
+                        for (int k = 0; k < 3; ++k) same = same && std::abs(int(px[k]) - int(r.after[k])) <= 2;
+                    }
+                }
+                check("proof: the screen's fast path looks as check says (within 2 levels)", same);
+            }
             {   // s085: the intent asked for, and the proof made with it.
                 const auto per = L::color_report(d, icc, true, blue_px);
                 const L::ColorRow* psky = nullptr;

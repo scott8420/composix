@@ -94,6 +94,22 @@ void Shell::bind_actions() {  // bindings: actions + recents group
             core::save_settings(m_settings_file, m_settings);
         }, on);
     }
+    // s099: proof colours -- with the export's press profile (else the first installed) and intent.
+    {
+        auto a = Gio::SimpleAction::create_bool("toggle-proof", false);
+        a->signal_activate().connect([this, a](const Glib::VariantBase&) {
+            bool on = false;
+            a->get_state(on);
+            if (!on && !apply_proof(true)) {
+                alert("No press profile", "Proof Colours shows the pages through a CMYK press profile. Install one (your printer's, "
+                                          "or GRACoL / FOGRA) in ~/.local/share/icc, or pick one in Export PDF.");
+                return;
+            }
+            if (on) apply_proof(false);
+            a->change_state(!on);
+        });
+        add_action(a);
+    }
     add_action("save",          sigc::mem_fun(*this, &Shell::on_save));
     add_action("save-as",       sigc::mem_fun(*this, &Shell::on_save_as));
     add_action("place",         sigc::mem_fun(*this, &Shell::on_place));   // s009

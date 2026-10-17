@@ -93,6 +93,7 @@ private:
     // ── handlers ───────────────────────────────────────────────────────────
     void on_nav_pick(const views::Pick& p);      // category: handler: section -> tiles, items -> open
     void on_tiles_selection(const std::vector<std::string>& ids);  // category: handler: -> inspector
+    bool apply_proof(bool on);   // s099: proof colours with the export's profile and intent; false = no profile
     std::vector<core::Field> section_fields(core::Segment s) const;   // s097: a section's own Inspector rows
     void on_tiles_open(const std::vector<std::string>& ids);       // category: handler: -> navigator selects them
     void on_inspector_edit(const std::string& key, const std::string& choice);  // category: handler: -> one verb
@@ -298,6 +299,7 @@ private:
     bool                             m_pdf_spreads = false; // s084: facing pages as one sheet
     bool                             m_pdf_perceptual = false;   // s085: the conversion's intent
     bool                             m_pdf_rebuild = true;       // s089: rebuild stale contents first
+    bool                             m_proofing = false;         // s099: View > Proof Colours
     std::string                      m_pdf_range;   // s077: as typed, "" = all
     int                              m_pdf_standard = 0;   // s017: 0 none, 1 PDF/X-1a, 2 PDF/X-4
     std::vector<std::string>         m_profiles;           // the sheet's list, as paths

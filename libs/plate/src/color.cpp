@@ -143,9 +143,10 @@ namespace plate {
 struct Proof::Impl {
     cmsHPROFILE   out = nullptr, srgb = nullptr, lab = nullptr;
     cmsHTRANSFORM to_cmyk = nullptr, back = nullptr, rgb_lab = nullptr, cmyk_lab = nullptr;
+    cmsHTRANSFORM fast = nullptr;   // s099: sRGB 8-bit -> press -> sRGB 8-bit
     std::string   name;
     ~Impl() {
-        for (auto t : {to_cmyk, back, rgb_lab, cmyk_lab}) if (t) cmsDeleteTransform(t);
+        for (auto t : {to_cmyk, back, rgb_lab, cmyk_lab, fast}) if (t) cmsDeleteTransform(t);
         for (auto p : {out, srgb, lab}) if (p) cmsCloseProfile(p);
     }
 };
@@ -174,7 +175,16 @@ bool Proof::load(const std::string& path, bool perceptual, std::string* err) {
     i->back = cmsCreateTransform(i->out, TYPE_CMYK_DBL, i->srgb, TYPE_RGB_DBL, INTENT_RELATIVE_COLORIMETRIC, 0);
     i->rgb_lab = cmsCreateTransform(i->srgb, TYPE_RGB_DBL, i->lab, TYPE_Lab_DBL, INTENT_RELATIVE_COLORIMETRIC, 0);
     i->cmyk_lab = cmsCreateTransform(i->out, TYPE_CMYK_DBL, i->lab, TYPE_Lab_DBL, INTENT_RELATIVE_COLORIMETRIC, 0);
-    if (!i->to_cmyk || !i->back || !i->rgb_lab || !i->cmyk_lab) {
+    {   // s099: the round trip in one transform, each leg with its own intent
+        // The press profile twice: into its CMYK, then out of it (lcms runs a
+        // chain's profiles alternately as output and input).
+        cmsHPROFILE chain[4] = {i->srgb, i->out, i->out, i->srgb};
+        cmsBool bpc[4] = {perceptual ? FALSE : TRUE, perceptual ? FALSE : TRUE, FALSE, FALSE};
+        cmsUInt32Number intents[4] = {in, in, INTENT_RELATIVE_COLORIMETRIC, INTENT_RELATIVE_COLORIMETRIC};
+        cmsFloat64Number adapt[4] = {0, 0, 0, 0};
+        i->fast = cmsCreateExtendedTransform(nullptr, 4, chain, bpc, intents, adapt, nullptr, 0, TYPE_RGB_8, TYPE_RGB_8, 0);
+    }
+    if (!i->to_cmyk || !i->back || !i->rgb_lab || !i->cmyk_lab) {   // (no fast one: simulate goes pixel by pixel)
         if (err) *err = "couldn't build the proofing transforms";
         return false;
     }
@@ -200,6 +210,12 @@ Proof::Result Proof::check(std::uint8_t r, std::uint8_t g, std::uint8_t b) const
         res.after[k] = static_cast<std::uint8_t>(std::lround(std::clamp(back[k], 0.0, 1.0) * 255.0));
     res.delta_e = cmsCIE2000DeltaE(&l0, &l1, 1, 1, 1);
     return res;
+}
+
+void Proof::simulate(std::uint8_t* rgb, std::size_t n) const {   // s099
+    if (!m || !rgb || n == 0) return;
+    if (m->fast) { cmsDoTransform(m->fast, rgb, rgb, static_cast<cmsUInt32Number>(n)); return; }
+    proof_pixels(rgb, n);
 }
 
 void Proof::proof_pixels(std::uint8_t* rgb, std::size_t n, std::vector<float>* de) const {
