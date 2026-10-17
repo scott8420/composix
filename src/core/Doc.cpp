@@ -1267,6 +1267,16 @@ bool set_note_numbering(DocJournal& j, Doc& d, NoteRestart restart, NoteStyle st
     });
 }
 
+bool set_note_area(DocJournal& j, Doc& d, int percent) {   // s117
+    percent = std::clamp(percent, 10, 100);
+    if (percent == d.settings().note_area) return false;
+    return j.run("Footnote area", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.note_area = percent;
+        d.put("doc", s);
+    });
+}
+
 bool save_query(DocJournal& j, Doc& d, SavedQuery q) {   // s078
     const auto a = q.name.find_first_not_of(" \t"), b = q.name.find_last_not_of(" \t");
     if (a == std::string::npos) return false;
@@ -2218,6 +2228,16 @@ Doc::Id duplicate_style(DocJournal& j, Doc& d, const Doc::Id& style) {
     return made;
 }
 
+std::string note_breaks(const std::string& text) {   // s116
+    std::string t;
+    t.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\r') { t += '\n'; if (i + 1 < text.size() && text[i + 1] == '\n') ++i; }
+        else t += text[i];
+    }
+    return t;
+}
+
 // ── footnotes (s109) ────────────────────────────────────────────────────────
 TextPos insert_note(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& text) {
     static int serial = 0;
@@ -2240,8 +2260,7 @@ bool set_note_text(DocJournal& j, Doc& d, const Doc::Id& story, int p, int k, co
     fit_notes(para);
     if (k < 0 || k >= static_cast<int>(para.notes.size())) return false;
     auto& n = para.notes[static_cast<std::size_t>(k)];
-    std::string t = text;
-    std::replace(t.begin(), t.end(), '\n', ' ');   // one paragraph
+    const std::string t = note_breaks(text);   // s116: paragraphs kept ('\n')
     if (n.text == t) return false;
     n.text = t;
     const int len = static_cast<int>(t.size());
@@ -2287,9 +2306,7 @@ int change_note_words(DocJournal& j, Doc& d, const Doc::Id& story, int p, int k,
     std::vector<Span> sp = spans_of(np, 0, a);
     int end = b;
     if (set_text) {
-        std::string t = text;
-        std::replace(t.begin(), t.end(), '\r', ' ');
-        std::replace(t.begin(), t.end(), '\n', ' ');   // one paragraph
+        const std::string t = note_breaks(text);   // s116: paragraphs kept
         const int at = (b != a && a < n) ? a + 1 : a;  // the first replaced character's style, else the one before
         sp.push_back({t, char_style_at(np, at), local_at(np, at)});
         end = a + static_cast<int>(t.size());
@@ -2825,6 +2842,7 @@ const std::vector<Verb>& verbs() {
         {"set_facing", [](DocJournal& j, Doc& d) { set_facing(j, d, !d.settings().facing); }},
         {"set_wrap_beneath", [](DocJournal& j, Doc& d) { set_wrap_beneath(j, d, true); }},   // s069
         {"set_note_numbering", [](DocJournal& j, Doc& d) { set_note_numbering(j, d, NoteRestart::Page, NoteStyle::Symbols); }},   // s111
+        {"set_note_area", [](DocJournal& j, Doc& d) { set_note_area(j, d, 50); }},   // s117
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
         {"delete_query", [](DocJournal& j, Doc& d) { delete_query(j, d, "Double spaces"); }},

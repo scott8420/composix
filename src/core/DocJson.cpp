@@ -46,6 +46,7 @@ json to(const Record& r) {
                              {"range", v.exp.range}, {"bookmarks", v.exp.bookmarks}}}};
             if (v.note_restart != NoteRestart::Story) j["note_restart"] = static_cast<int>(v.note_restart);   // s111
             if (v.note_style != NoteStyle::Arabic) j["note_style"] = static_cast<int>(v.note_style);
+            if (v.note_area != 100) j["note_area"] = v.note_area;   // s117
             if (!v.exp.mark_lists.empty()) j["export"]["mark_lists"] = v.exp.mark_lists;   // s082
             if (v.exp.spreads) j["export"]["spreads"] = true;                              // s084
             if (v.exp.perceptual) j["export"]["perceptual"] = true;                        // s085
@@ -200,6 +201,7 @@ std::optional<Record> from(const json& j) {
         v.units = static_cast<Units>(std::clamp(val(j, "units", 0), 0, 3));   // s073
         v.note_restart = static_cast<NoteRestart>(std::clamp(val(j, "note_restart", 0), 0, 2));   // s111
         v.note_style = static_cast<NoteStyle>(std::clamp(val(j, "note_style", 0), 0, 3));
+        v.note_area = std::clamp(val(j, "note_area", 100), 10, 100);   // s117
         if (j.contains("export")) {   // s032
             const auto& e = j.at("export");
             v.exp = {val(e, "print", true), val(e, "bleed", true), val(e, "marks", false),

@@ -6,6 +6,7 @@
 #include <gtkmm/label.h>
 #include <gtkmm/popover.h>
 #include <gtkmm/eventcontrollerkey.h>
+#include "views/NoteWords.hpp"
 
 // Shell_notes.cpp -- HELPERS for s110: footnotes in the text.
 //   * Insert Footnote (Ctrl+Alt+F, Edit > Insert Special Character): the mark
@@ -43,12 +44,10 @@ void Shell::edit_note(const std::string& story, int p, int k, int sel_a, int sel
     auto head = Gtk::make_managed<Gtk::Label>("Footnote " + std::to_string(number));
     head->set_xalign(0);
     head->add_css_class("heading");
-    auto entry = Gtk::make_managed<Gtk::Entry>();
-    entry->set_name("note.words");
+    auto entry = Gtk::make_managed<views::NoteWords>();   // s116: several paragraphs
     entry->set_text(words);
-    entry->set_placeholder_text("The note's words");
-    entry->set_width_chars(48);
-    auto hint = Gtk::make_managed<Gtk::Label>(take_focus ? "Enter to finish" : "Found in the note · click to edit");
+    auto hint = Gtk::make_managed<Gtk::Label>(take_focus ? "Enter: a new paragraph \u00b7 Ctrl+Enter or Esc to finish"
+                                                         : "Found in the note \u00b7 click to edit");
     hint->set_xalign(0);
     hint->add_css_class("dim-label");
     box->append(*head);
@@ -58,14 +57,7 @@ void Shell::edit_note(const std::string& story, int p, int k, int sel_a, int sel
     const auto r = canvas.caret_screen();
     if (r.w > 0)
         m_note_pop->set_pointing_to(Gdk::Rectangle(static_cast<int>(r.x), static_cast<int>(r.y), 1, static_cast<int>(std::max(1.0, r.h))));
-    entry->signal_activate().connect([this] { if (m_note_pop) m_note_pop->popdown(); });
-    auto keys = Gtk::EventControllerKey::create();   // s113: Esc closes it (a Find one doesn't hide by itself)
-    keys->signal_key_pressed().connect([this](guint kv, guint, Gdk::ModifierType) {
-        if (kv != GDK_KEY_Escape || !m_note_pop) return false;
-        m_note_pop->popdown();
-        return true;
-    }, false);
-    entry->add_controller(keys);
+    entry->signal_done().connect([this] { if (m_note_pop) m_note_pop->popdown(); });
     m_note_pop->signal_closed().connect([this, story, p, k, entry, words, take_focus] {
         const std::string t = entry->get_text();
         // s113: only what was typed here goes in -- not the words as they were
@@ -80,11 +72,11 @@ void Shell::edit_note(const std::string& story, int p, int k, int sel_a, int sel
         const auto chars = [&](int b) {
             return static_cast<int>(g_utf8_strlen(words.c_str(), std::clamp(b, 0, static_cast<int>(words.size()))));
         };
-        entry->select_region(chars(sel_a), chars(sel_b));
+        entry->select(chars(sel_a), chars(sel_b));
     }
     if (take_focus) {
-        entry->grab_focus();
-        if (sel_a < 0) entry->set_position(-1);   // the cursor after the words (not all of them selected)
+        if (sel_a < 0) entry->focus_end();   // the cursor after the words (not all of them selected)
+        else entry->view().grab_focus();
     }
 }
 

@@ -62,6 +62,17 @@ struct Line {
 struct NotePlace {
     int    para = 0, k = 0, number = 0, col = 0;
     double x = 0, y = 0, w = 0, h = 0;
+    // s117: a piece of the note -- its words [from, to) (to -1: to the end).
+    // `cont`: run on from a column before (no number; a full-width rule).
+    int    from = 0, to = -1;
+    bool   cont = false;
+};
+
+// s117: a note running on -- the rest of paragraph `para`'s k-th note, from
+// byte `from` of its words, still to be set (at the next column's foot).
+struct NoteRun {
+    int para = 0, k = 0, number = 0, from = 0;
+    bool operator==(const NoteRun&) const = default;
 };
 
 struct FrameText {
@@ -74,6 +85,7 @@ struct FrameText {
     int               from_p = -1, from_b = 0;
     std::string       page_before;
     int               note_from = 0;   // s111: notes numbered on its page (section) before it, when numbering restarts
+    std::vector<NoteRun> carry_in;     // s117: notes running on into this frame
 };
 
 struct StoryFlow {

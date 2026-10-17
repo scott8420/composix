@@ -207,6 +207,21 @@ std::string expand_groups(const std::string& with, const std::vector<std::string
 }
 
 namespace {
+// s113: the paragraph style a story's notes are set in, for "Any style /
+// this style" -- a paragraph style named Footnote (as the flow finds it).
+Doc::Id note_style_id(const Doc& d) {
+    for (const auto& id : d.ids_of<Style>()) {
+        const auto* s = d.as<Style>(id);
+        if (s->kind != StyleKind::Paragraph) continue;
+        std::string n = s->name;
+        for (auto& ch : n) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (n == "footnote" || n == "footnotes") return id;
+    }
+    return {};
+}
+}  // namespace
+
+namespace {
 // s095: does the search hold a paragraph break? "^p" (Text, Wildcards) or
 // "\n" (Regex). Not with character-level filters (a character style, bold
 // / italic), which belong to one paragraph.
@@ -219,6 +234,7 @@ bool spans_breaks(const FindOpts& f) {
 // character's place (paragraph, byte) kept, and one past the end.
 std::vector<Hit> find_across(const Doc& d, const FindOpts& f, const std::vector<Doc::Id>& order) {
     std::vector<Hit> out;
+    const Doc::Id nstyle = note_style_id(d);   // s116
     std::wregex re;
     const bool pattern = f.mode != FindOpts::Mode::Text;
     if (pattern && !make_regex(f, re, nullptr)) return out;
@@ -242,8 +258,9 @@ std::vector<Hit> find_across(const Doc& d, const FindOpts& f, const std::vector<
             if (p + 1 < static_cast<int>(st.paras.size())) { all.push_back(L'\n'); place.push_back({p, at.back()}); }
             else place.push_back({p, at.back()});   // one past the end
         }
-        const auto look = f.match_case ? all : folded(all);
         struct M { std::size_t a, b; std::vector<std::string> g; };
+        const auto matches = [&](const std::wstring& all) {
+        const auto look = f.match_case ? all : folded(all);
         std::vector<M> ms;
         if (pattern) {
             for (auto it = std::wsregex_iterator(look.begin(), look.end(), re); it != std::wsregex_iterator(); ++it) {
@@ -262,32 +279,43 @@ std::vector<Hit> find_across(const Doc& d, const FindOpts& f, const std::vector<
             }
         }
         const auto wordc = [](wchar_t c) { return c != L'\n' && word_byte(c < 0x80 ? static_cast<unsigned char>(c) : 0x80); };
-        for (auto& m : ms) {
-            if (f.whole_word && ((m.a > 0 && wordc(all[m.a - 1])) || (m.b < all.size() && wordc(all[m.b])))) continue;
+        std::erase_if(ms, [&](const M& m) {
+            return f.whole_word && ((m.a > 0 && wordc(all[m.a - 1])) || (m.b < all.size() && wordc(all[m.b])));
+        });
+        return ms;
+        };
+        std::vector<std::pair<TextPos, Hit>> keyed;   // s116: the text's and the notes' hits, read at their place
+        for (auto& m : matches(all)) {
             const TextPos a = place[m.a], b = place[m.b];
             if (!f.pstyle.empty() && st.paras[static_cast<std::size_t>(a.para)].style != f.pstyle) continue;
             if (f.in_range && (a < lo || hi < b)) continue;
-            out.push_back({sid, a, b, std::move(m.g)});
+            keyed.emplace_back(a, Hit{sid, a, b, std::move(m.g)});
         }
+        // s116: a note's paragraph breaks -- each note's words searched as one
+        // text (notes when the paragraph style asked is none, or Footnote).
+        if (f.pstyle.empty() || f.pstyle == nstyle)
+            for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+                const auto& para = st.paras[static_cast<std::size_t>(p)];
+                for (int k = 0; k < static_cast<int>(para.notes.size()); ++k) {
+                    const int mark = note_mark_byte(st, p, k);
+                    if (mark < 0) continue;
+                    if (f.in_range && (TextPos{p, mark} < lo || hi < TextPos{p, mark + 3})) continue;
+                    std::vector<int> at;
+                    const auto w = widen(para.notes[static_cast<std::size_t>(k)].text, &at);
+                    for (auto& m : matches(w)) {
+                        Hit h{sid, {p, at[m.a]}, {p, at[m.b]}, std::move(m.g)};
+                        h.note = k;
+                        keyed.emplace_back(TextPos{p, mark + 1}, std::move(h));
+                    }
+                }
+            }
+        std::stable_sort(keyed.begin(), keyed.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+        for (auto& [key, h] : keyed) out.push_back(std::move(h));
     }
     return out;
 }
 }  // namespace
 
-namespace {
-// s113: the paragraph style a story's notes are set in, for "Any style /
-// this style" -- a paragraph style named Footnote (as the flow finds it).
-Doc::Id note_style_id(const Doc& d) {
-    for (const auto& id : d.ids_of<Style>()) {
-        const auto* s = d.as<Style>(id);
-        if (s->kind != StyleKind::Paragraph) continue;
-        std::string n = s->name;
-        for (auto& ch : n) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        if (n == "footnote" || n == "footnotes") return id;
-    }
-    return {};
-}
-}  // namespace
 
 std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
     if (spans_breaks(f)) return find_across(d, f, reading_order(d));   // s095

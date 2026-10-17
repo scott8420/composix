@@ -6380,9 +6380,9 @@ int main() {
                   D::find_all(d, {"yy", false, true}).size() == 3 && d.as<core::Story>("story.1")->paras[1].notes.size() == 1);
         j.undo();
         check("change all: undone in one", d.records() == pre);
-        check("change: a line break in a note reads as a space",
-              D::change_hits(j, d, zh, {true, "big\nheron"}, "Change") == 1 &&
-                  d.as<core::Story>("story.1")->paras[1].notes[0].text == "Logged by the big heron qqx master.");
+        check("change: a line break in a note is a new paragraph (s116)",
+              D::change_hits(j, d, zh, {true, "big\r\nheron"}, "Change") == 1 &&
+                  d.as<core::Story>("story.1")->paras[1].notes[0].text == "Logged by the big\nheron qqx master.");
         j.undo();
         // A character style onto a note's words.
         D::ChangeOpts cs{false, "", "", "style.5"};
@@ -6491,6 +6491,215 @@ int main() {
             for (const auto& it : o.items()) if (!ids.insert(it.id).second) return false;
             return true;
         }());
+    }
+
+    {
+        std::cout << "\n-- footnotes in paragraphs (s116) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto note = [&] { return d.as<core::Story>("story.1")->paras[5].notes[0].text; };
+        const auto foot = [&] {   // the sample note's place: its height, its lines drawn
+            L::FlowCache flows;
+            const auto& f = flows.get(d, "story.1");
+            double h = 0;
+            int lines = 0;
+            for (const auto& ft : f.frames) {
+                for (const auto& np : ft.notes) h += np.h;
+                if (!ft.notes.empty())
+                    L::visit_lines(d, "story.1", f, ft.frame, [&](const L::LineVisit& v) { lines += v.from == -4; });
+            }
+            return std::pair<double, int>{h, lines};
+        };
+        const auto one = foot();
+        check("set_note_text: paragraphs kept, \\r\\n read as one break",
+              D::set_note_text(j, d, "story.1", 5, 0, "First, the foldout.\r\nSecond, the key.\rThird, the scale.") &&
+                  note() == "First, the foldout.\nSecond, the key.\nThird, the scale.");
+        const auto three = foot();
+        check("three paragraphs: taller at the foot, each its own line(s)", three.first > one.first + 1 && three.second >= 3,
+              std::to_string(one.first) + " -> " + std::to_string(three.first) + ", " + std::to_string(three.second) + " lines");
+        core::Doc e;
+        std::string err;
+        check("json: a note's paragraphs kept", core::from_json(e, core::to_json(d), &err) &&
+                                                e.as<core::Story>("story.1")->paras[5].notes[0].text == note(), err);
+        const auto hits = D::find_all(d, {"key.^pThird"});
+        check("find ^p: across a note's paragraphs", hits.size() == 1 && hits[0].note == 0 && hits[0].a.para == 5);
+        D::FindOpts rx{"\\n"};
+        rx.mode = D::FindOpts::Mode::Regex;
+        const auto in_note = [](std::vector<D::Hit> h) { std::erase_if(h, [](const D::Hit& x) { return x.note < 0; }); return h; };
+        check("find \\n (regex): each break in the note", in_note(D::find_all(d, rx)).size() == 2);
+        check("change ^p in a note: joined, one step",
+              D::change_hits(j, d, in_note(D::find_all(d, {"^p"})), {true, " "}, "Change All") == 2 &&
+                  note() == "First, the foldout. Second, the key. Third, the scale.");
+        j.undo();
+        check("undo: the paragraphs back", note() == "First, the foldout.\nSecond, the key.\nThird, the scale.");
+        const auto o = core::project(d, "");
+        const auto ns = o.in(core::Segment::Notes);
+        bool ro = false;
+        for (const auto& f : ns.front()->fields) ro = ro || (f.label.rfind("Words (", 0) == 0 && f.edit.empty());
+        check("the Footnotes section: paragraphs shown, not typed in one line", ns.size() == 1 && ro);
+    }
+
+    {
+        std::cout << "\n-- footnotes run on; the footnote area (s117) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("footnote area: one step, kept", D::set_note_area(j, d, 50) && !D::set_note_area(j, d, 50) &&
+                                               d.settings().note_area == 50 && D::set_note_area(j, d, 100));
+        {
+            core::Doc e;
+            std::string err;
+            D::set_note_area(j, d, 33);
+            check("json: the area kept", core::from_json(e, core::to_json(d), &err) && e.settings().note_area == 33, err);
+            D::set_note_area(j, d, 100);
+        }
+        // A note far longer than a column, on Chapter One's first paragraph.
+        std::string longw;
+        for (int i = 1; i <= 60; ++i)
+            longw += "Clause " + std::to_string(i) + " of the harbour ordinance, as amended, applies to every vessel entering the port.";
+        longw += "\nA second paragraph closes the note.";
+        D::insert_note(j, d, "story.1", {1, 4}, longw);
+        const auto* st = d.as<core::Story>("story.1");
+        // Every piece of the note, in thread order, and the checks on each frame.
+        struct Piece { std::size_t frame; int from, to; bool cont; double y, h; };
+        const auto pieces = [&](const L::StoryFlow& f, bool* inside, bool* clear, double* most) {
+            std::vector<Piece> out;
+            *inside = *clear = true;
+            *most = 0;
+            for (std::size_t i = 0; i < f.frames.size(); ++i) {
+                const auto& ft = f.frames[i];
+                const auto* fr = d.as<core::Frame>(ft.frame);
+                std::map<int, double> per_col;
+                for (const auto& np : ft.notes) {
+                    if (np.para == 1 && np.k == 0) out.push_back({i, np.from, np.to, np.cont, np.y, np.h});
+                    *inside = *inside && np.y >= -0.01 && np.y + np.h <= fr->h - std::max(0.0, fr->inset.bottom) + 0.01;
+                    per_col[np.col] += np.h;
+                    for (const auto& l : ft.lines)
+                        if (l.col == np.col && l.y + l.h > np.y + 0.01) *clear = false;
+                }
+                const double colh = fr->h - std::max(0.0, fr->inset.bottom) - std::max(0.0, fr->inset.top);
+                for (const auto& [c, h] : per_col) *most = std::max(*most, h / colh);
+            }
+            return out;
+        };
+        const auto joined = [&](const std::vector<Piece>& ps, bool overset = false) {   // the pieces cover the words, in order, once
+            if (ps.empty() || ps.front().from != 0 || ps.front().cont || (ps.back().to != -1 && !overset)) return false;
+            for (std::size_t i = 1; i < ps.size(); ++i)
+                if (!ps[i].cont || ps[i].from != ps[i - 1].to || ps[i].frame <= ps[i - 1].frame) return false;
+            return true;
+        };
+        bool inside = false, clear = false;
+        double most = 0;
+        L::FlowCache flows;
+        const auto& whole = flows.get(d, "story.1");
+        auto ps = pieces(whole, &inside, &clear, &most);
+        check("a note longer than a column: cut, run on", ps.size() >= 2 && joined(ps), std::to_string(ps.size()) + " pieces");
+        check("each piece inside its frame; no line runs into the notes", inside && clear);
+        const auto n100 = ps.size();
+        // Its mark's line stays where it was: the note is cut instead (not the line sent on).
+        bool mark_on_first = false;
+        for (const auto& l : whole.frames[ps.front().frame].lines)
+            mark_on_first = mark_on_first || (l.para == 1 && l.start <= 4 && l.end > 4);
+        check("the mark's line keeps its frame, with the note's first piece", mark_on_first);
+        // The rule over a run-on piece spans the column.
+        bool wide = false;
+        for (const auto& r : L::paragraph_rules(d, "story.1", whole, whole.frames[ps[1].frame].frame))
+            for (const auto& np : whole.frames[ps[1].frame].notes)
+                if (np.cont && std::abs(r.r.w - np.w) < 0.01) wide = true;
+        check("a run-on piece: the rule across the column", wide);
+        int cont_lines = 0;
+        L::visit_lines(d, "story.1", whole, whole.frames[ps[1].frame].frame, [&](const L::LineVisit& v) { cont_lines += v.from == -4; });
+        check("a run-on piece is drawn", cont_lines >= 1);
+        {   // Cut with two lines of the note or more on each side.
+            bool two = true;
+            for (const auto& ft : whole.frames)
+                for (const auto& np : ft.notes)
+                    if (np.para == 1 && np.k == 0) {
+                        int lines = 0;
+                        L::visit_lines(d, "story.1", whole, ft.frame, [&](const L::LineVisit& v) { lines += v.from == -4; });
+                        two = two && lines >= 2;
+                    }
+            check("each piece two lines or more", two);
+        }
+        // The area at 50%: no column's notes past half of it; more pieces.
+        D::set_note_area(j, d, 50);
+        const auto& half = flows.get(d, "story.1");
+        ps = pieces(half, &inside, &clear, &most);
+        check("area 50%: the notes keep to half the column", most <= 0.5 + 0.01, std::to_string(most));
+        check("area 50%: the note runs on further (past the last frame: overset)", joined(ps, half.overset) && ps.size() > n100, std::to_string(n100) + " -> " + std::to_string(ps.size()));
+        check("area 50%: inside, clear", inside && clear);
+        check("a frame the text passes (a chapter starts right) still takes the note running on", [&] {
+            for (const auto& ft : half.frames)
+                if (ft.lines.empty() && !ft.notes.empty() && ft.notes.front().cont) return true;
+            return false;
+        }());
+        // Numbered by page: a run-on piece takes no number -- the next page's own note is 1.
+        D::set_note_numbering(j, d, core::NoteRestart::Page, core::NoteStyle::Arabic);
+        {
+            const auto& fp = flows.get(d, "story.1");
+            const auto pp = pieces(fp, &inside, &clear, &most);
+            bool ok = !pp.empty();
+            for (const auto& ft : fp.frames) {
+                int own = 0;
+                for (const auto& np : ft.notes)
+                    if (!np.cont) ok = ok && np.number == ++own;
+            }
+            check("by page: run-on pieces take no number", ok);
+        }
+        D::set_note_numbering(j, d, core::NoteRestart::Story, core::NoteStyle::Arabic);
+        // A re-flow after an edit past the note: the same as a whole flow.
+        {
+            const core::Story before = *d.as<core::Story>("story.1");
+            const auto old = L::flow_story(d, "story.1");
+            D::edit_text(j, d, "story.1", {3, 0}, {3, 0}, "Late that night ", "Typing", "");
+            const auto re = L::reflow_story(d, "story.1", before, old);
+            const auto wf = L::flow_story(d, "story.1");
+            bool same = re.frames.size() == wf.frames.size() && re.overset == wf.overset;
+            for (std::size_t i = 0; same && i < re.frames.size(); ++i) {
+                const auto& a = re.frames[i].notes;
+                const auto& b = wf.frames[i].notes;
+                same = a.size() == b.size() && re.frames[i].lines.size() == wf.frames[i].lines.size() && re.frames[i].carry_in == wf.frames[i].carry_in;
+                for (std::size_t k = 0; same && k < a.size(); ++k)
+                    same = a[k].para == b[k].para && a[k].k == b[k].k && a[k].from == b[k].from && a[k].to == b[k].to && a[k].cont == b[k].cont &&
+                           std::abs(a[k].y - b[k].y) < 1e-9;
+            }
+            check("re-flow with a note running on == whole flow", same);
+            // And an edit before the note (its line moves): still the same.
+            const core::Story before2 = *d.as<core::Story>("story.1");
+            const auto old2 = L::flow_story(d, "story.1");
+            D::edit_text(j, d, "story.1", {1, 0}, {1, 0}, "At first light ", "Typing", "");
+            const auto re2 = L::reflow_story(d, "story.1", before2, old2);
+            const auto wf2 = L::flow_story(d, "story.1");
+            bool same2 = re2.frames.size() == wf2.frames.size();
+            for (std::size_t i = 0; same2 && i < re2.frames.size(); ++i)
+                same2 = re2.frames[i].notes.size() == wf2.frames[i].notes.size() && re2.frames[i].carry_in == wf2.frames[i].carry_in &&
+                        re2.frames[i].lines.size() == wf2.frames[i].lines.size();
+            check("re-flow, an edit before the note == whole flow", same2);
+        }
+        while (j.can_undo()) j.undo();
+        // The text ends, a note still runs on: into the next frame.
+        {
+            core::Doc e;
+            core::DocJournal je{e};
+            e.set_door([&je] { return je.open(); });
+            core::load_sample(e);
+            // The Sources story is short: a long note on its last paragraph.
+            const auto& src = *e.as<core::Story>("story.4");
+            const int last = static_cast<int>(src.paras.size()) - 1;
+            D::insert_note(je, e, "story.4", {last, static_cast<int>(src.paras[static_cast<std::size_t>(last)].text.size())}, longw);
+            const auto f = L::flow_story(e, "story.4");
+            int with_notes = 0;
+            for (const auto& ft : f.frames) with_notes += ft.notes.empty() ? 0 : 1;
+            check("the text ended, the note ran on (or is overset): never lost",
+                  f.overset || with_notes >= 2 || f.frames.size() == 1, std::to_string(with_notes) + " frames with notes, overset " + std::to_string(f.overset));
+        }
     }
 
     std::cout << "-----------------------------------------------\n";

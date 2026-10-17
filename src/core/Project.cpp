@@ -202,6 +202,14 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                          : st.note_style == NoteStyle::AlphaLower ? "a b c"
                                          : st.note_style == NoteStyle::Symbols ? "* \u2020 \u2021" : "1 2 3",
                               "dnote_style", {{"0", "1 2 3"}, {"1", "i ii iii"}, {"2", "a b c"}, {"3", "* \u2020 \u2021"}}},
+                             [&] {   // s117: the most of a column the notes may take
+                                 Field a{"Footnote area", st.note_area >= 100 ? "Whole column" : std::to_string(st.note_area) + "% of the column",
+                                         "dnote_area", {{"100", "Whole column"}, {"75", "75%"}, {"50", "50%"}, {"33", "33%"}, {"25", "25%"}}};
+                                 a.percent = true;
+                                 a.lo = 10;
+                                 a.hi = 100;
+                                 return a;
+                             }(),
                              {"Length", std::to_string(d.pages().size()) + (d.pages().size() == 1 ? " page" : " pages")}};
         mark_typed(f, unit_pt(d.settings().units));
         o.add({"doc", G::Document, "Document settings", "", {K::Section, 6, 9, 0x9a8f88}, f});
@@ -618,8 +626,11 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                     if (!in.empty()) in.pop_back();
                     in += "\u2026";
                 }
-                Field w{"Words", words, "note_words"};
-                w.text = true;
+                // s116: one paragraph -- typed here; several -- shown, edited in the text.
+                const bool paras = words.find('\n') != std::string::npos;
+                Field w{paras ? "Words (\u00b6 " + std::to_string(std::count(words.begin(), words.end(), '\n') + 1) + ")" : "Words",
+                        words, paras ? "" : "note_words"};
+                w.text = !paras;
                 Field go{"", "", "note", {{"show", "Show in the Text"}}};
                 go.buttons = true;
                 Thumb th{K::Text, 6, 9};

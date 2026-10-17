@@ -1,4 +1,5 @@
 #include "views/StoryEditor.hpp"
+#include "views/NoteWords.hpp"
 #include "views/BackButton.hpp"
 #include "layout/Flow.hpp"
 #include "Log.hpp"
@@ -217,22 +218,23 @@ void StoryEditor::edit_note(int para, int k, Gtk::Widget& chip) {
     auto head = Gtk::make_managed<Gtk::Label>("Footnote " + core::note_label(core::note_number(*st, para, k), m_doc.settings().note_style));
     head->set_xalign(0);
     head->add_css_class("heading");
-    auto entry = Gtk::make_managed<Gtk::Entry>();
-    entry->set_name("story.note.words");
+    auto entry = Gtk::make_managed<NoteWords>();   // s116: several paragraphs
+    entry->view().set_name("story.note.words");
     entry->set_text(words);
-    entry->set_width_chars(48);
-    entry->set_placeholder_text("The note's words");
+    auto hint = Gtk::make_managed<Gtk::Label>("Enter: a new paragraph \u00b7 Ctrl+Enter or Esc to finish");
+    hint->set_xalign(0);
+    hint->add_css_class("dim-label");
     box->append(*head);
     box->append(*entry);
+    box->append(*hint);
     m_note_pop.set_child(*box);
-    entry->signal_activate().connect([this] { m_note_pop.popdown(); });
+    entry->signal_done().connect([this] { m_note_pop.popdown(); });
     m_note_conn.disconnect();
     m_note_conn = m_note_pop.signal_closed().connect([this, para, k, entry] {
         if (core::doc::set_note_text(m_journal, m_doc, m_story, para, k, entry->get_text())) m_edited.emit();
     });
     m_note_pop.popup();
-    entry->grab_focus();
-    entry->set_position(-1);   // the cursor after the words (not all of them selected)
+    entry->focus_end();   // the cursor after the words (not all of them selected)
 }
 
 void StoryEditor::pick_para_style(int para, double y) {

@@ -970,6 +970,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             if (key == "dnote_restart") r = static_cast<core::NoteRestart>(std::min(v, 2));
             else st = static_cast<core::NoteStyle>(v);
             did = core::doc::set_note_numbering(m_journal, m_doc, r, st);
+        } else if (key == "dnote_area") {   // s117
+            did = core::doc::set_note_area(m_journal, m_doc, static_cast<int>(std::lround(std::stod(choice))));
         } else if (key == "dfacing") {
             did = core::doc::set_facing(m_journal, m_doc, choice == "1");
         } else if (key == "pmargins") {   // s062: a page's own margins, or back to the master's

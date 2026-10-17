@@ -121,6 +121,9 @@ struct Settings {
     ExportPrefs exp;                     // s032
     NoteRestart note_restart = NoteRestart::Story;   // s111
     NoteStyle   note_style   = NoteStyle::Arabic;
+    // s117: the most of a column its footnotes may take, percent (100: all
+    // of it). A note that doesn't fit runs on to the next column's foot.
+    int         note_area    = 100;
     bool operator==(const Settings&) const = default;
 };
 
@@ -646,6 +649,8 @@ bool set_facing(DocJournal& j, Doc& d, bool facing);
 bool set_wrap_beneath(DocJournal& j, Doc& d, bool on);
 // s111: footnote numbering (restart, look). One step each; false if unchanged.
 bool set_note_numbering(DocJournal& j, Doc& d, NoteRestart restart, NoteStyle style);
+// s117: the footnote area, percent of the column (10 .. 100). One step.
+bool set_note_area(DocJournal& j, Doc& d, int percent);
 // s073: the document's display unit. One step.
 bool set_units(DocJournal& j, Doc& d, Units u);
 // s078: keep a query under its name (trimmed, not empty; the same name is
@@ -788,6 +793,9 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
 // s109: a footnote at `at` -- its mark in the text, its words `text`. One
 // step. Returns the place just after the mark.
 TextPos insert_note(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& text);
+// s116: a note's words may run to several paragraphs, '\n' between them
+// (\r\n and \r read as \n).
+std::string note_breaks(const std::string& text);
 // The words of paragraph p's k-th note. A merge key folds a burst of typing.
 bool set_note_text(DocJournal& j, Doc& d, const Doc::Id& story, int p, int k, const std::string& text,
                    const std::string& merge_key = {});
@@ -796,7 +804,7 @@ int note_index_at(const Story& s, TextPos at);
 // s113: where paragraph p's k-th note's mark is (its first byte); -1 none.
 int note_mark_byte(const Story& s, int p, int k);
 // s113: a stretch [a, b) of paragraph p's k-th note's words -- replaced by
-// `text` (when `set_text`; a line break reads as a space; it takes the style
+// `text` (when `set_text`; s116: a line break is a new paragraph; it takes the style
 // of the first character replaced), then given character style `cstyle`
 // (when not empty; `fold` then runs over the stretch's local formatting).
 // One step (or part of the one it runs in). Returns where the stretch ends

@@ -158,7 +158,8 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
                     if (np.para < 0 || np.para >= static_cast<int>(st->paras.size())) continue;
                     const auto& p = st->paras[static_cast<std::size_t>(np.para)];
                     std::string line = fid + "|note|" + std::to_string(np.number) + "|" + std::to_string(np.col) + "|" +
-                                       std::to_string(np.y) + "|" + p.style + "|";
+                                       std::to_string(np.y) + "|" + p.style + "|" + std::to_string(np.from) + "-" +
+                                       std::to_string(np.to) + (np.cont ? "c" : "") + "|";   // s117: its piece
                     if (np.k < static_cast<int>(p.notes.size())) {
                         const auto& n = p.notes[static_cast<std::size_t>(np.k)];
                         for (const auto& r : n.runs) line += std::to_string(r.start) + "-" + std::to_string(r.end) + r.style + ",";
