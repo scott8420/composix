@@ -16,15 +16,18 @@
 // Ideas from Curvz (viewport, handles, gesture shape), code rewritten: ARC s005.
 #include "core/Doc.hpp"
 #include "layout/Flow.hpp"
+#include "layout/ThumbStore.hpp"
 #include <plate/plate.hpp>
 #include "widgets/Widgets.hpp"
 
 #include <gdkmm/rgba.h>
+#include <glibmm/dispatcher.h>
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/eventcontrollerscroll.h>
 #include <gtkmm/gesturedrag.h>
 #include <sigc++/signal.h>
 
+#include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
@@ -74,7 +77,7 @@ public:
     void set_show_hidden(bool on) { m_show_hidden = on; queue_draw(); }   // s059: hidden characters
     // s099: proof colours -- the pages drawn as this press profile will
     // print them (null: off).
-    void set_proof(std::shared_ptr<const plate::Proof> p) { m_proof = std::move(p); queue_draw(); }
+    void set_proof(std::shared_ptr<const plate::Proof> p) { m_proof = std::move(p); ++m_proof_gen; queue_draw(); }
     bool proofing() const { return m_proof != nullptr; }
     bool show_hidden() const { return m_show_hidden; }
 
@@ -154,8 +157,6 @@ private:
 
     void draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h);
     void draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
-    void draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Frame& f, double ox, double oy,
-                    bool from_master, const std::string& id, const std::string& on_page = {});
     void draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr);
     void draw_guides(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);
     void draw_grid(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p);   // s036
@@ -227,6 +228,7 @@ private:
     bool              m_snap = true, m_show_guides = true, m_show_grid = false;
     bool              m_show_hidden = false;   // s059
     std::shared_ptr<const plate::Proof> m_proof;   // s099
+    std::uint64_t     m_proof_gen = 0;             // s104: a new proof, new page images
     bool              m_follow_keep_zoom = false;   // s061: a follow shows another spread without fitting
     sigc::signal<void(const std::string&)> m_sig_follow;
     sigc::signal<void(const std::string&, const std::vector<std::string>&)> m_sig_master_drop;
@@ -277,6 +279,13 @@ private:
     std::vector<double> m_col0;                 // every column's width (points) at press
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool, m_sig_caret;
     sigc::signal<void(const ContextHit&)> m_sig_context;   // s074
+
+    // s104: the pages as images at the current zoom, drawn on a worker (last:
+    // it stops its worker first, while the dispatcher is still there).
+    Glib::Dispatcher   m_pg_disp;
+    std::atomic<bool>  m_pg_signalled = false;
+    sigc::connection   m_pg_flush, m_pg_collect;
+    layout::ThumbStore m_pages{std::size_t{160} << 20};
 };
 
 class Ruler;

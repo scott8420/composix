@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -59,12 +60,23 @@ struct Line {
 struct FrameText {
     std::string       frame;
     std::vector<Line> lines;
+    // s105: where the flow stood when it came to this frame -- the paragraph
+    // and byte (from_p -1: the story ended before it) and the page of the
+    // last frame that took lines. A re-flow starts at a frame from these.
+    int               from_p = -1, from_b = 0;
+    std::string       page_before;
 };
 
 struct StoryFlow {
     std::vector<FrameText> frames;     // thread order
     bool                   overset = false;
     int                    lines   = 0;
+    int                    filled  = 0;   // s105: frames set this time (the rest kept from the last flow)
+    // s106: set only so far (a re-flow's budget ran out before the lines
+    // resettled): frames from `tail_from` on are the last flow's, moved --
+    // what was there, until the whole is worked out (FlowCache::complete).
+    bool                   provisional = false;
+    int                    tail_from   = -1;
 };
 
 // The story's frames in thread order.
@@ -74,6 +86,17 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story);
 // s102: the same, telling `tick` after each frame (done, of total).
 using FlowTick = std::function<void(int done, int total)>;
 StoryFlow flow_story(const core::Doc& d, const std::string& story, const FlowTick& tick);
+// s105: the story re-flowed after an edit to its text: `old_flow` is the
+// flow of `old_text` with everything else as now (frames, styles, pages).
+// Frames up to the one where the first changed paragraph's predecessor
+// starts are kept; from there it is set again until the flow comes to a
+// frame just as it did before (past the changed paragraphs) -- the rest is
+// the old flow, moved by the paragraphs added or taken away. The same
+// lines a whole flow would give.
+StoryFlow reflow_story(const core::Doc& d, const std::string& story, const core::Story& old_text,
+                       const StoryFlow& old_flow, int budget = 0);
+// s106: `budget` > 0 -- set at most that many frames; if the lines haven't
+// resettled by then the flow is provisional (see StoryFlow).
 // s048: auto-size frames -- each (the last of its thread, one column)
 // measured with room to spare and given the height its text needs (top
 // fixed; at least 1 pt). What changes, for DocJournal::set_settle.
@@ -156,6 +179,9 @@ struct Caret {
     double      x = 0, y = 0, h = 0;   // the caret: x, top, height
 };
 Caret caret_at(const core::Doc& d, const std::string& story, const StoryFlow& flow, core::TextPos p);
+// s105: the same frame, top and height, without the x -- read off the flow's
+// lines, no text laid out (the contents check asks it per heading).
+Caret caret_line(const core::Doc& d, const std::string& story, const StoryFlow& flow, core::TextPos p);
 // The place nearest (x, y) in a frame of the story (clamped to its lines).
 core::TextPos hit_text(const core::Doc& d, const std::string& story, const StoryFlow& flow,
                        const std::string& frame, double x, double y);
@@ -195,11 +221,45 @@ public:
     // s103: what it holds was laid out for this revision of `d`.
     bool fresh_for(const core::Doc& d) const { return m_rev == d.revision(); }
 
+    // s105: how the last get() was had -- for tests and the log.
+    enum class How { Kept, Whole, Reflowed };
+    How last_how() const { return m_how; }
+
+    // s106: re-flows set at most `frames` frames (0: no limit, the default);
+    // past that a flow is provisional until complete() hands in the whole.
+    void set_reflow_budget(int frames) { m_budget = frames; }
+    // The provisional flows, each with what the whole is worked out from:
+    // the last whole flow of the story and the text it was made from.
+    struct Unfinished {
+        std::string story;
+        StoryFlow   basis;
+        core::Story basis_text;
+    };
+    std::vector<Unfinished> unfinished() const;
+    bool any_unfinished() const;
+    // The whole flow of `story`, worked out (on a worker) for revision `rev`
+    // of `d` from `text`. Taken as the flow when `d` is still at `rev`; else,
+    // if only text changed since, as the basis the next re-flow starts from.
+    void complete(const core::Doc& d, const std::string& story, std::uint64_t rev, StoryFlow flow, core::Story text);
+    // Work out every provisional flow here and now (before anything that
+    // must not read a stand-in: rebuilding a contents list, the export sheet).
+    void finish_now(const core::Doc& d);
+
 private:
     void check(const core::Doc& d);
+    struct Entry {
+        StoryFlow   flow;
+        core::Story text;   // s105: what it was flowed from -- an edit re-flows from it
+        // s106: a provisional flow's basis -- the last whole flow and its text.
+        std::shared_ptr<const StoryFlow>   basis;
+        std::shared_ptr<const core::Story> basis_text;
+    };
     std::uint64_t                    m_rev = ~0ull;
-    std::map<std::string, StoryFlow> m_flows;
+    std::map<std::string, Entry>     m_flows;
+    std::map<std::string, Entry>     m_prev;       // s105: flows of stories edited since -- re-flowed from
     std::map<std::string, Resolved>  m_resolved;   // story "|" page
+    How                              m_how = How::Whole;
+    int                              m_budget = 0;
 };
 
 }  // namespace composix::layout

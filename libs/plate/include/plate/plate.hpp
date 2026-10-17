@@ -254,6 +254,7 @@ public:
     void proof_pixels(std::uint8_t* rgb, std::size_t n, std::vector<float>* de = nullptr) const;
     // s099: the same look, fast -- one 8-bit sRGB -> press -> sRGB transform
     // (lcms precomputes it), for a whole screen of pixels. No Delta E.
+    // Any thread (one at a time).
     void simulate(std::uint8_t* rgb, std::size_t n) const;
 
 private:

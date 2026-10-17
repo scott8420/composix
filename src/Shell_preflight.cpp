@@ -54,6 +54,7 @@ void Shell::build_preflight() {  // zone
 
 void Shell::update_preflight() {  // helper
     if (!m_preflight) return;
+    if (m_pf_flows.any_unfinished()) return;   // s106: as it was, until the flow is whole
     layout::PreflightOpts o;
     o.standard = m_pdf_print ? m_pdf_standard : 0;
     o.profile = !m_pdf_profile.empty();

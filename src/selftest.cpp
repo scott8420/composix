@@ -5809,6 +5809,43 @@ int main() {
     }
 
     {
+        std::cout << "\n-- the store's general form: a variant, a renderer, a mode (s104) --\n";
+        namespace L = composix::layout;
+        using Miss = L::ThumbStore::Miss;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        L::FlowCache flows;
+        int drawn = 0;
+        const auto at = [&](int w) {
+            return L::ThumbStore::Render([&drawn, w](const core::Doc& doc, L::FlowCache& fl, const L::ImageSource& im) {
+                ++drawn;
+                return L::render_thumb(doc, fl, "page.5", w, w * 3 / 2, false, im);
+            });
+        };
+        L::ThumbStore st;
+        auto lk = st.look(d, flows, {}, "p5", "page.5", "z1", 100, 150, at(100), Miss::NowIfNone);
+        check("NowIfNone: nothing yet -> drawn on the spot, current", lk.current && lk.surf && drawn == 1 && !st.asking());
+        lk = st.look(d, flows, {}, "p5", "page.5", "z2", 120, 180, at(120), Miss::NowIfNone);
+        check("NowIfNone: another variant -> the last stands in, the new is asked",
+              !lk.current && lk.surf && cairo_image_surface_get_width(lk.surf.get()) == 100 && st.asking() && drawn == 1);
+        st.hold(true);
+        (void)st.flush(d, flows, {});
+        // Meanwhile the page is drawn on the spot (an edit, say) for z2: the
+        // worker's answer, asked before, must not replace it.
+        lk = st.look(d, flows, {}, "p5", "page.5", "z3", 140, 210, at(140), Miss::Now);
+        check("Now: drawn on the spot", lk.current && drawn == 2);
+        st.hold(false);
+        st.wait_idle();
+        (void)st.collect();
+        lk = st.look(d, flows, {}, "p5", "page.5", "z3", 140, 210, at(140), Miss::NowIfNone);
+        check("an older answer doesn't replace a newer picture", lk.current && drawn == 3 && st.renders() == 3);
+        lk = st.look(d, flows, {}, "p5", "page.5", "z1", 100, 150, at(100), Miss::Ask);
+        check("Ask: a variant back again is asked, not drawn here", !lk.current && st.asking() && drawn == 3);
+    }
+
+    {
         std::cout << "\n-- a long book's tiles off the UI thread (s103) --\n";
         namespace L = composix::layout;
         core::Doc d;
@@ -5826,6 +5863,194 @@ int main() {
         for (const auto& p : pages) all = all && st.look(d, flows, {}, p, p, 80, 120, false).current;
         check("every page of a 40-page book drawn on the worker, current", all && st.renders() == static_cast<int>(pages.size()));
     }
+    {
+        std::cout << "\n-- a keystroke re-flows from the edit (s105) --\n";
+        namespace L = composix::layout;
+        const auto same_flow = [](const L::StoryFlow& a, const L::StoryFlow& b, std::string& why) {
+            if (a.overset != b.overset) { why = "overset"; return false; }
+            if (a.frames.size() != b.frames.size()) { why = "frames"; return false; }
+            for (std::size_t i = 0; i < a.frames.size(); ++i) {
+                const auto& x = a.frames[i].lines;
+                const auto& y = b.frames[i].lines;
+                if (x.size() != y.size()) { why = "frame " + std::to_string(i) + " lines " + std::to_string(x.size()) + " vs " + std::to_string(y.size()); return false; }
+                for (std::size_t k = 0; k < x.size(); ++k) {
+                    const auto& l = x[k];
+                    const auto& m = y[k];
+                    if (l.para != m.para || l.start != m.start || l.end != m.end || std::abs(l.y - m.y) > 1e-9 ||
+                        l.h != m.h || l.col != m.col || std::abs(l.x - m.x) > 1e-9 || std::abs(l.w - m.w) > 1e-9 ||
+                        l.cap != m.cap || std::abs(l.base - m.base) > 1e-9 || l.hyphen != m.hyphen) {
+                        why = "frame " + std::to_string(i) + " line " + std::to_string(k);
+                        return false;
+                    }
+                }
+                if (a.frames[i].from_p != b.frames[i].from_p || a.frames[i].from_b != b.frames[i].from_b) {
+                    why = "frame " + std::to_string(i) + " start";
+                    return false;
+                }
+            }
+            return true;
+        };
+        {
+            core::Doc d;
+            core::DocJournal j{d};
+            d.set_door([&j] { return j.open(); });
+            (void)L::load_big_book(d, {.pages = 24});
+            L::FlowCache cache;
+            (void)cache.get(d, "story.1");
+            std::vector<std::string> ids;
+            core::doc::edit_text(j, d, "story.1", {5, 0}, {5, 0}, "x", "Typing", "");
+            check("a keystroke writes only its story", d.changes_since(d.revision() - 1, ids) && ids.size() == 1 && ids[0] == "story.1");
+            // Edits of every kind, at places through the book: each re-flowed
+            // flow must be the whole flow, line for line.
+            std::uint32_t seed = 7;
+            const auto rnd = [&](std::uint32_t n) { seed = seed * 1103515245u + 12345u; return (seed >> 8) % std::max(1u, n); };
+            const char* inserts[] = {"x", "Lorem ipsum dolor sit amet, ", "\n", "a much longer run of words to push a line or two on, and more words still to make it so ", "", "\nA new paragraph.\n"};
+            int bad = 0, reflowed = 0, kept = 0, partial = 0;
+            std::string why;
+            for (int n = 0; n < 40; ++n) {
+                const auto* st = d.as<core::Story>("story.1");
+                const int np = static_cast<int>(st->paras.size());
+                const int p = static_cast<int>(rnd(static_cast<std::uint32_t>(np)));
+                const auto& t = st->paras[static_cast<std::size_t>(p)].text;
+                // A word boundary (ASCII greeking: any space).
+                int at = 0;
+                for (int tries = 0; tries < 8; ++tries) {
+                    const int k = static_cast<int>(rnd(static_cast<std::uint32_t>(t.size() + 1)));
+                    if (k == 0 || k == static_cast<int>(t.size()) || t[static_cast<std::size_t>(k - 1)] == ' ') { at = k; break; }
+                }
+                core::TextPos a{p, at}, b = a;
+                const int kind = static_cast<int>(rnd(6));
+                if (n % 5 == 3 && p + 1 < np) b = {p + 1, 0};                                   // join with the next
+                else if (n % 7 == 4 && at + 5 <= static_cast<int>(t.size()) && t.find(' ', static_cast<std::size_t>(at)) != std::string::npos)
+                    b = {p, static_cast<int>(t.find(' ', static_cast<std::size_t>(at)))};       // a word taken out
+                core::doc::edit_text(j, d, "story.1", a, b, inserts[kind], "Typing", "");
+                const auto& inc = cache.get(d, "story.1");
+                reflowed += cache.last_how() == L::FlowCache::How::Reflowed;
+                kept += cache.last_how() == L::FlowCache::How::Kept;   // an edit that changed nothing
+                partial += inc.filled < static_cast<int>(inc.frames.size()) / 2;
+                const auto whole = L::flow_story(d, "story.1");
+                if (!same_flow(inc, whole, why)) {
+                    if (bad++ == 0) check("re-flow == whole flow (first difference)", false, "edit " + std::to_string(n) + ": " + why);
+                }
+            }
+            check("40 edits through a 24-page book: every re-flow is the whole flow", bad == 0, std::to_string(bad) + " differ");
+            check("each was re-flowed, not flowed whole", reflowed + kept == 40 && reflowed >= 30,
+                  std::to_string(reflowed) + " re-flowed, " + std::to_string(kept) + " no change");
+            check("most set fewer than half the frames", partial >= 10, std::to_string(partial) + " of 40");
+            // Undo and redo are edits too.
+            j.undo();
+            const bool u = same_flow(cache.get(d, "story.1"), L::flow_story(d, "story.1"), why);
+            j.redo();
+            const bool r = same_flow(cache.get(d, "story.1"), L::flow_story(d, "story.1"), why);
+            check("undo / redo: re-flowed as the whole", u && r, why);
+            // Another story's flow is kept through an edit of this one.
+            const auto* title = &cache.get(d, "story.2");
+            core::doc::edit_text(j, d, "story.1", {3, 0}, {3, 0}, "y", "Typing", "");
+            (void)cache.get(d, "story.1");
+            check("an edit leaves other stories' flows as they were", &cache.get(d, "story.2") == title &&
+                                                                     cache.last_how() == L::FlowCache::How::Kept);
+            // Anything but text: the whole again.
+            core::doc::edit_frames(j, d, {d.as<core::Story>("story.1") ? L::thread_frames(d, "story.1").front() : ""}, "Gutter",
+                                   [](core::Frame& f) { f.gutter += 1; });
+            (void)cache.get(d, "story.1");
+            check("a frame changed: flowed whole", cache.last_how() == L::FlowCache::How::Whole);
+        }
+        {   // s106: a budget -- the far end provisional, then the whole handed in.
+            core::Doc d;
+            core::DocJournal j{d};
+            d.set_door([&j] { return j.open(); });
+            (void)L::load_big_book(d, {.pages = 24});
+            L::FlowCache cache;
+            cache.set_reflow_budget(2);
+            (void)cache.get(d, "story.1");
+            const auto valid = [&](const L::StoryFlow& f) {   // every line's text is there
+                const auto* st = d.as<core::Story>("story.1");
+                for (const auto& ft : f.frames)
+                    for (const auto& l : ft.lines)
+                        if (l.para < 0 || l.para >= static_cast<int>(st->paras.size()) || l.start < 0 ||
+                            l.end > static_cast<int>(st->paras[static_cast<std::size_t>(l.para)].text.size()) || l.start > l.end)
+                            return false;
+                return true;
+            };
+            const auto head_same = [&](const L::StoryFlow& f, const L::StoryFlow& whole) {
+                if (f.tail_from < 0 || f.tail_from > static_cast<int>(f.frames.size())) return false;
+                std::string w;
+                L::StoryFlow a = f, b = whole;
+                a.frames.resize(static_cast<std::size_t>(f.tail_from));
+                b.frames.resize(static_cast<std::size_t>(f.tail_from));
+                a.overset = b.overset;
+                return same_flow(a, b, w);
+            };
+            // Pages of text pasted in: no 2-frame re-flow can resettle after
+            // that, whatever the fonts (a chapter's last page has < 1 page free).
+            std::string paste;
+            for (int k = 0; k < 40; ++k)
+                paste += "\nPasted paragraph, long enough to take several lines in a column of this book, so forty of them run on for pages and pages.";
+            core::doc::edit_text(j, d, "story.1", {5, 3}, {5, 3}, paste, "Paste", "");
+            const auto rev1 = d.revision();
+            const auto p1 = cache.get(d, "story.1");
+            const auto whole1 = L::flow_story(d, "story.1");
+            check("budget: the re-flow stops, provisional", p1.provisional && p1.tail_from > 0 && p1.filled <= 2 &&
+                                                          cache.any_unfinished(), std::to_string(p1.filled) + " set");
+            check("budget: the frames it set are the whole flow's", p1.provisional && head_same(p1, whole1));
+            check("budget: the stand-in's lines are all real text", valid(p1));
+            std::string why;
+            {   // the worker's part, then handed in
+                const auto u = cache.unfinished();
+                const bool one = u.size() == 1 && u[0].story == "story.1";
+                const auto full = one ? L::reflow_story(d, "story.1", u[0].basis_text, u[0].basis) : L::flow_story(d, "story.1");
+                cache.complete(d, "story.1", rev1, full, *d.as<core::Story>("story.1"));
+                const auto& got = cache.get(d, "story.1");
+                check("complete: the whole taken, no longer provisional", one && !got.provisional && !cache.any_unfinished() &&
+                                                                          same_flow(got, whole1, why), why);
+            }
+            // Typed on while the worker works: its answer becomes the basis.
+            core::doc::edit_text(j, d, "story.1", {7, 2}, {7, 2}, paste, "Paste", "");
+            const auto rev2 = d.revision();
+            (void)cache.get(d, "story.1");
+            const auto u2 = cache.unfinished();
+            const auto text2 = *d.as<core::Story>("story.1");
+            const auto full2 = u2.empty() ? L::StoryFlow{} : L::reflow_story(d, "story.1", u2[0].basis_text, u2[0].basis);
+            core::doc::edit_text(j, d, "story.1", {9, 2}, {9, 2}, "and more \n", "Typing", "");
+            const auto& p3 = cache.get(d, "story.1");
+            const bool p3ok = valid(p3) && (!p3.provisional || head_same(p3, L::flow_story(d, "story.1")));
+            if (!u2.empty()) cache.complete(d, "story.1", rev2, full2, text2);   // late: the document moved on
+            const auto& p4 = cache.get(d, "story.1");
+            check("typed on meanwhile: re-flowed from the late answer", !u2.empty() && p3ok && valid(p4) &&
+                                                                     cache.last_how() == L::FlowCache::How::Reflowed);
+            cache.finish_now(d);
+            check("finish_now: the whole, here and now", same_flow(cache.get(d, "story.1"), L::flow_story(d, "story.1"), why) &&
+                                                         !cache.any_unfinished(), why);
+            // Undo through it all, unfinished or not, ends at the whole.
+            j.undo(); j.undo(); j.undo(); j.undo();
+            (void)cache.get(d, "story.1");
+            cache.finish_now(d);
+            check("undo: the whole again", same_flow(cache.get(d, "story.1"), L::flow_story(d, "story.1"), why), why);
+        }
+        {   // The sample: keeps, drop caps, wraps, columns, balance, breaks.
+            core::Doc d;
+            core::DocJournal j{d};
+            d.set_door([&j] { return j.open(); });
+            core::load_sample(d);
+            L::FlowCache cache;
+            int bad = 0;
+            std::string why, first;
+            for (const auto& sid : d.ids_of<core::Story>()) {
+                (void)cache.get(d, sid);
+                const auto* st = d.as<core::Story>(sid);
+                for (int p = 0; p < static_cast<int>(st->paras.size()); ++p) {
+                    for (const char* ins : {"Then ", "\n", "some words to push the paragraph a line further on, it may be, here "}) {
+                        core::doc::edit_text(j, d, sid, {p, 0}, {p, 0}, ins, "Typing", "");
+                        if (!same_flow(cache.get(d, sid), L::flow_story(d, sid), why) && bad++ == 0) first = sid + " para " + std::to_string(p) + ": " + why;
+                        j.undo();
+                        if (!same_flow(cache.get(d, sid), L::flow_story(d, sid), why) && bad++ == 0) first = sid + " para " + std::to_string(p) + " (undone): " + why;
+                    }
+                }
+            }
+            check("the sample: every paragraph of every story edited -- re-flow == whole", bad == 0, first);
+        }
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

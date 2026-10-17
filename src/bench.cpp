@@ -13,6 +13,7 @@
 //
 // Each timing is the median of a few runs (the count in brackets).
 #include "core/Doc.hpp"
+#include "core/Outline.hpp"
 #include "layout/BigBook.hpp"
 #include "layout/Export.hpp"
 #include "layout/Flow.hpp"
@@ -145,16 +146,21 @@ int main(int argc, char** argv) {
         C::DocJournal j{d};
         const auto& body = d.as<C::Story>("story.1")->paras;
         const int early = 2, late = static_cast<int>(body.size()) - 3;
-        for (const auto& [label, para] : {std::pair{"near the start", early}, std::pair{"near the end", late}}) {
+        struct Case { const char* label; int para; const char* text; };
+        for (const auto& [label, para, text] : {Case{"keystroke near the start", early, "x"}, Case{"keystroke near the end", late, "x"},
+                                                Case{"Enter near the start", early, "\n"}}) {
             std::vector<double> te, tf;
+            int filled = 0;
             for (int r = 0; r < 5; ++r) {
                 L::FlowCache f;
                 (void)f.get(d, "story.1");   // warm, as the canvas is
-                te.push_back(ms_of([&] { C::doc::edit_text(j, d, "story.1", {para, 5}, {para, 5}, "x"); }));
-                tf.push_back(ms_of([&] { (void)f.get(d, "story.1"); }));
+                te.push_back(ms_of([&] { C::doc::edit_text(j, d, "story.1", {para, 5}, {para, 5}, text); }));
+                tf.push_back(ms_of([&] { filled = f.get(d, "story.1").filled; }));
             }
-            row((std::string("keystroke ") + label + ": the edit").c_str(), median(te), 5, "journal + store");
-            row((std::string("keystroke ") + label + ": reflow").c_str(), median(tf), 5, "the whole story, as now");
+            row((std::string(label) + ": the edit").c_str(), median(te), 5, "journal + store");
+            // s105: re-flowed from the edit until the lines resettle.
+            row((std::string(label) + ": reflow").c_str(), median(tf), 5,
+                std::to_string(filled) + " of " + std::to_string(flow.frames.size()) + " frames set");
         }
         while (j.can_undo()) j.undo();
     }
@@ -253,14 +259,22 @@ int main(int argc, char** argv) {
         // What Shell::refresh does on the idle after ANY change (a keystroke):
         // project_now flows every story for the overset badges and runs the
         // stale check; update_preflight runs preflight (the stale check
-        // again) -- all on the one cache the change just emptied.
+        // again). s105: a keystroke no longer empties the cache -- the edited
+        // story is re-flowed from the edit, the others kept.
+        L::FlowCache pf;
+        for (const auto& s : stories) (void)pf.get(d, s);
+        C::DocJournal j{d};
+        C::doc::edit_text(j, d, "story.1", {2, 5}, {2, 5}, "x");
         const double t = ms_of([&] {
-            L::FlowCache pf;   // s101: one cache for all three (the change emptied it)
             for (const auto& s : stories) (void)pf.get(d, s);
             (void)L::stale_lists(d, pf);
             (void)L::preflight_issues(d, pf, {});
         });
-        row("the app's refresh after a change", t, 1, "project_now + update_preflight");
+        j.undo();
+        row("the app's refresh after a keystroke", t, 1, "project_now + update_preflight");
+        std::vector<double> tp;
+        for (int r = 0; r < 3; ++r) tp.push_back(ms_of([&] { (void)C::project(d, "", nullptr, nullptr, nullptr); }));
+        row("  the projection (core::project)", median(tp), 3, "the navigator's / tiles' model");
     }
     {
         C::DocJournal j{d};

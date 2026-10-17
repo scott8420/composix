@@ -33,6 +33,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -451,15 +452,32 @@ public:
     // Bumped by every put / reset (s007): caches keyed on it (text flow) know
     // when to recompute.
     std::uint64_t revision() const { return m_rev; }
+    // s105: the ids written since revision `rev`, oldest first (repeats
+    // kept) -- false when that's no longer known (long ago, or a reset).
+    bool changes_since(std::uint64_t rev, std::vector<Id>& ids) const;
 
 private:
     std::map<Id, Record>       m_recs;
     std::uint64_t              m_rev = 0;
+    std::deque<std::pair<std::uint64_t, Id>> m_log;   // s105: (revision after, id), the last few thousand writes
+    std::uint64_t              m_log_floor = 0;        // changes since a revision below this are not known
     std::map<std::string, int> m_next;   // fresh_id counters per prefix
     // s101: page order, rebuilt when the revision moves (page_index was a
     // scan of every record per call -- per page, per projection).
     mutable std::map<Id, int>  m_page_at;
     mutable std::uint64_t      m_page_at_rev = ~0ull;
+    // s105: more of the same, each rebuilt when the revision moves -- the
+    // projection asked these per page, each a scan (and a sort) of every record.
+    mutable std::array<std::vector<Id>, std::variant_size_v<Record>> m_ids;   // ids_of, by kind
+    mutable std::array<std::uint64_t, std::variant_size_v<Record>>   m_ids_rev = [] {
+        std::array<std::uint64_t, std::variant_size_v<Record>> a{};
+        a.fill(~0ull);
+        return a;
+    }();
+    mutable std::map<Id, std::vector<Id>> m_frames_on;   // owner -> its frames, by z
+    mutable std::uint64_t      m_frames_on_rev = ~0ull;
+    mutable std::map<Id, Id>   m_section_at;             // page -> its section
+    mutable std::uint64_t      m_section_at_rev = ~0ull;
     int                        m_strays = 0;
     int                        m_loading = 0;
     std::function<bool()>      m_door;

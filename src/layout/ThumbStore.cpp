@@ -47,7 +47,11 @@ Surface render_thumb(const core::Doc& d, FlowCache& flows, const std::string& id
 }
 
 namespace {
-std::size_t size_of(int pw, int ph) { return static_cast<std::size_t>(pw) * static_cast<std::size_t>(ph) * 4; }
+std::size_t size_of(const Surface& s) {
+    if (!s) return 0;
+    return static_cast<std::size_t>(cairo_image_surface_get_stride(s.get())) *
+           static_cast<std::size_t>(cairo_image_surface_get_height(s.get()));
+}
 }  // namespace
 
 ThumbStore::ThumbStore(std::size_t cap_bytes) : m_cap(cap_bytes) {}
@@ -87,17 +91,27 @@ const PageKey& ThumbStore::key_of(const core::Doc& d, FlowCache& flows, const st
     return it->second;
 }
 
-void ThumbStore::store(Entry& e, Surface s, const PageKey& key, int pw, int ph) {
-    if (e.surf) m_bytes -= size_of(e.pw, e.ph);
+void ThumbStore::store(Entry& e, Surface s, const PageKey& key, const std::string& variant, int pw, int ph) {
+    m_bytes -= size_of(e.surf);
     e.surf = std::move(s);
     e.key = key;
+    e.variant = variant;
     e.pw = pw;
     e.ph = ph;
-    if (e.surf) m_bytes += size_of(pw, ph);
+    m_bytes += size_of(e.surf);
 }
 
 ThumbStore::Look ThumbStore::look(const core::Doc& d, FlowCache& flows, const ImageSource& images,
                                   const std::string& slot, const std::string& id, int pw, int ph, bool guides) {
+    const Render r = [id, pw, ph, guides](const core::Doc& doc, FlowCache& fl, const ImageSource& im) {
+        return render_thumb(doc, fl, id, pw, ph, guides, im);
+    };
+    return look(d, flows, images, slot, id, {}, pw, ph, r, m_threaded ? Miss::Ask : Miss::Now);
+}
+
+ThumbStore::Look ThumbStore::look(const core::Doc& d, FlowCache& flows, const ImageSource& images,
+                                  const std::string& slot, const std::string& id, const std::string& variant, int pw,
+                                  int ph, const Render& render, Miss miss) {
     // Asks made for an earlier revision are dropped, not snapshotted with a
     // later one (the picture would not be what its key says).
     if (d.revision() != m_asks_rev) {
@@ -109,9 +123,12 @@ ThumbStore::Look ThumbStore::look(const core::Doc& d, FlowCache& flows, const Im
     const PageKey& key = key_of(d, flows, id);
     Entry& e = m_entries[slot];
     e.used = ++m_tick;
-    if (e.surf && e.pw == pw && e.ph == ph && e.key == key) return {e.surf, true};
-    if (!m_threaded) {
-        store(e, render_thumb(d, flows, id, pw, ph, guides, images), key, pw, ph);
+    if (e.surf && e.pw == pw && e.ph == ph && e.variant == variant && e.key == key) return {e.surf, true};
+    if (miss == Miss::Now || (miss == Miss::NowIfNone && !e.surf)) {
+        store(e, render(d, flows, images), key, variant, pw, ph);
+        e.drawn_at = m_tick;
+        e.asked = false;
+        std::erase_if(m_asks, [&](const Job& j) { return j.slot == slot; });
         {
             std::lock_guard lk(m_mx);
             ++m_sync_renders;
@@ -120,13 +137,14 @@ ThumbStore::Look ThumbStore::look(const core::Doc& d, FlowCache& flows, const Im
         trim();
         return {s, s != nullptr};
     }
-    if (!(e.asked && e.want_pw == pw && e.want_ph == ph && e.want_key == key)) {
+    if (!(e.asked && e.want_pw == pw && e.want_ph == ph && e.want_variant == variant && e.want_key == key)) {
         e.asked = true;
         e.want_key = key;
+        e.want_variant = variant;
         e.want_pw = pw;
         e.want_ph = ph;
         std::erase_if(m_asks, [&](const Job& j) { return j.slot == slot; });
-        m_asks.push_back(Job{slot, id, key, pw, ph, guides, nullptr});
+        m_asks.push_back(Job{slot, id, key, variant, pw, ph, render, nullptr, m_tick});
     }
     return {e.surf, false};
 }
@@ -180,12 +198,14 @@ void ThumbStore::run() {
         m_queue.pop_front();
         m_busy = true;
         lk.unlock();
-        Surface s = render_thumb(j.snap->doc, j.snap->flows, j.id, j.pw, j.ph, j.guides, j.snap->images);
+        Surface s = j.render ? j.render(j.snap->doc, j.snap->flows, j.snap->images) : Surface{};
         const std::uint64_t gen = j.snap->gen;
         j.snap.reset();   // the last job of a revision lets its snapshot go here
         lk.lock();
         ++m_worker_renders;
-        m_done.push_back(Done{std::move(j.slot), std::move(j.id), std::move(j.key), j.pw, j.ph, std::move(s), gen});
+        j.render = {};   // what it captured goes on this thread
+        m_done.push_back(Done{std::move(j.slot), std::move(j.id), std::move(j.key), std::move(j.variant), j.pw, j.ph,
+                              std::move(s), gen, j.asked_at});
         m_busy = false;
         auto notify = m_notify;
         const bool idle = m_queue.empty();
@@ -206,8 +226,11 @@ std::set<std::string> ThumbStore::collect() {
     for (auto& r : done) {
         if (r.gen != m_gen || !r.surf) continue;   // another document's
         Entry& e = m_entries[r.slot];
-        store(e, std::move(r.surf), r.key, r.pw, r.ph);
-        if (e.asked && e.want_key == r.key && e.want_pw == r.pw && e.want_ph == r.ph) e.asked = false;
+        if (e.surf && r.asked_at < e.drawn_at) continue;   // something newer is already there
+        store(e, std::move(r.surf), r.key, r.variant, r.pw, r.ph);
+        e.drawn_at = r.asked_at;
+        if (e.asked && e.want_key == r.key && e.want_variant == r.variant && e.want_pw == r.pw && e.want_ph == r.ph)
+            e.asked = false;
         ids.insert(r.id);
     }
     if (!done.empty()) trim();
@@ -223,7 +246,7 @@ void ThumbStore::trim() {
     for (const auto& [used, slot] : order) {
         if (m_bytes <= m_cap) break;
         Entry& e = m_entries[slot];
-        store(e, nullptr, e.key, 0, 0);
+        store(e, nullptr, e.key, {}, 0, 0);
         if (!e.asked) m_entries.erase(slot);
     }
 }

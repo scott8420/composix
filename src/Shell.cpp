@@ -33,9 +33,13 @@ Shell::Shell()
     m_canvas_view.canvas().share_flows(m_pf_flows);
     m_page_thumbs.share_flows(m_pf_flows);
     m_page_thumbs.set_threaded(true);   // s103: drawn on a worker, a stand-in until ready
+    // s106: a re-flow sets at most this many frames on the spot; the rest of
+    // a long story follows on a worker (finish_flows).
+    m_pf_flows.set_reflow_budget(reflow_budget());
 }
 
 Shell::~Shell() {
+    if (m_flow_thread.joinable()) m_flow_thread.join();   // s106
     if (m_ctx_menu) m_ctx_menu->unparent();   // s074: a popover parented by hand goes by hand
 }
 

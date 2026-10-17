@@ -202,7 +202,7 @@ std::vector<Bookmark> list_marks(const core::Doc& d, FlowCache& flows, const cor
             std::string title = para.text;
             for (auto& c : title) if (c == '\t') c = ' ';
             if (title.find_first_not_of(' ') == std::string::npos) continue;
-            const auto c = caret_at(d, sid, flow, {p, 0});
+            const auto c = caret_line(d, sid, flow, {p, 0});   // s105: (was caret_at: a frame laid out a heading)
             if (!c.ok) continue;
             const auto* f = d.as<core::Frame>(c.frame);
             if (!f) continue;

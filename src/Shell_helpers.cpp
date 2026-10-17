@@ -88,7 +88,11 @@ core::Outline Shell::project_now() const {  // helper
     for (const auto& sid : m_doc.ids_of<core::Story>())   // s101: through the cache (was a fresh flow each)
         if (m_pf_flows.get(m_doc, sid).overset) over.push_back(sid);
     std::map<std::string, std::string> stale;   // s089
-    for (const auto& s : layout::stale_lists(m_doc, m_pf_flows)) stale[s.list] = s.why;
+    if (m_pf_flows.any_unfinished()) stale = m_stale_last;   // s106: not judged on a stand-in
+    else {
+        for (const auto& s : layout::stale_lists(m_doc, m_pf_flows)) stale[s.list] = s.why;
+        m_stale_last = stale;
+    }
     return core::project(m_doc, m_project_dir, &over, &layout::font_families(), &stale);
 }
 
@@ -108,19 +112,32 @@ void Shell::refresh() {  // helper
     // Mid-drag the canvas paints the gesture itself; the rest of the views
     // catch up when it ends (signal_edited -> here again).
     if (m_journal.in_gesture()) { m_canvas_view.canvas().queue_draw(); return; }
+    m_pf_flows.set_reflow_budget(reflow_budget());   // s106 (a forget() or an adopt() replaced the cache)
     // s101: a slow refresh (100 ms+) says so -- with the canvas's draw line,
     // what a change costs. The flow it pays is shared with the canvas.
+    // s105: and where it went (project / nav / views / preflight).
+    using Clock = std::chrono::steady_clock;
     struct Timer {
-        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        Clock::time_point t0 = Clock::now(), mark = t0;
+        double part[4] = {0, 0, 0, 0};
+        void lap(int k) {
+            const auto now = Clock::now();
+            part[k] = std::chrono::duration<double, std::milli>(now - mark).count();
+            mark = now;
+        }
         ~Timer() {
-            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
             if (ms >= 100)
-                if (auto lg = log::get(log::Area::Shell)) lg->info("refresh {:.0f} ms", ms);
+                if (auto lg = log::get(log::Area::Shell))
+                    lg->info("refresh {:.0f} ms (project {:.0f}, navigator {:.0f}, views {:.0f}, preflight {:.0f})", ms,
+                             part[0], part[1], part[2], part[3]);
         }
     } timer;
     const auto keep = m_pick.segment ? m_tiles.selected() : std::vector<std::string>{};
     m_outline = project_now();
+    timer.lap(0);
     m_nav.refresh(&m_outline);
+    timer.lap(1);
     std::vector<std::string> still;
     for (const auto& id : m_pick.items)
         if (m_outline.find(id)) still.push_back(id);
@@ -131,7 +148,10 @@ void Shell::refresh() {  // helper
     m_story_ed.model_changed();   // s033
     m_canvas_view.queue_rulers();   // s073: the unit may have changed (an undo too)
     update_title();
+    timer.lap(2);
     update_preflight();   // s024
+    timer.lap(3);
+    finish_flows();   // s106
 }
 
 // s068: up a level follows what's open -- enabled (and the views' back
@@ -274,6 +294,7 @@ void Shell::adopt(const core::Doc& fresh, const std::string& dir, layout::FlowCa
         m_pf_flows = std::move(*laid);
         m_pf_flows.rebase(m_doc);
     }
+    m_pf_flows.set_reflow_budget(reflow_budget());   // s106
     m_journal.clear();       // no step carries over from another document
     m_dirty = true;          // (so set_dirty repaints the title)
     m_saved_mark = m_journal.mark();   // s057

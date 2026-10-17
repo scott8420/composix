@@ -26,6 +26,11 @@ void Doc::put(const Id& id, const std::optional<Record>& v) {
     if (v) m_recs[id] = *v;
     else   m_recs.erase(id);
     ++m_rev;
+    m_log.emplace_back(m_rev, id);   // s105
+    if (m_log.size() > 4096) {
+        m_log_floor = m_log.front().first;
+        m_log.pop_front();
+    }
     // Keep fresh ids ahead of anything that comes back (undo of a delete).
     const auto dot = id.rfind('.');
     if (dot != std::string::npos) {
@@ -38,10 +43,23 @@ void Doc::put(const Id& id, const std::optional<Record>& v) {
     if (m_changed) m_changed();
 }
 
+bool Doc::changes_since(std::uint64_t rev, std::vector<Id>& ids) const {   // s105
+    ids.clear();
+    if (rev > m_rev || rev < m_log_floor) return false;
+    if (rev == m_rev) return true;
+    // The first write after `rev` must still be in the log.
+    if (m_log.empty() || m_log.front().first > rev + 1) return false;
+    for (auto it = m_log.rbegin(); it != m_log.rend() && it->first > rev; ++it) ids.push_back(it->second);
+    std::reverse(ids.begin(), ids.end());
+    return true;
+}
+
 void Doc::reset() {
     m_recs.clear();
     m_next.clear();
     ++m_rev;
+    m_log.clear();
+    m_log_floor = m_rev;
     if (m_changed) m_changed();
 }
 
@@ -67,6 +85,9 @@ template <class T> double pos_of(const T& r) {
 }  // namespace
 
 template <class T> std::vector<Doc::Id> Doc::ids_of() const {
+    // s105: kept until the revision moves.
+    static const std::size_t k = Record(std::in_place_type<T>).index();
+    if (m_ids_rev[k] == m_rev) return m_ids[k];
     std::vector<Id> out;
     for (const auto& [id, r] : m_recs)
         if (std::holds_alternative<T>(r)) out.push_back(id);
@@ -81,6 +102,8 @@ template <class T> std::vector<Doc::Id> Doc::ids_of() const {
     }
     // s101: no pos (frames, guides): id order as it stands -- the stable sort
     // on an all-equal key changed nothing and cost two lookups a comparison.
+    m_ids[k] = out;
+    m_ids_rev[k] = m_rev;
     return out;
 }
 
@@ -125,15 +148,24 @@ int Doc::page_index(const Id& page) const {
 }
 
 Doc::Id Doc::section_of(const Id& page) const {
-    const int at = page_index(page);
-    if (at < 0) return {};
-    Id best;
-    int best_at = -1;
-    for (const auto& sid : ids_of<Section>()) {
-        const int s = page_index(as<Section>(sid)->start_page);
-        if (s >= 0 && s <= at && s > best_at) { best = sid; best_at = s; }
+    if (m_section_at_rev != m_rev) {   // s105: every page's, in one pass
+        m_section_at.clear();
+        const auto ps = pages();
+        std::vector<int> starts(ps.size(), -1);   // page index -> the section starting there (index in secs)
+        const auto secs = ids_of<Section>();
+        for (std::size_t i = 0; i < secs.size(); ++i) {
+            const int s = page_index(as<Section>(secs[i])->start_page);
+            if (s >= 0 && starts[static_cast<std::size_t>(s)] < 0) starts[static_cast<std::size_t>(s)] = static_cast<int>(i);
+        }
+        Id cur;
+        for (std::size_t i = 0; i < ps.size(); ++i) {
+            if (starts[i] >= 0) cur = secs[static_cast<std::size_t>(starts[i])];
+            m_section_at[ps[i]] = cur;
+        }
+        m_section_at_rev = m_rev;
     }
-    return best;
+    const auto it = m_section_at.find(page);
+    return it == m_section_at.end() ? Id{} : it->second;
 }
 
 std::string Doc::folio(const Id& page) const {
@@ -159,12 +191,17 @@ std::vector<Doc::Id> Doc::pages_of(const Id& section) const {
 }
 
 std::vector<Doc::Id> Doc::frames_on(const Id& owner) const {
-    std::vector<Id> out;
-    for (const auto& [id, r] : m_recs)   // s101: straight from the store (ids_of's order)
-        if (const auto* f = std::get_if<Frame>(&r); f && f->owner == owner) out.push_back(id);
-    std::stable_sort(out.begin(), out.end(),
-                     [this](const Id& a, const Id& b) { return as<Frame>(a)->z < as<Frame>(b)->z; });
-    return out;
+    if (m_frames_on_rev != m_rev) {   // s105: every owner's, in one pass
+        m_frames_on.clear();
+        for (const auto& [id, r] : m_recs)   // s101: straight from the store (ids_of's order)
+            if (const auto* f = std::get_if<Frame>(&r)) m_frames_on[f->owner].push_back(id);
+        for (auto& [o, ids] : m_frames_on)
+            std::stable_sort(ids.begin(), ids.end(),
+                             [this](const Id& a, const Id& b) { return as<Frame>(a)->z < as<Frame>(b)->z; });
+        m_frames_on_rev = m_rev;
+    }
+    const auto it = m_frames_on.find(owner);
+    return it == m_frames_on.end() ? std::vector<Id>{} : it->second;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -140,6 +140,7 @@ add_executable(composix
     src/Shell_swatch.cpp
     src/Shell_start.cpp
     src/Shell_preflight.cpp
+    src/Shell_reflow.cpp   # s106: the far end of a long story on a worker
     src/Shell_busy.cpp
     src/Shell_helpers.cpp
     # s002: the segmented navigator, tile view, item preview, inspector.
@@ -154,6 +155,7 @@ add_executable(composix
     src/views/PanelHandle.cpp
     # s005: the page canvas.
     src/views/Canvas.cpp
+    src/views/PagePaint.cpp   # s104: the canvas page, drawn on any thread
     # s006: rulers.
     src/views/Ruler.cpp
     # s009: probing + decoding image files.

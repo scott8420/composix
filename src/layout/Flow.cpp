@@ -604,8 +604,22 @@ StoryFlow flow_story(const core::Doc& d, const std::string& story) {
 }
 
 namespace {
+struct Prev {   // s105
+    const core::Story*     text;
+    const StoryFlow*       flow;
+    int                    budget = 0;   // s106: frames to set at most (0: all it takes)
+};
 StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::Story& text,
-                    const std::map<std::string, double>* heights, const FlowTick* tick = nullptr);
+                    const std::map<std::string, double>* heights, const FlowTick* tick = nullptr,
+                    const Prev* prev = nullptr);
+}
+
+StoryFlow reflow_story(const core::Doc& d, const std::string& story, const core::Story& old_text,
+                       const StoryFlow& old_flow, int budget) {   // s105
+    const auto* st = d.as<core::Story>(story);
+    if (!st) return {};
+    const Prev prev{&old_text, &old_flow, budget};
+    return flow_impl(d, story, *st, nullptr, nullptr, &prev);
 }
 
 StoryFlow flow_story(const core::Doc& d, const std::string& story, const FlowTick& tick) {   // s102
@@ -643,7 +657,7 @@ std::vector<core::DocJournal::Settled> fit_frames(const core::Doc& d) {
 
 namespace {
 StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::Story& text,
-                    const std::map<std::string, double>* heights, const FlowTick* tick) {
+                    const std::map<std::string, double>* heights, const FlowTick* tick, const Prev* prev) {
     StoryFlow out;
     const auto* st = &text;
     const auto chain = thread_frames(d, story);
@@ -653,8 +667,85 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
     Cursor c;
     bool done = st->paras.empty();
     std::string last_page;   // s043: the page of the last frame that took lines
-    for (std::size_t fi = 0; fi < chain.size() && !done; ++fi) {
+    std::size_t first = 0;
+
+    // s105: from an earlier flow of this story -- the paragraphs changed are
+    // [k0, k1) now (they were [k0, k1 - delta)); the frames before the one
+    // where paragraph k0 - 1 starts are kept as they were.
+    int k1 = 0, delta = 0;
+    bool resume = false;
+    if (prev && !heights && !done && prev->flow->frames.size() == chain.size()) {
+        bool same_chain = true;
+        for (std::size_t i = 0; i < chain.size() && same_chain; ++i) same_chain = prev->flow->frames[i].frame == chain[i];
+        const auto& op = prev->text->paras;
+        const auto& np = st->paras;
+        if (same_chain && !op.empty()) {
+            const std::size_t lim = std::min(op.size(), np.size());
+            std::size_t k0 = 0;
+            while (k0 < lim && op[k0] == np[k0]) ++k0;
+            std::size_t suf = 0;
+            while (suf < lim - k0 && op[op.size() - 1 - suf] == np[np.size() - 1 - suf]) ++suf;
+            k1 = static_cast<int>(np.size() - suf);
+            delta = static_cast<int>(np.size()) - static_cast<int>(op.size());
+            const int back = k0 > 0 ? static_cast<int>(k0) - 1 : 0;
+            // The last frame the old flow came to at or before paragraph `back`'s start.
+            std::size_t fi0 = 0;
+            bool found = false;
+            for (std::size_t i = 0; i < chain.size(); ++i) {
+                const auto& ft = prev->flow->frames[i];
+                if (ft.from_p < 0) break;
+                if (ft.from_p < back || (ft.from_p == back && ft.from_b == 0)) { fi0 = i; found = true; }
+                else break;
+            }
+            if (found) {
+                for (std::size_t i = 0; i < fi0; ++i) out.frames[i] = prev->flow->frames[i];
+                const auto& at = prev->flow->frames[fi0];
+                c = Cursor{at.from_p, at.from_b};
+                last_page = at.page_before;
+                first = fi0;
+                resume = true;
+            }
+        }
+    }
+
+    for (std::size_t fi = first; fi < chain.size() && !done; ++fi) {
         const auto& fr = *d.as<core::Frame>(chain[fi]);
+        out.frames[fi].from_p = c.p;   // s105
+        out.frames[fi].from_b = c.start;
+        out.frames[fi].page_before = last_page;
+        // s105: come to this frame just as before, past what changed: the
+        // rest is the old flow, its paragraphs moved by delta.
+        if (resume && fi > first && c.p > k1) {
+            const auto& old = prev->flow->frames[fi];
+            if (old.from_p >= 0 && old.from_p + delta == c.p && old.from_b == c.start && old.page_before == last_page) {
+                for (std::size_t i = fi; i < chain.size(); ++i) {
+                    FrameText ft = prev->flow->frames[i];
+                    for (auto& l : ft.lines) l.para += delta;
+                    if (ft.from_p >= 0) ft.from_p += delta;
+                    out.frames[i] = std::move(ft);
+                }
+                for (const auto& ft : out.frames) out.lines += static_cast<int>(ft.lines.size());
+                out.overset = prev->flow->overset;
+                return out;
+            }
+        }
+        // s106: the budget spent and not resettled: the old frames from here
+        // stand in -- their lines of paragraphs that didn't change, moved.
+        if (resume && prev->budget > 0 && out.filled >= prev->budget) {
+            const int keep_from = k1 - delta;   // in the old numbering: the paragraphs after the change
+            for (std::size_t i = fi; i < chain.size(); ++i) {
+                FrameText ft = prev->flow->frames[i];
+                std::erase_if(ft.lines, [&](const Line& l) { return l.para < keep_from; });
+                for (auto& l : ft.lines) l.para += delta;
+                if (ft.from_p >= 0) ft.from_p += delta;
+                out.frames[i] = std::move(ft);
+            }
+            for (const auto& ft : out.frames) out.lines += static_cast<int>(ft.lines.size());
+            out.overset = prev->flow->overset;
+            out.provisional = true;
+            out.tail_from = static_cast<int>(fi);
+            return out;
+        }
         // s043: a paragraph to start on a new (right-hand) page passes the
         // frames on the page it would follow on, and left-hand pages.
         if (c.start == 0 && c.p < static_cast<int>(st->paras.size()) && !last_page.empty()) {
@@ -663,6 +754,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
                 (fr.owner == last_page || (start == core::ParaStart::NextRightPage && d.side_of(fr.owner) == core::Side::Left)))
                 continue;
         }
+        ++out.filled;
         const Cursor at = c;
         const auto wraps = core::wrap_rects(d, chain[fi]);
         // s048: a frame being measured for its auto-size gets room to spare (and no vertical justification).
@@ -670,6 +762,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         const bool measuring = heights && hit != heights->end();
         const double fh = measuring ? hit->second : fr.h;
         const double floor = fh - std::max(0.0, fr.inset.bottom);   // s040: above the bottom inset
+        out.frames[fi].lines.clear();
         done = fill_frame(d, *st, fr, wraps, c, floor, out.frames[fi]);
         if (done && fr.balance && core::column_count(fr) > 1) {
             // The shortest column height that still holds the rest.
@@ -688,6 +781,10 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         if (!out.frames[fi].lines.empty()) last_page = fr.owner;
         if (tick) (*tick)(static_cast<int>(fi + 1), static_cast<int>(chain.size()));   // s102
     }
+    // Frames the story never came to (it ended before them): as a whole flow leaves them.
+    if (resume)
+        for (std::size_t i = 0; i < chain.size(); ++i)
+            if (i >= first && out.frames[i].from_p < 0) out.frames[i].lines.clear();
     for (const auto& ft : out.frames) out.lines += static_cast<int>(ft.lines.size());
     out.overset = !done;
     return out;
@@ -1147,6 +1244,16 @@ Caret caret_at(const core::Doc& d, const std::string& story, const StoryFlow& fl
     return c;
 }
 
+Caret caret_line(const core::Doc& d, const std::string& story, const StoryFlow& flow, core::TextPos p) {   // s105
+    Caret c;
+    const auto* st = d.as<core::Story>(story);
+    if (!st) return c;
+    for (const auto& ft : flow.frames)
+        for (const auto& l : ft.lines)
+            if (on_line(*st, l, p)) return {true, ft.frame, 0, l.y, l.h};
+    return c;
+}
+
 core::TextPos hit_text(const core::Doc& d, const std::string& story, const StoryFlow& flow,
                        const std::string& frame, double x, double y) {
     const FrameText* ft = frame_text(flow, frame);
@@ -1288,7 +1395,29 @@ const std::vector<std::string>& font_families() {
 }
 
 void FlowCache::check(const core::Doc& d) {
-    if (d.revision() != m_rev) { m_flows.clear(); m_resolved.clear(); m_rev = d.revision(); }
+    if (d.revision() == m_rev) return;
+    // s105: when only stories' text changed since, the other stories' flows
+    // still hold, and an edited one is re-flowed from its last flow.
+    std::vector<core::Doc::Id> ids;
+    bool text_only = m_rev != ~0ull && d.changes_since(m_rev, ids);
+    for (std::size_t i = 0; text_only && i < ids.size(); ++i) text_only = d.as<core::Story>(ids[i]) != nullptr;
+    if (!text_only) {
+        m_flows.clear();
+        m_prev.clear();
+    } else {
+        for (const auto& id : ids)
+            if (auto it = m_flows.find(id); it != m_flows.end()) {
+                // (an older prev of it is as good: either is a whole flow of its text.)
+                // s106: a provisional flow isn't -- its basis is.
+                if (it->second.flow.provisional && it->second.basis && it->second.basis_text)
+                    m_prev[id] = Entry{*it->second.basis, *it->second.basis_text, nullptr, nullptr};
+                else
+                    m_prev[id] = std::move(it->second);
+                m_flows.erase(it);
+            }
+    }
+    m_resolved.clear();
+    m_rev = d.revision();
 }
 
 const Resolved& FlowCache::resolved(const core::Doc& d, const std::string& story, const std::string& on_page) {
@@ -1301,7 +1430,59 @@ const Resolved& FlowCache::resolved(const core::Doc& d, const std::string& story
 
 void FlowCache::put(const core::Doc& d, const std::string& story, StoryFlow f) {   // s102
     check(d);
-    m_flows[story] = std::move(f);
+    const auto* st = d.as<core::Story>(story);
+    m_flows[story] = Entry{std::move(f), st ? *st : core::Story{}};
+    m_prev.erase(story);
+}
+
+std::vector<FlowCache::Unfinished> FlowCache::unfinished() const {   // s106
+    std::vector<Unfinished> out;
+    for (const auto& [id, e] : m_flows)
+        if (e.flow.provisional && e.basis && e.basis_text) out.push_back({id, *e.basis, *e.basis_text});
+    return out;
+}
+
+bool FlowCache::any_unfinished() const {
+    for (const auto& [id, e] : m_flows)
+        if (e.flow.provisional) return true;
+    return false;
+}
+
+void FlowCache::complete(const core::Doc& d, const std::string& story, std::uint64_t rev, StoryFlow flow,
+                         core::Story text) {   // s106
+    if (flow.provisional) return;
+    if (rev == d.revision() && m_rev == rev) {
+        m_flows[story] = Entry{std::move(flow), std::move(text), nullptr, nullptr};
+        m_prev.erase(story);
+        m_resolved.clear();
+        return;
+    }
+    // The document moved on: if only text changed since `rev`, the whole
+    // flow of `text` is a better basis than the one the next re-flow has.
+    std::vector<core::Doc::Id> ids;
+    if (!d.changes_since(rev, ids)) return;
+    for (const auto& id : ids)
+        if (!d.as<core::Story>(id)) return;
+    check(d);
+    auto basis = std::make_shared<const StoryFlow>(std::move(flow));
+    auto btext = std::make_shared<const core::Story>(std::move(text));
+    if (auto it = m_flows.find(story); it != m_flows.end()) {
+        if (it->second.flow.provisional) {   // re-flow the current text from it now, next get()
+            m_prev[story] = Entry{*basis, *btext, nullptr, nullptr};
+            m_flows.erase(it);
+        }
+        return;   // a whole flow already: nothing better to do
+    }
+    m_prev[story] = Entry{*basis, *btext, nullptr, nullptr};
+}
+
+void FlowCache::finish_now(const core::Doc& d) {   // s106
+    check(d);
+    for (auto& u : unfinished()) {
+        const auto* st = d.as<core::Story>(u.story);
+        if (!st) continue;
+        complete(d, u.story, d.revision(), reflow_story(d, u.story, u.basis_text, u.basis), *st);
+    }
 }
 
 void flow_all(const core::Doc& d, FlowCache& cache, const std::function<void(int, int)>& tick) {   // s102
@@ -1323,8 +1504,25 @@ void flow_all(const core::Doc& d, FlowCache& cache, const std::function<void(int
 const StoryFlow& FlowCache::get(const core::Doc& d, const std::string& story) {
     check(d);
     auto it = m_flows.find(story);
-    if (it == m_flows.end()) it = m_flows.emplace(story, flow_story(d, story)).first;
-    return it->second;
+    if (it != m_flows.end()) {
+        m_how = How::Kept;
+        return it->second.flow;
+    }
+    const auto* st = d.as<core::Story>(story);
+    Entry e{{}, st ? *st : core::Story{}};
+    if (auto pv = m_prev.find(story); pv != m_prev.end() && st) {
+        e.flow = reflow_story(d, story, pv->second.text, pv->second.flow, m_budget);
+        if (e.flow.provisional) {   // s106: keep what the whole is worked out from
+            e.basis = std::make_shared<const StoryFlow>(std::move(pv->second.flow));
+            e.basis_text = std::make_shared<const core::Story>(std::move(pv->second.text));
+        }
+        m_prev.erase(pv);
+        m_how = How::Reflowed;
+    } else {
+        e.flow = flow_story(d, story);
+        m_how = How::Whole;
+    }
+    return m_flows.emplace(story, std::move(e)).first->second.flow;
 }
 
 }  // namespace composix::layout

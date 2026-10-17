@@ -53,6 +53,14 @@ Surface render_thumb(const core::Doc& d, FlowCache& flows, const std::string& id
 
 class ThumbStore {
 public:
+    // s104: what draws a picture -- any thread, from the document (and flow
+    // cache) it is handed: the live one, or a snapshot on the worker.
+    using Render = std::function<Surface(const core::Doc& d, FlowCache& flows, const ImageSource& images)>;
+    // What look() does with a miss: ask the worker; draw it now (and keep
+    // it); draw it now only if there is no picture at all (else the stale one
+    // stands in while the worker draws the new).
+    enum class Miss { Ask, Now, NowIfNone };
+
     struct Look {
         Surface surf;            // null: nothing yet -- the placeholder
         bool    current = false; // drawn for what the page looks like now, at this size
@@ -73,6 +81,10 @@ public:
     // preview's size); `id` the page or master.
     Look look(const core::Doc& d, FlowCache& flows, const ImageSource& images, const std::string& slot,
               const std::string& id, int pw, int ph, bool guides);
+    // s104: the general form. `variant` -- whatever else decides the picture
+    // besides the page's key and size (a zoom, a mode); `render` draws it.
+    Look look(const core::Doc& d, FlowCache& flows, const ImageSource& images, const std::string& slot,
+              const std::string& id, const std::string& variant, int pw, int ph, const Render& render, Miss miss);
     // Hand the asks to the worker. False: nothing asked.
     bool flush(const core::Doc& d, const FlowCache& flows, const ImageSource& images);
     bool asking() const { return !m_asks.empty(); }
@@ -104,29 +116,36 @@ private:
     struct Job {
         std::string           slot, id;
         PageKey               key;
+        std::string           variant;
         int                   pw = 0, ph = 0;
-        bool                  guides = false;
+        Render                render;
         std::shared_ptr<Snap> snap;
+        std::uint64_t         asked_at = 0;   // m_tick when asked
     };
     struct Done {
         std::string   slot, id;
         PageKey       key;
+        std::string   variant;
         int           pw = 0, ph = 0;
         Surface       surf;
         std::uint64_t gen = 0;
+        std::uint64_t asked_at = 0;
     };
     struct Entry {
         PageKey       key;        // what `surf` was drawn for
+        std::string   variant;
         Surface       surf;
         int           pw = 0, ph = 0;
         bool          asked = false;   // an ask for want_key at want_pw x want_ph is out
         PageKey       want_key;
+        std::string   want_variant;
         int           want_pw = 0, want_ph = 0;
         std::uint64_t used = 0;   // LRU tick
+        std::uint64_t drawn_at = 0;   // when what `surf` shows was asked for (a later answer wins)
     };
 
     const PageKey& key_of(const core::Doc& d, FlowCache& flows, const std::string& id);
-    void           store(Entry& e, Surface s, const PageKey& key, int pw, int ph);
+    void           store(Entry& e, Surface s, const PageKey& key, const std::string& variant, int pw, int ph);
     void           trim();
     void           run();   // the worker
 

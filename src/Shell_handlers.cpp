@@ -439,6 +439,7 @@ void Shell::on_export_pdf() {  // handler
             if (any && o.mark_lists.empty()) o.bookmarks = false;
             const auto i = prof->get_selected();
             const std::string pname = (pro && i - 1 < m_profile_names.size()) ? m_profile_names[i - 1] : std::string{};
+            m_pf_flows.finish_now(m_doc);   // s106
             const auto s = layout::export_summary(m_doc, m_pf_flows, o, on, pname);
             size->set_text(s.size);
             colour->set_text(s.colour);
@@ -504,6 +505,7 @@ void Shell::on_export_pdf() {  // handler
             }
             if (rebuild->get_visible() && m_pdf_rebuild) {   // s089: its own undo step, before the file
                 bool any = false;
+                m_pf_flows.finish_now(m_doc);   // s106
                 for (const auto& s : layout::stale_lists(m_doc, m_pf_flows)) any = layout::build_list(m_journal, m_doc, s.list) || any;
                 if (any) queue_refresh();
             }
@@ -548,6 +550,7 @@ void Shell::on_export_pdf() {  // handler
     if (auto* dd = named<Gtk::DropDown>(root, "export.intent")) dd->set_selected(m_pdf_perceptual ? 1u : 0u);   // s085
     if (auto* b = named<Gtk::CheckButton>(root, "export.rebuild")) {   // s089: only when something's out of date
         std::string names;
+        m_pf_flows.finish_now(m_doc);   // s106
         for (const auto& s : layout::stale_lists(m_doc, m_pf_flows))
             names += (names.empty() ? "" : ", ") + m_doc.as<core::GenList>(s.list)->name;
         b->set_visible(!names.empty());

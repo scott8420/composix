@@ -35,6 +35,8 @@
 
 #include <functional>
 #include <memory>
+#include <glibmm/dispatcher.h>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -158,6 +160,7 @@ private:
     Glib::RefPtr<Gio::Menu> special_menu();       // category: zone: s023 -- Insert Special Character
     void build_preflight();                       // category: zone: s024 -- the header's Preflight button + list
     void update_preflight();                      // category: helper: s024 -- the checks again; the count, the list
+    void finish_flows();                          // category: helper: s106 -- a provisional flow's whole, on a worker
     void go_to_issue(const layout::Issue& i);     // category: helper: s024 -- its page, its frame picked
     void find_refresh();                          // category: helper: s022 -- the hits again, from the bar's settings
     void find_go(int dir);                        // category: helper: s022 -- next / previous hit, shown on the canvas
@@ -248,6 +251,15 @@ private:
     // s089: Preflight's flows; s101: THE flow cache -- the canvas and the
     // thumbnails share it (declared before them: it outlives them).
     mutable layout::FlowCache        m_pf_flows;
+    static constexpr int             kReflowBudget = 24;   // s106: frames a re-flow sets on the spot
+    static int reflow_budget();   // kReflowBudget, or COMPOSIX_REFLOW_BUDGET (a test knob)
+    // s106: the whole of a provisional flow, worked out on a worker.
+    struct FlowJob;
+    std::shared_ptr<FlowJob>         m_flow_job;
+    std::thread                      m_flow_thread;
+    Glib::Dispatcher                 m_flow_disp;
+    bool                             m_flow_disp_bound = false;
+    mutable std::map<std::string, std::string> m_stale_last;   // the contents check while a flow is provisional
 
     // s020: the page / master tiles drawn for real, kept per page.
     views::PageThumbs  m_page_thumbs{m_doc, [this] { return m_project_dir; }};

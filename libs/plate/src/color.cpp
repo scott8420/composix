@@ -2,6 +2,7 @@
 // CMYK output profile.
 #include "internal.hpp"
 
+#include <mutex>
 #include <algorithm>
 #include <cmath>
 #include <cctype>
@@ -145,6 +146,7 @@ struct Proof::Impl {
     cmsHTRANSFORM to_cmyk = nullptr, back = nullptr, rgb_lab = nullptr, cmyk_lab = nullptr;
     cmsHTRANSFORM fast = nullptr;   // s099: sRGB 8-bit -> press -> sRGB 8-bit
     std::string   name;
+    std::mutex    mx;               // s104: proofed from the canvas page worker too
     ~Impl() {
         for (auto t : {to_cmyk, back, rgb_lab, cmyk_lab, fast}) if (t) cmsDeleteTransform(t);
         for (auto p : {out, srgb, lab}) if (p) cmsCloseProfile(p);
@@ -214,6 +216,7 @@ Proof::Result Proof::check(std::uint8_t r, std::uint8_t g, std::uint8_t b) const
 
 void Proof::simulate(std::uint8_t* rgb, std::size_t n) const {   // s099
     if (!m || !rgb || n == 0) return;
+    std::lock_guard lk(m->mx);
     if (m->fast) { cmsDoTransform(m->fast, rgb, rgb, static_cast<cmsUInt32Number>(n)); return; }
     proof_pixels(rgb, n);
 }

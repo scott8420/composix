@@ -1,6 +1,7 @@
 #include "views/Canvas.hpp"
 #include "views/BackButton.hpp"
 #include "views/Images.hpp"
+#include "views/PagePaint.hpp"
 #include "views/Ruler.hpp"
 #include "layout/Flow.hpp"
 #include "Log.hpp"
@@ -31,18 +32,6 @@ namespace {
 // The accent for selection (Adwaita's blue; the theme's own is not reachable
 // from a draw function without the deprecated style-context lookups).
 constexpr double kAcc[3] = {0.21, 0.52, 0.89};
-constexpr std::uint32_t kTints[] = {0x8fa37a, 0xc98f5a, 0x8a7fb0, 0x6b9e9a, 0x5b7fa6, 0x9a8f88};
-
-void rgb(const Cairo::RefPtr<Cairo::Context>& cr, std::uint32_t c, double a = 1) {
-    cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0, a);
-}
-
-std::uint32_t tint_for(const std::string& id) {
-    std::size_t h = 0;
-    for (char c : id) h = h * 31 + static_cast<unsigned char>(c);
-    return kTints[h % std::size(kTints)];
-}
-
 const char* cursor_for(core::Handle h) {
     switch (h) {
     case core::Handle::NW: case core::Handle::SE: return "nwse-resize";
@@ -162,9 +151,26 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
         auto* c = static_cast<Canvas*>(self);
         if (c->editing() && t) c->edit_insert(t, "type", "Typing");
     }), this);
+
+    // s104: page images back from the worker -> drawn again (gathered 30 ms).
+    m_pages.set_threaded(true);
+    m_pg_disp.connect([this] {
+        m_pg_signalled = false;
+        if (m_pg_collect.connected()) return;
+        m_pg_collect = Glib::signal_timeout().connect([this] {
+            if (!m_pages.collect().empty()) queue_draw();
+            return false;
+        }, 30);
+    });
+    m_pages.set_notify([this] {
+        if (!m_pg_signalled.exchange(true)) m_pg_disp.emit();
+    });
 }
 
 Canvas::~Canvas() {
+    m_pg_flush.disconnect();
+    m_pg_collect.disconnect();
+    m_pages.set_notify({});
     m_blink.disconnect();
     if (m_im) {
         g_signal_handlers_disconnect_by_data(m_im, this);
@@ -278,40 +284,8 @@ void Canvas::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
         m_vp.fit();
         Glib::signal_idle().connect_once([this] { m_sig_zoom.emit(); });
     }
-    if (m_proof && w > 0 && h > 0) {   // s099: draw the pages off screen, proof their pixels, then paint
-        auto img = Cairo::ImageSurface::create(Cairo::Surface::Format::ARGB32, w, h);
-        {
-            auto c2 = Cairo::Context::create(img);
-            for (const auto& p : m_placed) draw_page(c2, p);
-        }
-        img->flush();
-        unsigned char* data = img->get_data();
-        const int stride = img->get_stride();
-        std::vector<std::uint8_t> rgb;
-        rgb.reserve(static_cast<std::size_t>(w) * 3);
-        for (int y = 0; y < h; ++y) {   // a row at a time: the opaque pixels (the paper and what's on it)
-            auto* row = reinterpret_cast<std::uint32_t*>(data + static_cast<std::size_t>(y) * stride);
-            rgb.clear();
-            for (int x = 0; x < w; ++x)
-                if ((row[x] >> 24) == 0xFF) {
-                    rgb.push_back(static_cast<std::uint8_t>(row[x] >> 16));
-                    rgb.push_back(static_cast<std::uint8_t>(row[x] >> 8));
-                    rgb.push_back(static_cast<std::uint8_t>(row[x]));
-                }
-            m_proof->simulate(rgb.data(), rgb.size() / 3);
-            std::size_t k = 0;
-            for (int x = 0; x < w; ++x)
-                if ((row[x] >> 24) == 0xFF) {
-                    row[x] = 0xFF000000u | (std::uint32_t(rgb[k]) << 16) | (std::uint32_t(rgb[k + 1]) << 8) | rgb[k + 2];
-                    k += 3;
-                }
-        }
-        img->mark_dirty();
-        cr->set_source(img, 0, 0);
-        cr->paint();
-    } else {
-        for (const auto& p : m_placed) draw_page(cr, p);
-    }
+    // s104: each page an image (proofed in it when Proof Colours is on).
+    for (const auto& p : m_placed) draw_page(cr, p);
     if (m_show_grid)
         for (const auto& p : m_placed) draw_grid(cr, p);
     if (m_show_guides)
@@ -437,77 +411,103 @@ void Canvas::drop_guide(bool vertical, double x, double y) {
         }
 }
 
+// s104: the page as an image at this zoom (views::render_canvas_page), kept
+// in m_pages. A change elsewhere -- another page edited, a zoom, Proof
+// Colours -- is drawn on the page worker from a snapshot while the last
+// image stands in (scaled to the zoom); the page being edited, or dragged
+// on, is drawn on the spot. A page bigger than the view (zoomed in) is
+// drawn on the spot, just the part in view. Off screen: not drawn at all.
 void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p) {
+    double ox = 0, oy = 0;
+    m_vp.to_screen(0, 0, ox, oy);
+    CanvasParams v;
+    v.s = m_vp.scale();
+    v.ox = ox;
+    v.oy = oy;
+    v.dir = m_dir;
+    v.show_hidden = m_show_hidden;
+    v.live_story = m_edit_story;
+    for (const auto& q : m_placed) {   // s027: in a spread the bleed runs round it -- none at the spine
+        if (q.id == p.id || q.master || p.master) continue;
+        v.spine_left = v.spine_left || std::abs(q.r.x + q.r.w - p.r.x) < 0.01;
+        v.spine_right = v.spine_right || std::abs(p.r.x + p.r.w - q.r.x) < 0.01;
+    }
+    const PixBox full = canvas_page_box(m_doc, p, v);
+    const int W = static_cast<int>(std::ceil(m_vp.widget_w())), H = static_cast<int>(std::ceil(m_vp.widget_h()));
+    if (full.x >= W || full.y >= H || full.x + full.w <= 0 || full.y + full.h <= 0) return;   // off screen
+
+    double ds = 1, dsy = 1;
+    cairo_surface_get_device_scale(cairo_get_target(cr->cobj()), &ds, &dsy);
+    // Whole when it's not much more than the view; else the part in view.
+    PixBox box = full;
+    const bool clipped = static_cast<double>(full.w) * full.h > 4.0 * std::max(1, W) * std::max(1, H);
+    if (clipped) {
+        const int x1 = std::min(full.x + full.w, W), y1 = std::min(full.y + full.h, H);
+        box.x = std::max(full.x, 0);
+        box.y = std::max(full.y, 0);
+        box.w = x1 - box.x;
+        box.h = y1 - box.y;
+    }
+    // What decides the image besides the page's key: the look, where the
+    // page falls on the pixel grid, the thread ports' state, the proof.
+    std::string var;
+    {
+        char buf[200];
+        if (clipped)
+            std::snprintf(buf, sizeof buf, "c%.9g|%.4f|%.4f|%d|%d|%g", v.s, box.x - ox, box.y - oy, box.w, box.h, ds);
+        else
+            std::snprintf(buf, sizeof buf, "w%.9g|%.4f|%.4f|%g", v.s, ox - std::floor(ox), oy - std::floor(oy), ds);
+        var = buf;
+        var += "|" + v.dir + "|" + v.live_story + (v.show_hidden ? "|h" : "|-") + (v.spine_left ? "L" : "-") +
+               (v.spine_right ? "R" : "-") + "|p" + std::to_string(m_proof ? m_proof_gen : 0);
+        for (const auto& fid : m_doc.frames_on(p.id)) {
+            const auto* f = m_doc.as<core::Frame>(fid);
+            if (!f || f->kind != core::FrameKind::Text || f->story.empty()) continue;
+            const auto [at, total] = core::thread_place(m_doc, fid);
+            var += "|" + std::to_string(at) + "/" + std::to_string(total) + (flows().get(m_doc, f->story).overset ? "+" : "");
+        }
+    }
+    bool live = m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Gutter || m_drag == Drag::Tab ||
+                m_drag == Drag::Picture || clipped;
+    if (!live && editing())
+        for (const auto& fid : m_doc.frames_on(p.id))
+            if (const auto* f = m_doc.as<core::Frame>(fid); f && f->story == m_edit_story) { live = true; break; }
+    const std::shared_ptr<const plate::Proof> proof = m_proof;
+    const core::Placed placed = p;
+    const layout::ThumbStore::Render render = [v, placed, box, ds, proof](const core::Doc& d, layout::FlowCache& fl,
+                                                                         const layout::ImageSource&) {
+        return render_canvas_page(d, fl, v, placed, box, ds, proof.get());
+    };
+    const int pw = static_cast<int>(std::ceil(box.w * ds)), ph = static_cast<int>(std::ceil(box.h * ds));
+    const auto look = m_pages.look(m_doc, flows(), {}, p.id, p.id, var, pw, ph, render,
+                                   live ? layout::ThumbStore::Miss::Now : layout::ThumbStore::Miss::NowIfNone);
+    if (m_pages.asking() && !m_pg_flush.connected())
+        m_pg_flush = Glib::signal_idle().connect([this] {
+            m_pages.flush(m_doc, flows(), {});
+            return false;
+        });
+    if (const ImagePlace* at = canvas_image_place(look.surf)) {
+        // Where the image's layout origin falls now: scaled from its zoom to this one.
+        const double k = v.s / at->s;
+        cr->save();
+        cr->translate(ox + (at->x - at->ox) * k, oy + (at->y - at->oy) * k);
+        cr->scale(k, k);
+        cr->set_source(Cairo::make_refptr_for_instance<Cairo::Surface>(
+                           new Cairo::Surface(cairo_surface_reference(look.surf.get()), true)), 0, 0);
+        if (k != 1.0) cairo_pattern_set_filter(cairo_get_source(cr->cobj()), CAIRO_FILTER_BILINEAR);
+        if (clipped) {   // a part, drawn for this view: only what it covers
+            cr->rectangle(0, 0, cairo_image_surface_get_width(look.surf.get()) / ds,
+                          cairo_image_surface_get_height(look.surf.get()) / ds);
+            cr->clip();
+        }
+        cr->paint();
+        cr->restore();
+    }
+
+    // The page's name, under it.
     const double s = m_vp.scale();
     const Rect sr = m_vp.to_screen(p.r);
     const auto fg = get_color();
-
-    // Shadow and paper (paper is paper-white in both appearances).
-    for (int i = 4; i >= 1; --i) {
-        cr->set_source_rgba(0, 0, 0, 0.04);
-        cr->rectangle(sr.x - i * 0.5, sr.y + i, sr.w + i, sr.h + i);
-        cr->fill();
-    }
-    cr->set_source_rgb(1, 1, 1);
-    cr->rectangle(sr.x, sr.y, sr.w, sr.h);
-    cr->fill();
-
-    // Bleed: a thin red line outside the trim.
-    // s027: in a spread the bleed runs round the spread -- none at the spine.
-    const double bleed = m_doc.settings().bleed * s;
-    if (bleed > 1) {
-        bool at_left = false, at_right = false;   // a page touching this one at the spine
-        for (const auto& q : m_placed) {
-            if (q.id == p.id || q.master || p.master) continue;
-            at_left = at_left || std::abs(q.r.x + q.r.w - p.r.x) < 0.01;
-            at_right = at_right || std::abs(p.r.x + p.r.w - q.r.x) < 0.01;
-        }
-        const double x0 = std::round(sr.x - (at_left ? 0 : bleed)) + 0.5, x1 = std::round(sr.r() + (at_right ? 0 : bleed)) + 0.5;
-        const double y0 = std::round(sr.y - bleed) + 0.5, y1 = std::round(sr.b() + bleed) + 0.5;
-        cr->set_source_rgba(0.85, 0.2, 0.2, 0.55);
-        cr->set_line_width(1);
-        cr->move_to(x0, y0); cr->line_to(x1, y0);
-        cr->move_to(x0, y1); cr->line_to(x1, y1);
-        if (!at_left) { cr->move_to(x0, y0); cr->line_to(x0, y1); }
-        if (!at_right) { cr->move_to(x1, y0); cr->line_to(x1, y1); }
-        cr->stroke();
-        if (at_right) {   // the spine: a quiet line where the pages meet
-            cr->set_source_rgba(0, 0, 0, 0.18);
-            cr->move_to(std::round(sr.r()) + 0.5, sr.y);
-            cr->line_to(std::round(sr.r()) + 0.5, sr.b());
-            cr->stroke();
-        }
-    }
-
-    // Folds: dashed, from the page's own fold positions.
-    const std::vector<double>* folds = nullptr;
-    if (const auto* pg = m_doc.as<core::Page>(p.id)) folds = &pg->folds;
-    else if (const auto* m = m_doc.as<core::Master>(p.id)) folds = &m->folds;
-    if (folds && !folds->empty()) {
-        cr->set_source_rgba(0.2, 0.4, 0.9, 0.75);
-        cr->set_line_width(1);
-        std::vector<double> dash{5, 4};
-        cr->set_dash(dash, 0);
-        for (double fx : *folds) {
-            const double x = std::round(sr.x + fx * s) + 0.5;
-            cr->move_to(x, sr.y);
-            cr->line_to(x, sr.b());
-        }
-        cr->stroke();
-        cr->unset_dash();
-    }
-
-    // Master items first (dimmed: they are not picked on a page), then the
-    // page's own frames, back to front.
-    if (!p.master)
-        for (const auto& m : core::master_chain(m_doc, p.id))
-            for (const auto& fid : m_doc.frames_on(m))
-                if (core::master_item_on(m_doc, fid, p.id))   // s025: its side, not overridden here
-                    draw_frame(cr, *m_doc.as<core::Frame>(fid), p.r.x, p.r.y, true, fid, p.id);
-    for (const auto& fid : m_doc.frames_on(p.id))
-        draw_frame(cr, *m_doc.as<core::Frame>(fid), p.r.x, p.r.y, false, fid, p.id);
-
-    // The page's name, under it.
     std::string name;
     if (p.master) name = core::master_label(m_doc, p.id);
     else          name = "Page " + m_doc.folio(p.id);
@@ -518,270 +518,7 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
     cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.6);
     cr->move_to(sr.x + (sr.w - lw) / 2, sr.b() + 8);
     lay->show_in_cairo_context(cr);
-}
-
-void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Frame& f, double ox, double oy,
-                        bool from_master, const std::string& id, const std::string& on_page) {
-    const Rect r = m_vp.to_screen(Rect{ox + f.x, oy + f.y, f.w, f.h});
-    const double s = m_vp.scale();
-    const double dim = from_master ? 0.45 : 1.0;
-    const double op = std::clamp(f.opacity, 0.0, 1.0);   // s021: on fill, content and stroke alike
-    // s016: the frame's fill, behind its content (and its stroke, after).
-    if (const auto* fs = m_doc.as<core::Swatch>(f.fill)) {
-        const auto c = core::tint_rgb(fs->preview, f.fill_tint);   // s021
-        cr->save();
-        cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0, dim * op);
-        cr->rectangle(r.x, r.y, r.w, r.h);
-        cr->fill();
-        cr->restore();
-    }
-    struct StrokeLater {
-        const Cairo::RefPtr<Cairo::Context>& cr; const core::Doc& d; const core::Frame& f; Rect r; double s, dim;
-        ~StrokeLater() {
-            const auto* ss = d.as<core::Swatch>(f.stroke);
-            if (!ss || f.stroke_w <= 0) return;
-            const auto c = core::tint_rgb(ss->preview, f.stroke_tint);   // s021
-            cr->save();
-            cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0,
-                                dim * std::clamp(f.opacity, 0.0, 1.0));
-            cr->set_line_width(std::max(0.5, f.stroke_w * s));
-            cr->rectangle(r.x, r.y, r.w, r.h);   // centred on the frame's edge, as it prints
-            cr->stroke();
-            cr->restore();
-        }
-    } stroke_later{cr, m_doc, f, r, s, dim};
-    cr->save();
-
-    switch (f.kind) {
-    case core::FrameKind::Text: {
-        // s007: the story's text, flowed through the thread (layout::Flow),
-        // drawn at true size and scaled -- breaks never change with zoom.
-        const auto& flow = flows().get(m_doc, f.story);
-        cr->save();
-        cr->rectangle(r.x, r.y, r.w, r.h);
-        cr->clip();
-        cr->translate(r.x, r.y);
-        cr->scale(s, s);
-        if (from_master || op < 1) cr->push_group();
-        // s023: page numbers and the like filled in -- except in the story
-        // being edited, whose markers show as signs (every byte where it was).
-        const bool live = editing() && m_edit_story == f.story;
-        const std::string ctx = from_master && m_doc.as<core::Page>(on_page) ? on_page : std::string{};
-        const layout::Resolved* rs = live ? nullptr : &flows().resolved(m_doc, f.story, ctx);
-        if (rs && rs->any) layout::draw_frame_text(cr->cobj(), m_doc, f.story, rs->flow, id, 0, 0, 0.08, &rs->text);
-        else layout::draw_frame_text(cr->cobj(), m_doc, f.story, flow, id, 0, 0);
-        // s059: hidden characters, over the words, in the selection's blue (never printed).
-        if (m_show_hidden && !from_master) {
-            const auto marks = (rs && rs->any) ? layout::hidden_marks(m_doc, f.story, rs->flow, id, &rs->text)
-                                               : layout::hidden_marks(m_doc, f.story, flow, id);
-            cr->save();
-            cr->set_source_rgba(0.22, 0.45, 0.85, 0.8);
-            cr->set_line_width(0.6);
-            cr->select_font_face("Sans", Cairo::ToyFontFace::Slant::NORMAL, Cairo::ToyFontFace::Weight::NORMAL);
-            for (const auto& m : marks) {
-                const double mid = m.base - m.h * 0.28;
-                using K = layout::HiddenMark::Kind;
-                if (m.kind == K::Space) {
-                    cr->arc((m.x0 + m.x1) / 2, mid, std::max(0.45, m.h * 0.045), 0, 2 * M_PI);
-                    cr->fill();
-                } else if (m.kind == K::Tab) {   // an arrow across the tab's room
-                    const double a = m.x0 + 1, b = std::max(a + 2, m.x1 - 1), hh = m.h * 0.12;
-                    cr->move_to(a, mid);
-                    cr->line_to(b, mid);
-                    cr->move_to(b - hh, mid - hh);
-                    cr->line_to(b, mid);
-                    cr->line_to(b - hh, mid + hh);
-                    cr->stroke();
-                } else if (m.kind == K::Hyphen) {   // s065: a typed hyphen -- a short dash, raised
-                    cr->move_to(m.x0 - m.h * 0.1, mid - m.h * 0.12);
-                    cr->line_to(m.x0 + m.h * 0.1, mid - m.h * 0.12);
-                    cr->stroke();
-                } else if (m.kind == K::Para || m.kind == K::End) {
-                    cr->set_font_size(m.h * 0.62);
-                    cr->move_to(m.x0 + 1, m.base);
-                    cr->show_text(m.kind == K::Para ? "\u00b6" : "#");
-                } else {   // a break: a down arrow -- a bar under it for a frame, two for a page
-                    const double x = m.x0 + 1 + m.h * 0.2, top = m.base - m.h * 0.62, bot = m.base - m.h * 0.12, w = m.h * 0.18;
-                    cr->move_to(x, top);
-                    cr->line_to(x, bot);
-                    cr->move_to(x - w, bot - w);
-                    cr->line_to(x, bot);
-                    cr->line_to(x + w, bot - w);
-                    for (int k = 1; k < std::min(m.brk, 3); ++k) {
-                        cr->move_to(x - w, bot + k * m.h * 0.08);
-                        cr->line_to(x + w, bot + k * m.h * 0.08);
-                    }
-                    cr->stroke();
-                    // s098: a dashed rule on to the column's edge, the break named at its end.
-                    const double from = x + w + m.h * 0.25, to = std::max(from, m.edge - 1);
-                    const double size = std::max(3.0, m.h * 0.42);
-                    cr->set_font_size(size);
-                    Cairo::TextExtents te;
-                    const char* name = layout::break_name(m.brk);
-                    cr->get_text_extents(name, te);
-                    const double label_x = to - te.x_advance;
-                    if (label_x > from + m.h * 0.5) {
-                        const std::vector<double> dash{m.h * 0.18, m.h * 0.12};
-                        cr->save();
-                        cr->set_dash(dash, 0);
-                        cr->move_to(from, mid);
-                        cr->line_to(label_x - m.h * 0.2, mid);
-                        cr->stroke();
-                        cr->restore();
-                        cr->move_to(label_x, mid + te.height / 2);
-                        cr->show_text(name);
-                    } else {   // no room on the line: the name alone, after the arrow
-                        cr->move_to(from, mid + te.height / 2);
-                        cr->show_text(name);
-                    }
-                }
-            }
-            cr->restore();
-        }
-        if (from_master || op < 1) { cr->pop_group_to_source(); cr->paint_with_alpha(dim * op); }
-        cr->restore();
-        cr->set_source_rgba(0.45, 0.55, 0.7, 0.55 * dim);
-        cr->set_line_width(1);
-        cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
-        cr->stroke();
-        // s012: the columns' edges, either side of each gutter.
-        if (const int n = core::column_count(f); n > 1) {
-            cr->save();
-            std::vector<double> dash{3, 3};
-            cr->set_dash(dash, 0);
-            cr->set_source_rgba(0.45, 0.55, 0.7, 0.4 * dim);
-            for (int k = 0; k + 1 < n; ++k) {
-                for (double fx : {core::column_x(f, k) + core::column_width(f, k), core::column_x(f, k + 1)}) {
-                    const double x = std::round(r.x + fx * s) + 0.5;
-                    cr->move_to(x, r.y);
-                    cr->line_to(x, r.b());
-                }
-            }
-            cr->stroke();
-            cr->restore();
-        }
-        // s040: the inset -- where the text area sits inside the frame.
-        if (const auto& in = f.inset; !(in == core::Sides{})) {
-            cr->save();
-            std::vector<double> dash{2, 3};
-            cr->set_dash(dash, 0);
-            cr->set_source_rgba(0.45, 0.55, 0.7, 0.4 * dim);
-            const double x0 = std::round(r.x + std::max(0.0, in.left) * s) + 0.5, y0 = std::round(r.y + std::max(0.0, in.top) * s) + 0.5;
-            const double x1 = std::round(r.x + (f.w - std::max(0.0, in.right)) * s) + 0.5;
-            const double y1 = std::round(r.y + (f.h - std::max(0.0, in.bottom)) * s) + 0.5;
-            if (x1 > x0 && y1 > y0) { cr->rectangle(x0, y0, x1 - x0, y1 - y0); cr->stroke(); }
-            cr->restore();
-        }
-        // Thread ports: in (top-left), out (bottom-right); filled = linked.
-        // The last frame of an overset story shows the red + instead.
-        const auto [at, total] = core::thread_place(m_doc, id);
-        const bool over_here = flow.overset && total > 0 && at == total;
-        const double ps = 7;
-        const auto port = [&](double x, double y, bool linked) {
-            cr->set_source_rgb(1, 1, 1);
-            cr->rectangle(x, y, ps, ps);
-            cr->fill_preserve();
-            cr->set_source_rgba(0.45, 0.55, 0.7, dim);
-            cr->stroke();
-            if (linked) {
-                cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], dim);
-                cr->rectangle(x + 2, y + 2, ps - 4, ps - 4);
-                cr->fill();
-            }
-        };
-        if (!from_master && r.w > 24 && r.h > 24) {
-            // s060: just outside the frame's edges (they sat over its first glyph).
-            const Rect in = port_rect(id, false), out = port_rect(id, true);
-            port(in.x, in.y, at > 1);
-            const double px = out.x, py = out.y;
-            if (over_here) {
-                cr->set_source_rgb(0.85, 0.15, 0.15);
-                cr->rectangle(px - 1, py - 1, ps + 2, ps + 2);
-                cr->fill();
-                cr->set_source_rgb(1, 1, 1);
-                cr->set_line_width(1.5);
-                cr->move_to(px + ps / 2, py + 1); cr->line_to(px + ps / 2, py + ps - 1);
-                cr->move_to(px + 1, py + ps / 2); cr->line_to(px + ps - 1, py + ps / 2);
-                cr->stroke();
-                cr->set_line_width(1);
-            } else {
-                port(px, py, total > 0 && at < total);
-            }
-        }
-        break;
-    }
-    case core::FrameKind::Image: {
-        if (f.asset.empty()) {   // an empty graphic frame: the classic X
-            cr->set_source_rgba(0.5, 0.5, 0.55, 0.8 * dim);
-            cr->set_line_width(1);
-            cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
-            cr->move_to(r.x, r.y); cr->line_to(r.r(), r.b());
-            cr->move_to(r.r(), r.y); cr->line_to(r.x, r.b());
-            cr->stroke();
-            break;
-        }
-        const auto* asset = m_doc.as<core::Asset>(f.asset);
-        const auto status = asset ? core::link_status(*asset, m_dir) : core::LinkStatus::Missing;
-        const bool missing = status == core::LinkStatus::Missing || status == core::LinkStatus::EmbeddedMissing;
-        // s009: the real picture, cropped by its frame.
-        if (asset && !missing) {
-            const std::string file = core::resolve_asset(*asset, m_dir);
-            int iw = 0, ih = 0;
-            if (auto pic = images::get(file, core::file_stamp(file), &iw, &ih)) {
-                cr->save();
-                cr->rectangle(r.x, r.y, r.w, r.h);
-                cr->clip();
-                const Rect ir = core::picture_rect(r, f, iw, ih, s);   // s035: Custom placement too
-                images::paint(cr, pic, ir.x, ir.y, ir.w, ir.h, dim * op);   // s021: its opacity
-                cr->restore();
-                if (status == core::LinkStatus::Modified) {   // a quiet corner flag
-                    cr->set_source_rgba(0.85, 0.51, 0.17, 0.95);
-                    cr->move_to(r.r(), r.y); cr->line_to(r.r() - 12, r.y); cr->line_to(r.r(), r.y + 12);
-                    cr->close_path();
-                    cr->fill();
-                }
-                break;
-            }
-        }
-        rgb(cr, tint_for(f.asset), 0.55 * dim * op);   // s021: the stand-in at its opacity too
-        cr->rectangle(r.x, r.y, r.w, r.h);
-        cr->fill();
-        // The stand-in: a file it can't read here (or the unsaved sample's).
-        cr->set_source_rgba(1, 1, 1, 0.5 * dim * op);
-        cr->move_to(r.x + r.w * 0.1, r.y + r.h * 0.85);
-        cr->line_to(r.x + r.w * 0.38, r.y + r.h * 0.45);
-        cr->line_to(r.x + r.w * 0.55, r.y + r.h * 0.68);
-        cr->line_to(r.x + r.w * 0.7, r.y + r.h * 0.52);
-        cr->line_to(r.x + r.w * 0.9, r.y + r.h * 0.85);
-        cr->close_path();
-        cr->fill();
-        if (missing) {
-            cr->set_source_rgba(0.85, 0.2, 0.2, 0.85 * dim);
-            cr->set_line_width(2);
-            cr->move_to(r.x, r.y); cr->line_to(r.r(), r.b());
-            cr->move_to(r.r(), r.y); cr->line_to(r.x, r.b());
-            cr->stroke();
-        }
-        if (const auto* a = m_doc.as<core::Asset>(f.asset); a && r.w > 60 && r.h > 20) {
-            auto lay = create_pango_layout(a->name + (missing ? "  — missing" : ""));
-            lay->set_font_description(Pango::FontDescription("Sans 8"));
-            cr->set_source_rgba(missing ? 0.75 : 0.15, 0.15, 0.15, 0.9 * dim);
-            cr->move_to(r.x + 4, r.y + 2);
-            lay->show_in_cairo_context(cr);
-        }
-        break;
-    }
-    case core::FrameKind::Shape:
-        if (!f.fill.empty() || !f.stroke.empty()) break;   // s016: it has its own look
-        cr->set_source_rgba(0.5, 0.5, 0.55, 0.12 * dim);
-        cr->rectangle(r.x, r.y, r.w, r.h);
-        cr->fill_preserve();
-        cr->set_source_rgba(0.4, 0.4, 0.45, 0.8 * dim);
-        cr->set_line_width(1);
-        cr->stroke();
-        break;
-    }
-    cr->restore();
+    (void)s;
 }
 
 // A picked text frame shows its whole thread: out-port to in-port, in order.
