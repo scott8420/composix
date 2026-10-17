@@ -114,6 +114,13 @@ public:
     sigc::signal<void()>& signal_edited()    { return m_sig_edited; } // a drag / nudge ended: refresh the rest
     sigc::signal<void()>& signal_view()      { return m_sig_view; }   // zoom / pan / pointer moved: rulers repaint
     sigc::signal<void()>& signal_tool()      { return m_sig_tool; }   // the tool changed (a key)
+    // s074: a right-click -- what's under it (a frame -- now picked --, else a
+    // master item showing on a page, else the page) and where (widget px).
+    struct ContextHit {
+        std::string frame, master_item, page;
+        double x = 0, y = 0;
+    };
+    sigc::signal<void(const ContextHit&)>& signal_context() { return m_sig_context; }
 
 private:
     enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture };
@@ -257,6 +264,7 @@ private:
     int                 m_hover_gutter = -1;
     std::vector<double> m_col0;                 // every column's width (points) at press
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool, m_sig_caret;
+    sigc::signal<void(const ContextHit&)> m_sig_context;   // s074
 };
 
 class Ruler;

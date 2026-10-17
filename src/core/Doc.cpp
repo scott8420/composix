@@ -193,6 +193,29 @@ std::string format_folio(int n, Numbering how) {
     return std::to_string(n);
 }
 
+std::vector<ByteSpan> no_break_spans(const Doc& d, const Para& p) {   // s075
+    std::vector<ByteSpan> out;
+    for (const auto& r : p.runs) {
+        const auto* st = d.as<Style>(r.style);   // (a based-on style's settings are written through)
+        if (!st || !st->no_break || r.end <= r.start) continue;
+        if (!out.empty() && r.start <= out.back().b) out.back().b = std::max(out.back().b, r.end);
+        else out.push_back({r.start, r.end});
+    }
+    return out;
+}
+
+int keep_together(const std::string& text, const std::vector<ByteSpan>& spans, int pos, int took) {
+    const int end = pos + took;
+    for (const auto& s : spans) {
+        if (!(s.a < end && end < s.b)) continue;   // the break isn't inside this one
+        if (s.a <= pos) return took;                // it starts the line: too long for any -- as usual
+        int at = s.a;
+        while (at > pos && text[static_cast<std::size_t>(at - 1)] != ' ') --at;   // back to a word's start
+        return at > pos ? at - pos : s.a - pos;
+    }
+    return took;
+}
+
 std::optional<double> parse_percent(std::string_view text) {   // s071
     std::string t;
     for (char c : text) if (!std::isspace(static_cast<unsigned char>(c))) t += c;
@@ -1562,6 +1585,7 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("leading", "Leading", leading),
         COMPOSIX_SF("bold", "Weight", bold),
         COMPOSIX_SF("italic", "Slant", italic),
+        COMPOSIX_SF("no_break", "No break", no_break),   // s075
         COMPOSIX_SF("color", "Color", color),
         COMPOSIX_SF("color_tint", "Tint", color_tint),
         COMPOSIX_SF("align", "Align", align),
@@ -2121,6 +2145,30 @@ bool set_picture_scale(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, d
     });
 }
 
+bool set_picture_offset(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, int axis, double pts) {   // s076
+    if (axis < 0 || axis > 1) return false;
+    std::vector<Doc::Id> frames;
+    for (const auto& id : ids)
+        if (const auto* f = d.as<Frame>(id); f && f->kind == FrameKind::Image && d.as<Asset>(f->asset)) {
+            const auto& a = *d.as<Asset>(f->asset);
+            const Rect now = picture_rect({0, 0, f->w, f->h}, *f, a.px_w > 0 ? a.px_w : 1, a.px_h > 0 ? a.px_h : 1);
+            if (f->fit != ImageFit::Custom || std::abs((axis ? now.y : now.x) - pts) > 1e-9) frames.push_back(id);
+        }
+    if (frames.empty()) return false;
+    return j.run("Picture position", frames, [&] {
+        for (const auto& id : frames) {
+            Frame f = *d.as<Frame>(id);
+            const auto& a = *d.as<Asset>(f.asset);
+            const Rect now = picture_rect({0, 0, f.w, f.h}, f, a.px_w > 0 ? a.px_w : 1, a.px_h > 0 ? a.px_h : 1);
+            f.fit = ImageFit::Custom;
+            f.pic_w = now.w;
+            f.pic_x = axis == 0 ? pts : now.x;
+            f.pic_y = axis == 1 ? pts : now.y;
+            d.put(id, f);
+        }
+    });
+}
+
 bool thread_frames(DocJournal& j, Doc& d, const Doc::Id& from, const Doc::Id& to) {
     const auto* a = d.as<Frame>(from);
     const auto* b = d.as<Frame>(to);
@@ -2260,6 +2308,7 @@ const std::vector<Verb>& verbs() {
         {"set_facing", [](DocJournal& j, Doc& d) { set_facing(j, d, !d.settings().facing); }},
         {"set_wrap_beneath", [](DocJournal& j, Doc& d) { set_wrap_beneath(j, d, true); }},   // s069
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
+        {"set_picture_offset", [](DocJournal& j, Doc& d) { set_picture_offset(j, d, {"frame.11"}, 0, -6); }},   // s076
         {"arrange_back", [](DocJournal& j, Doc& d) { arrange(j, d, {"frame.11"}, Arrange::Back); }},   // s070
         {"arrange_forward", [](DocJournal& j, Doc& d) { arrange(j, d, {"frame.1"}, Arrange::Forward); }},
         {"ignore_wrap", [](DocJournal& j, Doc& d) {

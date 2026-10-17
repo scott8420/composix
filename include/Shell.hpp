@@ -12,6 +12,7 @@
 #include "views/TileView.hpp"
 #include "core/Settings.hpp"
 
+#include <gtkmm/popovermenu.h>
 #include <gtkmm/applicationwindow.h>
 #include <giomm/menu.h>
 #include <gtkmm/dropdown.h>
@@ -123,7 +124,9 @@ private:
     void on_about();                             // category: handler: the About window
     void on_shortcuts();                         // category: handler: keyboard reference
     void on_go_up();                             // category: handler: s068 -- Alt+Up / the header's Up: the section's tiles
-    void on_arrange(core::doc::Arrange how);     // category: handler: s070 -- the canvas's picked frames, up / down the stack
+    void on_arrange(core::doc::Arrange how);
+    void on_canvas_context(const views::Canvas::ContextHit& h);   // category: handler: s074 -- the canvas's right-click menu
+    void bind_context_actions();                 // category: bindings: s074 -- what that menu runs     // category: handler: s070 -- the canvas's picked frames, up / down the stack
     void on_go_forward();                        // category: handler: s068 -- Alt+Right / Forward: back into what Back left
     void sync_up();                              // category: helper: s068 -- the Up button: shown, named, enabled
     void on_undo();                              // category: handler: Ctrl+Z / menu
@@ -237,7 +240,10 @@ private:
     // s005: the page canvas -- after the document and journal it edits.
     views::CanvasView  m_canvas_view{m_doc, m_journal};
     Glib::RefPtr<Gio::Menu>         m_edit_menu;
-    Glib::RefPtr<Gio::Menu>         m_arrange_menu;   // s070: kept, so the Edit section's rebuild keeps it
+    Glib::RefPtr<Gio::Menu>         m_arrange_menu;
+    // s074: the canvas's right-click menu, and what it was opened on.
+    std::unique_ptr<Gtk::PopoverMenu> m_ctx_menu;
+    views::Canvas::ContextHit         m_ctx;   // s070: kept, so the Edit section's rebuild keeps it
     Glib::RefPtr<Gio::SimpleAction> m_act_undo, m_act_redo;
 
     // s013: the Export PDF sheet, and its choices for the session.
@@ -281,6 +287,7 @@ private:
     bool                             m_pdf_convert = false;
     std::vector<std::string>         m_pdf_only;            // s054: the range's pages (empty = all)
     bool                             m_pdf_bookmarks = true;
+    std::string                      m_pdf_range;   // s077: as typed, "" = all
     int                              m_pdf_standard = 0;   // s017: 0 none, 1 PDF/X-1a, 2 PDF/X-4
     std::vector<std::string>         m_profiles;           // the sheet's list, as paths
     std::vector<std::string>         m_profile_names;      // s032: ... and their names (what the document keeps)

@@ -7,6 +7,7 @@
 
 #include <gdkmm/cursor.h>
 #include <glibmm/main.h>
+#include <gtkmm/gestureclick.h>
 #include <gtkmm/droptarget.h>
 #include <gtkmm/root.h>
 #include <gtkmm/eventcontrollerkey.h>
@@ -70,6 +71,34 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
     add_controller(m_gdrag);
 
     // Middle button: pan.
+    // s074: right-click -- the thing under the pointer picked, then the shell's menu.
+    {
+        auto right = Gtk::GestureClick::create();
+        right->set_button(GDK_BUTTON_SECONDARY);
+        right->signal_pressed().connect([this](int, double x, double y) {
+            if (editing() || m_drag != Drag::None) return;
+            grab_focus();
+            double lx = 0, ly = 0;
+            m_vp.to_doc(x, y, lx, ly);
+            ContextHit h;
+            h.x = x;
+            h.y = y;
+            h.frame = core::hit_frame(m_doc, m_placed, lx, ly, 3 / m_vp.scale());
+            if (!h.frame.empty()) {
+                if (std::find(m_sel.begin(), m_sel.end(), h.frame) == m_sel.end()) pick({h.frame});
+            } else {
+                h.master_item = core::hit_master_item(m_doc, m_placed, lx, ly, 3 / m_vp.scale(), &h.page);
+                if (h.page.empty()) h.page = core::page_at(m_placed, lx, ly);
+                if (!m_sel.empty()) pick({});
+            }
+            if (h.page.empty() && !h.frame.empty())
+                if (const auto* f = m_doc.as<core::Frame>(h.frame)) h.page = f->owner;
+            if (auto lg = log::get(log::Area::View))
+                lg->info("context: frame '{}' master item '{}' page '{}'", h.frame, h.master_item, h.page);
+            m_sig_context.emit(h);
+        });
+        add_controller(right);
+    }
     auto mid = Gtk::GestureDrag::create();
     mid->set_button(GDK_BUTTON_MIDDLE);
     mid->signal_drag_begin().connect([this](double, double) {

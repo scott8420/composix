@@ -77,6 +77,8 @@ struct ExportPrefs {
     std::string profile;          // "" = none (device CMYK)
     bool        convert = false;
     int         standard = 0;     // 0 none, 1 PDF/X-1a:2003, 2 PDF/X-4
+    std::string range;            // s077: the pages as typed ("" = all)
+    bool        bookmarks = true; // s077: the contents' headings as the PDF's outline
     bool operator==(const ExportPrefs&) const = default;
 };
 
@@ -314,6 +316,7 @@ struct Style {
     std::string based_on;
     std::string next;
     std::vector<std::string> own;
+    bool        no_break = false;        // s075: character style -- its words stay on one line
     bool operator==(const Style&) const = default;
 };
 
@@ -433,6 +436,15 @@ std::string inches(double pt);                          // 432 -> "6", 423 -> "5
 // picas 6 points), "6p", "10 mm", "1.5cm". A bare number is in `unit`
 // points (1: points, 72: inches). Nothing (nullopt) if it isn't a length.
 std::optional<double> parse_length(std::string_view text, double unit = 1);
+// s075: where a paragraph's words must stay on one line -- its runs in a
+// character style with No Break (or one it's based on), merged. Bytes.
+struct ByteSpan { int a = 0, b = 0; };
+std::vector<ByteSpan> no_break_spans(const Doc& d, const Para& p);
+// s075: a line from `pos` that Pango ends after `took` bytes: pulled back
+// to before a no-break span it would split (to the last space before the
+// span, else the span's start) -- unless the span starts the line (too
+// long for any line: it breaks as usual). The line's new length.
+int keep_together(const std::string& text, const std::vector<ByteSpan>& spans, int pos, int took);
 // s071: a typed percentage: "40", "40%", "40 %", "12.5%". Nothing if it
 // isn't one.
 std::optional<double> parse_percent(std::string_view text);
@@ -650,6 +662,9 @@ bool    unembed_assets(DocJournal& j, Doc& d, const std::vector<Doc::Id>& assets
 // s035: a picture at `percent` of its own size (300 ppi), about its centre:
 // the fit becomes Custom. One step.
 bool    set_picture_scale(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, double percent);
+// s076: the picture's left (axis 0) or top (1), points from the frame's;
+// the fit becomes Custom, starting from where it sits now. One step.
+bool    set_picture_offset(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, int axis, double pts);
 bool    set_fit(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ImageFit fit);
 
 // ── masters (s014) ──────────────────────────────────────────────────────────

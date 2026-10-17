@@ -70,6 +70,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500},
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
         {"dtrim", 72, 36, 5000}, {"dbleed", 72, 0, 72},   // s066
+        {"pic_off", 72, -20000, 20000},   // s076
         {"ptop", 72, 0, 5000}, {"pbottom", 72, 0, 5000}, {"pinside", 72, 0, 5000}, {"poutside", 72, 0, 5000}};   // s062
     for (auto& f : fields)
         for (const auto& t : typed)
@@ -368,6 +369,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             if (para) f.push_back({"Leading", s.leading > 0 ? pt(s.leading) : "Auto", "leading", lead_ch});
             f.push_back({"Weight", s.bold ? "Bold" : "Regular", "bold", {{"0", "Regular"}, {"1", "Bold"}}});
             f.push_back({"Slant", s.italic ? "Italic" : "Roman", "italic", {{"0", "Roman"}, {"1", "Italic"}}});
+            if (!para) f.push_back({"No break", s.no_break ? "On" : "Off", "nobreak", {{"0", "Off"}, {"1", "On"}}});   // s075
             // s015: its colour, a swatch.
             {
                 std::vector<Choice> col{{"", para ? "Black" : "Inherit"}};
@@ -738,6 +740,13 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 std::vector<Choice> sc;
                 for (int v : {10, 25, 50, 75, 100, 125, 150, 200, 300, 400}) sc.push_back({std::to_string(v), std::to_string(v) + "%"});
                 fields.push_back({"Scale", std::to_string(static_cast<int>(std::lround(picture_scale(*f, *a)))) + "%", "pic_scale", sc});
+                {   // s076: where it sits in the frame, typed (the document's unit).
+                    const Rect r = picture_rect({0, 0, f->w, f->h}, *f, a->px_w > 0 ? a->px_w : 1, a->px_h > 0 ? a->px_h : 1);
+                    Field off{"Offset (" + unit_name(U) + ")", length_in(r.x, U) + "\t" + length_in(r.y, U)};
+                    off.cols = {"X", "Y"};
+                    off.edit = "pic_off";
+                    fields.push_back(off);
+                }
                 const double p = effective_ppi(*f, *a);
                 fields.push_back({"Effective ppi", a->px_w == 0 ? "Vector"
                                   : std::to_string(static_cast<int>(std::lround(p))) + (p < kLowPpi ? "  (low)" : "")});

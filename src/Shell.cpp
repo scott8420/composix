@@ -30,7 +30,9 @@ Shell::Shell()
     set_name("shell.window");
 }
 
-Shell::~Shell() = default;
+Shell::~Shell() {
+    if (m_ctx_menu) m_ctx_menu->unparent();   // s074: a popover parented by hand goes by hand
+}
 
 // construct the shell -> bind actions -> bind the views -> load -> paint.
 void Shell::build_ui() {

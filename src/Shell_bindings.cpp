@@ -102,6 +102,7 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     add_action("bring-forward", [this] { on_arrange(core::doc::Arrange::Forward); });
     add_action("send-backward", [this] { on_arrange(core::doc::Arrange::Backward); });
     add_action("send-back",     [this] { on_arrange(core::doc::Arrange::Back); });
+    bind_context_actions();   // s074
     add_action("export-pdf",    sigc::mem_fun(*this, &Shell::on_export_pdf));   // s013
     add_action("color-report",  sigc::mem_fun(*this, &Shell::on_color_report));   // s053
     add_action("dump-registry", sigc::mem_fun(*this, &Shell::on_dump_registry));
@@ -268,6 +269,7 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_tiles.signal_move().connect(sigc::mem_fun(*this, &Shell::on_tiles_move));   // s014
     m_tiles.signal_delete().connect([this](const std::vector<std::string>& ids) { page_action("delete", ids); });
     cv.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));
+    cv.signal_context().connect(sigc::mem_fun(*this, &Shell::on_canvas_context));   // s074
     cv.signal_caret().connect(sigc::mem_fun(*this, &Shell::on_canvas_selection));   // s011: the text inspector
     cv.signal_edited().connect([this] { queue_refresh(); });
     // s009: files change behind our back (an image edited in another app):

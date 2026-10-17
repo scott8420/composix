@@ -40,7 +40,8 @@ json to(const Record& r) {
             j = {{"kind", "settings"}, {"title", v.title}, {"trim_w", v.trim_w}, {"trim_h", v.trim_h},
                  {"bleed", v.bleed}, {"facing", v.facing}, {"wrap_beneath", v.wrap_beneath}, {"units", static_cast<int>(v.units)},
                  {"export", {{"print", v.exp.print}, {"bleed", v.exp.bleed}, {"marks", v.exp.marks},
-                             {"profile", v.exp.profile}, {"convert", v.exp.convert}, {"standard", v.exp.standard}}}};
+                             {"profile", v.exp.profile}, {"convert", v.exp.convert}, {"standard", v.exp.standard},
+                             {"range", v.exp.range}, {"bookmarks", v.exp.bookmarks}}}};
         } else if constexpr (std::is_same_v<T, Section>) {
             j = {{"kind", "section"}, {"name", v.name}, {"start_page", v.start_page},
                  {"numbering", en(v.numbering)}, {"start_at", v.start_at}, {"starts", en(v.starts)},
@@ -104,6 +105,7 @@ json to(const Record& r) {
                  {"drop_lines", v.drop_lines}, {"drop_chars", v.drop_chars}, {"align_grid", v.align_grid}, {"hyphenate", v.hyphenate},
                  {"hyph_limit", v.hyph_limit}, {"hyph_shortest", v.hyph_shortest}, {"hyph_last_word", v.hyph_last_word},
                  {"keep_next", v.keep_next}, {"keep_lines", v.keep_lines}, {"start", en(v.start)}};
+            if (v.no_break) j["no_break"] = true;   // s075
             if (!v.tabs.empty()) {
                 json tabs = json::array();
                 for (const auto& t : v.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
@@ -149,7 +151,8 @@ std::optional<Record> from(const json& j) {
         if (j.contains("export")) {   // s032
             const auto& e = j.at("export");
             v.exp = {val(e, "print", true), val(e, "bleed", true), val(e, "marks", false),
-                     val<std::string>(e, "profile", ""), val(e, "convert", false), val(e, "standard", 0)};
+                     val<std::string>(e, "profile", ""), val(e, "convert", false), val(e, "standard", 0),
+                     val<std::string>(e, "range", ""), val(e, "bookmarks", true)};   // s077
         }
         return v;
     }
@@ -270,6 +273,7 @@ std::optional<Record> from(const json& j) {
         v.leading = val(j, "leading", v.leading);
         v.bold = val(j, "bold", false);
         v.italic = val(j, "italic", false);
+        v.no_break = val(j, "no_break", false);   // s075
         v.align = de(j, "align", Align::Left);
         v.space_before = val(j, "space_before", 0.0);
         v.space_after = val(j, "space_after", 0.0);

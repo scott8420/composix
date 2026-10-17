@@ -253,6 +253,8 @@ void Shell::load_export_prefs() {  // helper
     m_pdf_bleed = e.bleed;
     m_pdf_marks = e.marks;
     m_pdf_convert = e.convert;
+    m_pdf_range = e.range;            // s077
+    m_pdf_bookmarks = e.bookmarks;
     m_pdf_profile.clear();
     m_profile_missing.clear();
     if (!e.profile.empty()) {

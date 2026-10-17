@@ -346,6 +346,7 @@ void Shell::on_export_pdf() {  // handler
                 }
                 m_pdf_only = only.size() == m_doc.pages().size() ? std::vector<std::string>{} : only;
                 m_pdf_bookmarks = marksb->get_active();
+                m_pdf_range = text;   // s077: kept with the document below
             }
             m_pdf_bleed = bleed->get_active();
             m_pdf_marks = marks->get_active();
@@ -356,7 +357,8 @@ void Shell::on_export_pdf() {  // handler
             m_pdf_standard = (m_pdf_print && !m_pdf_profile.empty()) ? static_cast<int>(stdd->get_selected()) : 0;
             // s032: kept with the document, the profile by its name.
             {
-                core::ExportPrefs e{m_pdf_print, m_pdf_bleed, m_pdf_marks, {}, m_pdf_convert, m_pdf_standard};
+                core::ExportPrefs e{m_pdf_print, m_pdf_bleed, m_pdf_marks, {}, m_pdf_convert, m_pdf_standard,
+                                    m_pdf_range, m_pdf_bookmarks};   // s077: the range and bookmarks too
                 for (std::size_t k = 0; k < m_profiles.size(); ++k)
                     if (m_profiles[k] == m_pdf_profile) e.profile = m_profile_names[k];
                 m_profile_missing.clear();
@@ -394,6 +396,14 @@ void Shell::on_export_pdf() {  // handler
             static_cast<Gtk::CheckButton*>(c)->set_active(!m_pdf_print);
         } else if (c->get_name() == "export.convert") {
             static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_convert);
+        } else if (c->get_name() == "export.bookmarks") {   // s077
+            static_cast<Gtk::CheckButton*>(c)->set_active(m_pdf_bookmarks);
+        } else if (c->get_name() == "export.range.row") {   // s077: the range the document keeps
+            for (auto* k = static_cast<Gtk::Box*>(c)->get_first_child(); k; k = k->get_next_sibling())
+                if (k->get_name() == "export.range") {
+                    static_cast<Gtk::Entry*>(k)->set_text(m_pdf_range);
+                    k->remove_css_class("error");
+                }
         } else if (auto* row = dynamic_cast<Gtk::Box*>(c)) {   // the profile row: re-pick the session's profile
             for (auto* k = row->get_first_child(); k; k = k->get_next_sibling())
                 if (k->get_name() == "export.profile") {
@@ -517,6 +527,112 @@ void Shell::on_arrange(core::doc::Arrange how) {  // handler
     if (m_main.get_visible_child_name() != "canvas" || cv.editing() || cv.selection().empty()) return;
     const bool did = core::doc::arrange(m_journal, m_doc, cv.selection(), how);
     if (auto lg = log::get(log::Area::Shell)) lg->info("arrange {} on {} frame(s): {}", static_cast<int>(how), cv.selection().size(), did ? "step" : "no change");
+}
+
+// ── s074: the canvas's right-click menu ─────────────────────────────────────
+void Shell::bind_context_actions() {  // bindings
+    auto picked = [this] { return m_canvas_view.canvas().selection(); };
+    add_action("delete-frames", [this] { m_canvas_view.canvas().delete_selection(); });
+    add_action_with_parameter("frame-wrap", Glib::Variant<Glib::ustring>::variant_type(), [this, picked](const Glib::VariantBase& p) {
+        const int w = std::stoi(Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(p).get());
+        core::doc::edit_frames(m_journal, m_doc, picked(), "Text wrap", [&](core::Frame& f) {
+            const auto to = static_cast<core::Wrap>(std::clamp(w, 0, 2));
+            if (f.wrap == core::Wrap::None && to != core::Wrap::None && f.wrap_off == core::Sides{}) f.wrap_off = {9, 9, 9, 9};
+            f.wrap = to;
+        });
+    });
+    add_action("frame-ignore-wrap", [this, picked] {
+        bool all = true;
+        for (const auto& id : picked())
+            if (const auto* f = m_doc.as<core::Frame>(id); f && f->kind == core::FrameKind::Text) all = all && f->ignore_wrap;
+        core::doc::edit_frames(m_journal, m_doc, picked(), "Ignore text wrap", [&](core::Frame& f) {
+            if (f.kind == core::FrameKind::Text) f.ignore_wrap = !all;
+        });
+    });
+    add_action("remove-override", [this, picked] { core::doc::remove_overrides(m_journal, m_doc, picked()); });
+    add_action("override-item", [this] {
+        if (m_ctx.page.empty() || m_ctx.master_item.empty()) return;
+        const auto made = core::doc::override_master_item(m_journal, m_doc, m_ctx.page, m_ctx.master_item);
+        if (!made.empty()) {   // the copy, picked (as Ctrl+Shift+click)
+            m_canvas_view.canvas().model_changed();
+            m_canvas_view.canvas().set_selection({made});
+            on_canvas_selection();
+        }
+    });
+    add_action("override-page", [this] { if (!m_ctx.page.empty()) core::doc::override_all(m_journal, m_doc, {m_ctx.page}); });
+    add_action("remove-page-overrides", [this] { if (!m_ctx.page.empty()) core::doc::remove_all_overrides(m_journal, m_doc, {m_ctx.page}); });
+    add_action("page-add-after", [this] { if (!m_ctx.page.empty()) page_action("add", {m_ctx.page}); });
+}
+
+void Shell::on_canvas_context(const views::Canvas::ContextHit& h) {  // handler
+    m_ctx = h;
+    auto menu = Gio::Menu::create();
+    if (!h.frame.empty()) {
+        const auto& sel = m_canvas_view.canvas().selection();
+        bool text = false, copy = false, ignoring = true;
+        for (const auto& id : sel)
+            if (const auto* f = m_doc.as<core::Frame>(id)) {
+                if (f->kind == core::FrameKind::Text) { text = true; ignoring = ignoring && f->ignore_wrap; }
+                copy = copy || !f->overrides.empty();
+            }
+        auto top = Gio::Menu::create();
+        if (text) top->append("Story Editor", "win.story-editor");
+        if (copy) top->append(sel.size() == 1 ? "Remove Override" : "Remove Overrides", "win.remove-override");
+        if (top->get_n_items() > 0) menu->append_section(top);
+        auto arrange = Gio::Menu::create();
+        arrange->append_submenu("Arrange", m_arrange_menu);
+        auto wrap = Gio::Menu::create();
+        wrap->append("None", "win.frame-wrap::0");
+        wrap->append("Wrap Around", "win.frame-wrap::1");
+        wrap->append("Jump Over", "win.frame-wrap::2");
+        arrange->append_submenu("Text Wrap", wrap);
+        if (text) arrange->append(ignoring ? "Let Wrap Push the Text" : "Ignore Others' Wrap", "win.frame-ignore-wrap");
+        menu->append_section(arrange);
+        auto del = Gio::Menu::create();
+        del->append(sel.size() == 1 ? "Delete Frame" : "Delete Frames", "win.delete-frames");
+        menu->append_section(del);
+    } else if (!h.page.empty() && m_doc.as<core::Page>(h.page)) {
+        auto page = Gio::Menu::create();
+        if (!h.master_item.empty()) page->append("Override This Master Item", "win.override-item");
+        if (!core::doc::overridable_items(m_doc, h.page).empty()) page->append("Override All Master Items", "win.override-page");
+        bool own = false;
+        for (const auto& f : m_doc.frames_on(h.page)) own = own || !m_doc.as<core::Frame>(f)->overrides.empty();
+        if (own) page->append("Remove All Overrides", "win.remove-page-overrides");
+        if (page->get_n_items() > 0) menu->append_section(page);
+        auto more = Gio::Menu::create();
+        more->append("Add Page After", "win.page-add-after");
+        more->append("Fit the Pages", "win.zoom-fit");
+        menu->append_section(more);
+    } else {
+        auto more = Gio::Menu::create();
+        more->append("Fit the Pages", "win.zoom-fit");
+        menu->append_section(more);
+    }
+    auto& canvas = m_canvas_view.canvas();
+    if (!m_ctx_menu) {
+        m_ctx_menu = std::make_unique<Gtk::PopoverMenu>(menu, Gtk::PopoverMenu::Flags::NESTED);
+        m_ctx_menu->set_name("canvas.context");
+        m_ctx_menu->set_has_arrow(false);
+        m_ctx_menu->set_parent(canvas);
+    } else {
+        m_ctx_menu->set_menu_model(menu);
+    }
+    m_ctx_menu->set_pointing_to(Gdk::Rectangle(static_cast<int>(h.x), static_cast<int>(h.y), 1, 1));
+    // A hand-parented popover is given less than its natural height (seen
+    // under Xvfb: content 103 px in a 90 px scroller, the last item cut), and
+    // can't be measured before it's up (0). So: up, then measured, asked for
+    // its natural height, presented again.
+    m_ctx_menu->set_size_request(-1, -1);
+    m_ctx_menu->popup();
+    Glib::signal_idle().connect_once([this] {
+        if (!m_ctx_menu || !m_ctx_menu->get_visible()) return;
+        int mn = 0, nat = 0, b1 = 0, b2 = 0;
+        m_ctx_menu->measure(Gtk::Orientation::VERTICAL, -1, mn, nat, b1, b2);
+        if (nat > m_ctx_menu->get_height()) {
+            m_ctx_menu->set_size_request(-1, nat);
+            m_ctx_menu->present();
+        }
+    });
 }
 
 // s068: Forward -- back into what Back left, while its section is shown.
@@ -683,6 +799,9 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                     else if (k == 2) f.w = std::max(1.0, v);
                     else f.h = std::max(1.0, v);
                 });
+        } else if (key == "nobreak") {   // s075: a character style keeps its words on one line
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "No break",
+                                         [&](core::Style& st) { if (st.kind == core::StyleKind::Character) st.no_break = choice == "1"; });
         } else if (key == "font" || key == "ssize" || key == "leading" || key == "bold" || key == "italic" ||
                    key == "align" || key == "before" || key == "after") {   // s011: style settings
             static const std::map<std::string, std::string> labels{
@@ -906,6 +1025,10 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                     f.widths = w;
                 }
             });
+        } else if (key == "pic_off") {   // s076: "0:<points>" (X) / "1:<points>" (Y)
+            const auto colon = choice.find(':');
+            did = core::doc::set_picture_offset(m_journal, m_doc, m_inspected, std::stoi(choice.substr(0, colon)),
+                                                std::stod(choice.substr(colon + 1)));
         } else if (key == "pic_scale") {   // s035
             did = core::doc::set_picture_scale(m_journal, m_doc, m_inspected, std::stod(choice));
         } else if (key == "fit") {   // s009

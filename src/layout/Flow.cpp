@@ -297,7 +297,8 @@ bool touches(const std::vector<core::WrapRect>& wraps, double x0, double x1) {
 int lines_left(const core::Doc& d, const core::Para& para, const core::Style& style, int from, double w) {
     const int len = static_cast<int>(para.text.size());
     if (from >= len) return 0;
-    if (!style.hyphenate) {
+    const auto nb = core::no_break_spans(d, para);   // s075
+    if (!style.hyphenate && nb.empty()) {
         auto lay = make_layout(style, para.text.c_str() + from, len - from, w, false);
         apply_runs(lay.get(), d, para, from);
         return pango_layout_get_line_count(lay.get());
@@ -308,8 +309,10 @@ int lines_left(const core::Doc& d, const core::Para& para, const core::Style& st
         apply_runs(lay.get(), d, para, pos);
         int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
         const bool may = style.hyph_limit <= 0 || run < style.hyph_limit;
-        const int cut = may ? hyphen_cut(d, para, style, pos, took, w, 0) : 0;
+        int cut = style.hyphenate && may ? hyphen_cut(d, para, style, pos, took, w, 0) : 0;
+        if (cut > 0 && core::keep_together(para.text, nb, pos, cut) != cut) cut = 0;   // s075: not inside a no-break span
         if (cut > 0) took = cut;
+        else took = core::keep_together(para.text, nb, pos, took);
         run = cut > 0 ? run + 1 : 0;
         pos += std::max(1, took);
     }
@@ -456,7 +459,8 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             }
             // s038: a hyphenating paragraph is set line by line too (each
             // line may end inside a word).
-            if (wrapped || drop || style.hyphenate) {   // s018: line by line, each at the width the wraps leave
+            const auto nobreak = core::no_break_spans(d, para);   // s075: kept on one line -- set line by line too
+            if (wrapped || drop || style.hyphenate || !nobreak.empty()) {   // s018: line by line, each at the width the wraps leave
                 const auto& wraps_here = drop ? local : wraps;
                 int pos = c.start;
                 bool ended = false, full = false;
@@ -480,9 +484,11 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                         apply_runs(lay.get(), d, para, pos);
                         int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
                         const bool may = style.hyph_limit <= 0 || hy_run < style.hyph_limit;
-                        const int cut = style.hyphenate && may ? hyphen_cut(d, para, style, pos, took, w,
-                                                                            pos == 0 ? std::max(0.0, ind.first) : 0) : 0;
+                        int cut = style.hyphenate && may ? hyphen_cut(d, para, style, pos, took, w,
+                                                                      pos == 0 ? std::max(0.0, ind.first) : 0) : 0;
+                        if (cut > 0 && core::keep_together(para.text, nobreak, pos, cut) != cut) cut = 0;   // s075
                         if (cut > 0) took = cut;
+                        else took = core::keep_together(para.text, nobreak, pos, took);
                         // s065: Pango broke at a typed hyphen -- draw it as a hyphen too.
                         const bool at_shy = took >= 3 && pos + took < len &&   // (after a letter: one at a word's start isn't a break)
                                             std::isalpha(static_cast<unsigned char>(para.text[static_cast<std::size_t>(pos + took - 3)])) &&

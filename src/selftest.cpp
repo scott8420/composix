@@ -2740,6 +2740,121 @@ int main() {
     }
 
     {
+        std::cout << "\n-- export memory (s077) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("export: all pages and bookmarks by default", d.settings().exp.range.empty() && d.settings().exp.bookmarks);
+        auto e = d.settings().exp;
+        e.range = "iii-7, 12";
+        e.bookmarks = false;
+        check("export: the range and bookmarks kept, one step", core::doc::set_export(j, d, e) && j.size() == 1 &&
+                                                                d.settings().exp.range == "iii-7, 12" && !d.settings().exp.bookmarks);
+        check("export: the same again is no step", !core::doc::set_export(j, d, e));
+        std::string err;
+        core::Doc f;
+        check("json: range and bookmarks kept", core::from_json(f, core::to_json(d), &err) &&
+                                                f.settings().exp.range == "iii-7, 12" && !f.settings().exp.bookmarks, err);
+        check("json: an older file (no keys) -> all pages, bookmarks on", [] {
+            core::Doc g;
+            core::load_sample(g);
+            auto js = core::to_json(g);   // (keys are written sorted: cut the two new ones out)
+            bool cut = false;
+            for (const std::string k : {"\"bookmarks\": true,", "\"range\": \"\","})
+                if (const auto at = js.find(k); at != std::string::npos) { js.erase(at, k.size()); cut = true; }
+            core::Doc h;
+            std::string err2;
+            return cut && js.find("\"bookmarks\"") == std::string::npos && core::from_json(h, js, &err2) &&
+                   h.settings().exp.range.empty() && h.settings().exp.bookmarks;
+        }());
+        check("export: the kept range still reads", !core::pages_in_range(d, d.settings().exp.range).empty());
+    }
+
+    {
+        std::cout << "\n-- picture offsets (s076) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto& f0 = *d.as<core::Frame>("frame.11");
+        const auto& a = *d.as<core::Asset>(f0.asset);
+        const double iw = a.px_w > 0 ? a.px_w : 1, ih = a.px_h > 0 ? a.px_h : 1;
+        const auto r0 = core::picture_rect({0, 0, f0.w, f0.h}, f0, iw, ih);
+        check("sample: the lighthouse is fitted, not by hand", f0.fit != core::ImageFit::Custom);
+        check("offset X: one step, by hand, Y and size kept",
+              core::doc::set_picture_offset(j, d, {"frame.11"}, 0, -6) && j.size() == 1);
+        const auto& f1 = *d.as<core::Frame>("frame.11");
+        const auto r1 = core::picture_rect({0, 0, f1.w, f1.h}, f1, iw, ih);
+        check("offset X: there", f1.fit == core::ImageFit::Custom && std::abs(r1.x + 6) < 1e-9 && std::abs(r1.y - r0.y) < 1e-9 &&
+                                 std::abs(r1.w - r0.w) < 1e-9);
+        check("offset Y: there", core::doc::set_picture_offset(j, d, {"frame.11"}, 1, 4) &&
+                                 std::abs(d.as<core::Frame>("frame.11")->pic_y - 4) < 1e-9);
+        check("offset: the same again is no step", !core::doc::set_picture_offset(j, d, {"frame.11"}, 1, 4));
+        check("offset: not on a text frame", !core::doc::set_picture_offset(j, d, {"frame.1"}, 0, 1));
+        const auto items = core::frame_items(d, {"frame.11"});
+        const core::Field* off = nullptr;
+        for (const auto& f : items.at(0).fields) if (f.edit == "pic_off") off = &f;
+        check("inspector: Offset X / Y typed, inches", off && off->cols.size() == 2 && off->unit == 72 && off->value == "-0.083\t0.056",
+              off ? off->value : "");
+        j.undo();
+        j.undo();
+        check("undo: fitted as before", d.as<core::Frame>("frame.11")->fit == f0.fit);
+    }
+
+    {
+        std::cout << "\n-- no break (s075) --\n";
+        namespace L = composix::layout;
+        //            0123456789012345678901234
+        const std::string t = "one two three four five";
+        const std::vector<core::ByteSpan> sp{{8, 18}};   // "three four"
+        check("keep together: a break inside goes back to the span's word start",
+              core::keep_together(t, sp, 0, 14) == 8);
+        check("keep together: a break outside stays", core::keep_together(t, sp, 0, 8) == 8 && core::keep_together(t, sp, 0, 19) == 19);
+        check("keep together: a span starting the line breaks as usual", core::keep_together(t, sp, 8, 6) == 6);
+        check("keep together: mid-word span start -> back to that word", core::keep_together("ab 12km x", {{5, 7}}, 0, 6) == 3);
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // A character style with No break, over a stretch of the opening paragraph.
+        core::Doc::Id cs;
+        for (const auto& id : d.ids_of<core::Style>())
+            if (d.as<core::Style>(id)->kind == core::StyleKind::Character) { cs = id; break; }
+        check("sample: a character style", !cs.empty());
+        check("no break: one step on the style", core::doc::edit_styles(j, d, {cs}, "No break", [](core::Style& st) { st.no_break = true; }));
+        // The full column (the lighthouse's wrap off), so 30 bytes surely fit one line.
+        core::doc::edit_frames(j, d, {"frame.11"}, "Text wrap", [](core::Frame& f) { f.wrap = core::Wrap::None; });
+        const auto& para = d.as<core::Story>("story.1")->paras.at(1);
+        // Some 30 bytes from the 3rd word on, ending at a word's end.
+        int a = 0, words = 0;
+        while (a < static_cast<int>(para.text.size()) && words < 3) if (para.text[static_cast<std::size_t>(a++)] == ' ') ++words;
+        int b = std::min(static_cast<int>(para.text.size()), a + 30);
+        while (b < static_cast<int>(para.text.size()) && para.text[static_cast<std::size_t>(b)] != ' ') ++b;
+        core::doc::set_char_style(j, d, "story.1", {1, a}, {1, b}, cs);
+        const auto spans = core::no_break_spans(d, d.as<core::Story>("story.1")->paras.at(1));
+        check("no break: the run is a span", !spans.empty() && spans[0].a <= a && spans[0].b >= b);
+        bool never = !spans.empty(), whole = false;
+        for (const auto& fr : L::flow_story(d, "story.1").frames)
+            for (const auto& l : fr.lines) {
+                if (l.para != 1) continue;
+                for (const auto& s : spans) {
+                    if (l.end > s.a && l.end < s.b && l.start < s.a) never = false;
+                    whole = whole || (l.start <= s.a && l.end >= s.b);
+                }
+            }
+        check("no break: no line ends inside it", never);
+        check("no break: it sits whole on one line (it's narrower than the column)", whole);
+        const auto o = core::project(d, "");
+        bool row = false;
+        for (const auto& f : o.find(cs)->fields) row = row || (f.edit == "nobreak" && f.value == "On");
+        check("inspector: a character style's No break", row);
+        std::string err;
+        core::Doc e;
+        check("json: no break kept", core::from_json(e, core::to_json(d), &err) && e.as<core::Style>(cs)->no_break, err);
+    }
+
+    {
         std::cout << "\n-- units (s073) --\n";
         using U = core::Units;
         check("units: points per unit", core::unit_pt(U::Inches) == 72 && core::unit_pt(U::Points) == 1 &&
