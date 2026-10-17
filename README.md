@@ -55,6 +55,9 @@ seam proven three ways + the mapping.
                            # the hide-on-close About window (a symbolic icon
                            # resolved from the compiled-in gresource bundle).
                            # The Undo page: delete, drag, rename -- Ctrl+Z.
+./build/composix_bench     # s100: timings on the generated ~400-page book
+                           # (flow, a keystroke's reflow, drawing, thumbnails);
+                           # --pages N, --no-pictures, --pdf. Not a gate.
 ```
 
 Deps (Ubuntu/Debian): `libgtkmm-4.0-dev libspdlog-dev cmake g++`.

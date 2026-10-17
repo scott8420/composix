@@ -160,10 +160,11 @@ void Shell::build_welcome() {  // zone: the main view when nothing is picked
 Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto menu = Gio::Menu::create();
 
+    // s101 (Scott): the menu ran ~30 items long -- the everyday file and
+    // output verbs stay on top; Edit, View and Help are submenus.
     auto file = Gio::Menu::create();
     file->append("New\u2026", "win.new");   // s019
     file->append("Open Project…", "win.open");
-    file->append("Start Screen", "win.start");   // s064
     m_recents_menu = Gio::Menu::create();
     file->append_submenu("Open Recent", m_recents_menu);
     file->append("Save", "win.save");
@@ -176,6 +177,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     place->append("Colour Report\u2026", "win.color-report");   // s053
     menu->append_section(place);
 
+    // Edit: rebuilt in place after each step (the undo labels) -- Shell_helpers.
     m_edit_menu = Gio::Menu::create();
     m_edit_menu->append("Undo", "win.undo");
     m_edit_menu->append("Redo", "win.redo");
@@ -189,11 +191,12 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         m_arrange_menu->append("Send to Back", "win.send-back");
         m_edit_menu->append_submenu("Arrange", m_arrange_menu);
     }
-    menu->append_section(m_edit_menu);
 
     auto view = Gio::Menu::create();
-    view->append("Navigator", "win.toggle-nav");
-    view->append("Inspector", "win.toggle-inspector");
+    auto panels = Gio::Menu::create();
+    panels->append("Navigator", "win.toggle-nav");
+    panels->append("Inspector", "win.toggle-inspector");
+    view->append_section(panels);
     auto canvas = Gio::Menu::create();   // s006
     canvas->append("Rulers", "win.toggle-rulers");
     canvas->append("Guides", "win.toggle-guides");
@@ -201,17 +204,29 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     canvas->append("Hidden Characters", "win.toggle-hidden");   // s059
     canvas->append("Proof Colours", "win.toggle-proof");        // s099
     canvas->append("Snap to Guides & Edges", "win.toggle-snap");
-    view->append_section("", canvas);
-    menu->append_section(view);
+    view->append_section(canvas);
 
+    auto help = Gio::Menu::create();
+    auto start = Gio::Menu::create();
+    start->append("Start Screen", "win.start");   // s064
+    start->append("Keyboard Shortcuts", "win.shortcuts");
+    help->append_section(start);
+    auto books = Gio::Menu::create();
+    books->append("Open Sample Book", "win.open-sample");   // s019
+    books->append("Open Big Test Book", "win.open-big-book");   // s100
+    help->append_section(books);
     auto diag = Gio::Menu::create();
-    diag->append("Dump registry", "win.dump-registry");
-    diag->append("Keyboard shortcuts", "win.shortcuts");
-    menu->append_section(diag);
+    diag->append("Dump Registry", "win.dump-registry");
+    diag->append("About Composix", "win.about");
+    help->append_section(diag);
+
+    auto subs = Gio::Menu::create();
+    subs->append_submenu("Edit", m_edit_menu);
+    subs->append_submenu("View", view);
+    subs->append_submenu("Help", help);
+    menu->append_section(subs);
 
     auto app = Gio::Menu::create();
-    app->append("Open Sample Book", "win.open-sample");   // s019
-    app->append("About Composix", "win.about");
     app->append("Quit", "win.quit");
     menu->append_section(app);
     return menu;

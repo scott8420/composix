@@ -17,6 +17,7 @@
 #include "layout/ColorReport.hpp"
 #include <plate/plate.hpp>
 #include "layout/Export.hpp"
+#include "layout/BigBook.hpp"
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
 #include "core/Settings.hpp"
@@ -5576,6 +5577,75 @@ int main() {
               w2.size() == 2 && !w2[0].italic && w2[0].cstyle == "style.5" && w2[1].italic, std::to_string(w2.size()));
         j.undo(); j.undo();
         check("undo: as it was", looks("story.4", 0).size() == 1 && looks("story.4", 1).empty());
+    }
+
+    {
+        std::cout << "\n-- the long test book (s100) --\n";
+        namespace L = composix::layout;
+        // A short one (the full ~400 pages is composix_bench's): the rules
+        // are the same at any length. No picture folder: missing links.
+        core::Doc d;
+        const auto info = L::load_big_book(d, {.pages = 20});
+        const auto flow = L::flow_story(d, "story.1");
+        check("big book: the long story fits (nothing overset)", !flow.overset);
+        const auto body = d.pages_of(d.ids_of<core::Section>().back());
+        const auto thread = L::thread_frames(d, "story.1");
+        check("big book: one thread through every body page", thread.size() == body.size() && !body.empty(),
+              std::to_string(thread.size()) + " frames, " + std::to_string(body.size()) + " pages");
+        check("big book: about the length asked", info.pages >= 12 && info.pages <= 40, std::to_string(info.pages) + " pages");
+        check("big book: the last page has text (no empty pages at the end)",
+              !flow.frames.empty() && flow.frames.back().frame == thread.back() && !flow.frames.back().lines.empty());
+        // Every chapter opens a right-hand page set on the chapter master,
+        // with its picture in the sink; no other page is.
+        const auto& paras = d.as<core::Story>("story.1")->paras;
+        int heads = 0, opened = 0, bad = 0;
+        for (const auto& p : paras) heads += p.style == "style.2";
+        for (const auto& ft : flow.frames) {
+            const auto* f = d.as<core::Frame>(ft.frame);
+            const bool opens = !ft.lines.empty() && ft.lines.front().start == 0 &&
+                               paras[static_cast<std::size_t>(ft.lines.front().para)].style == "style.2";
+            const auto* pg = d.as<core::Page>(f->owner);
+            int pics = 0;
+            for (const auto& id : d.frames_on(f->owner)) pics += d.as<core::Frame>(id)->kind == core::FrameKind::Image;
+            if (opens) {
+                ++opened;
+                if (d.side_of(f->owner) != core::Side::Right || pg->master != "master.3" || pics < 1) ++bad;
+            } else if (pg->master == "master.3") {
+                ++bad;
+            }
+        }
+        check("big book: every chapter opens a right page on the chapter master, its picture over it",
+              heads == info.chapters && opened == heads && bad == 0,
+              std::to_string(heads) + " heads, " + std::to_string(opened) + " opened, " + std::to_string(bad) + " wrong");
+        check("big book: section heads and pictures in it", info.sections > 0 && info.pictures > info.chapters);
+        L::FlowCache flows;
+        check("big book: its contents are current, one entry a chapter",
+              L::stale_lists(d, flows).empty() && d.as<core::GenList>("list.1")->built_entries == info.chapters);
+        core::Doc d2;
+        (void)L::load_big_book(d2, {.pages = 20});
+        check("big book: the same every time (seeded greeking)", d2.records() == d.records());
+    }
+
+    {
+        std::cout << "\n-- page order, kept (s101) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto scan = [&] {   // what page_index was: a count, record by record
+            bool ok = true;
+            const auto ps = d.pages();
+            for (std::size_t i = 0; i < ps.size(); ++i) ok = ok && d.page_index(ps[i]) == static_cast<int>(i);
+            return ok && d.page_index("page.none") == -1;
+        };
+        check("page order: every page at its place", scan());
+        const auto added = core::doc::add_pages(j, d, "page.2", 2, "master.1");
+        check("page order: follows pages added in the middle", scan() && added.size() == 2 &&
+                                                               d.page_index(added[0]) == 2 && d.page_index("page.3") == 4);
+        core::doc::move_pages(j, d, {"page.1"}, "page.5");
+        check("page order: follows a move", scan());
+        j.undo(); j.undo();
+        check("page order: and undo", scan() && d.page_index("page.3") == 2 && d.page_index(added[0]) == -1);
     }
 
     std::cout << "-----------------------------------------------\n";

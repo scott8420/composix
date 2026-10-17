@@ -28,6 +28,10 @@ Shell::Shell()
       m_main("shell.main"),
       m_welcome("shell.welcome", Gtk::Orientation::VERTICAL, 8) {
     set_name("shell.window");
+    // s101: one flow cache for the canvas, the thumbnails and the refresh --
+    // a change is flowed once, not once a view.
+    m_canvas_view.canvas().share_flows(m_pf_flows);
+    m_page_thumbs.share_flows(m_pf_flows);
 }
 
 Shell::~Shell() {

@@ -13,7 +13,7 @@ void PageThumbs::forget() {
     m_cache.clear();
     m_keys.clear();
     m_keys_rev = ~0ull;
-    m_flows = {};
+    *m_flowp = {};
 }
 
 const layout::PageKey& PageThumbs::key_of(const std::string& id) {
@@ -22,7 +22,7 @@ const layout::PageKey& PageThumbs::key_of(const std::string& id) {
         m_keys_rev = m_doc.revision();
     }
     auto it = m_keys.find(id);
-    if (it == m_keys.end()) it = m_keys.emplace(id, layout::page_key(m_doc, m_flows, id)).first;
+    if (it == m_keys.end()) it = m_keys.emplace(id, layout::page_key(m_doc, *m_flowp, id)).first;
     return it->second;
 }
 
@@ -37,7 +37,7 @@ Cairo::RefPtr<Cairo::ImageSurface> PageThumbs::render(const std::string& id, dou
         const auto pic = images::get(m_resolve(a), a.stamp);
         return pic ? cairo_surface_reference(pic->cobj()) : nullptr;
     };
-    layout::draw_page(cr, m_doc, id, m_flows, pictures, nullptr, {.placeholders = true});
+    layout::draw_page(cr, m_doc, id, *m_flowp, pictures, nullptr, {.placeholders = true});
     // The margins (and a master's columns) as the canvas shows them: on the
     // preview, and on every master -- a master's layout IS its guides.
     if (large || m_doc.as<core::Master>(id)) {

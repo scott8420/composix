@@ -101,6 +101,7 @@ private:
     void on_open();                              // category: handler: pick a project folder -> load it
     void on_new();                               // category: handler: s019 -- the New sheet -> a blank document
     void on_sample();                            // category: handler: s019 -- open the built-in sample book
+    void on_big_book();                          // category: handler: s100 -- the generated ~400-page test book
     void on_find();                              // category: handler: s022 -- Ctrl+F: show the find bar
     void on_story_editor();                      // category: handler: s033 -- Ctrl+Y: the story being edited / picked
     void on_save();                              // category: handler: save (Save As the first time)
@@ -236,6 +237,10 @@ private:
     std::uint64_t      m_saved_mark = 0;   // s057: the journal's mark when last saved / opened
     bool               m_closing_ok = false;   // the user chose; let the close through
 
+    // s089: Preflight's flows; s101: THE flow cache -- the canvas and the
+    // thumbnails share it (declared before them: it outlives them).
+    mutable layout::FlowCache        m_pf_flows;
+
     // s020: the page / master tiles drawn for real, kept per page.
     views::PageThumbs  m_page_thumbs{m_doc, [this](const core::Asset& a) { return core::resolve_asset(a, m_project_dir); }};
 
@@ -338,7 +343,6 @@ private:
     Gtk::Label*                      m_preflight_label = nullptr;
     Gtk::ListBox*                    m_preflight_list = nullptr;
     std::vector<layout::Issue>       m_issues;
-    mutable layout::FlowCache        m_pf_flows;   // s089: mutable -- project_now reads it too
 
     // s019: the New sheet, and what it was last set to (for the session).
     std::unique_ptr<Gtk::Window>     m_new;

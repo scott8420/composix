@@ -1122,6 +1122,9 @@ Caret caret_at(const core::Doc& d, const std::string& story, const StoryFlow& fl
     const auto* st = d.as<core::Story>(story);
     if (!st) return c;
     for (const auto& ft : flow.frames) {
+        // s101: lay out only the frame that holds the place -- walking every
+        // frame before it cost ~0.6 s a call in a 440-page story.
+        if (std::none_of(ft.lines.begin(), ft.lines.end(), [&](const Line& l) { return on_line(*st, l, p); })) continue;
         walk_frame(d, story, flow, ft.frame, [&](const Placed& pl) {
             if (c.ok || !on_line(*st, *pl.line, p)) return;
             c = {true, ft.frame, x_of(pl, p.byte), pl.line->y, pl.line->h};

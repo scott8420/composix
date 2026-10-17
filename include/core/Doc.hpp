@@ -456,6 +456,10 @@ private:
     std::map<Id, Record>       m_recs;
     std::uint64_t              m_rev = 0;
     std::map<std::string, int> m_next;   // fresh_id counters per prefix
+    // s101: page order, rebuilt when the revision moves (page_index was a
+    // scan of every record per call -- per page, per projection).
+    mutable std::map<Id, int>  m_page_at;
+    mutable std::uint64_t      m_page_at_rev = ~0ull;
     int                        m_strays = 0;
     int                        m_loading = 0;
     std::function<bool()>      m_door;

@@ -34,6 +34,8 @@ public:
                bool large);
     // Another document (or folder): nothing kept carries over.
     void forget();
+    // s101: flow through this cache (the shell's, shared with the canvas).
+    void share_flows(layout::FlowCache& f) { m_flowp = &f; }
     int renders() const { return m_renders; }   // how many times a page was drawn (tests, logs)
 
 private:
@@ -47,7 +49,8 @@ private:
 
     const core::Doc&                                 m_doc;
     std::function<std::string(const core::Asset&)>  m_resolve;
-    layout::FlowCache                                m_flows;
+    layout::FlowCache                                m_own_flows;
+    layout::FlowCache*                               m_flowp = &m_own_flows;   // s101: the shell's, shared
     std::map<std::string, Entry>                     m_cache;   // id ("|L" for the preview's size)
     std::map<std::string, layout::PageKey>           m_keys;    // this revision's
     std::uint64_t                                    m_keys_rev = ~0ull;

@@ -1,5 +1,8 @@
 #include "Shell.hpp"
 #include "Log.hpp"
+#include "layout/BigBook.hpp"
+#include <glibmm/miscutils.h>
+#include <chrono>
 #include <gtkmm/adjustment.h>
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
@@ -30,6 +33,36 @@ void Shell::on_sample() {  // handler
         core::load_sample(fresh);
         adopt(fresh, "");
         if (auto lg = log::get(log::Area::Shell)) lg->info("opened the sample book");
+    });
+}
+
+// s100: the generated long book -- ~400 pages fitted by flowing them, so
+// making it takes a while (the window waits; the first time only). Its
+// pictures are drawn into the cache folder and linked from there, and the
+// book is kept there as a project to read back next time. It opens unsaved
+// (Save As puts it somewhere of your own); delete the folder to make it anew.
+void Shell::on_big_book() {  // handler
+    confirm_discard([this] {
+        const auto t0 = std::chrono::steady_clock::now();
+        const std::string dir = Glib::build_filename(Glib::get_user_cache_dir(), "composix", "big-book");
+        const std::string kept = Glib::build_filename(dir, "book-s100");   // the generator's version
+        core::Doc fresh;
+        std::string err;
+        bool read = core::load_project(fresh, kept, &err);
+        layout::BigBookInfo info;
+        if (!read) {
+            layout::BigBookOpts o;
+            o.picture_dir = dir;
+            info = layout::load_big_book(fresh, o);
+            if (!core::save_project(fresh, kept, &err))
+                if (auto lg = log::get(log::Area::Io)) lg->warn("big test book: not kept ({})", err);
+        }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        const auto pages = fresh.pages().size();
+        adopt(fresh, "");
+        if (auto lg = log::get(log::Area::Shell))
+            lg->info("opened the big test book: {} pages -- {} in {:.0f} ms", pages,
+                     read ? "read back" : "made (" + std::to_string(info.rounds) + " chapter flows, " + std::to_string(info.whole) + " whole)", ms);
     });
 }
 

@@ -74,6 +74,8 @@ add_library(composix_layout STATIC
     src/layout/Preflight.cpp
     # s053: the colour report -- RGB proofed through the press profile.
     src/layout/ColorReport.cpp
+    # s100: the generated long test book (fitted by flowing it).
+    src/layout/BigBook.cpp
 )
 target_include_directories(composix_layout PUBLIC include ${PANGOCAIRO_INCLUDE_DIRS})
 target_link_libraries(composix_layout PUBLIC composix_core plate_pango ${PANGOCAIRO_LIBRARIES})
@@ -83,6 +85,10 @@ target_compile_options(composix_layout PUBLIC ${PANGOCAIRO_CFLAGS_OTHER})
 # ── Headless selftest -- exercises the core with no display ────────────────────
 add_executable(composix_selftest src/selftest.cpp)
 target_link_libraries(composix_selftest PRIVATE composix_core composix_layout)
+
+# ── s100: timings on the generated long book -- run by hand, not a gate ───────
+add_executable(composix_bench src/bench.cpp)
+target_link_libraries(composix_bench PRIVATE composix_core composix_layout)
 
 # ── App resources (gresource) -- the RESOURCE-PIPELINE paradigm ────────────────
 # glib-compile-resources embeds resources/composix.gresource.xml into a C source;

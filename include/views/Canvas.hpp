@@ -36,6 +36,8 @@ namespace composix::views {
 
 class Canvas : public widgets::DrawingArea {
 public:
+    // s101: flow through this cache (the shell's, shared with the thumbnails).
+    void share_flows(layout::FlowCache& f) { m_flowp = &f; }
     // s008: what a drag on empty space does.
     enum class Tool { Select, Text, Image, Shape };
     Canvas(core::Doc& d, core::DocJournal& j);
@@ -238,7 +240,11 @@ private:
     bool              m_preview = false, m_preview_v = false;
     double            m_preview_at = 0;
 
-    layout::FlowCache m_flows;   // s007: text, recomputed when the document changes
+    // s007: text, recomputed when the document changes. s101: the shell's
+    // cache (share_flows), so a change is flowed once for every view.
+    layout::FlowCache  m_own_flows;
+    layout::FlowCache* m_flowp = &m_own_flows;
+    layout::FlowCache& flows() const { return *m_flowp; }
 
     // s008
     Tool        m_tool = Tool::Select;

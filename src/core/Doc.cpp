@@ -74,11 +74,13 @@ template <class T> std::vector<Doc::Id> Doc::ids_of() const {
         std::stable_sort(out.begin(), out.end(), [this](const Id& a, const Id& b) {
             return page_index(as<Section>(a)->start_page) < page_index(as<Section>(b)->start_page);
         });
-    } else {
+    } else if constexpr (requires(const T& r) { r.pos; }) {
         std::stable_sort(out.begin(), out.end(), [this](const Id& a, const Id& b) {
             return pos_of(*as<T>(a)) < pos_of(*as<T>(b));
         });
     }
+    // s101: no pos (frames, guides): id order as it stands -- the stable sort
+    // on an all-equal key changed nothing and cost two lookups a comparison.
     return out;
 }
 
@@ -112,13 +114,14 @@ template double Doc::pos_after<Asset>(const Id&) const;
 template double Doc::pos_after<GenList>(const Id&) const;
 
 int Doc::page_index(const Id& page) const {
-    if (!as<Page>(page)) return -1;
-    const double p = as<Page>(page)->pos;
-    int n = 0;
-    for (const auto& [id, r] : m_recs)
-        if (const auto* pg = std::get_if<Page>(&r))
-            if (pg->pos < p || (pg->pos == p && id < page)) ++n;
-    return n;
+    if (m_page_at_rev != m_rev) {   // s101: (pos, id) order, as pages() gives it
+        m_page_at.clear();
+        int n = 0;
+        for (const auto& id : pages()) m_page_at[id] = n++;
+        m_page_at_rev = m_rev;
+    }
+    const auto it = m_page_at.find(page);
+    return it == m_page_at.end() ? -1 : it->second;
 }
 
 Doc::Id Doc::section_of(const Id& page) const {
@@ -157,8 +160,8 @@ std::vector<Doc::Id> Doc::pages_of(const Id& section) const {
 
 std::vector<Doc::Id> Doc::frames_on(const Id& owner) const {
     std::vector<Id> out;
-    for (const auto& id : ids_of<Frame>())
-        if (as<Frame>(id)->owner == owner) out.push_back(id);
+    for (const auto& [id, r] : m_recs)   // s101: straight from the store (ids_of's order)
+        if (const auto* f = std::get_if<Frame>(&r); f && f->owner == owner) out.push_back(id);
     std::stable_sort(out.begin(), out.end(),
                      [this](const Id& a, const Id& b) { return as<Frame>(a)->z < as<Frame>(b)->z; });
     return out;

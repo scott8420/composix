@@ -18,6 +18,7 @@
 #include <pangomm/layout.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 
@@ -260,6 +261,17 @@ void Canvas::zoom_step(int dir) {
 // drawing: pasteboard (CSS) -> pages -> master items -> own frames -> overlays
 // ─────────────────────────────────────────────────────────────────────────────
 void Canvas::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+    // s100: a slow draw (100 ms+) says so (View area): what the performance arc is
+    // working down. The reflow a keystroke causes is paid here, too.
+    struct Timer {
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        std::size_t pages;
+        ~Timer() {
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (ms >= 100)
+                if (auto lg = log::get(log::Area::View)) lg->info("canvas draw {:.0f} ms ({} pages laid out)", ms, pages);
+        }
+    } timer{.pages = m_placed.size()};
     m_vp.set_widget(w, h);
     if (m_fit_pending && w > 0 && h > 0 && !m_placed.empty()) {
         m_fit_pending = false;
@@ -544,7 +556,7 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
     case core::FrameKind::Text: {
         // s007: the story's text, flowed through the thread (layout::Flow),
         // drawn at true size and scaled -- breaks never change with zoom.
-        const auto& flow = m_flows.get(m_doc, f.story);
+        const auto& flow = flows().get(m_doc, f.story);
         cr->save();
         cr->rectangle(r.x, r.y, r.w, r.h);
         cr->clip();
@@ -555,7 +567,7 @@ void Canvas::draw_frame(const Cairo::RefPtr<Cairo::Context>& cr, const core::Fra
         // being edited, whose markers show as signs (every byte where it was).
         const bool live = editing() && m_edit_story == f.story;
         const std::string ctx = from_master && m_doc.as<core::Page>(on_page) ? on_page : std::string{};
-        const layout::Resolved* rs = live ? nullptr : &m_flows.resolved(m_doc, f.story, ctx);
+        const layout::Resolved* rs = live ? nullptr : &flows().resolved(m_doc, f.story, ctx);
         if (rs && rs->any) layout::draw_frame_text(cr->cobj(), m_doc, f.story, rs->flow, id, 0, 0, 0.08, &rs->text);
         else layout::draw_frame_text(cr->cobj(), m_doc, f.story, flow, id, 0, 0);
         // s059: hidden characters, over the words, in the selection's blue (never printed).
@@ -1647,7 +1659,7 @@ void Canvas::blink_restart() {
 
 core::TextPos Canvas::hit_story(const std::string& frame, double lx, double ly) {
     const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
-    const auto& flow = m_flows.get(m_doc, m_edit_story.empty() ? m_doc.as<core::Frame>(frame)->story : m_edit_story);
+    const auto& flow = flows().get(m_doc, m_edit_story.empty() ? m_doc.as<core::Frame>(frame)->story : m_edit_story);
     const std::string story = m_edit_story.empty() ? m_doc.as<core::Frame>(frame)->story : m_edit_story;
     return layout::hit_text(m_doc, story, flow, frame, lx - lr.x, ly - lr.y);
 }
@@ -1673,7 +1685,7 @@ void Canvas::place_caret(core::TextPos p) {
 // taken it there, then panned so it sits inside the canvas.
 void Canvas::follow_caret() {
     if (!editing()) return;
-    const auto& flow = m_flows.get(m_doc, m_edit_story);
+    const auto& flow = flows().get(m_doc, m_edit_story);
     const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
     if (!c.ok) return;   // overset: nowhere to show it
     m_edit_frame = c.frame;
@@ -1712,7 +1724,7 @@ bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {
     const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
     const bool sel = m_anchor != m_caret;
     const auto lo = std::min(m_anchor, m_caret), hi = std::max(m_anchor, m_caret);
-    const auto& flow = m_flows.get(m_doc, m_edit_story);
+    const auto& flow = flows().get(m_doc, m_edit_story);
     switch (kv) {
     case GDK_KEY_Escape: {
         const auto f = m_edit_frame;
@@ -1799,7 +1811,7 @@ Canvas::TabStrip Canvas::tab_strip() const {
     if (!m_doc.as<core::Style>(para.style)) return t;
     const core::Style eff = core::doc::para_style(m_doc, para);   // s094: the paragraph's own indents count
     const auto* ps = &eff;
-    const auto& flow = const_cast<layout::FlowCache&>(m_flows).get(m_doc, m_edit_story);
+    const auto& flow = flows().get(m_doc, m_edit_story);
     const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
     const auto* f = m_doc.as<core::Frame>(c.ok ? c.frame : m_edit_frame);
     if (!f) return t;
@@ -1879,7 +1891,7 @@ void Canvas::draw_tab_strip(const Cairo::RefPtr<Cairo::Context>& cr) {
 }
 
 void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
-    const auto& flow = m_flows.get(m_doc, m_edit_story);
+    const auto& flow = flows().get(m_doc, m_edit_story);
     const auto lo = std::min(m_anchor, m_caret), hi = std::max(m_anchor, m_caret);
     cr->save();
     for (const auto& ft : flow.frames) {

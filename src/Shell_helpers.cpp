@@ -4,6 +4,7 @@
 #include "core/Recents.hpp"
 #include "layout/Flow.hpp"
 #include "Log.hpp"
+#include <chrono>
 
 #include <gtkmm/alertdialog.h>
 #include <gtkmm/filedialog.h>
@@ -84,8 +85,8 @@ void Shell::rebuild_recents_menu() {  // helper: repaint the submenu
 // (core can't measure text; it is told).
 core::Outline Shell::project_now() const {  // helper
     std::vector<std::string> over;
-    for (const auto& sid : m_doc.ids_of<core::Story>())
-        if (layout::flow_story(m_doc, sid).overset) over.push_back(sid);
+    for (const auto& sid : m_doc.ids_of<core::Story>())   // s101: through the cache (was a fresh flow each)
+        if (m_pf_flows.get(m_doc, sid).overset) over.push_back(sid);
     std::map<std::string, std::string> stale;   // s089
     for (const auto& s : layout::stale_lists(m_doc, m_pf_flows)) stale[s.list] = s.why;
     return core::project(m_doc, m_project_dir, &over, &layout::font_families(), &stale);
@@ -107,6 +108,16 @@ void Shell::refresh() {  // helper
     // Mid-drag the canvas paints the gesture itself; the rest of the views
     // catch up when it ends (signal_edited -> here again).
     if (m_journal.in_gesture()) { m_canvas_view.canvas().queue_draw(); return; }
+    // s101: a slow refresh (100 ms+) says so -- with the canvas's draw line,
+    // what a change costs. The flow it pays is shared with the canvas.
+    struct Timer {
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        ~Timer() {
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (ms >= 100)
+                if (auto lg = log::get(log::Area::Shell)) lg->info("refresh {:.0f} ms", ms);
+        }
+    } timer;
     const auto keep = m_pick.segment ? m_tiles.selected() : std::vector<std::string>{};
     m_outline = project_now();
     m_nav.refresh(&m_outline);

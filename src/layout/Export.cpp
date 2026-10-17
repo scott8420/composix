@@ -269,6 +269,16 @@ std::vector<PdfLink> contents_links(const core::Doc& d, FlowCache& flows) {   //
                 if (std::find(l.from_styles.begin(), l.from_styles.end(), para.style) != l.from_styles.end()) continue;
                 const auto title = trimmed(para.text.substr(0, para.text.find('\t')));
                 if (title.empty()) continue;
+                // s101: only paragraphs that start on the contents page (looked
+                // up in the flow first -- caret_at for every paragraph of a long
+                // book took minutes).
+                bool on_page = false;
+                for (const auto& ft : flow.frames) {
+                    const auto* fr = d.as<core::Frame>(ft.frame);
+                    if (!fr || fr->owner != l.placed_on) continue;
+                    for (const auto& ln : ft.lines) on_page = on_page || (ln.para == p && ln.start == 0);
+                }
+                if (!on_page) continue;
                 const auto c = caret_at(d, sid, flow, {p, 0});
                 if (!c.ok) continue;
                 const auto* f = d.as<core::Frame>(c.frame);
