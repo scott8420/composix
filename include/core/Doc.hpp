@@ -135,6 +135,9 @@ struct Settings {
     double      note_space   = 0;
     std::string note_cont;
     NoteAt      note_at    = NoteAt::Foot;   // s120
+    // s126: the number before a note's words -- "1", "1.", "1)", or raised.
+    enum class NoteNum { Plain, Period, Paren, Raised };
+    NoteNum     note_num   = NoteNum::Plain;
     std::string note_title = "Notes";        // s120: over the endnotes ("" none)
     bool operator==(const Settings&) const = default;
 };
@@ -668,6 +671,8 @@ bool set_note_area(DocJournal& j, Doc& d, int percent);
 bool set_note_look(DocJournal& j, Doc& d, int rule, double rule_w, double space, const std::string& cont);
 // s120: where notes go, and the endnotes' title. One step.
 bool set_note_place(DocJournal& j, Doc& d, NoteAt at, const std::string& title);
+// s126: how the number before a note's words looks. One step.
+bool set_note_num(DocJournal& j, Doc& d, Settings::NoteNum how);
 // s073: the document's display unit. One step.
 bool set_units(DocJournal& j, Doc& d, Units u);
 // s078: keep a query under its name (trimmed, not empty; the same name is

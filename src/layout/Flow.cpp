@@ -495,12 +495,46 @@ core::Style note_style_of(const core::Doc& d, const core::Style& body) {
     return n;
 }
 
+// s126: what comes before a note's words -- its number as the document
+// writes it ("1", "1.", "1)", raised), then an en space.
+std::string note_prefix(const core::Doc& d, int number) {
+    std::string n = core::note_label(number, d.settings().note_style);
+    switch (d.settings().note_num) {
+    case core::Settings::NoteNum::Period: n += "."; break;
+    case core::Settings::NoteNum::Paren:  n += ")"; break;
+    default: break;
+    }
+    return n + "\u2002";
+}
+
+// s125: a chapter's head among endnotes -- the words of its first paragraph
+// (p), markers and marks left out, tabs as spaces, 80 bytes at most.
+std::string chapter_head_text(const core::Story& st, int p) {
+    if (p < 0 || p >= static_cast<int>(st.paras.size())) return {};
+    const auto& t = st.paras[static_cast<std::size_t>(p)].text;
+    std::string out;
+    for (std::size_t i = 0; i < t.size() && out.size() < 80;) {
+        if (static_cast<unsigned char>(t[i]) == 0xEE && i + 2 < t.size() && static_cast<unsigned char>(t[i + 1]) == 0x80) { i += 3; continue; }
+        out += t[i] == '\t' ? ' ' : t[i];
+        ++i;
+    }
+    while (!out.empty() && (static_cast<unsigned char>(out.back()) & 0xC0) == 0x80) out.pop_back();   // a cut character
+    return out;
+}
+
 // The note's words, after its number, at width w. s117: a piece of them --
 // [from, to) (to -1: the end); a piece from past the start has no number.
 LayoutPtr note_layout(const core::Doc& d, const core::Story& st, int p, int k, int number, double w, int from = 0, int to = -1) {
     const auto& para = st.paras[static_cast<std::size_t>(p)];
     const auto ns = note_style_of(d, style_of(d, para));
     const core::Note* note = k >= 0 && k < static_cast<int>(para.notes.size()) ? &para.notes[static_cast<std::size_t>(k)] : nullptr;
+    if (k == -2) {   // s125: a chapter's head among story endnotes -- its first paragraph's words, italic
+        auto hs = ns;
+        hs.italic = true;
+        hs.bold = false;
+        const auto t = chapter_head_text(st, p);
+        return make_layout(hs, t.c_str(), static_cast<int>(t.size()), w, false);
+    }
     if (k == -1) {   // s120: the endnotes' title -- the note style, bold, a little larger
         auto hs = ns;
         hs.bold = true;
@@ -513,7 +547,7 @@ LayoutPtr note_layout(const core::Doc& d, const core::Story& st, int p, int k, i
     const int n = static_cast<int>(words.size());
     from = std::clamp(from, 0, n);
     const int end = to < 0 ? n : std::clamp(to, from, n);
-    const std::string prefix = from == 0 ? core::note_label(number, d.settings().note_style) + " " : std::string{};   // the number, an en space
+    const std::string prefix = from == 0 ? note_prefix(d, number) : std::string{};   // the number, an en space (s126: its look)
     core::Para np{para.style, prefix + words.substr(static_cast<std::size_t>(from), static_cast<std::size_t>(end - from)), {}};
     if (to >= 0 && !d.settings().note_cont.empty()) np.text += "\n" + d.settings().note_cont;   // s118: cut -- the continued line
     const int shift = static_cast<int>(prefix.size()) - from;
@@ -528,6 +562,22 @@ LayoutPtr note_layout(const core::Doc& d, const core::Story& st, int p, int k, i
         }
     auto lay = make_layout(ns, np.text.c_str(), static_cast<int>(np.text.size()), w, false);
     apply_runs(lay.get(), d, np, 0);
+    if (!prefix.empty() && d.settings().note_num == core::Settings::NoteNum::Raised) {   // s126: the number raised, smaller
+        PangoAttrList* al = pango_layout_get_attributes(lay.get());
+        PangoAttrList* mine = al ? pango_attr_list_copy(al) : pango_attr_list_new();
+        const double size = ns.size > 0 ? ns.size : 9;
+        const auto end = static_cast<guint>(prefix.size() - 3);   // the number, not the space
+        PangoAttribute* sc = pango_attr_scale_new(0.7);
+        sc->start_index = 0;
+        sc->end_index = end;
+        pango_attr_list_insert(mine, sc);
+        PangoAttribute* up = pango_attr_rise_new(static_cast<int>(size * 0.35 * PANGO_SCALE));
+        up->start_index = 0;
+        up->end_index = end;
+        pango_attr_list_insert(mine, up);
+        pango_layout_set_attributes(lay.get(), mine);
+        pango_attr_list_unref(mine);
+    }
     return lay;
 }
 
@@ -558,8 +608,9 @@ std::vector<NoteCut> note_cuts(const core::Doc& d, const core::Story& st, int p,
     auto lay = note_layout(d, st, p, k, number, w, from);
     const auto& para = st.paras[static_cast<std::size_t>(p)];
     const int n = k >= 0 && k < static_cast<int>(para.notes.size()) ? static_cast<int>(para.notes[static_cast<std::size_t>(k)].text.size())
-                  : k == -1 ? static_cast<int>(d.settings().note_title.size()) : 0;
-    const int prefix = from == 0 && k >= 0 ? static_cast<int>(core::note_label(number, d.settings().note_style).size()) + 3 : 0;
+                  : k == -1 ? static_cast<int>(d.settings().note_title.size())
+                  : k == -2 ? static_cast<int>(chapter_head_text(st, p).size()) : 0;   // s125
+    const int prefix = from == 0 && k >= 0 ? static_cast<int>(note_prefix(d, number).size()) : 0;   // s126
     std::vector<int> starts;
     PangoLayoutIter* it = pango_layout_get_iter(lay.get());
     do {
@@ -758,7 +809,25 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             if (runs.empty()) return false;
             c.carry.clear();
             if (!d.settings().note_title.empty()) c.carry.push_back({runs.front().para, -1, 0, 0});
-            c.carry.insert(c.carry.end(), runs.begin(), runs.end());
+            // s125: story endnotes numbered by chapter -- each chapter's group under
+            // its head (the numbers start again; the head tells them apart).
+            const bool heads = d.settings().note_at == core::NoteAt::StoryEnd && d.settings().note_restart == core::NoteRestart::Chapter;
+            const auto chapter_of = [&](int p) {
+                for (int i = p; i > 0; --i) {
+                    const auto sa = core::doc::start_of(d, st.paras[static_cast<std::size_t>(i)]);
+                    if (sa == core::ParaStart::NextPage || sa == core::ParaStart::NextRightPage) return i;
+                }
+                return 0;
+            };
+            int chap = -1;
+            for (const auto& r : runs) {
+                if (heads) {
+                    const int ch = chapter_of(r.para);
+                    if (ch != chap && !chapter_head_text(st, ch).empty()) c.carry.push_back({ch, -2, 0, 0});
+                    chap = ch;
+                }
+                c.carry.push_back(r);
+            }
             c.ending = true;
             return true;
         };
@@ -774,7 +843,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 std::size_t take = 0;
                 while (take < cuts.size() && cuts[take].h <= room + 0.01) ++take;
                 // The title goes with the first note's first lines.
-                if (r.k == -1 && take == cuts.size() && i + 1 < c.carry.size()) {
+                if (r.k < 0 && take == cuts.size() && i + 1 < c.carry.size()) {   // (s125: a chapter's head too)
                     const auto& nx = c.carry[i + 1];
                     const auto nc2 = note_cuts(d, st, nx.para, nx.k, nx.number, cw, nx.from);
                     const double first = nc2.empty() ? 0 : nc2[std::min<std::size_t>(1, nc2.size() - 1)].h;

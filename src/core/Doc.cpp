@@ -1307,6 +1307,15 @@ bool set_note_place(DocJournal& j, Doc& d, NoteAt at, const std::string& title) 
     });
 }
 
+bool set_note_num(DocJournal& j, Doc& d, Settings::NoteNum how) {   // s126
+    if (how == d.settings().note_num) return false;
+    return j.run("Footnote numbers", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.note_num = how;
+        d.put("doc", s);
+    });
+}
+
 bool save_query(DocJournal& j, Doc& d, SavedQuery q) {   // s078
     const auto a = q.name.find_first_not_of(" \t"), b = q.name.find_last_not_of(" \t");
     if (a == std::string::npos) return false;
@@ -2875,6 +2884,7 @@ const std::vector<Verb>& verbs() {
         {"set_note_area", [](DocJournal& j, Doc& d) { set_note_area(j, d, 50); }},   // s117
         {"set_note_look", [](DocJournal& j, Doc& d) { set_note_look(j, d, 100, 1, 3, "(continued)"); }},   // s118
         {"set_note_place", [](DocJournal& j, Doc& d) { set_note_place(j, d, NoteAt::StoryEnd, "Endnotes"); }},   // s120
+        {"set_note_num", [](DocJournal& j, Doc& d) { set_note_num(j, d, Settings::NoteNum::Period); }},   // s126
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
         {"delete_query", [](DocJournal& j, Doc& d) { delete_query(j, d, "Double spaces"); }},

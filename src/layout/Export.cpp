@@ -166,6 +166,12 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
                         line += "|" + n.text;
                     }
                     if (np.k == -1) line += "|" + d.settings().note_title;   // s120: the endnotes' title
+                    {   // s126: the note settings that change how a note looks (not where it goes)
+                        const auto& ds = d.settings();
+                        line += "|" + std::to_string(static_cast<int>(ds.note_style)) + std::to_string(static_cast<int>(ds.note_num)) + "|" +
+                                std::to_string(ds.note_rule) + "/" + std::to_string(ds.note_rule_w) + "|" + ds.note_cont;
+                    }
+                    if (np.k == -2) line += "|" + p.text;                     // s125: a chapter's head (its paragraph's words)
                     k.lines.push_back(std::move(line));
                 }
             }

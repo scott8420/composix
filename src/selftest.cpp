@@ -7146,6 +7146,105 @@ int main() {
         }
     }
 
+    {
+        std::cout << "\n-- chapter heads among endnotes (s125) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::insert_note(j, d, "story.1", {1, 4}, "One.");
+        D::insert_note(j, d, "story.1", {2, 6}, "Two.");
+        D::set_note_place(j, d, core::NoteAt::StoryEnd, "Notes");
+        D::set_note_numbering(j, d, core::NoteRestart::Chapter, core::NoteStyle::Arabic);
+        L::FlowCache flows;
+        const auto order = [&] {
+            std::vector<std::pair<int, int>> v;   // (k, para)
+            for (const auto& ft : flows.get(d, "story.1").frames)
+                for (const auto& np : ft.notes) if (!np.cont) v.push_back({np.k, np.para});
+            return v;
+        };
+        using V = std::vector<std::pair<int, int>>;
+        check("story endnotes by chapter: the title, each chapter's head, its notes",
+              order() == V{{-1, 1}, {-2, 0}, {0, 1}, {0, 2}, {-2, 4}, {0, 5}});
+        {
+            std::vector<std::string> heads;
+            const auto& f = flows.get(d, "story.1");
+            for (const auto& ft : f.frames) {
+                std::vector<double> ys;
+                for (const auto& np : ft.notes) if (np.k == -2) ys.push_back(np.y);
+                if (ys.empty()) continue;
+                L::visit_lines(d, "story.1", f, ft.frame, [&](const L::LineVisit& v) {
+                    if (v.from != -4) return;
+                    const char* t = pango_layout_get_text(v.line->layout);
+                    const std::string line(t + v.line->start_index, static_cast<std::size_t>(v.line->length));
+                    if (line.rfind("Chapter", 0) == 0) heads.push_back(line);
+                });
+            }
+            check("the heads read the chapters' first words", heads == std::vector<std::string>{"Chapter One", "Chapter Two"},
+                  std::to_string(heads.size()));
+        }
+        D::set_note_numbering(j, d, core::NoteRestart::Story, core::NoteStyle::Arabic);
+        check("through the story: no heads", order() == V{{-1, 1}, {0, 1}, {0, 2}, {0, 5}});
+        D::set_note_numbering(j, d, core::NoteRestart::Chapter, core::NoteStyle::Arabic);
+        D::set_note_place(j, d, core::NoteAt::ChapterEnd, "Notes");
+        bool none = true;
+        for (const auto& kp : order()) none = none && kp.first != -2;
+        check("chapter endnotes: no heads (each group follows its chapter)", none);
+    }
+
+    {
+        std::cout << "\n-- the number in the note (s126) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);   // its note: Chapter Two, page 3
+        using NN = core::Settings::NoteNum;
+        check("in the note: one step, the same again none", D::set_note_num(j, d, NN::Period) && !D::set_note_num(j, d, NN::Period));
+        {
+            core::Doc e;
+            std::string err;
+            check("json: kept", core::from_json(e, core::to_json(d), &err) && e.settings().note_num == NN::Period, err);
+        }
+        // The note's first line, as drawn.
+        const auto first_line = [&](bool* raised) {
+            const auto f = L::flow_story(d, "story.1");
+            std::string out;
+            *raised = false;
+            for (const auto& ft : f.frames) {
+                if (ft.notes.empty()) continue;
+                L::visit_lines(d, "story.1", f, ft.frame, [&](const L::LineVisit& v) {
+                    if (v.from != -4 || !out.empty()) return;
+                    const char* t = pango_layout_get_text(v.line->layout);
+                    out.assign(t + v.line->start_index, static_cast<std::size_t>(v.line->length));
+                    if (PangoAttrList* al = pango_layout_get_attributes(v.line->layout)) {
+                        PangoAttrIterator* it = pango_attr_list_get_iterator(al);
+                        do {
+                            if (pango_attr_iterator_get(it, PANGO_ATTR_RISE)) *raised = true;
+                        } while (pango_attr_iterator_next(it));
+                        pango_attr_iterator_destroy(it);
+                    }
+                });
+            }
+            return out;
+        };
+        bool raised = false;
+        check("\"1.\" before the words", first_line(&raised).rfind("1. The foldout", 0) == 0 && !raised);
+        L::FlowCache flows;
+        const auto page = d.as<core::Frame>(L::flow_story(d, "story.1").frames.back().frame)->owner;
+        const auto k1 = L::page_key(d, flows, page);
+        D::set_note_num(j, d, NN::Paren);
+        check("\"1)\" before the words", first_line(&raised).rfind("1) The foldout", 0) == 0 && !raised);
+        check("the page's key moves with it (its picture redrawn)", !(L::page_key(d, flows, page) == k1));
+        D::set_note_num(j, d, NN::Raised);
+        check("raised: \"1\" raised and smaller", first_line(&raised).rfind("1 The foldout", 0) == 0 && raised);
+        D::set_note_num(j, d, NN::Plain);
+        check("plain: \"1\", as before", first_line(&raised).rfind("1 The foldout", 0) == 0 && !raised);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

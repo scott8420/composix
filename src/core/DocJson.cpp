@@ -53,6 +53,7 @@ json to(const Record& r) {
             if (!v.note_cont.empty()) j["note_cont"] = v.note_cont;
             if (v.note_at != NoteAt::Foot) j["note_at"] = static_cast<int>(v.note_at);   // s120
             if (v.note_title != "Notes") j["note_title"] = v.note_title;
+            if (v.note_num != Settings::NoteNum::Plain) j["note_num"] = static_cast<int>(v.note_num);   // s126
             if (!v.exp.mark_lists.empty()) j["export"]["mark_lists"] = v.exp.mark_lists;   // s082
             if (v.exp.spreads) j["export"]["spreads"] = true;                              // s084
             if (v.exp.perceptual) j["export"]["perceptual"] = true;                        // s085
@@ -214,6 +215,7 @@ std::optional<Record> from(const json& j) {
         v.note_cont = val(j, "note_cont", std::string{});
         v.note_at = static_cast<NoteAt>(std::clamp(val(j, "note_at", 0), 0, 2));   // s120
         v.note_title = val(j, "note_title", std::string("Notes"));
+        v.note_num = static_cast<Settings::NoteNum>(std::clamp(val(j, "note_num", 0), 0, 3));   // s126
         if (j.contains("export")) {   // s032
             const auto& e = j.at("export");
             v.exp = {val(e, "print", true), val(e, "bleed", true), val(e, "marks", false),

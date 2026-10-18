@@ -99,6 +99,8 @@ void Shell::open_notes_panel() {  // helper
         add("Count", *m_np_restart);
         m_np_style = drop("notes.style", {"1 2 3", "i ii iii", "a b c", "* † ‡"});
         add("Numbers", *m_np_style);
+        m_np_num = drop("notes.num", {"1", "1.", "1)", "Raised"});   // s126
+        add("In the note", *m_np_num);
 
         grid->attach(*group_label("Look"), 0, r++, 2);
         m_np_rule = spin("notes.rule", 0, 100, 5, 0);
@@ -140,6 +142,10 @@ void Shell::open_notes_panel() {  // helper
                                           static_cast<core::NoteStyle>(std::min(3u, m_np_style->get_selected())));
         };
         m_np_restart->property_selected().signal_changed().connect(numbering);
+        m_np_num->property_selected().signal_changed().connect([this] {   // s126
+            if (!m_np_syncing)
+                core::doc::set_note_num(m_journal, m_doc, static_cast<core::Settings::NoteNum>(std::min(3u, m_np_num->get_selected())));
+        });
         m_np_style->property_selected().signal_changed().connect(numbering);
         m_np_rule->signal_value_changed().connect(look);
         m_np_rule_w->signal_value_changed().connect(look);
@@ -170,6 +176,7 @@ void Shell::notes_panel_sync() {  // helper
     if (!m_np_title->has_focus()) m_np_title->set_text(s.note_title);
     m_np_restart->set_selected(static_cast<guint>(s.note_restart));
     m_np_style->set_selected(static_cast<guint>(s.note_style));
+    m_np_num->set_selected(static_cast<guint>(s.note_num));   // s126
     m_np_rule->set_value(s.note_rule);
     m_np_rule_w->set_value(s.note_rule_w);
     m_np_space->set_value(s.note_space);
@@ -219,7 +226,12 @@ void Shell::draw_notes_preview(const Cairo::RefPtr<Cairo::Context>& cr, int cw, 
         cr->show_text(t);
     };
     const double lead = 9, nlead = 7;
-    const auto label = [&](int n) { return core::note_label(n, s.note_style); };
+    const auto label = [&](int n) {   // s126: as the note shows it
+        std::string t = core::note_label(n, s.note_style);
+        if (s.note_num == core::Settings::NoteNum::Period) t += ".";
+        if (s.note_num == core::Settings::NoteNum::Paren) t += ")";
+        return t;
+    };
     if (s.note_at != core::NoteAt::Foot) {
         double y = top;
         for (int i = 0; i < 9; ++i, y += lead) bar(y, i == 8 ? w * 0.55 : w, 4, 0.22);

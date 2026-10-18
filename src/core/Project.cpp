@@ -200,6 +200,9 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                            : st.note_restart == NoteRestart::Section ? "Each section"
                                            : st.note_restart == NoteRestart::Chapter ? "Each chapter" : "Through the story",   // s124
                               "dnote_restart", {{"0", "Through the story"}, {"1", "Each page"}, {"2", "Each section"}, {"3", "Each chapter"}}},
+                             {"In the note", st.note_num == Settings::NoteNum::Period ? "1." : st.note_num == Settings::NoteNum::Paren ? "1)"   // s126
+                                             : st.note_num == Settings::NoteNum::Raised ? "Raised" : "1",
+                              "dnote_num", {{"0", "1"}, {"1", "1."}, {"2", "1)"}, {"3", "Raised"}}},
                              {"Numbers", st.note_style == NoteStyle::RomanLower ? "i ii iii"
                                          : st.note_style == NoteStyle::AlphaLower ? "a b c"
                                          : st.note_style == NoteStyle::Symbols ? "* \u2020 \u2021" : "1 2 3",

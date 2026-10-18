@@ -993,6 +993,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             if (key == "dnote_at") at = static_cast<core::NoteAt>(std::clamp(std::stoi(choice), 0, 2));   // s122: chapters
             else title = choice;
             did = core::doc::set_note_place(m_journal, m_doc, at, title);
+        } else if (key == "dnote_num") {   // s126
+            did = core::doc::set_note_num(m_journal, m_doc, static_cast<core::Settings::NoteNum>(std::clamp(std::stoi(choice), 0, 3)));
         } else if (key == "dnote_area") {   // s117
             did = core::doc::set_note_area(m_journal, m_doc, static_cast<int>(std::lround(std::stod(choice))));
         } else if (key == "dfacing") {

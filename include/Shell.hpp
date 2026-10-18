@@ -305,6 +305,7 @@ private:
     Gtk::DropDown*                   m_np_at = nullptr;
     Gtk::DropDown*                   m_np_restart = nullptr;
     Gtk::DropDown*                   m_np_style = nullptr;
+    Gtk::DropDown*                   m_np_num = nullptr;   // s126
     Gtk::SpinButton*                 m_np_area = nullptr;
     Gtk::SpinButton*                 m_np_rule = nullptr;
     Gtk::SpinButton*                 m_np_rule_w = nullptr;
