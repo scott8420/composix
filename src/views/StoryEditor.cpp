@@ -8,6 +8,7 @@
 #include <gtkmm/entry.h>
 #include <gtkmm/textchildanchor.h>
 #include <gtkmm/eventcontrollerkey.h>
+#include <gtkmm/eventcontrollerfocus.h>
 #include <gtkmm/gestureclick.h>
 #include <gtkmm/label.h>
 #include <gtkmm/scrolledwindow.h>
@@ -69,6 +70,15 @@ StoryEditor::StoryEditor(core::Doc& d, core::DocJournal& j)
     m_char_btn.add_css_class("flat");
     m_char_btn.set_popover(m_char_pop);
     m_head.append(m_char_btn);
+    // s127: the notes pane, on / off.
+    m_notes_btn.set_name("story.notes");
+    m_notes_btn.set_label("Notes");
+    m_notes_btn.set_tooltip_text("Show each footnote's words beside the text");
+    m_notes_btn.set_valign(Gtk::Align::CENTER);
+    m_notes_btn.add_css_class("flat");
+    m_notes_btn.set_active(true);
+    m_notes_btn.signal_toggled().connect([this] { fill_notes_pane(); });
+    m_head.append(m_notes_btn);
     m_head.append(m_info);
     append(m_head);
 
@@ -150,7 +160,30 @@ StoryEditor::StoryEditor(core::Doc& d, core::DocJournal& j)
     m_scroll.set_child(m_view);
     m_scroll.set_vexpand(true);
     m_scroll.set_hexpand(true);
-    append(m_scroll);
+    // s127: the text, and beside it the notes.
+    m_notes_box.set_margin(12);
+    m_notes_box.set_name("story.notes.box");
+    m_notes_scroll.set_child(m_notes_box);
+    m_notes_scroll.set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
+    m_notes_scroll.set_size_request(260, -1);
+    m_notes_scroll.add_css_class("cx-story-notes");
+    m_split.set_start_child(m_scroll);
+    m_split.set_end_child(m_notes_scroll);
+    m_split.set_resize_start_child(true);
+    m_split.set_resize_end_child(false);   // the text takes what's spare
+    m_split.set_shrink_start_child(false);
+    m_split.set_shrink_end_child(false);
+    m_split.set_vexpand(true);
+    m_scroll.set_size_request(240, -1);
+    append(m_split);
+    // The pane ~320 px wide at first; then where the divider is left.
+    m_split.signal_map().connect([this] {
+        Glib::signal_idle().connect_once([this] {
+            if (m_split_set) return;
+            const int w = m_split.get_width();
+            if (w > 600) { m_split.set_position(w - 320); m_split_set = true; }
+        });
+    });
 }
 
 StoryEditor::~StoryEditor() {
@@ -207,7 +240,9 @@ void StoryEditor::place_note_chips() {
             chip->set_tooltip_text(tip);
             chip->set_focus_on_click(false);
             const int pp = p, kk = k;
-            chip->signal_clicked().connect([this, pp, kk, chip] { edit_note(pp, kk, *chip); });
+            chip->signal_clicked().connect([this, pp, kk, chip] {
+                if (!focus_pane_note(pp, kk)) edit_note(pp, kk, *chip);   // s127: the pane's box when it's open
+            });
             m_view.add_child_at_anchor(*chip, anchor);
         }
     }
@@ -331,6 +366,7 @@ void StoryEditor::model_changed() {
     } else if (m_doc.settings().note_restart != core::NoteRestart::Story) {
         place_note_chips();   // s119: typed here -- numbers by page may have moved
     }
+    sync_notes_pane();   // s127
     mark_overset();
     show_looks();
     if (!m_char_pop.get_visible()) fill_char_menu();   // s050: styles added / renamed
@@ -376,6 +412,7 @@ void StoryEditor::load() {
     const std::string text = st ? shown_text(*st) : std::string{};
     buf->set_text(text);
     place_note_chips();   // s112
+    fill_notes_pane();    // s127
     buf->place_cursor(buf->get_iter_at_offset(std::min(at, buf->end().get_offset())));
     m_applying = false;
     m_title.set_text(st ? "Story — " + st->name : "Story");
@@ -457,6 +494,103 @@ void StoryEditor::draw_gutter(const Cairo::RefPtr<Cairo::Context>& cr, int w, in
     cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.12);
     cr->rectangle(w - 1, 0, 1, 100000);
     cr->fill();
+}
+
+// ── s127: the notes pane ───────────────────────────────────────────────────
+// Every footnote of the story, in order: its number (click: the text at its
+// mark) and its words in a box -- Enter a new paragraph; they go in on
+// leaving the box or Ctrl+Enter (one step). Shown when the story has notes
+// and Notes is on.
+void StoryEditor::fill_notes_pane() {
+    while (auto* c = m_notes_box.get_first_child()) m_notes_box.remove(*c);
+    m_note_rows.clear();
+    const auto* st = m_doc.as<core::Story>(m_story);
+    int count = 0;
+    if (st)
+        for (const auto& p : st->paras) count += static_cast<int>(p.notes.size());
+    m_notes_btn.set_sensitive(count > 0);
+    m_notes_btn.set_tooltip_text(count > 0 ? "Show each footnote's words beside the text" : "This story has no footnotes");
+    m_notes_scroll.set_visible(count > 0 && m_notes_btn.get_active());
+    if (!st || count == 0) return;
+    const auto style = m_doc.settings().note_style;
+    auto title = Gtk::make_managed<Gtk::Label>(std::to_string(count) + (count == 1 ? " footnote" : " footnotes"));
+    title->set_xalign(0);
+    title->add_css_class("heading");
+    m_notes_box.append(*title);
+    for (int p = 0; p < static_cast<int>(st->paras.size()); ++p) {
+        const auto& para = st->paras[static_cast<std::size_t>(p)];
+        for (int k = 0; k < static_cast<int>(para.notes.size()); ++k) {
+            auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+            row->set_name("story.note.row");
+            auto head = Gtk::make_managed<Gtk::Button>("Footnote " + core::note_label(note_shown(*st, p, k), style));
+            head->add_css_class("flat");
+            head->set_halign(Gtk::Align::START);
+            head->set_tooltip_text("Show its mark in the text");
+            head->signal_clicked().connect([this, p, k] { show_chip(p, k); });
+            auto words = Gtk::make_managed<NoteWords>();
+            words->view().set_name("story.note.pane.words");
+            words->set_size_request(200, -1);
+            words->set_text(para.notes[static_cast<std::size_t>(k)].text);
+            // In on leaving the box, or Ctrl+Enter / Esc.
+            const auto commit = [this, p, k, words] {
+                const auto* s2 = m_doc.as<core::Story>(m_story);
+                if (!s2 || p >= static_cast<int>(s2->paras.size()) || k >= static_cast<int>(s2->paras[static_cast<std::size_t>(p)].notes.size())) return;
+                const auto t = words->get_text();
+                if (t == s2->paras[static_cast<std::size_t>(p)].notes[static_cast<std::size_t>(k)].text) return;
+                if (core::doc::set_note_text(m_journal, m_doc, m_story, p, k, t)) m_edited.emit();
+            };
+            words->signal_done().connect([this, commit] { commit(); m_view.grab_focus(); });
+            auto fc = Gtk::EventControllerFocus::create();
+            fc->signal_leave().connect(commit);
+            words->view().add_controller(fc);
+            row->append(*head);
+            row->append(*words);
+            m_notes_box.append(*row);
+            m_note_rows.push_back({p, k, row, words, head});
+        }
+    }
+}
+
+void StoryEditor::sync_notes_pane() {
+    const auto* st = m_doc.as<core::Story>(m_story);
+    std::vector<std::pair<int, int>> now;
+    if (st)
+        for (int p = 0; p < static_cast<int>(st->paras.size()); ++p)
+            for (int k = 0; k < static_cast<int>(st->paras[static_cast<std::size_t>(p)].notes.size()); ++k) now.push_back({p, k});
+    bool same = now.size() == m_note_rows.size();
+    for (std::size_t i = 0; same && i < now.size(); ++i) same = now[i].first == m_note_rows[i].p && now[i].second == m_note_rows[i].k;
+    if (!same) { fill_notes_pane(); return; }
+    const auto style = m_doc.settings().note_style;
+    for (auto& r : m_note_rows) {   // the words (not the one being typed in), the numbers
+        const auto& t = st->paras[static_cast<std::size_t>(r.p)].notes[static_cast<std::size_t>(r.k)].text;
+        if (!r.words->view().has_focus() && r.words->get_text() != t) r.words->set_text(t);
+        r.head->set_label("Footnote " + core::note_label(note_shown(*st, r.p, r.k), style));
+    }
+}
+
+bool StoryEditor::focus_pane_note(int para, int k) {
+    if (!m_notes_scroll.get_visible()) return false;
+    for (auto& r : m_note_rows)
+        if (r.p == para && r.k == k) {
+            r.words->focus_end();
+            // Scrolled to: the row's place in the pane.
+            double x = 0, y = 0;
+            if (r.row->translate_coordinates(m_notes_box, 0, 0, x, y)) m_notes_scroll.get_vadjustment()->set_value(std::max(0.0, y - 12));
+            return true;
+        }
+    return false;
+}
+
+void StoryEditor::show_chip(int para, int k) {
+    const auto* st = m_doc.as<core::Story>(m_story);
+    if (!st) return;
+    const int m = core::doc::note_mark_byte(*st, para, k);
+    if (m < 0) return;
+    auto buf = m_view.get_buffer();
+    auto it = buf->get_iter_at_line_index(para, m);
+    buf->place_cursor(it);
+    m_view.scroll_to(it, 0.2);
+    m_view.grab_focus();
 }
 
 }  // namespace composix::views

@@ -15,6 +15,8 @@
 #include <gtkmm/menubutton.h>
 #include <gtkmm/popover.h>
 #include <gtkmm/textview.h>
+#include <gtkmm/paned.h>
+#include <gtkmm/togglebutton.h>
 
 #include <sigc++/signal.h>
 
@@ -62,6 +64,11 @@ private:
     // s112: footnotes as chips in the text -- each mark an anchor holding its number.
     void place_note_chips();
     void edit_note(int para, int k, Gtk::Widget& chip);
+    // s127: the notes pane -- every footnote's words beside the text.
+    void fill_notes_pane();
+    void sync_notes_pane();          // texts from the document (structure the same), else refill
+    bool focus_pane_note(int para, int k);   // the note's box, scrolled to and focused; false if the pane is shut
+    void show_chip(int para, int k);         // the text scrolled to a note's chip
 
     core::Doc&           m_doc;
     core::DocJournal&    m_journal;
@@ -80,6 +87,14 @@ private:
     std::string          m_story;
     bool                 m_applying = false;   // our own edit: the reload would undo the cursor
     sigc::signal<void()> m_edited;
+    // s127
+    Gtk::Paned           m_split{Gtk::Orientation::HORIZONTAL};
+    bool                 m_split_set = false;   // the divider placed once
+    Gtk::ToggleButton    m_notes_btn;
+    widgets::ScrolledWindow m_notes_scroll{"story.notes.scroll"};
+    Gtk::Box             m_notes_box{Gtk::Orientation::VERTICAL, 10};
+    struct NoteRow { int p = 0, k = 0; Gtk::Widget* row = nullptr; class NoteWords* words = nullptr; Gtk::Button* head = nullptr; };
+    std::vector<NoteRow> m_note_rows;
 };
 
 }  // namespace composix::views

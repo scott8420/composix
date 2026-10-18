@@ -20,7 +20,7 @@ public:
         set_min_content_height(72);
         set_max_content_height(260);
         set_propagate_natural_height(true);
-        set_size_request(420, -1);
+        set_size_request(420, -1);   // (the Story Editor's pane asks less, s127)
         add_css_class("frame");
         m_view.set_wrap_mode(Gtk::WrapMode::WORD_CHAR);
         m_view.set_accepts_tab(false);
