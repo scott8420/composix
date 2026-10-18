@@ -31,6 +31,7 @@ Glib::RefPtr<Gio::Menu> Shell::special_menu() {  // zone
     notes->append("Footnotes & Endnotes\u2026", "win.notes-panel");   // s121
     notes->append("Cross-Reference\u2026", "win.insert-xref");   // s128
     notes->append("Edit Cross-Reference\u2026", "win.edit-xref");   // s130
+    notes->append("All Cross-References\u2026", "win.xrefs-panel");   // s133
     m->append_section(notes);
     auto breaks = Gio::Menu::create();   // s055
     breaks->append("Column Break", "win.insert-column-break");

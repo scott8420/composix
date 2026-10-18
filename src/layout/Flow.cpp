@@ -1899,9 +1899,58 @@ std::string ref_value(const core::Doc& d, const core::XRef& r, FlowCache& flows)
     return ref_value_by(d, r, [&](const std::string& story) -> const StoryFlow& { return flows.get(d, story); });
 }
 
+std::vector<XRefRow> xref_list(const core::Doc& d, FlowCache& flows) {   // s133
+    std::vector<XRefRow> out;
+    // UTF-8: back / on to a character's start.
+    const auto lead = [](const std::string& t, std::size_t i) {
+        while (i > 0 && i < t.size() && (static_cast<unsigned char>(t[i]) & 0xC0) == 0x80) --i;
+        return i;
+    };
+    for (const auto& sid : d.ids_of<core::Story>()) {
+        const auto& st = *d.as<core::Story>(sid);
+        if (std::none_of(st.paras.begin(), st.paras.end(), [](const core::Para& p) { return !p.refs.empty(); })) continue;
+        const auto& rs = flows.resolved(d, sid, {});
+        const auto& flow = flows.get(d, sid);
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            const auto& para = st.paras[static_cast<std::size_t>(p)];
+            int k = 0;
+            for (std::size_t i = para.text.find(core::kMarkRef); i != std::string::npos; i = para.text.find(core::kMarkRef, i + 3), ++k) {
+                if (k >= static_cast<int>(para.refs.size())) break;
+                const auto& r = para.refs[static_cast<std::size_t>(k)];
+                XRefRow row{sid, p, k, static_cast<int>(i)};
+                for (const auto& sp : rs.refs) {
+                    if (sp.para != p || sp.k != k) continue;
+                    const auto& t = rs.text.paras[static_cast<std::size_t>(p)].text;
+                    row.shows = t.substr(static_cast<std::size_t>(sp.from), static_cast<std::size_t>(sp.to - sp.from));
+                    const auto a = lead(t, sp.from > 40 ? static_cast<std::size_t>(sp.from - 40) : 0);
+                    const auto b = lead(t, std::min(t.size(), static_cast<std::size_t>(sp.to) + 16));
+                    row.context = (a > 0 ? "\u2026" : "") + t.substr(a, b - a) + (b < t.size() ? "\u2026" : "");
+                    std::string clean;   // marks out (a note's number shows as itself on the page, not here)
+                    for (std::size_t q = 0; q < row.context.size();) {
+                        if (static_cast<unsigned char>(row.context[q]) == 0xEE && q + 2 < row.context.size() &&
+                            static_cast<unsigned char>(row.context[q + 1]) == 0x80) { q += 3; continue; }
+                        clean += row.context[q] == '\t' ? ' ' : row.context[q];
+                        ++q;
+                    }
+                    row.context = std::move(clean);
+                }
+                const auto c = caret_at(d, sid, flow, {p, static_cast<int>(i)});
+                if (const auto* f = c.ok ? d.as<core::Frame>(c.frame) : nullptr; f && d.as<core::Page>(f->owner)) {
+                    row.page = d.folio(f->owner);
+                    row.page_id = f->owner;
+                }
+                row.where = ref_where(d, r, flows, sid);
+                row.broken = core::doc::find_anchor(d, r.target).story.empty() || row.shows.find("??") != std::string::npos;
+                out.push_back(std::move(row));
+            }
+        }
+    }
+    return out;
+}
+
 std::string ref_where(const core::Doc& d, const core::XRef& r, FlowCache& flows, const std::string& from_story) {   // s130
     const auto at = core::doc::find_anchor(d, r.target);
-    if (at.story.empty()) return "Cross-reference: its place is gone -- it shows question marks";
+    if (at.story.empty()) return "Cross-reference: its place is gone \u2014 it shows question marks";
     const auto& text = d.as<core::Story>(at.story)->paras[static_cast<std::size_t>(at.at.para)].text;
     const bool note = core::note_at(text, static_cast<std::size_t>(at.at.byte) + 3);
     std::string w = ref_value(d, core::XRef{r.target, core::RefShow::Custom, note ? "note *, page #" : "\u201c%\u201d, page #"}, flows);

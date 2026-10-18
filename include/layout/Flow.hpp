@@ -156,6 +156,17 @@ std::string ref_value(const core::Doc& d, const core::XRef& r, FlowCache& flows)
 // s130: where a reference points, in words for a tooltip -- "Points at
 // “Chapter Two”, page 3", "Points at note 1, page 3", or that its place is gone.
 std::string ref_where(const core::Doc& d, const core::XRef& r, FlowCache& flows, const std::string& from_story = {});   // (another story: its name too)
+// s133: every cross-reference in the document, in story then reading order:
+// where it is (its page's folio, "" not on a page), the words round it as
+// set (\u2026 at a cut), what it shows, where it points (ref_where), and
+// whether it is broken (its place gone, or "??" in what it shows).
+struct XRefRow {
+    std::string story;
+    int para = 0, k = 0, byte = 0;
+    std::string page, page_id, context, shows, where;
+    bool broken = false;
+};
+std::vector<XRefRow> xref_list(const core::Doc& d, FlowCache& flows);
 // The value a marker takes on `page` (k as core::marker_at). `frame`: the
 // frame it sits in, for next / previous (its thread's neighbours).
 std::string marker_value(const core::Doc& d, int k, const std::string& page, const std::string& frame);

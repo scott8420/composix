@@ -7570,6 +7570,40 @@ int main() {
         check("undo all: as loaded", P(1).anchors.empty() && P(2).notes.empty() && d.strays() == 0);
     }
 
+    {
+        std::cout << "\n-- the cross-references, listed (s133) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        L::FlowCache flows;
+        check("none: an empty list", L::xref_list(d, flows).empty());
+        D::insert_ref_to(j, d, "story.1", {3, 0}, "story.1", 4, core::RefShow::Text);           // paragraph 3
+        D::insert_ref_to(j, d, "story.1", {1, 4}, "story.1", 5, core::RefShow::Page);           // paragraph 1 -- listed first
+        D::insert_ref_to_note(j, d, "story.1", {1, 0}, "story.1", 5, 0, core::RefShow::Note);   // before it in paragraph 1
+        D::insert_ref(j, d, "story.2", {0, 0}, "anchor.99", core::RefShow::Page);              // the caption's: points nowhere
+        auto rows = L::xref_list(d, flows);
+        check("four, in story then reading order", rows.size() == 4 && rows[0].story == "story.1" && rows[0].para == 1 && rows[0].k == 0 &&
+                                                   rows[1].para == 1 && rows[1].k == 1 && rows[2].para == 3 && rows[3].story == "story.2",
+              std::to_string(rows.size()));
+        if (rows.size() == 4) {
+            check("its page's folio", !rows[0].page.empty() && d.as<core::Page>(rows[0].page_id) != nullptr);
+            check("what it shows; the words round it, marks left out",
+                  rows[2].shows == "Chapter Two" && rows[2].context.find("Chapter Two") != std::string::npos &&
+                  rows[2].context.find("\xEE\x80") == std::string::npos, rows[2].context);
+            check("where it points", rows[0].where.find("points at note 1") != std::string::npos, rows[0].where);
+            check("broken: the one pointing nowhere only", !rows[0].broken && !rows[1].broken && !rows[2].broken && rows[3].broken);
+        }
+        // The heading deleted: its reference broken too.
+        D::edit_text(j, d, "story.1", {4, 0}, {4, static_cast<int>(d.as<core::Story>("story.1")->paras[4].text.size())}, "", "Delete", "");
+        rows = L::xref_list(d, flows);
+        int broken = 0;
+        for (const auto& r : rows) broken += r.broken;
+        check("its place deleted: broken", broken == 2, std::to_string(broken));
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

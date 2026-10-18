@@ -92,7 +92,10 @@ void Shell::open_xref(int edit_para, int edit_k) {
         const auto& st = *m_doc.as<core::Story>(sid);
         for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
             const auto& para = st.paras[static_cast<std::size_t>(p)];
-            const bool anchored = para.text.find(core::kMarkAnchor) != std::string::npos;
+            // s133: an anchor of its own (one set before a note's mark is the note's -- listed with the notes).
+            bool anchored = false;
+            for (auto i = para.text.find(core::kMarkAnchor); i != std::string::npos && !anchored; i = para.text.find(core::kMarkAnchor, i + 3))
+                anchored = !core::note_at(para.text, i + 3);
             if (!anchored && !heading_style(m_doc, para.style, listed)) continue;
             // Its words and where it is now (as a reference would show them).
             std::string words, page;

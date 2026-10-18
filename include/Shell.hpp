@@ -41,6 +41,7 @@
 #include <thread>
 #include <string>
 #include <vector>
+#include <tuple>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shell -- the app window, AND the split-class exemplar (inherited from Cairn).
@@ -170,6 +171,9 @@ private:
     void on_insert_xref();                      // category: handler: s128 -- a cross-reference at the cursor
     void on_edit_xref();                        // category: handler: s130 -- the one beside the cursor, changed
     void open_xref(int edit_para, int edit_k);  // s130: the picker (edit_k >= 0: changing that reference)
+    void open_xrefs_panel();                    // category: helper: s133 -- every cross-reference, one panel
+    void xrefs_panel_sync();                    // category: helper: s133 -- the panel from the document
+    void go_to_ref(const std::string& story, int para, int k, bool edit);   // category: helper: s133 -- a reference selected (and its picker)
     void open_notes_panel();                     // category: helper: s121 -- Footnotes & Endnotes, one panel
     void notes_panel_sync();                     // category: helper: s121 -- the panel from the document
     void draw_notes_preview(const Cairo::RefPtr<Cairo::Context>& cr, int cw, int ch);   // category: helper: s121
@@ -305,6 +309,12 @@ private:
     Gtk::Label*                      m_start_empty = nullptr;
     std::map<const Gtk::FlowBoxChild*, std::string> m_start_paths;
     std::unique_ptr<Gtk::Window>     m_swed;
+    // s133: the Cross-References panel.
+    std::unique_ptr<Gtk::Window>     m_xp;
+    Gtk::ListBox*                    m_xp_list = nullptr;
+    Gtk::Label*                      m_xp_count = nullptr;
+    Gtk::ToggleButton*               m_xp_broken = nullptr;
+    std::vector<std::tuple<std::string, int, int>> m_xp_rows;   // each row's reference: story, paragraph, index
     // s121: the Footnotes & Endnotes panel.
     std::unique_ptr<Gtk::Window>     m_np;
     Gtk::DrawingArea*                m_np_preview = nullptr;
