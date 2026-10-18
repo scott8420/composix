@@ -1156,6 +1156,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             if (colon != std::string::npos)
                 for (const auto& id : m_inspected)
                     did = core::doc::set_list_entry_style(m_journal, m_doc, id, std::stoi(choice.substr(0, colon)), choice.substr(colon + 1)) || did;
+        } else if (key == "list_cite_order") {   // s142
+            for (const auto& id : m_inspected) did = core::doc::set_list_cite_order(m_journal, m_doc, id, choice == "1") || did;
         } else if (key == "list_numbers") {   // s090
             for (const auto& id : m_inspected) did = core::doc::set_list_numbers(m_journal, m_doc, id, choice == "1") || did;
         } else if (key == "genlist") {   // s087: Build / Rebuild

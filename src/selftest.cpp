@@ -8168,6 +8168,65 @@ int main() {
         check("undo all", d.strays() == 0 && d.as<core::Story>("story.1")->paras[1].refs.empty());
     }
 
+    {
+        std::cout << "\n-- the bibliography in cited order (s142) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);   // Sources: Almanac (1), Harbor Registers (2), Letters (3)
+        const auto shown = [&](int p) {
+            const auto r = L::resolve_story(d, "story.1", "");
+            return r.any ? r.text.paras[static_cast<std::size_t>(p)].text : std::string{};
+        };
+        // Letters cited first (paragraph 1), then Almanac (paragraph 2); Harbor never.
+        D::insert_citation(j, d, "story.1", {1, 0}, "story.4", 2);
+        D::insert_citation(j, d, "story.1", {2, 0}, "story.4", 0);
+        check("alphabetical: [3] then [1]", shown(1).rfind("[3]", 0) == 0 && shown(2).rfind("[1]", 0) == 0, shown(1).substr(0, 5) + shown(2).substr(0, 5));
+        const auto rows = [&] {
+            std::map<std::string, std::string> m;
+            const auto o = core::project(d, "", nullptr, nullptr, nullptr);
+            for (const auto& it : o.items()) if (it.id == "list.2") for (const auto& f : it.fields) m[f.label] = f.value;
+            return m;
+        };
+        check("the inspector: Order Alphabetical", rows()["Order"] == "Alphabetical");
+        L::build_list(j, d, "list.2");   // written alphabetical first
+        check("first cited: one step", D::set_list_cite_order(j, d, "list.2", true) && rows()["Order"] == "First cited");
+        {
+            L::FlowCache f;
+            std::string why;
+            for (const auto& x : L::stale_lists(d, f)) if (x.list == "list.2") why = x.why;
+            check("  out of date, saying why: the order", why == "Not in the order first cited", why);
+        }
+        check("  the same again: nothing", !D::set_list_cite_order(j, d, "list.2", true));
+        L::build_list(j, d, "list.2");
+        const auto& w = d.as<core::Story>("story.4")->paras;
+        const auto has = [](const core::Para& p, const char* t) { return p.text.find(t) != std::string::npos; };
+        check("rebuilt: Letters, Almanac, then the uncited Harbor Registers",
+              w.size() == 3 && has(w[0], "Letters") && has(w[1], "Almanac") && has(w[2], "Harbor"));
+        check("  the citations renumbered: [1] then [2]", shown(1).rfind("[1]", 0) == 0 && shown(2).rfind("[2]", 0) == 0,
+              shown(1).substr(0, 5) + shown(2).substr(0, 5));
+        {
+            L::FlowCache f;
+            bool stale = false;
+            for (const auto& x : L::stale_lists(d, f)) stale = stale || x.list == "list.2";
+            check("  current", !stale);
+        }
+        // A citation of Harbor added before the others: it moves to the front on a rebuild.
+        D::insert_citation(j, d, "story.1", {0, 0}, "story.4", 2);
+        L::build_list(j, d, "list.2");
+        check("a new first citation: that source first", has(d.as<core::Story>("story.4")->paras[0], "Harbor") && shown(0).rfind("[1]", 0) == 0,
+              shown(0).substr(0, 5));
+        {
+            core::Doc e;
+            std::string err;
+            check("json: the order kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        }
+        while (j.can_undo()) j.undo();
+        check("undo all", d.strays() == 0 && !d.as<core::GenList>("list.2")->cite_order);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

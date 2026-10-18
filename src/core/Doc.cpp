@@ -1459,6 +1459,16 @@ Doc::Id list_story(const Doc& d, const Doc::Id& list) {   // s141 (s140's adopti
     return {};
 }
 
+bool set_list_cite_order(DocJournal& j, Doc& d, const Doc::Id& list, bool on) {   // s142
+    const auto* l = d.as<GenList>(list);
+    if (!l || l->kind != ListKind::Bibliography || l->cite_order == on) return false;
+    return j.run(on ? "Order: First Cited" : "Order: Alphabetical", {list}, [&] {
+        GenList nl = *d.as<GenList>(list);
+        nl.cite_order = on;
+        d.put(list, nl);
+    });
+}
+
 bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<ListEntry>& entries) {   // s087
     const auto* l = d.as<GenList>(list);
     if (!l) return false;
@@ -1552,7 +1562,7 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
     }
     if (paras.empty()) paras.push_back({entry_style, ""});
     const int n = static_cast<int>(entries.size());
-    if (st && to_make.empty() && !make_head && st->paras == paras && l->built_entries == n) return false;
+    if (st && adopt.empty() && to_make.empty() && !make_head && st->paras == paras && l->built_entries == n) return false;   // s142: an adoption is a change
     std::vector<Doc::Id> ids{list};
     if (st) ids.push_back(adopt.empty() ? l->story : adopt);
     return j.run("Build " + l->name, ids, [&]() -> std::vector<Doc::Id> {
@@ -3387,6 +3397,7 @@ const std::vector<Verb>& verbs() {
             j.run("t", {"story.1"}, [&] { insert_index_mark(j, d, "story.1", {1, 4}, "Harbors"); set_index_mark(j, d, "story.1", 1, 0, "Ports", "fees"); });
         }},
         {"add_list", [](DocJournal& j, Doc& d) { add_list(j, d, ListKind::Index, "Index", d.pages().back()); }},   // s135
+        {"set_list_cite_order", [](DocJournal& j, Doc& d) { set_list_cite_order(j, d, "list.2", true); }},   // s142
         {"insert_citation", [](DocJournal& j, Doc& d) { insert_citation(j, d, "story.1", {1, 4}, "story.4", 1); }},   // s141: the sample's Sources
         {"insert_ref_to_note", [](DocJournal& j, Doc& d) { insert_ref_to_note(j, d, "story.1", {1, 4}, "story.1", 5, 0, RefShow::Custom, "note *"); }},   // s129: the sample's note
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073

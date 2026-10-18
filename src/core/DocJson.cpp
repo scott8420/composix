@@ -213,6 +213,7 @@ json to(const Record& r) {
             if (!v.story.empty()) j["story"] = v.story;   // s087
             if (!v.entry_styles.empty()) j["entry_styles"] = v.entry_styles;   // s088
             if (!v.numbers) j["numbers"] = false;                              // s090
+            if (v.cite_order) j["cite_order"] = true;                          // s142
         }
         return j;
     }, r);
@@ -492,6 +493,7 @@ std::optional<Record> from(const json& j) {
         v.built_entries = val(j, "built_entries", -1);
         v.story = val<std::string>(j, "story", "");   // s087
         v.numbers = val(j, "numbers", true);   // s090
+        v.cite_order = val(j, "cite_order", false);   // s142
         if (j.contains("entry_styles") && j.at("entry_styles").is_array())   // s088
             for (const auto& e : j.at("entry_styles")) v.entry_styles.push_back(e.is_string() ? e.get<std::string>() : std::string{});
         return v;

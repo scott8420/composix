@@ -458,6 +458,7 @@ struct GenList {
     std::string              story;         // s087: the story Build writes into ("" = none yet)
     std::vector<std::string> entry_styles;  // s088: the style each level's entries take (by level; "" / missing = found or made)
     bool                     numbers = true;   // s090: entries end with a tab and the page number
+    bool                     cite_order = false;   // s142: a bibliography -- in the order first cited (else alphabetical)
     bool operator==(const GenList&) const = default;
 };
 
@@ -1062,6 +1063,8 @@ bool set_list_styles(DocJournal& j, Doc& d, const Doc::Id& list, const std::vect
 // page numbers on / off. One step; no change -> no step.
 bool set_list_entry_style(DocJournal& j, Doc& d, const Doc::Id& list, int level, const Doc::Id& style);
 bool set_list_numbers(DocJournal& j, Doc& d, const Doc::Id& list, bool on);
+// s142: a bibliography's order -- as first cited in the text, or alphabetical. One step.
+bool set_list_cite_order(DocJournal& j, Doc& d, const Doc::Id& list, bool on);
 // s135: a new generated list of `kind`, named, placed on page `on` ("" none):
 // one step; its id ("" when `on` isn't a page and isn't ""). Built later.
 Doc::Id add_list(DocJournal& j, Doc& d, ListKind kind, const std::string& name, const Doc::Id& on);

@@ -729,6 +729,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             }
             entry_rows.push_back({"Page numbers", l.numbers ? "Yes" : "No", "list_numbers", {{"1", "Yes"}, {"0", "No"}}});
         }
+        if (l.kind == ListKind::Bibliography)   // s142: its order
+            entry_rows.push_back({"Order", l.cite_order ? "First cited" : "Alphabetical", "list_cite_order", {{"0", "Alphabetical"}, {"1", "First cited"}}});
         if (l.kind == ListKind::Index) {   // s138: an index's two levels -- entries and the sub-entries under them
             for (int k = 0; k < 2; ++k) {
                 const std::string lv = std::to_string(k + 1);

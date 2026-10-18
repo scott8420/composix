@@ -696,6 +696,43 @@ std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& fl
             }
         }
         for (auto& [k, e] : by) out.push_back(std::move(e));
+        if (l->cite_order) {   // s142: as first cited -- cited sources by their first citation in reading order, the rest after (alphabetical)
+            struct At { int page, story, para, byte; bool operator<(const At& o) const { return std::tie(page, story, para, byte) < std::tie(o.page, o.story, o.para, o.byte); } };
+            std::map<std::string, At> first;   // anchor id -> its first citation
+            int sn = 0;
+            for (const auto& sid : d.ids_of<core::Story>()) {
+                ++sn;
+                const auto& st = *d.as<core::Story>(sid);
+                if (std::none_of(st.paras.begin(), st.paras.end(), [](const core::Para& p) { return !p.refs.empty(); })) continue;
+                const auto& flow = flows.get(d, sid);
+                for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+                    const auto& para = st.paras[static_cast<std::size_t>(p)];
+                    int k = 0;
+                    for (auto i = para.text.find(core::kMarkRef); i != std::string::npos && k < static_cast<int>(para.refs.size());
+                         i = para.text.find(core::kMarkRef, i + 3), ++k) {
+                        const auto& r = para.refs[static_cast<std::size_t>(k)];
+                        if (r.show != core::RefShow::Cite || r.target.empty()) continue;
+                        int page = 1 << 30;   // not on a page: after those that are
+                        for (const auto& ft : flow.frames)
+                            for (const auto& ln : ft.lines)
+                                if (ln.para == p && static_cast<int>(i) >= ln.start && static_cast<int>(i) <= std::max(ln.end, ln.start + 1))
+                                    if (const auto* f = d.as<core::Frame>(ft.frame); f && d.as<core::Page>(f->owner))
+                                        page = std::min(page, d.page_index(f->owner));
+                        const At at{page, sn, p, static_cast<int>(i)};
+                        if (const auto it = first.find(r.target); it == first.end() || at < it->second) first[r.target] = at;
+                    }
+                }
+            }
+            const auto rank = [&](const core::doc::ListEntry& e) {
+                At best{1 << 30, 1 << 30, 0, 0};
+                bool cited = false;
+                if (e.para)
+                    for (const auto& id : e.para->anchors)
+                        if (const auto it = first.find(id); !id.empty() && it != first.end()) { cited = true; best = std::min(best, it->second); }
+                return std::make_tuple(!cited, best.page, best.story, best.para, best.byte);
+            };
+            std::stable_sort(out.begin(), out.end(), [&](const auto& a, const auto& b) { return rank(a) < rank(b); });
+        }
         return out;
     }
     if (l && l->kind == core::ListKind::Index) {   // s135: the index marks' entries, a letter heading each initial
@@ -838,6 +875,12 @@ std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows) {   // 
         }
         if (why.empty() && want.size() > had.size()) why = name(en[had.size()]) + " not listed yet";
         if (why.empty() && had.size() > want.size()) why = "\u201c" + had[want.size()] + "\u201d listed, no such entry";
+        if (!why.empty() && l.kind == core::ListKind::Bibliography) {   // s142: the same sources, another order
+            auto a1 = want, b1 = had;
+            std::sort(a1.begin(), a1.end());
+            std::sort(b1.begin(), b1.end());
+            if (a1 == b1) why = l.cite_order ? "Not in the order first cited" : "Not in alphabetical order";
+        }
         if (why.empty()) {   // s138: a level whose style was picked -- written in it?
             const auto t0 = static_cast<std::size_t>(core::doc::list_title_paras(*st, l.kind));
             for (std::size_t i = 0; i < en.size() && why.empty(); ++i) {
