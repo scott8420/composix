@@ -3107,6 +3107,247 @@ int main() {
     }
 
     {
+        std::cout << "\n-- a style's setting, one code path; the specimen shows what's waiting (s164) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::load_sample(d);
+        core::Doc::Id body, emph;
+        for (const auto& id : d.ids_of<core::Style>()) {
+            if (d.as<core::Style>(id)->name == "Body") body = id;
+            if (d.as<core::Style>(id)->kind == core::StyleKind::Character && emph.empty()) emph = id;
+        }
+        core::Style b = *d.as<core::Style>(body);
+        check("labels: a plain setting has one, the others none", D::style_edit_label("ssize") == "Size" &&
+              D::style_edit_label("rule_b_w") == "Rule" && D::style_edit_label("based_on").empty() && D::style_edit_label("style").empty());
+        const double lead0 = b.leading, size0 = b.size;
+        D::style_edit(d, b, "ssize", "13");
+        check("size: set; leading follows when it was the usual ratio",
+              b.size == 13 && (std::abs(lead0 - size0 * 1.2) < 1.5 ? b.leading == std::round(13 * 1.2 * 2) / 2 : b.leading == lead0));
+        D::style_edit(d, b, "align", "1");
+        D::style_edit(d, b, "rule_b_w", "2");
+        check("align and a rule below (offset clear of the text)", b.align == core::Align::Center && b.rule_below.weight == 2 &&
+                                                                  b.rule_below.offset > 0);
+        D::style_edit(d, b, "list_type", "1");
+        check("a list makes room for its marker", b.list.type == core::ListType::Bullet && b.left_indent >= b.list.hang);
+        core::Style e = *d.as<core::Style>(emph);
+        const auto e0 = e;
+        D::style_edit(d, e, "lindent", "36");
+        check("a paragraph setting leaves a character style alone", e == e0);
+        L::StyleOver over{{body, b}};
+        const auto sd = L::style_specimen_doc(d, body, false, 432, 324, &over);
+        check("specimen: the waiting change shown", sd.as<core::Style>(body)->size == 13 && sd.as<core::Style>(body)->align == core::Align::Center);
+        check("...the document's style as it was", d.as<core::Style>(body)->size == size0);
+    }
+
+    {
+        std::cout << "\n-- a style, greeked: on its own and in use (s163) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::load_sample(d);
+        core::Doc::Id body, head, emph;
+        for (const auto& id : d.ids_of<core::Style>()) {
+            const auto* s = d.as<core::Style>(id);
+            if (s->name == "Body") body = id;
+            if (s->name == "Heading 1") head = id;
+            if (s->kind == core::StyleKind::Character && emph.empty()) emph = id;
+        }
+        check("fixture: Body, Heading 1, a character style", !body.empty() && !head.empty() && !emph.empty());
+        const auto alone = L::style_specimen_doc(d, body, false, 432, 324);
+        const auto* st = alone.as<core::Story>("story.1");
+        check("on its own: paragraphs all in it", st && st->paras.size() >= 2 &&
+              std::all_of(st->paras.begin(), st->paras.end(), [&](const core::Para& p) { return p.style == body; }));
+        const auto use = L::style_specimen_doc(d, head, true, 432, 648);
+        const auto* su = use.as<core::Story>("story.1");
+        int mine = 0, other = 0;
+        for (const auto& p : su->paras) (p.style == head ? mine : other)++;
+        check("in use: it among others", mine >= 1 && other >= 2);
+        const auto use_styles = use.ids_of<core::Style>();
+        check("in use: a next-page start set where it falls (one page)",
+              std::all_of(use_styles.begin(), use_styles.end(),
+                          [&](const auto& id) { return use.as<core::Style>(id)->start == core::ParaStart::Anywhere; }));
+        L::FlowCache fl;
+        check("in use: it all fits the page", !fl.get(use, "story.1").overset);
+        const auto ch = L::style_specimen_doc(d, emph, true, 432, 648);
+        bool run = false;
+        for (const auto& p : ch.as<core::Story>("story.1")->paras) for (const auto& r : p.runs) run = run || r.style == emph;
+        check("a character style: on some words of the body", run);
+        check("the document untouched", d.strays() == 0);
+        auto* surf = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 800, 600);
+        cairo_t* cr = cairo_create(surf);
+        cairo_set_source_rgb(cr, 0.9, 0.9, 0.9);
+        cairo_paint(cr);
+        L::draw_style_specimen(cr, d, head, 800, 600);
+        cairo_destroy(cr);
+        cairo_surface_flush(surf);
+        int white = 0;
+        const auto* data = cairo_image_surface_get_data(surf);
+        const int stride = cairo_image_surface_get_stride(surf);
+        for (int y = 0; y < 600; y += 4)
+            for (int x = 0; x < 800; x += 4) white += (reinterpret_cast<const std::uint32_t*>(data + y * stride)[x] & 0xffffff) == 0xffffff;
+        cairo_surface_destroy(surf);
+        check("drawn: paper on the pasteboard", white > 1000);
+    }
+
+    {
+        std::cout << "\n-- a style's rows in groups; Set as one step (s161 / s162) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto o = core::project(d, "");
+        const core::Item* para = nullptr;
+        for (const auto* it : o.in(core::Segment::Styles))
+            if (const auto* st = d.as<core::Style>(it->id); st && st->kind == core::StyleKind::Paragraph) { para = it; break; }
+        check("a paragraph style item", para != nullptr);
+        std::set<std::string> groups;
+        bool ok = true;
+        std::string why;
+        for (const auto& f : para->fields) {
+            if (f.label == "Kind" || f.buttons) { ok = ok && (f.group.empty() || f.edit == "style_base"); continue; }   // Kind above, actions below
+            if (f.group.empty()) { ok = false; why = f.label; }
+            groups.insert(f.group);
+        }
+        check("every row but Kind in a group", ok, why);
+        check("shared fields keep their groups", [&] {
+            const auto sh = core::shared_fields({para});
+            return std::all_of(sh.begin(), sh.end(), [](const core::Field& f) { return f.label == "Kind" || f.buttons || !f.group.empty(); });
+        }());
+        check("groups: Text, Paragraph, Flow, List, Rules, Style",
+              groups.count("Text") && groups.count("Paragraph") && groups.count("Flow") && groups.count("List") && groups.count("Rules") &&
+              groups.count("Style"));
+        {   // each group's rows together (one heading each)
+            std::vector<std::string> seq;
+            for (const auto& f : para->fields) if (!f.group.empty() && (seq.empty() || seq.back() != f.group)) seq.push_back(f.group);
+            check("each group's rows together", std::set<std::string>(seq.begin(), seq.end()).size() == seq.size());
+        }
+        const auto sid = para->id;
+        const auto before = *d.as<core::Style>(sid);
+        const auto n0 = j.size();
+        const bool did = D::styles_as_one(j, d, "Style settings", [&] {
+            D::edit_styles(j, d, {sid}, "Size", [](core::Style& s) { s.size = 15; });
+            D::edit_styles(j, d, {sid}, "Space after", [](core::Style& s) { s.space_after = 9; });
+        });
+        check("Set: one step for both", did && j.size() == n0 + 1 && j.undo_label() == "Style settings" &&
+                                        d.as<core::Style>(sid)->size == 15 && d.as<core::Style>(sid)->space_after == 9);
+        j.undo();
+        check("undo: both back", *d.as<core::Style>(sid) == before);
+        check("Set with nothing changed: no step", !D::styles_as_one(j, d, "Style settings", [] {}));
+        check("groups: through the door", d.strays() == 0);
+    }
+
+    {
+        std::cout << "\n-- find bold / italic by the paragraph style too (s160) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // a bold paragraph style on paragraph 0, a word made italic by hand in paragraph 1
+        const auto& st = *d.as<core::Story>("story.1");
+        const auto ps0 = st.paras.at(0).style;
+        D::edit_styles(j, d, {ps0}, "Weight", [](core::Style& s) { s.bold = true; });
+        const bool other_bold = d.as<core::Style>(st.paras.at(1).style)->bold;
+        D::set_local(j, d, "story.1", {1, 0}, {1, 3}, "Bold", [](core::Local& l) { l.bold = 1; });
+        D::FindOpts f;
+        f.bold = true;
+        f.story = "story.1";
+        const auto by_hand = D::find_all(d, f);
+        check("bold, by hand only: not the bold style's paragraph",
+              std::none_of(by_hand.begin(), by_hand.end(), [](const D::Hit& h) { return h.a.para == 0; }) &&
+              std::any_of(by_hand.begin(), by_hand.end(), [](const D::Hit& h) { return h.a.para == 1 && h.a.byte == 0 && h.b.byte == 3; }));
+        f.para_counts = true;
+        const auto with = D::find_all(d, f);
+        const int len0 = static_cast<int>(d.as<core::Story>("story.1")->paras.at(0).text.size());
+        check("by the paragraph style too: the whole bold paragraph",
+              std::any_of(with.begin(), with.end(), [&](const D::Hit& h) { return h.a.para == 0 && h.a.byte == 0 && h.b.byte == len0; }));
+        if (!other_bold)
+            check("...and still the word set by hand", std::any_of(with.begin(), with.end(), [](const D::Hit& h) { return h.a.para == 1 && h.b.byte == 3; }));
+        D::set_local(j, d, "story.1", {0, 0}, {0, 2}, "Bold", [](core::Local& l) { l.bold = 0; });
+        const auto with2 = D::find_all(d, f);
+        check("words set not-bold by hand in a bold style: left out",
+              std::any_of(with2.begin(), with2.end(), [&](const D::Hit& h) { return h.a.para == 0 && h.a.byte == 2 && h.b.byte == len0; }));
+        f.what = "a";
+        check("with words too", !D::find_all(d, f).empty() || len0 == 0);
+    }
+
+    {
+        std::cout << "\n-- No break on the words themselves (s159) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto& p1 = [&]() -> const core::Para& { return d.as<core::Story>("story.1")->paras.at(1); };
+        check("none to start", core::no_break_spans(d, p1()).empty());
+        check("No break on: one step", D::set_local(j, d, "story.1", {1, 4}, {1, 20}, "No break", [](core::Local& l) { l.no_break = 1; }) &&
+                                      j.undo_label() == "No break");
+        const auto sp = core::no_break_spans(d, p1());
+        check("its words kept together", sp.size() == 1 && sp[0].a == 4 && sp[0].b == 20);
+        {
+            core::Doc e;
+            check("json: round-trips", core::from_json(e, core::to_json(d)) && core::no_break_spans(e, e.as<core::Story>("story.1")->paras.at(1)).size() == 1);
+        }
+        // a character style with No break, turned off on some of its words
+        core::Doc::Id cs;
+        for (const auto& id : d.ids_of<core::Style>())
+            if (d.as<core::Style>(id)->kind == core::StyleKind::Character) { cs = id; break; }
+        D::edit_styles(j, d, {cs}, "No break", [](core::Style& st) { st.no_break = true; });
+        D::set_local(j, d, "story.1", {1, 0}, {1, 20}, "No break", [](core::Local& l) { l.no_break = -1; });
+        D::set_char_style(j, d, "story.1", {1, 30}, {1, 50}, cs);
+        check("the character style's", core::no_break_spans(d, p1()).size() == 1);
+        D::set_local(j, d, "story.1", {1, 30}, {1, 40}, "No break", [](core::Local& l) { l.no_break = 0; });
+        const auto sp2 = core::no_break_spans(d, p1());
+        check("Off on the words beats the style's", sp2.size() == 1 && sp2[0].a == 40 && sp2[0].b == 50);
+        check("keep_together breaks before them", core::keep_together(p1().text, {{4, 20}}, 0, 10) <= 4);
+        check("no break: through the door", d.strays() == 0);
+    }
+
+    {
+        std::cout << "\n-- a paragraph's own tab stops (s157) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto& st0 = *d.as<core::Story>("story.1");
+        const std::string ps = st0.paras.at(1).style;
+        const auto style_tabs = d.as<core::Style>(ps)->tabs;
+        std::vector<core::TabStop> mine{{144, core::TabAlign::Right, "."}, {72, core::TabAlign::Left, ""}};
+        check("own stops: one step, sorted", core::doc::set_para_tabs(j, d, "story.1", {1, 0}, {1, 0}, "Add tab", mine) &&
+                                             j.undo_label() == "Add tab" && d.as<core::Story>("story.1")->paras[1].over.tabs &&
+                                             d.as<core::Story>("story.1")->paras[1].over.tabs->front().pos == 72);
+        check("the style keeps its own", d.as<core::Style>(ps)->tabs == style_tabs);
+        check("the layout sets it in them", core::doc::para_style(d, d.as<core::Story>("story.1")->paras[1]).tabs.size() == 2 &&
+                                            core::doc::para_style(d, d.as<core::Story>("story.1")->paras[1]).tabs[1].leader == ".");
+        check("only that paragraph", !d.as<core::Story>("story.1")->paras[2].over.tabs);
+        check("the same again: no step", !core::doc::set_para_tabs(j, d, "story.1", {1, 0}, {1, 0}, "Add tab", mine));
+        {
+            core::Doc e;
+            check("json: own stops round-trip", core::from_json(e, core::to_json(d)) && e.as<core::Story>("story.1")->paras[1].over.tabs &&
+                                                *e.as<core::Story>("story.1")->paras[1].over.tabs == *d.as<core::Story>("story.1")->paras[1].over.tabs);
+        }
+        check("Reset to style: one step, the style's again",
+              core::doc::clear_para_local(j, d, "story.1", {1, 0}, {1, 0}, {"tabs"}) && !d.as<core::Story>("story.1")->paras[1].over.tabs &&
+              core::doc::para_style(d, d.as<core::Story>("story.1")->paras[1]).tabs == style_tabs);
+        j.undo();
+        check("undo: its own again", d.as<core::Story>("story.1")->paras[1].over.tabs.has_value());
+        check("set to the style's: follows the style (none of its own)",
+              core::doc::set_para_tabs(j, d, "story.1", {1, 0}, {1, 0}, "Move tab", style_tabs) && !d.as<core::Story>("story.1")->paras[1].over.tabs);
+        check("a range: each paragraph", core::doc::set_para_tabs(j, d, "story.1", {1, 0}, {3, 0}, "Add tab", mine) &&
+                                         d.as<core::Story>("story.1")->paras[2].over.tabs && d.as<core::Story>("story.1")->paras[3].over.tabs);
+        {   // a style change later doesn't reach a paragraph with its own
+            core::doc::edit_styles(j, d, {ps}, "Tabs", [](core::Style& s) { s.tabs = {{36, core::TabAlign::Left, ""}}; });
+            check("its own stops hold over a style change", core::doc::para_style(d, d.as<core::Story>("story.1")->paras[1]).tabs.size() == 2 &&
+                                                            d.as<core::Style>(ps)->tabs.size() == 1);
+        }
+        L::FlowCache f;
+        check("still flows", !f.get(d, "story.1").frames.empty());
+        check("own tabs: through the door", d.strays() == 0);
+    }
+
+    {
         std::cout << "\n-- footnotes page width: one foot under all the columns (s156) --\n";
         namespace L = composix::layout;
         core::Doc d;

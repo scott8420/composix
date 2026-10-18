@@ -1,4 +1,5 @@
 #include "Shell.hpp"
+#include "layout/Export.hpp"   // s163: a style's specimen
 #include "plate/plate.hpp"
 #include "views/Images.hpp"
 #include "core/Recents.hpp"
@@ -244,6 +245,25 @@ void Shell::show_pick_now(const views::Pick& p, const std::vector<std::string>& 
         }
         m_inspected = p.items;
         m_item.show_items(items);
+        // s163 (Scott): a style -- greeked, on its own and in use.
+        if (p.items.size() == 1 && m_doc.as<core::Style>(p.items.front())) {
+            const std::string sid = p.items.front();
+            m_item.set_painter([this, sid](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+                // s164 (Scott): the changes waiting for Set, shown already.
+                layout::StyleOver over;
+                for (const auto& id : m_inspector.pending_ids()) {
+                    const auto* st = m_doc.as<core::Style>(id);
+                    if (!st) continue;
+                    core::Style x = *st;
+                    for (const auto& [k, v] : m_inspector.pending())
+                        if (!core::doc::style_edit_label(k).empty()) {
+                            try { core::doc::style_edit(m_doc, x, k, v); } catch (const std::exception&) {}
+                        }
+                    over[id] = x;
+                }
+                layout::draw_style_specimen(cr->cobj(), m_doc, sid, w, h, over.empty() ? nullptr : &over);
+            });
+        }
         m_main.set_visible_child("item");
         m_inspector.show_items(items);
         return;

@@ -18,6 +18,7 @@
 
 #include <functional>
 #include <string>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -194,6 +195,21 @@ struct PageDraw {
 };
 void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& page_or_master, FlowCache& flows,
                const ImageSource& images, std::set<std::string>* missing = nullptr, const PageDraw& how = {});
+// s163 (Scott): a style shown greeked -- ON ITS OWN (a few paragraphs set
+// in it; a character style on some words of the body) and IN USE (a page of
+// the document's styles mixed -- a heading, body, the style among them --
+// its own paragraphs marked in the margin). A scratch document: the
+// document's settings, styles and swatches, one page, one frame, a story of
+// placeholder text. `in_use` picks which; w / h the page's size (points).
+// s164: `over` -- styles as they'd be (changes waiting for Set), shown in their place.
+using StyleOver = std::map<core::Doc::Id, core::Style>;
+core::Doc style_specimen_doc(const core::Doc& d, const core::Doc::Id& style, bool in_use, double w, double h,
+                             const StyleOver* over = nullptr);
+// Both, side by side, fitted into W x H (cairo units): "On its own" and
+// "In use", each on paper, labelled.
+void draw_style_specimen(cairo_t* cr, const core::Doc& d, const core::Doc::Id& style, double W, double H,
+                         const StyleOver* over = nullptr);
+
 // s149 (Scott): a master as a mock-up, fitted into x, y, w, h (the paper's
 // box, in `cr`'s units): its pages -- a facing master as its spread, left
 // and right -- with the margins, the columns and gutters, the baseline grid

@@ -2,6 +2,8 @@
 #include "core/Doc.hpp"
 
 #include <memory>
+#include <algorithm>
+#include <glibmm/main.h>
 
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
@@ -141,6 +143,46 @@ Inspector::Inspector()
     m_scroll.set_child(m_fields);
     append(m_scroll);
 
+    // s162: Set / Reset for a style's waiting changes -- under the rows, always in view.
+    m_bar = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+    m_bar->set_name("inspector.stage_bar");
+    m_bar->add_css_class("cx-stage-bar");
+    m_bar_text = Gtk::make_managed<Gtk::Label>();
+    m_bar_text->add_css_class("cx-stage-text");
+    m_bar_text->set_hexpand(true);
+    m_bar_text->set_xalign(0.0f);
+    auto reset = Gtk::make_managed<Gtk::Button>("Reset");
+    reset->set_name("inspector.stage_reset");
+    reset->set_tooltip_text("Drop the changes waiting");
+    auto set = Gtk::make_managed<Gtk::Button>("Set");
+    set->set_name("inspector.stage_set");
+    set->add_css_class("suggested-action");
+    set->set_tooltip_text("Set the changes -- one step");
+    reset->signal_clicked().connect([this] {
+        m_pending.clear();
+        update_bar();
+        m_staged_sig.emit();   // s164
+        m_has_shown = false;   // the rows as they are in the document again
+        const auto t = m_shown_title, sb = m_shown_sub;
+        const auto fs = m_shown;
+        m_staged_next = m_staged;
+        m_stage_ids_next = m_stage_ids;
+        fill(t, sb, fs);
+    });
+    set->signal_clicked().connect([this] {
+        auto ids = m_stage_ids;
+        auto pend = m_pending;
+        m_pending.clear();
+        update_bar();
+        m_has_shown = false;
+        m_apply.emit(ids, pend);
+    });
+    m_bar->append(*m_bar_text);
+    m_bar->append(*reset);
+    m_bar->append(*set);
+    m_bar->set_visible(false);
+    append(*m_bar);
+
     m_empty.add_css_class("cx-insp-empty");
     m_empty.set_text("Select something in the navigator or the tiles.");
     m_empty.set_wrap(true);
@@ -151,7 +193,7 @@ Inspector::Inspector()
 }
 
 // s041: a typed value's presets, in a menu (s067: shared with compact rows).
-Gtk::MenuButton* Inspector::presets_button(const std::string& key, const std::vector<core::Choice>& choices) {
+Gtk::MenuButton* Inspector::presets_button(const std::string& key, const std::vector<core::Choice>& choices, Gtk::Entry* show_in) {
     auto mb = Gtk::make_managed<Gtk::MenuButton>();
     mb->set_name("inspector.presets." + key);
     mb->set_icon_name("pan-down-symbolic");
@@ -163,7 +205,11 @@ Gtk::MenuButton* Inspector::presets_button(const std::string& key, const std::ve
         b->add_css_class("flat");
         if (auto* lab = dynamic_cast<Gtk::Label*>(b->get_child())) lab->set_xalign(0.0f);
         const std::string id = c.id;
-        b->signal_clicked().connect([this, pop, key, id] { pop->popdown(); m_edit.emit(key, id); });
+        b->signal_clicked().connect([this, pop, key, id, show_in, lbl = c.label] {
+            pop->popdown();
+            if (show_in && m_staged) show_in->set_text(lbl);   // s162: what's waiting, shown
+            send(key, id);
+        });
         list->append(*b);
     }
     pop->set_child(*list);
@@ -173,6 +219,22 @@ Gtk::MenuButton* Inspector::presets_button(const std::string& key, const std::ve
 
 void Inspector::fill(const std::string& title, const std::string& sub,
                      const std::vector<core::Field>& fields) {
+    const bool same_subject = m_has_shown && title == m_shown_title && sub == m_shown_sub;
+    // s162: changes waiting -- the same subject keeps them (and its rows as
+    // they are); another subject sets them first, on the styles they were for.
+    if (!m_pending.empty()) {
+        if (same_subject && m_staged_next) { m_staged_next = false; m_stage_ids_next.clear(); return; }
+        auto ids = m_stage_ids;
+        auto pend = m_pending;
+        m_pending.clear();
+        Glib::signal_idle().connect_once([this, ids, pend] { m_apply.emit(ids, pend); });
+        m_has_shown = false;
+    }
+    m_staged = m_staged_next;
+    m_stage_ids = m_stage_ids_next;
+    m_staged_next = false;
+    m_stage_ids_next.clear();
+    update_bar();
     if (m_has_shown && title == m_shown_title && sub == m_shown_sub && fields == m_shown) return;
     m_has_shown = true;
     m_shown_title = title;
@@ -187,8 +249,33 @@ void Inspector::fill(const std::string& title, const std::string& sub,
     m_empty.set_visible(false);
     m_scroll.set_visible(true);
     m_painting = true;
+    m_row_label.clear();
     int row = 0;
+    // s161: rows under group headings, folded or open.
+    std::string cur_group;
+    std::map<int, std::string> row_group;                 // a row -> its group
+    std::map<std::string, std::vector<const core::Field*>> group_fields;
+    std::vector<std::pair<std::string, Gtk::Button*>> headers;
     for (const auto& f : fields) {
+        if (f.group != cur_group) {
+            cur_group = f.group;
+            if (!cur_group.empty()) {
+                auto hb = Gtk::make_managed<Gtk::Button>();
+                hb->set_name("inspector.group." + cur_group);
+                hb->add_css_class("flat");
+                hb->add_css_class("cx-insp-group");
+                hb->set_hexpand(true);
+                m_fields.attach(*hb, 0, row, 2, 1);
+                headers.push_back({cur_group, hb});
+                ++row;
+            }
+        }
+        if (!f.group.empty()) group_fields[f.group].push_back(&f);
+        // Its rows (however the row ends -- the `continue`s too) under its group.
+        struct Rows {
+            int row0; const int& row; std::map<int, std::string>& out; const std::string& g;
+            ~Rows() { for (int r = row0; r < row; ++r) out[r] = g; }
+        } rows_mark{row, row, row_group, f.group};
         if (f.buttons) {   // s009: actions -- a row of buttons under the fields
             auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
             box->set_name("inspector.actions." + f.edit);
@@ -209,6 +296,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             auto l = Gtk::make_managed<Gtk::Label>(f.label);
             l->add_css_class("cx-field-label");
             if (!f.own.empty()) l->add_css_class("cx-field-own");   // s092: marked (Reset to base clears it)
+            if (!f.edit.empty()) m_row_label[f.edit] = l;   // s162
             l->set_xalign(1.0f);
             l->set_valign(Gtk::Align::END);
             m_fields.attach(*l, 0, row);
@@ -235,7 +323,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                     const std::string key = f.edit, idx = std::to_string(k);
                     auto en = typed_entry("inspector.edit." + key + "." + idx, k < vals.size() ? vals[k] : "", f.unit, f.lo, f.hi,
                                           [this, key, idx, linked](const std::string& v) {
-                                              m_edit.emit(key, (*linked ? std::string("a") : idx) + ":" + v);
+                                              send(key, (*linked ? std::string("a") : idx) + ":" + v);
                                           });
                     // Room for the link / presets beside them without widening the panel.
                     en->set_width_chars(1);   // s096: share the column -- a wider minimum widened the panel
@@ -276,7 +364,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                     if (m_painting) return;
                     *linked = tb->get_active();
                     // Linking sides that differ makes all four the first (top).
-                    if (*linked && !even && first != core::kMixed && !first.empty()) m_edit.emit(key, "a:" + first);
+                    if (*linked && !even && first != core::kMixed && !first.empty()) send(key, "a:" + first);
                 });
                 box->append(*tb);
             }
@@ -294,6 +382,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
         l->add_css_class("cx-field-label");
         l->set_xalign(1.0f);
         l->set_valign(f.edit.empty() ? Gtk::Align::START : Gtk::Align::CENTER);
+        if (!f.edit.empty()) m_row_label[f.edit] = l;   // s162
         if (!f.own.empty()) {   // s092: the style's own setting -- marked, with a way back to the base's
             l->add_css_class("cx-field-own");
             l->set_tooltip_text("Its own setting \u2014 not from the style it's based on");
@@ -306,7 +395,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             rb->add_css_class("cx-own-reset");
             rb->set_tooltip_text("Take " + f.label + " from the base style again");
             const std::string k = f.own;
-            rb->signal_clicked().connect([this, k] { m_edit.emit("style_reset", k); });
+            rb->signal_clicked().connect([this, k] { send("style_reset", k); });
             lb->append(*rb);
             lb->append(*l);
             m_fields.attach(*lb, 0, row);
@@ -330,7 +419,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                 const std::string text = en->get_text();
                 if (text == *shown || text.empty()) return;
                 *shown = text;
-                m_edit.emit(key, text);
+                send(key, text);
             };
             en->signal_activate().connect(commit);
             auto focus = Gtk::EventControllerFocus::create();
@@ -347,9 +436,10 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             box->add_css_class("linked");
             box->set_hexpand(true);
             const std::string key = f.edit;
-            box->append(*typed_entry("inspector.edit." + key, f.value, f.unit, f.lo, f.hi,
-                                     [this, key](const std::string& v) { m_edit.emit(key, v); }, f.percent));
-            if (!f.choices.empty()) box->append(*presets_button(key, f.choices));
+            auto* te = typed_entry("inspector.edit." + key, f.value, f.unit, f.lo, f.hi,
+                                   [this, key](const std::string& v) { send(key, v); }, f.percent);
+            box->append(*te);
+            if (!f.choices.empty()) box->append(*presets_button(key, f.choices, te));
             m_fields.attach(*box, 1, row);
         } else if (!f.edit.empty()) {
             // An editable field: a dropdown of its choices.
@@ -395,7 +485,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                 if (m_painting) return;
                 const guint i = dd->get_selected();
                 if (i < offset || i == GTK_INVALID_LIST_POSITION) return;
-                if (i - offset < choices.size()) m_edit.emit(key, choices[i - offset].id);
+                if (i - offset < choices.size()) send(key, choices[i - offset].id);
             });
             m_fields.attach(*dd, 1, row);
         } else {
@@ -412,11 +502,103 @@ void Inspector::fill(const std::string& title, const std::string& sub,
         }
         ++row;
     }
+    // s161: each heading -- an arrow, its name, and (folded) a line of its values;
+    // its rows shown or hidden.
+    std::map<std::string, std::vector<Gtk::Widget*>> members;
+    for (auto* c = m_fields.get_first_child(); c; c = c->get_next_sibling()) {
+        int col = 0, r = 0, w = 0, h = 0;
+        m_fields.query_child(*c, col, r, w, h);
+        if (const auto it = row_group.find(r); it != row_group.end() && !it->second.empty()) members[it->second].push_back(c);
+    }
+    for (const auto& [name, hb] : headers) {
+        std::string summary;
+        int n = 0;
+        for (const auto* f : group_fields[name]) {
+            if (f->buttons || f->label.empty() || f->value.empty() || n >= 4) continue;
+            std::string v = f->value;
+            for (auto& ch : v) if (ch == '\t') ch = ' ';
+            // A bare On / Off / None says little alone: with its label.
+            if (v == "On" || v == "Off" || v == "None" || v == "Inherit") {
+                std::string lv = v;
+                lv[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(lv[0])));
+                v = f->label + " " + lv;
+            }
+            summary += (summary.empty() ? "" : " \u00b7 ") + v;
+            ++n;
+        }
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        auto arrow = Gtk::make_managed<Gtk::Label>();
+        arrow->add_css_class("cx-group-arrow");
+        auto nl = Gtk::make_managed<Gtk::Label>(name);
+        nl->add_css_class("cx-group-name");
+        auto sl = Gtk::make_managed<Gtk::Label>(summary);
+        sl->add_css_class("cx-group-summary");
+        sl->set_ellipsize(Pango::EllipsizeMode::END);
+        sl->set_width_chars(1);
+        sl->set_hexpand(true);
+        sl->set_xalign(0.0f);
+        box->append(*arrow);
+        box->append(*nl);
+        box->append(*sl);
+        hb->set_child(*box);
+        hb->set_tooltip_text(summary);
+        auto rows = members[name];
+        const auto apply = [this, name, arrow, sl, rows] {
+            const bool open = m_open.count(name) > 0;
+            arrow->set_text(open ? "\u25BE" : "\u25B8");
+            sl->set_visible(!open);
+            for (auto* w : rows) w->set_visible(open);
+        };
+        apply();
+        hb->signal_clicked().connect([this, name, apply] {
+            if (m_open.count(name)) m_open.erase(name); else m_open.insert(name);
+            apply();
+            std::string csv;
+            for (const auto& g : m_open) csv += (csv.empty() ? "" : ",") + g;
+            m_groups_sig.emit(csv);
+        });
+    }
     m_painting = false;
+}
+
+void Inspector::set_open_groups(const std::string& csv) {   // s161
+    m_open.clear();
+    std::string cur;
+    for (char c : csv + ",") {
+        if (c == ',') { if (!cur.empty()) m_open.insert(cur); cur.clear(); }
+        else cur += c;
+    }
+}
+
+// s162: an edit -- to the shell now, or (a style's) waiting for Set.
+void Inspector::send(const std::string& key, const std::string& value) {
+    if (!m_staged) { m_edit.emit(key, value); return; }
+    const auto colon = value.find(':');
+    const std::string slot = key + "|" + (colon == std::string::npos ? std::string{} : value.substr(0, colon));
+    bool found = false;
+    for (auto& [k, v] : m_pending) {
+        const auto c2 = v.find(':');
+        if (k + "|" + (c2 == std::string::npos ? std::string{} : v.substr(0, c2)) == slot) { v = value; found = true; }
+    }
+    if (!found) m_pending.emplace_back(key, value);
+    if (const auto it = m_row_label.find(key); it != m_row_label.end() && it->second) it->second->add_css_class("cx-field-pending");
+    update_bar();
+    m_staged_sig.emit();   // s164: the specimen shows it now
+}
+
+void Inspector::update_bar() {
+    if (!m_bar) return;
+    m_bar->set_visible(m_staged && !m_pending.empty());
+    const auto n = m_pending.size();
+    m_bar_text->set_text(std::to_string(n) + (n == 1 ? " change waiting" : " changes waiting"));
 }
 
 void Inspector::show_items(const std::vector<const core::Item*>& sel) {
     if (sel.empty()) { clear(); return; }
+    // s162: styles' settings wait for Set.
+    m_staged_next = std::all_of(sel.begin(), sel.end(), [](const core::Item* it) { return it->segment == core::Segment::Styles; });
+    m_stage_ids_next.clear();
+    if (m_staged_next) for (const auto* it : sel) m_stage_ids_next.push_back(it->id);
     std::string sub;
     if (sel.size() == 1) sub = core::segment_info(sel.front()->segment).title;
     else                 sub = "Shared fields — Mixed where they differ";
@@ -429,6 +611,14 @@ void Inspector::show_section(const core::Outline& o, core::Segment s, const std:
 }
 
 void Inspector::clear() {
+    if (!m_pending.empty()) {   // s162: leaving with changes waiting -- set them
+        auto ids = m_stage_ids;
+        auto pend = m_pending;
+        m_pending.clear();
+        Glib::signal_idle().connect_once([this, ids, pend] { m_apply.emit(ids, pend); });
+    }
+    m_staged = false;
+    update_bar();
     m_has_shown = false;
     m_painting = true;
     while (auto* c = m_fields.get_first_child()) m_fields.remove(*c);

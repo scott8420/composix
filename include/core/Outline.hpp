@@ -95,6 +95,9 @@ struct Field {
     // s092: a style's row that is its OWN (not from its base): the style
     // field's key ("size"), so the inspector can mark it and offer a reset.
     std::string own;
+    // s161 (Scott): a heading the inspector folds this row under ("Text",
+    // "Paragraph" ...; "" none). A folded group shows a line of its values.
+    std::string group;
     bool operator==(const Field&) const = default;
 };
 

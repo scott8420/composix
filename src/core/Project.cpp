@@ -134,6 +134,27 @@ std::string pts(double v) {
     return o.str();
 }
 
+// s161 (Scott): a style's rows in groups the inspector folds -- Text,
+// Paragraph, Flow, List, Rules, Style.
+std::string style_group(const Field& f) {
+    static const std::map<std::string, std::string> by_edit{
+        {"font", "Text"}, {"ssize", "Text"}, {"leading", "Text"}, {"bold", "Text"}, {"italic", "Text"}, {"nobreak", "Text"},
+        {"color", "Text"}, {"color_tint", "Text"},
+        {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
+        {"findent", "Paragraph"}, {"indent_after", "Paragraph"}, {"tabs", "Paragraph"}, {"drop_lines", "Paragraph"},
+        {"drop_chars", "Paragraph"},
+        {"align_grid", "Flow"}, {"hyphenate", "Flow"}, {"hyph_limit", "Flow"}, {"hyph_shortest", "Flow"}, {"hyph_last_word", "Flow"},
+        {"keep_next", "Flow"}, {"keep_lines", "Flow"}, {"pstart", "Flow"},
+        {"list_type", "List"}, {"list_bullet", "List"}, {"list_num", "List"}, {"list_cont", "List"}, {"list_level", "List"},
+        {"list_hang", "List"},
+        {"based_on", "Style"}, {"style_base", "Style"}, {"next_style", "Style"}};   // (Duplicate / Delete: under all, always in view)
+    if (const auto it = by_edit.find(f.edit); it != by_edit.end()) return it->second;
+    if (f.edit.rfind("rule_", 0) == 0) return "Rules";
+    if (f.label == "Own settings" || f.label == "Styles on it" || f.label == "Used") return "Style";
+    if (f.label == "Font") return "Text";   // (read-only when the fonts aren't known)
+    return "";   // Kind: above the groups
+}
+
 // s073: a unit as the Units dropdown reads it.
 std::string unit_label(Units u) {
     switch (u) {
@@ -584,6 +605,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             act.buttons = true;
             f.push_back(act);
             mark_typed(f, unit_pt(d.settings().units));   // s041
+            for (auto& fl : f) fl.group = style_group(fl);   // s161
             if (d.as<Style>(s.based_on))   // s092: mark the rows that are its own
                 for (auto& fl : f)
                     if (const auto k = doc::style_key_of_edit(fl.edit); !k.empty() && std::find(s.own.begin(), s.own.end(), k) != s.own.end())
@@ -1095,6 +1117,9 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
         const auto* sw = d.as<Swatch>(l.color);
         out.push_back({"Size", l.size > 0 ? pt(l.size) : "Style's", "lsize", sz});
         out.push_back({"Colour", sw ? sw->name : "Style's", "lcolor", co});
+        // s159: No break on the words themselves (a character style's before).
+        out.push_back({"No break", l.no_break < 0 ? "Style's" : l.no_break ? "On" : "Off", "lnobreak",
+                       {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
         mark_typed(out, unit_pt(d.settings().units));   // s041: Size typed
         Field fx{"", "", "local", {{"bold", "Bold"}, {"italic", "Italic"}, {"clear", "Clear overrides"}}};
         fx.buttons = true;

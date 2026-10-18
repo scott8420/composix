@@ -253,7 +253,8 @@ struct Local {
     int         bold = -1, italic = -1;   // -1 the styles', 0 off, 1 on
     double      size = 0;                 // points
     std::string color;                    // a swatch id
-    bool empty() const { return bold < 0 && italic < 0 && size <= 0 && color.empty(); }
+    int         no_break = -1;            // s159: -1 the styles', 0 may break, 1 kept on one line
+    bool empty() const { return bold < 0 && italic < 0 && size <= 0 && color.empty() && no_break < 0; }
     bool operator==(const Local&) const = default;
 };
 
@@ -264,6 +265,16 @@ struct Run {
     bool operator==(const Run&) const = default;
 };
 
+// s026: a tab stop -- where (points from the text's left edge), how the
+// text after it lines up, and what fills the gap ("" none, "." dots).
+enum class TabAlign { Left, Center, Right, Decimal };
+struct TabStop {
+    double      pos = 0;
+    TabAlign    align = TabAlign::Left;
+    std::string leader;
+    bool operator==(const TabStop&) const = default;
+};
+
 // s093: a paragraph's own settings over its style's -- each unset (the
 // style's) or set. Kept when the style changes; cleared one by one.
 struct ParaLocal {
@@ -271,9 +282,12 @@ struct ParaLocal {
     std::optional<double> left_indent, right_indent, first_indent, space_before, space_after;
     std::optional<bool>   keep_next, hyphenate;   // s094
     std::optional<int>    keep_lines;             // s094: 0 off, 2 / 3, -1 all together
+    // s157 (Scott): the style holds the tab stops; a paragraph may have its
+    // own (the tab ruler edits these), "Reset to style" drops them.
+    std::optional<std::vector<TabStop>> tabs;
     bool empty() const {
         return !align && !left_indent && !right_indent && !first_indent && !space_before && !space_after && !keep_next &&
-               !hyphenate && !keep_lines;
+               !hyphenate && !keep_lines && !tabs;
     }
     bool operator==(const ParaLocal&) const = default;
 };
@@ -346,16 +360,6 @@ struct Story {
     std::string       name;
     std::vector<Para> paras;
     bool operator==(const Story&) const = default;
-};
-
-// s026: a tab stop -- where (points from the text's left edge), how the
-// text after it lines up, and what fills the gap ("" none, "." dots).
-enum class TabAlign { Left, Center, Right, Decimal };
-struct TabStop {
-    double      pos = 0;
-    TabAlign    align = TabAlign::Left;
-    std::string leader;
-    bool operator==(const TabStop&) const = default;
 };
 
 // s044: a rule (a line) above a paragraph's first line or below its last.
@@ -1025,11 +1029,28 @@ Style para_style(const Doc& d, const Para& p);
 // s093: the paragraphs a..b's own settings -- `f` edits each; or the named
 // ones ("align", "left_indent", "right_indent", "first_indent",
 // "space_before", "space_after"; s094: "keep_next", "keep_lines",
-// "hyphenate") cleared back to the style's. One step;
+// "hyphenate"; s157: "tabs") cleared back to the style's. One step;
 // no change -> no step.
 bool set_para_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
                     const std::function<void(ParaLocal&)>& f);
 bool clear_para_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::vector<std::string>& keys);
+// s157: paragraphs a..b's tab stops -- `stops` (sorted) as their own; the
+// same as a paragraph's style's: its own dropped (it follows the style
+// again). `label` the step's. One step; no change -> no step.
+bool set_para_tabs(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
+                   std::vector<TabStop> stops);
+// s162: several style edits as ONE step (the inspector's Set) -- `body`
+// runs the edits (each a verb as usual); every style is in the step, so
+// styles based on the edited ones come back on undo too. True if anything
+// changed.
+bool styles_as_one(DocJournal& j, Doc& d, const std::string& label, const std::function<void()>& body);
+// s164: a style's setting as the inspector's row sends it (key, choice):
+// its step's label ("" -- not a plain style setting: based on, resets,
+// Duplicate ...), and the change made to one style. The inspector's Set
+// and its live specimen (changes waiting, shown before they're set) both
+// go through it. A paragraph-only setting leaves a character style alone.
+std::string style_edit_label(const std::string& key);
+void style_edit(const Doc& d, Style& st, const std::string& key, const std::string& choice);
 // s092: the style setting an inspector row edits ("ssize" -> "size",
 // "rule_a_w" -> "rule_above"); "" when it isn't one.
 std::string style_key_of_edit(const std::string& edit);
@@ -1179,6 +1200,9 @@ struct FindOpts {
     // already in this character style (what Apply is about to put on).
     bool        bold = false, italic = false;
     Doc::Id     skip_cstyle;
+    // s160: bold / italic set by the paragraph style count too (words in a
+    // bold heading style are "bold"); off: only by hand or character style.
+    bool        para_counts = false;
     // s056: how `what` reads -- plain text; Wildcards (^9 a digit, ^$ a
     // letter, ^w white space, ^? any character, ^^ a caret; the rest
     // plain); or a regular expression (ECMAScript; "." is one character;

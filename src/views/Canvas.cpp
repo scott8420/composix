@@ -157,10 +157,29 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
     // non-Latin input) -- attached to the key controller only while editing,
     // so V / T / F / M stay tools otherwise.
     m_im = gtk_im_multicontext_new();
-    gtk_im_context_set_use_preedit(m_im, FALSE);
+    // s158: what's being composed (a dead key's accent, a compose sequence,
+    // an input method's word) shown at the caret as it's typed.
+    gtk_im_context_set_use_preedit(m_im, TRUE);
     g_signal_connect(m_im, "commit", G_CALLBACK(+[](GtkIMContext*, const char* t, gpointer self) {
         auto* c = static_cast<Canvas*>(self);
+        c->m_preedit.clear();
         if (c->editing() && t) c->edit_insert(t, "type", "Typing");
+        c->queue_draw();
+    }), this);
+    g_signal_connect(m_im, "preedit-changed", G_CALLBACK(+[](GtkIMContext* im, gpointer self) {
+        auto* c = static_cast<Canvas*>(self);
+        gchar* str = nullptr;
+        gint cur = 0;
+        gtk_im_context_get_preedit_string(im, &str, nullptr, &cur);
+        c->m_preedit = str ? str : "";
+        c->m_preedit_cur = cur;
+        g_free(str);
+        c->queue_draw();
+    }), this);
+    g_signal_connect(m_im, "preedit-end", G_CALLBACK(+[](GtkIMContext*, gpointer self) {
+        auto* c = static_cast<Canvas*>(self);
+        c->m_preedit.clear();
+        c->queue_draw();
     }), this);
 
     // s104: page images back from the worker -> drawn again (gathered 30 ms).
@@ -794,23 +813,32 @@ void Canvas::on_drag_begin(double x, double y) {
     m_last_py = y;
     // s034: on the tab ruler -- a stop: drag it (double-click: its kind,
     // Shift+double-click: its leader); elsewhere: a new one.
+    // s157: "Reset to style" -- the paragraphs' own stops dropped.
+    if (const auto t = tab_strip(); t.ok && t.own && t.reset.contains(x, y)) {
+        const auto [a, b] = edit_range();
+        core::doc::clear_para_local(m_journal, m_doc, m_edit_story, a, b, {"tabs"});
+        m_sig_edited.emit();
+        m_drag = Drag::None;
+        queue_draw();
+        return;
+    }
     if (const auto t = tab_strip(); t.ok && t.screen.contains(x, y)) {
         const int hit = tab_hit(t, x);
-        if (hit >= 0 && m_clicks >= 2) {
+        if (hit >= 0 && m_clicks >= 2) {   // s157: the paragraph's own stops
             const bool leader = m_mods_shift;
-            core::doc::edit_styles(m_journal, m_doc, {t.style}, leader ? "Tab leader" : "Tab alignment", [&](core::Style& s) {
-                if (hit >= static_cast<int>(s.tabs.size())) return;
-                auto& stop = s.tabs[static_cast<std::size_t>(hit)];
-                if (leader) stop.leader = stop.leader.empty() ? "." : "";
-                else stop.align = static_cast<core::TabAlign>((static_cast<int>(stop.align) + 1) % 4);
-            });
+            auto tabs = t.tabs;
+            auto& stop = tabs[static_cast<std::size_t>(hit)];
+            if (leader) stop.leader = stop.leader.empty() ? "." : "";
+            else stop.align = static_cast<core::TabAlign>((static_cast<int>(stop.align) + 1) % 4);
+            const auto [a, b] = edit_range();
+            core::doc::set_para_tabs(m_journal, m_doc, m_edit_story, a, b, leader ? "Tab leader" : "Tab alignment", tabs);
             m_sig_edited.emit();
             m_drag = Drag::None;
             queue_draw();
             return;
         }
         m_tab = hit;
-        m_tab_x = hit >= 0 ? t.x0 + m_doc.as<core::Style>(t.style)->tabs[static_cast<std::size_t>(hit)].pos * t.scale : x;
+        m_tab_x = hit >= 0 ? t.x0 + t.tabs[static_cast<std::size_t>(hit)].pos * t.scale : x;
         m_tab_off = false;
         m_drag = Drag::Tab;
         queue_draw();
@@ -1193,16 +1221,17 @@ void Canvas::on_drag_end(double, double) {
             const int k = m_tab;
             const bool off = m_tab_off;
             const char* label = off ? "Remove tab" : k >= 0 ? "Move tab" : "Add tab";
-            if (!(off && k < 0))
-                core::doc::edit_styles(m_journal, m_doc, {t.style}, label, [&](core::Style& s) {
-                    if (k >= 0 && k < static_cast<int>(s.tabs.size())) {
-                        if (off) s.tabs.erase(s.tabs.begin() + k);
-                        else s.tabs[static_cast<std::size_t>(k)].pos = pos;
-                    } else if (!off) {
-                        s.tabs.push_back({pos, core::TabAlign::Left, ""});
-                    }
-                    std::sort(s.tabs.begin(), s.tabs.end(), [](const core::TabStop& a, const core::TabStop& b) { return a.pos < b.pos; });
-                });
+            if (!(off && k < 0)) {   // s157: the paragraph's own stops (the selection's paragraphs)
+                auto tabs = t.tabs;
+                if (k >= 0 && k < static_cast<int>(tabs.size())) {
+                    if (off) tabs.erase(tabs.begin() + k);
+                    else tabs[static_cast<std::size_t>(k)].pos = pos;
+                } else if (!off) {
+                    tabs.push_back({pos, core::TabAlign::Left, ""});
+                }
+                const auto [a, b] = edit_range();
+                core::doc::set_para_tabs(m_journal, m_doc, m_edit_story, a, b, label, tabs);
+            }
             m_sig_edited.emit();
         }
         m_tab = -1;
@@ -1772,44 +1801,101 @@ Canvas::TabStrip Canvas::tab_strip() const {
     t.scale = m_vp.scale();
     t.x0 = sr.x;
     t.width = width;
-    t.screen = {sr.x - 6, sr.y - 30, sr.w + 12, 22};
+    t.screen = {sr.x - 6, sr.y - 34, sr.w + 12, 26};   // s160 fix: room for the numbers
     t.style = para.style;
+    t.tabs = eff.tabs;                  // s157: the paragraph's own, else its style's
+    t.own = para.over.tabs.has_value();
+    if (t.own) t.reset = {t.screen.r() + 4, t.screen.y, 92, t.screen.h};
     return t;
 }
 
 int Canvas::tab_hit(const TabStrip& t, double x) const {
-    const auto* ps = m_doc.as<core::Style>(t.style);
-    if (!ps) return -1;
-    for (int i = 0; i < static_cast<int>(ps->tabs.size()); ++i)
-        if (std::abs(t.x0 + ps->tabs[static_cast<std::size_t>(i)].pos * t.scale - x) <= 6) return i;
+    for (int i = 0; i < static_cast<int>(t.tabs.size()); ++i)
+        if (std::abs(t.x0 + t.tabs[static_cast<std::size_t>(i)].pos * t.scale - x) <= 6) return i;
     return -1;
 }
 
 void Canvas::draw_tab_strip(const Cairo::RefPtr<Cairo::Context>& cr) {
     const auto t = tab_strip();
     if (!t.ok) return;
-    const auto* ps = m_doc.as<core::Style>(t.style);
     const auto& r = t.screen;
     cr->save();
     // The strip: a card, ticks every 6 pt (longer each half inch), inches marked.
-    cr->set_source_rgba(1, 1, 1, 0.96);
+    // s157: tinted when the stops are the paragraph's own; "Reset to style" beside it.
+    if (t.own) cr->set_source_rgba(1.0, 0.97, 0.90, 0.97);
+    else       cr->set_source_rgba(1, 1, 1, 0.96);
     cr->rectangle(r.x, r.y, r.w, r.h);
     cr->fill();
-    cr->set_source_rgba(0.45, 0.55, 0.7, 0.8);
+    if (t.own) {
+        const auto& b = t.reset;
+        cr->set_source_rgba(1, 1, 1, 0.96);
+        cr->rectangle(b.x, b.y, b.w, b.h);
+        cr->fill_preserve();
+        cr->set_source_rgba(0.85, 0.5, 0.1, 0.9);
+        cr->set_line_width(1);
+        cr->stroke();
+        auto lb = create_pango_layout("\u21BA Reset to style");
+        lb->set_font_description(Pango::FontDescription("Sans 7.5"));
+        int lw = 0, lh = 0;
+        lb->get_pixel_size(lw, lh);
+        cr->move_to(b.x + (b.w - lw) / 2, b.y + (b.h - lh) / 2);
+        lb->show_in_cairo_context(cr);
+        auto tag = create_pango_layout("this paragraph");
+        tag->set_font_description(Pango::FontDescription("Sans Italic 7"));
+        int tw = 0, th = 0;
+        tag->get_pixel_size(tw, th);
+        cr->set_source_rgba(0.6, 0.35, 0.05, 0.9);
+        cr->move_to(r.r() - tw - 4, r.y + 1);
+        tag->show_in_cairo_context(cr);
+    }
+    cr->set_source_rgba(0.3, 0.4, 0.55, 0.95);
     cr->set_line_width(1);
     cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w) - 1, std::round(r.h) - 1);
     cr->stroke();
-    cr->set_source_rgba(0.2, 0.25, 0.35, 0.55);
-    for (double p = 0; p <= t.width + 0.01; p += 6) {
-        const double x = std::round(t.x0 + p * t.scale) + 0.5;
-        const bool inch = std::fmod(p, 72) < 0.01, half = std::fmod(p, 36) < 0.01;
-        if (6 * t.scale < 3 && !half) continue;
-        cr->move_to(x, r.b() - 1);
-        cr->line_to(x, r.b() - (inch ? 9 : half ? 6 : 3));
+    // s160 fix (Scott: too faint, no measures): ticks in the document's unit,
+    // as the rulers -- majors numbered, halves and parts shorter -- drawn dark.
+    {
+        const auto units = m_doc.settings().units;
+        const double upt = core::unit_pt(units);
+        std::vector<double> steps;
+        std::vector<int> parts;
+        switch (units) {
+        case core::Units::Millimetres: steps = {5, 10, 20, 50, 100}; parts = {10, 5, 2, 1}; break;
+        case core::Units::Picas:       steps = {1, 2, 3, 6, 12};      parts = {12, 6, 3, 1}; break;
+        case core::Units::Points:      steps = {12, 18, 36, 72, 144}; parts = {12, 6, 2, 1}; break;
+        default:                       steps = {0.25, 0.5, 1, 2};     parts = {8, 4, 2, 1}; break;
+        }
+        double major = steps.back();
+        for (double st : steps) if (st * upt * t.scale >= 44) { major = st; break; }
+        const double px_major = major * upt * t.scale;
+        int subs = 1;
+        for (int q : parts) if (px_major / q >= 5) { subs = q; break; }
+        cr->set_source_rgba(0.12, 0.15, 0.22, 0.9);
+        cr->set_line_width(1);
+        const double right = t.x0 + t.width * t.scale + 0.5;
+        for (int k = 0; t.x0 + k * px_major <= right; ++k)
+            for (int i = 0; i < subs; ++i) {
+                const double x = std::round(t.x0 + (k + static_cast<double>(i) / subs) * px_major) + 0.5;
+                if (x > right) break;
+                const double len = i == 0 ? 11 : (subs % 2 == 0 && i == subs / 2 ? 7 : 4);
+                cr->move_to(x, r.b() - 1);
+                cr->line_to(x, r.b() - 1 - len);
+            }
+        cr->stroke();
+        auto font = Pango::FontDescription("Sans 7");
+        for (int k = 0; t.x0 + k * px_major <= right - 8; ++k) {
+            const double v = k * major;
+            char buf[16];
+            if (std::abs(v - std::round(v)) < 1e-9) std::snprintf(buf, sizeof buf, "%.0f", v);
+            else std::snprintf(buf, sizeof buf, "%g", v);
+            auto lay = create_pango_layout(buf);
+            lay->set_font_description(font);
+            cr->move_to(std::round(t.x0 + k * px_major) + 2, r.b() - 21);
+            lay->show_in_cairo_context(cr);
+        }
     }
-    cr->stroke();
     // The stops: a mark at each, its kind in a letter, dots for a leader.
-    std::vector<core::TabStop> tabs = ps ? ps->tabs : std::vector<core::TabStop>{};
+    std::vector<core::TabStop> tabs = t.tabs;
     if (m_drag == Drag::Tab) {   // the one in hand, where it is
         const double pos = std::max(0.0, std::round((m_tab_x - t.x0) / t.scale));
         if (m_tab >= 0 && m_tab < static_cast<int>(tabs.size())) {
@@ -1830,6 +1916,11 @@ void Canvas::draw_tab_strip(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->fill();
         auto lay = create_pango_layout(std::string(letter[static_cast<int>(s.align)]) + (s.leader.empty() ? "" : "…"));
         lay->set_font_description(Pango::FontDescription("Sans Bold 7"));
+        int lw = 0, lh = 0;   // s160 fix: on a chip, over the numbers
+        lay->get_pixel_size(lw, lh);
+        cr->rectangle(x - 4, r.y + 1, lw + 2, lh);
+        cr->fill();
+        cr->set_source_rgb(1, 1, 1);
         cr->move_to(x - 3, r.y + 1);
         lay->show_in_cairo_context(cr);
     }
@@ -1889,6 +1980,38 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
             cr->move_to(std::round(sr.x) + 0.5, sr.y);
             cr->line_to(std::round(sr.x) + 0.5, sr.b());
             cr->stroke();
+        }
+    }
+    // s158: the composing text at the caret -- set in the paragraph's face at
+    // the zoom, on paper, underlined; the input method's window told where.
+    if (!m_preedit.empty() && lo == hi) {
+        const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
+        if (c.ok) {
+            const Rect fr = core::frame_in_layout(m_doc, m_placed, c.frame);
+            const Rect sr = m_vp.to_screen(Rect{fr.x + c.x, fr.y + c.y, 1, c.h});
+            const auto* st = edit_story();
+            core::Style ps;
+            if (st && m_caret.para < static_cast<int>(st->paras.size()))
+                ps = core::doc::para_style(m_doc, st->paras[static_cast<std::size_t>(m_caret.para)]);
+            auto lay = create_pango_layout(m_preedit);
+            Pango::FontDescription fd(ps.family.empty() ? std::string("Serif") : ps.family);
+            fd.set_absolute_size(std::max(4.0, (ps.size > 0 ? ps.size : 11) * m_vp.scale()) * PANGO_SCALE);
+            lay->set_font_description(fd);
+            int lw = 0, lh = 0;
+            lay->get_pixel_size(lw, lh);
+            const double ty = sr.b() - lh;
+            cr->set_source_rgba(1, 1, 1, 0.95);
+            cr->rectangle(sr.x, ty, lw + 2, lh);
+            cr->fill();
+            cr->set_source_rgb(0.05, 0.05, 0.08);
+            cr->move_to(sr.x + 1, ty);
+            lay->show_in_cairo_context(cr);
+            cr->set_line_width(1);
+            cr->move_to(sr.x + 1, std::round(sr.b()) - 0.5);
+            cr->line_to(sr.x + 1 + lw, std::round(sr.b()) - 0.5);
+            cr->stroke();
+            GdkRectangle area{static_cast<int>(sr.x), static_cast<int>(sr.y), 1, static_cast<int>(sr.h)};
+            gtk_im_context_set_cursor_location(m_im, &area);
         }
     }
     cr->restore();

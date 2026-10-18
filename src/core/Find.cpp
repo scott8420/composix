@@ -43,6 +43,32 @@ std::vector<Doc::Id> reading_order(const Doc& d) {
 struct Stretch { int a = 0, b = 0; };
 std::vector<Stretch> format_stretches(const Doc& d, const Para& para, const FindOpts& f) {
     std::vector<Stretch> out;
+    if (f.para_counts) {   // s160: the paragraph style's bold / italic too -- every byte, runs or not
+        const Style ps = para_style(d, para);
+        const int len = static_cast<int>(para.text.size());
+        const auto add = [&](int a, int b) {
+            if (b <= a) return;
+            if (!out.empty() && out.back().b == a) out.back().b = b;
+            else out.push_back({a, b});
+        };
+        const auto look = [&](int a, int b, const Run* r) {
+            if (!f.cstyle.empty() && (!r || r->style != f.cstyle)) return;
+            if (!f.skip_cstyle.empty() && r && r->style == f.skip_cstyle) return;
+            const auto* cs = r ? d.as<Style>(r->style) : nullptr;
+            const bool bo = r && r->local.bold >= 0 ? r->local.bold == 1 : ((cs && cs->bold) || ps.bold);
+            const bool it = r && r->local.italic >= 0 ? r->local.italic == 1 : ((cs && cs->italic) || ps.italic);
+            if ((f.bold && !bo) || (f.italic && !it)) return;
+            add(a, b);
+        };
+        int at = 0;
+        for (const auto& r : para.runs) {
+            if (r.start > at) look(at, r.start, nullptr);
+            look(std::max(at, r.start), r.end, &r);
+            at = std::max(at, r.end);
+        }
+        if (at < len) look(at, len, nullptr);
+        return out;
+    }
     for (const auto& r : para.runs) {
         if (!f.cstyle.empty() && r.style != f.cstyle) continue;
         if (!f.skip_cstyle.empty() && r.style == f.skip_cstyle) continue;

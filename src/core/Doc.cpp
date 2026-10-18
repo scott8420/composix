@@ -260,7 +260,9 @@ std::vector<ByteSpan> no_break_spans(const Doc& d, const Para& p) {   // s075
     std::vector<ByteSpan> out;
     for (const auto& r : p.runs) {
         const auto* st = d.as<Style>(r.style);   // (a based-on style's settings are written through)
-        if (!st || !st->no_break || r.end <= r.start) continue;
+        // s159: set on the words themselves -- over the character style's.
+        const bool nb = r.local.no_break >= 0 ? r.local.no_break == 1 : (st && st->no_break);
+        if (!nb || r.end <= r.start) continue;
         if (!out.empty() && r.start <= out.back().b) out.back().b = std::max(out.back().b, r.end);
         else out.push_back({r.start, r.end});
     }
@@ -2429,6 +2431,7 @@ Style para_style(const Doc& d, const Para& p) {   // s093
     if (o.keep_next) s.keep_next = *o.keep_next;     // s094
     if (o.keep_lines) s.keep_lines = *o.keep_lines;
     if (o.hyphenate) s.hyphenate = *o.hyphenate;
+    if (o.tabs) s.tabs = *o.tabs;   // s157
     return s;
 }
 
@@ -2457,8 +2460,119 @@ bool clear_para_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Te
             else if (k == "keep_next") o.keep_next.reset();     // s094
             else if (k == "keep_lines") o.keep_lines.reset();
             else if (k == "hyphenate") o.hyphenate.reset();
+            else if (k == "tabs") o.tabs.reset();   // s157
         }
     });
+}
+
+std::string style_edit_label(const std::string& key) {   // s164
+    static const std::map<std::string, std::string> labels{
+        {"font", "Font"}, {"ssize", "Size"}, {"leading", "Leading"}, {"bold", "Weight"}, {"italic", "Slant"},
+        {"align", "Align"}, {"before", "Space before"}, {"after", "Space after"}, {"lindent", "Left indent"},
+        {"rindent", "Right indent"}, {"findent", "First indent"}, {"indent_after", "Indent when"}, {"tabs", "Tabs"},
+        {"drop_lines", "Drop cap"}, {"drop_chars", "Drop letters"}, {"color", "Color"}, {"color_tint", "Tint"},
+        {"nobreak", "No break"}, {"next_style", "Next style"}, {"list_cont", "Numbering"}, {"list_level", "Level"},
+        {"list_type", "List"}, {"list_bullet", "Bullet"}, {"list_num", "Numbers"}, {"list_hang", "Hang"},
+        {"pstart", "Start"}, {"keep_next", "Keep with next"}, {"keep_lines", "Keep lines"},
+        {"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"}, {"hyph_last_word", "Hyphenate last word"},
+        {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}};
+    if (const auto it = labels.find(key); it != labels.end()) return it->second;
+    if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {
+        static const std::map<char, std::string> rl{{'w', "Rule"}, {'c', "Rule colour"}, {'t', "Rule tint"}, {'o', "Rule offset"},
+                                                    {'x', "Rule width"}};
+        if (const auto it = rl.find(key.back()); it != rl.end() && key.size() == 8) return it->second;
+    }
+    return {};
+}
+
+void style_edit(const Doc& d, Style& st, const std::string& key, const std::string& choice) {   // s164 (from the shell's handler)
+    const bool para = st.kind == StyleKind::Paragraph;
+    if (key == "font") { st.family = choice; return; }
+    if (key == "ssize" || key == "leading" || key == "bold" || key == "italic" || key == "align" || key == "before" || key == "after") {
+        const double v = std::stod(choice);
+        if (key == "ssize") {
+            // Leading follows the size when it was the usual ratio (or auto).
+            if (st.size > 0 && st.leading > 0 && std::abs(st.leading - st.size * 1.2) < 1.5) st.leading = std::round(v * 1.2 * 2) / 2;
+            st.size = v;
+        }
+        else if (key == "leading") st.leading = v;
+        else if (key == "bold") st.bold = v != 0;
+        else if (key == "italic") st.italic = v != 0;
+        else if (key == "align") st.align = static_cast<Align>(static_cast<int>(v));
+        else if (key == "before") st.space_before = v;
+        else st.space_after = v;
+        return;
+    }
+    if (key == "color") { st.color = choice; return; }
+    if (key == "color_tint") { st.color_tint = std::stod(choice) / 100; return; }
+    if (key == "nobreak") { if (!para) st.no_break = choice == "1"; return; }
+    if (!para) return;   // the rest: paragraph styles'
+    if (key == "lindent") st.left_indent = std::stod(choice);
+    else if (key == "rindent") st.right_indent = std::stod(choice);
+    else if (key == "findent") st.first_indent = std::stod(choice);
+    else if (key == "indent_after") st.skip_after_heading = choice == "1";
+    else if (key == "tabs") st.tabs = tab_preset(d, choice);
+    else if (key == "drop_lines") st.drop_lines = std::stoi(choice);
+    else if (key == "drop_chars") st.drop_chars = std::stoi(choice);
+    else if (key == "next_style") st.next = choice;
+    else if (key == "list_cont") st.list.continues = choice == "1";
+    else if (key == "list_level") st.list.level = std::clamp(std::stoi(choice), 1, 2);
+    else if (key == "list_type") {
+        st.list.type = static_cast<ListType>(std::clamp(std::stoi(choice), 0, 2));
+        // Room for the marker: the text in from the column by the hang.
+        if (st.list.type != ListType::None && st.left_indent < st.list.hang) st.left_indent = st.list.hang;
+    }
+    else if (key == "list_bullet") st.list.bullet = choice;
+    else if (key == "list_num") st.list.numbering = static_cast<Numbering>(std::clamp(std::stoi(choice), 0, 4));
+    else if (key == "list_hang") st.list.hang = std::stod(choice);
+    else if (key == "pstart") st.start = static_cast<ParaStart>(std::clamp(std::stoi(choice), 0, 4));
+    else if (key == "keep_next") st.keep_next = std::stoi(choice) != 0;
+    else if (key == "keep_lines") st.keep_lines = std::stoi(choice);
+    else if (key == "hyph_limit") st.hyph_limit = std::max(0, std::stoi(choice));
+    else if (key == "hyph_shortest") st.hyph_shortest = std::clamp(std::stoi(choice), 4, 20);
+    else if (key == "hyph_last_word") st.hyph_last_word = std::stoi(choice) != 0;
+    else if (key == "hyphenate") st.hyphenate = choice == "1";
+    else if (key == "align_grid") st.align_grid = choice == "1";
+    else if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {   // s044: paragraph rules
+        const bool above = key[5] == 'a';
+        const char what = key.back();
+        auto& r = above ? st.rule_above : st.rule_below;
+        if (what == 'w') {
+            const double w = std::stod(choice);
+            // Turned on: sit clear of the text (above: a line's height up; below: a little down).
+            if (r.weight <= 0 && w > 0 && r.offset == 0) r.offset = above ? std::round(st.size > 0 ? st.size : 11) : 4;
+            r.weight = w;
+        } else if (what == 'c') r.color = choice;
+        else if (what == 't') r.tint = std::stod(choice) / 100;
+        else if (what == 'o') r.offset = std::stod(choice);
+        else r.text_width = choice == "1";
+    }
+}
+
+bool styles_as_one(DocJournal& j, Doc& d, const std::string& label, const std::function<void()>& body) {   // s162
+    if (j.in_gesture()) { body(); return false; }
+    j.begin(label, d.ids_of<Style>());
+    body();
+    return j.commit();
+}
+
+bool set_para_tabs(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
+                   std::vector<TabStop> stops) {   // s157
+    std::sort(stops.begin(), stops.end(), [](const TabStop& x, const TabStop& y) { return x.pos < y.pos; });
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return false;
+    a = clamp_pos(*st, a);
+    b = clamp_pos(*st, b);
+    if (b < a) std::swap(a, b);
+    Story s = *st;
+    for (int p = a.para; p <= b.para; ++p) {
+        auto& para = s.paras[static_cast<std::size_t>(p)];
+        const auto* style = d.as<Style>(para.style);
+        if (style && style->tabs == stops) para.over.tabs.reset();   // the style's: follow it
+        else para.over.tabs = stops;
+    }
+    if (s == *st) return false;
+    return j.run(label, {story}, [&] { d.put(story, s); });
 }
 
 std::string style_key_of_edit(const std::string& e) {   // s092
@@ -3586,6 +3700,16 @@ const std::vector<Verb>& verbs() {
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"set_ruler_origin", [](DocJournal& j, Doc& d) { set_ruler_origin(j, d, RulerOrigin::Page); }},   // s154
         {"set_ruler_zero", [](DocJournal& j, Doc& d) { set_ruler_zero(j, d, 36, 18); }},
+        {"styles_as_one", [](DocJournal& j, Doc& d) {   // s162
+            const auto st = d.ids_of<Style>();
+            styles_as_one(j, d, "Style settings", [&] {
+                edit_styles(j, d, {st.front()}, "Size", [](Style& s) { s.size = 13; });
+                edit_styles(j, d, {st.front()}, "Leading", [](Style& s) { s.leading = 17; });
+            });
+        }},
+        {"set_para_tabs", [](DocJournal& j, Doc& d) {   // s157
+            for (const auto& sid : d.ids_of<Story>()) if (!d.as<Story>(sid)->paras.empty()) { set_para_tabs(j, d, sid, {0, 0}, {0, 0}, "Add tab", {{100, TabAlign::Left, ""}}); return; }
+        }},
         {"set_shows_on", [](DocJournal& j, Doc& d) {   // s155
             for (const auto& m : d.ids_of<Master>())
                 if (d.as<Master>(m)->facing && !d.frames_on(m).empty()) { set_shows_on(j, d, {d.frames_on(m).front()}, 3); return; }

@@ -946,7 +946,9 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
     }
     bool did = false;
     try {
-        if (key == "master") {
+        if (const auto label = core::doc::style_edit_label(key); !label.empty()) {   // s164: a style's setting (one code path, the preview's too)
+            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, label, [&](core::Style& st) { core::doc::style_edit(m_doc, st, key, choice); });
+        } else if (key == "master") {
             did = core::doc::set_master(m_journal, m_doc, m_inspected, choice);
         } else if (key == "size") {
             // s148: a page's presets are its master's size -- pages grouped by master, each its own.
@@ -1035,7 +1037,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "starts") {
             did = core::doc::set_starts(m_journal, m_doc, m_inspected,
                                         static_cast<core::Side>(std::stoi(choice)));
-        } else if (key == "local" || key == "lsize" || key == "lcolor") {   // s030: formatting on the words
+        } else if (key == "local" || key == "lsize" || key == "lcolor" || key == "lnobreak") {   // s030: formatting on the words
             if (key == "local" && (choice == "bold" || choice == "italic")) { activate_action(choice == "bold" ? "win.bold" : "win.italic"); return; }
             auto& cv = m_canvas_view.canvas();
             if (!cv.editing()) return;
@@ -1046,6 +1048,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 did = core::doc::set_local(m_journal, m_doc, story, a, b, "Clear overrides", [](core::Local& l) { l = {}; });
             else if (key == "lsize")
                 did = core::doc::set_local(m_journal, m_doc, story, a, b, "Size", [&](core::Local& l) { l.size = std::stod(choice); });
+            else if (key == "lnobreak")   // s159
+                did = core::doc::set_local(m_journal, m_doc, story, a, b, "No break", [&](core::Local& l) { l.no_break = std::clamp(std::stoi(choice), -1, 1); });
             else
                 did = core::doc::set_local(m_journal, m_doc, story, a, b, "Colour", [&](core::Local& l) { l.color = choice; });
             cv.grab_focus();
@@ -1062,30 +1066,6 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 did = core::doc::set_char_style(m_journal, m_doc, story, a, b, choice);
             }
             cv.grab_focus();   // back to typing
-        } else if (key == "lindent" || key == "rindent" || key == "findent" || key == "indent_after" || key == "tabs") {   // s026
-            static const std::map<std::string, std::string> labels{
-                {"lindent", "Left indent"}, {"rindent", "Right indent"}, {"findent", "First indent"},
-                {"indent_after", "Indent when"}, {"tabs", "Tabs"}};
-            const auto stops = key == "tabs" ? core::tab_preset(m_doc, choice) : std::vector<core::TabStop>{};
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Style& st) {
-                if (st.kind != core::StyleKind::Paragraph) return;
-                if (key == "tabs") st.tabs = stops;
-                else if (key == "indent_after") st.skip_after_heading = choice == "1";
-                else {
-                    const double v = std::stod(choice);
-                    (key == "lindent" ? st.left_indent : key == "rindent" ? st.right_indent : st.first_indent) = v;
-                }
-            });
-        } else if (key == "drop_lines" || key == "drop_chars") {   // s029
-            const int v = std::stoi(choice);
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "drop_lines" ? "Drop cap" : "Drop letters",
-                                         [&](core::Style& st) {
-                if (st.kind != core::StyleKind::Paragraph) return;
-                (key == "drop_lines" ? st.drop_lines : st.drop_chars) = v;
-            });
-        } else if (key == "color_tint") {   // s021
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Tint",
-                                         [&](core::Style& st) { st.color_tint = std::stod(choice) / 100; });
         } else if (key == "fill_tint" || key == "stroke_tint" || key == "opacity") {   // s021
             static const std::map<std::string, std::string> labels{
                 {"fill_tint", "Fill tint"}, {"stroke_tint", "Stroke tint"}, {"opacity", "Opacity"}};
@@ -1095,9 +1075,6 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 else if (key == "stroke_tint") f.stroke_tint = v;
                 else f.opacity = v;
             });
-        } else if (key == "color") {   // s015: a style's swatch
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Color",
-                                         [&](core::Style& st) { st.color = choice; });
         } else if (key == "bounds") {   // s041: a frame's X / Y / W / H typed ("k:points")
             const auto colon = choice.find(':');
             const int k = std::stoi(choice.substr(0, colon));
@@ -1111,29 +1088,6 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                     else if (k == 2) f.w = std::max(1.0, v);
                     else f.h = std::max(1.0, v);
                 });
-        } else if (key == "nobreak") {   // s075: a character style keeps its words on one line
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "No break",
-                                         [&](core::Style& st) { if (st.kind == core::StyleKind::Character) st.no_break = choice == "1"; });
-        } else if (key == "font" || key == "ssize" || key == "leading" || key == "bold" || key == "italic" ||
-                   key == "align" || key == "before" || key == "after") {   // s011: style settings
-            static const std::map<std::string, std::string> labels{
-                {"font", "Font"}, {"ssize", "Size"}, {"leading", "Leading"}, {"bold", "Weight"},
-                {"italic", "Slant"}, {"align", "Align"}, {"before", "Space before"}, {"after", "Space after"}};
-            const double v = (key == "font") ? 0 : std::stod(choice);
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Style& s) {
-                if (key == "font") s.family = choice;
-                else if (key == "ssize") {
-                    // Leading follows the size when it was the usual ratio (or auto).
-                    if (s.size > 0 && s.leading > 0 && std::abs(s.leading - s.size * 1.2) < 1.5) s.leading = std::round(v * 1.2 * 2) / 2;
-                    s.size = v;
-                }
-                else if (key == "leading") s.leading = v;
-                else if (key == "bold") s.bold = v != 0;
-                else if (key == "italic") s.italic = v != 0;
-                else if (key == "align") s.align = static_cast<core::Align>(static_cast<int>(v));
-                else if (key == "before") s.space_before = v;
-                else if (key == "after") s.space_after = v;
-            });
         } else if (key == "style") {   // s011: Duplicate / Delete
             if (choice == "duplicate" && !m_inspected.empty()) {
                 const auto made = core::doc::duplicate_style(m_journal, m_doc, m_inspected.front());
@@ -1216,84 +1170,12 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::reset_style_fields(m_journal, m_doc, m_inspected, {choice});
         } else if (key == "style_base") {   // s037: Reset to base
             did = core::doc::reset_to_base(m_journal, m_doc, m_inspected);
-        } else if (key == "next_style") {   // s037
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Next style", [&](core::Style& st) {
-                if (st.kind == core::StyleKind::Paragraph) st.next = choice;
-            });
         } else if (key == "list_from") {   // s047: the paragraph(s) being typed in
             auto& cv = m_canvas_view.canvas();
             if (!cv.editing()) return;
             const auto [a, b] = cv.edit_range();
             did = core::doc::set_list_restart(m_journal, m_doc, cv.edit_story_id(), a, b, std::stoi(choice));
             cv.grab_focus();
-        } else if (key == "list_cont" || key == "list_level") {   // s047
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "list_cont" ? "Numbering" : "Level", [&](core::Style& st) {
-                if (st.kind != core::StyleKind::Paragraph) return;
-                if (key == "list_cont") st.list.continues = choice == "1";
-                else st.list.level = std::clamp(std::stoi(choice), 1, 2);
-            });
-        } else if (key == "list_type" || key == "list_bullet" || key == "list_num" || key == "list_hang") {   // s045
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "list_type" ? "List" : key == "list_bullet" ? "Bullet"
-                                                                       : key == "list_num" ? "Numbers" : "Hang",
-                                         [&](core::Style& st) {
-                if (st.kind != core::StyleKind::Paragraph) return;
-                if (key == "list_type") {
-                    st.list.type = static_cast<core::ListType>(std::clamp(std::stoi(choice), 0, 2));
-                    // Room for the marker: the text in from the column by the hang.
-                    if (st.list.type != core::ListType::None && st.left_indent < st.list.hang) st.left_indent = st.list.hang;
-                } else if (key == "list_bullet") st.list.bullet = choice;
-                else if (key == "list_num") st.list.numbering = static_cast<core::Numbering>(std::clamp(std::stoi(choice), 0, 4));
-                else st.list.hang = std::stod(choice);
-            });
-        } else if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {   // s044: paragraph rules
-            const bool above = key[5] == 'a';
-            const char what = key.back();
-            static const std::map<char, std::string> labels{{'w', "Rule"}, {'c', "Rule colour"}, {'t', "Rule tint"},
-                                                           {'o', "Rule offset"}, {'x', "Rule width"}};
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(what), [&](core::Style& st) {
-                if (st.kind != core::StyleKind::Paragraph) return;
-                auto& r = above ? st.rule_above : st.rule_below;
-                if (what == 'w') {
-                    const double w = std::stod(choice);
-                    // Turned on: sit clear of the text (above: a line's height up; below: a little down).
-                    if (r.weight <= 0 && w > 0 && r.offset == 0) r.offset = above ? std::round(st.size > 0 ? st.size : 11) : 4;
-                    r.weight = w;
-                } else if (what == 'c') r.color = choice;
-                else if (what == 't') r.tint = std::stod(choice) / 100;
-                else if (what == 'o') r.offset = std::stod(choice);
-                else r.text_width = choice == "1";
-            });
-        } else if (key == "pstart") {   // s043
-            const auto v = static_cast<core::ParaStart>(std::clamp(std::stoi(choice), 0, 4));
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Start", [&](core::Style& st) {
-                if (st.kind == core::StyleKind::Paragraph) st.start = v;
-            });
-        } else if (key == "keep_next" || key == "keep_lines") {   // s039
-            const int v = std::stoi(choice);
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, key == "keep_next" ? "Keep with next" : "Keep lines",
-                                         [&](core::Style& st) {
-                if (st.kind != core::StyleKind::Paragraph) return;
-                if (key == "keep_next") st.keep_next = v != 0;
-                else st.keep_lines = v;
-            });
-        } else if (key == "hyph_limit" || key == "hyph_shortest" || key == "hyph_last_word") {   // s065
-            static const std::map<std::string, std::string> labels{{"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"},
-                                                                   {"hyph_last_word", "Hyphenate last word"}};
-            const int v = std::stoi(choice);
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Style& st) {
-                if (st.kind != core::StyleKind::Paragraph) return;
-                if (key == "hyph_limit") st.hyph_limit = std::max(0, v);
-                else if (key == "hyph_shortest") st.hyph_shortest = std::clamp(v, 4, 20);
-                else st.hyph_last_word = v != 0;
-            });
-        } else if (key == "hyphenate") {   // s038
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Hyphenate", [&](core::Style& st) {
-                if (st.kind == core::StyleKind::Paragraph) st.hyphenate = choice == "1";
-            });
-        } else if (key == "align_grid") {   // s036
-            did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Align to grid", [&](core::Style& st) {
-                if (st.kind == core::StyleKind::Paragraph) st.align_grid = choice == "1";
-            });
         } else if (key == "mname") {   // s148: a master's own settings
             did = core::doc::edit_masters(m_journal, m_doc, m_inspected, "Master name", [&](core::Master& m) { if (!choice.empty()) m.name = choice; });
         } else if (key == "msize") {   // "0:<points>" (W) or "1:<points>" (H)
@@ -1498,6 +1380,20 @@ void Shell::on_redo() {  // handler: put the undone step back
             cv.place_caret(core::changed_end(*before, *st));
     if (all_frames(m_doc, r.selection)) m_canvas_view.canvas().set_selection(r.selection);
     if (auto lg = log::get(log::Area::Shell)) lg->info("redo: {}", r.label);
+}
+
+// s162 (Scott): a style's waiting changes, Set -- on the styles they were
+// made for, each through the usual handler, all of it one step.
+void Shell::on_inspector_apply(const std::vector<std::string>& ids,
+                               const std::vector<std::pair<std::string, std::string>>& edits) {  // handler
+    if (ids.empty() || edits.empty()) return;
+    const auto keep = m_inspected;
+    m_inspected = ids;
+    const bool did = core::doc::styles_as_one(m_journal, m_doc, edits.size() == 1 ? std::string("Style setting") : "Style settings", [&] {
+        for (const auto& [k, v] : edits) on_inspector_edit(k, v);
+    });
+    m_inspected = keep;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("set {} style change(s) on {} style(s): {}", edits.size(), ids.size(), did ? "step" : "no change");
 }
 
 }  // namespace composix

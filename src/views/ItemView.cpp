@@ -29,6 +29,7 @@ ItemView::ItemView()
     m_area.set_vexpand(true);
     m_area.set_hexpand(true);
     m_area.set_draw_func([this](const Cairo::RefPtr<Cairo::Context>& cr, int W, int H) {
+        if (m_painter) { m_painter(cr, W, H); return; }   // s163
         if (m_thumbs.empty()) return;
         // Lay the items out left to right, each slot as wide as its proportions
         // want, all scaled together to fit the surface.
@@ -59,6 +60,7 @@ ItemView::ItemView()
 
 void ItemView::show_items(const std::vector<const core::Item*>& items) {
     m_thumbs.clear();
+    m_painter = {};
     for (const auto* it : items) m_thumbs.push_back(it->thumb);
     m_title.set_text(core::selection_title(items));
     m_count.set_visible(items.size() > 1);

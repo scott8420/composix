@@ -330,6 +330,14 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
         return core::any_facing(m_doc) ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};   // s147
     });
     m_inspector.signal_edit().connect(sigc::mem_fun(*this, &Shell::on_inspector_edit));
+    m_inspector.signal_apply().connect(sigc::mem_fun(*this, &Shell::on_inspector_apply));   // s162
+    m_inspector.signal_staged().connect([this] { m_item.redraw(); });                        // s164: the specimen, live
+    // s161: which inspector groups are open -- kept between runs.
+    m_inspector.set_open_groups(m_settings.count("insp.groups") ? m_settings["insp.groups"] : std::string("Text,Paragraph"));
+    m_inspector.signal_groups().connect([this](const std::string& csv) {
+        m_settings["insp.groups"] = csv;
+        core::save_settings(m_settings_file, m_settings);
+    });
 
     // s005: the canvas. Its picks drive the inspector; a finished drag or a
     // nudge refreshes the other views (mid-drag only the canvas repaints).

@@ -1,6 +1,7 @@
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "layout/Flow.hpp"
+#include <gtkmm/checkbutton.h>
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
 #include <gtkmm/eventcontrollerkey.h>
@@ -125,6 +126,12 @@ void Shell::build_find_bar() {  // zone
     r3->append(*m_find_in);
     r3->append(*fml);
     r3->append(*m_find_format);
+    // s160: ... or by the paragraph style too.
+    m_find_by_para = Gtk::make_managed<Gtk::CheckButton>("by paragraph style too");
+    m_find_by_para->set_name("find.by_para");
+    m_find_by_para->set_tooltip_text("Count words a bold / italic paragraph style sets (a heading's)");
+    m_find_by_para->set_sensitive(false);
+    r3->append(*m_find_by_para);
     r3->append(*apl);
     r3->append(*m_find_apply);
 
@@ -200,6 +207,8 @@ void Shell::build_find_bar() {  // zone
     m_find_word->signal_toggled().connect(again);
     m_find_in->property_selected().signal_changed().connect(again);
     m_find_format->property_selected().signal_changed().connect(again);
+    m_find_format->property_selected().signal_changed().connect([this] { m_find_by_para->set_sensitive(m_find_format->get_selected() > 0); });
+    m_find_by_para->signal_toggled().connect(again);   // s160
     m_find_mode->property_selected().signal_changed().connect(again);    // s056
     m_find_scope->property_selected().signal_changed().connect(again);
     m_find_apply->property_selected().signal_changed().connect(again);   // s051: what's already in it drops out
@@ -299,6 +308,7 @@ void Shell::find_refresh() {  // helper
     const auto fm = m_find_format->get_selected();   // s051
     f.bold = fm == 1 || fm == 3;
     f.italic = fm == 2 || fm == 3;
+    f.para_counts = (f.bold || f.italic) && m_find_by_para->get_active();   // s160
     if (f.bold || f.italic)
         if (const auto i = m_find_apply->get_selected(); i > 0 && i - 1 < m_find_styles.size())
             if (m_doc.as<core::Style>(m_find_styles[i - 1])->kind == core::StyleKind::Character) f.skip_cstyle = m_find_styles[i - 1];
@@ -478,7 +488,7 @@ core::SavedQuery Shell::find_capture() const {  // helper
     q.match_case = m_find_case->get_active();
     q.whole_word = m_find_word->get_active();
     q.mode = static_cast<int>(std::min(2u, m_find_mode->get_selected()));
-    q.format = static_cast<int>(std::min(3u, m_find_format->get_selected()));
+    q.format = static_cast<int>(std::min(3u, m_find_format->get_selected())) | (m_find_by_para->get_active() ? 4 : 0);   // s160: +4 the paragraph style counts
     if (const auto i = m_find_in->get_selected(); i > 0 && i - 1 < m_find_styles.size()) q.in_style = m_find_styles[i - 1];
     if (const auto i = m_find_apply->get_selected(); i > 0 && i - 1 < m_find_styles.size()) q.apply_style = m_find_styles[i - 1];
     return q;
@@ -495,7 +505,8 @@ void Shell::find_load(const core::SavedQuery& q) {  // helper
     m_find_case->set_active(q.match_case);
     m_find_word->set_active(q.whole_word);
     m_find_mode->set_selected(static_cast<guint>(std::clamp(q.mode, 0, 2)));
-    m_find_format->set_selected(static_cast<guint>(std::clamp(q.format, 0, 3)));
+    m_find_format->set_selected(static_cast<guint>(q.format & 3));
+    m_find_by_para->set_active((q.format & 4) != 0);   // s160
     m_find_in->set_selected(q.in_style.empty() ? 0 : at(q.in_style));
     m_find_apply->set_selected(q.apply_style.empty() ? 0 : at(q.apply_style));
     m_hits_rev = ~0ull;

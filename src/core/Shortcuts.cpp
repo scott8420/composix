@@ -159,7 +159,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Text tool: click inside the margins", "A text frame filling that page column"},
         {"Mouse", "", {}, "Drag a gutter (a picked text frame)", "Make one column wider, its neighbour narrower"},
         {"Mouse", "", {}, "Drop an image file on a page", "Place it there (on an image frame: into it)"},
-        {"Mouse", "", {}, "Tab ruler", "While typing: click the strip over the column to add a tab stop; drag to move, drag off to remove; double-click: left / centre / right / decimal; Shift+double-click: dot leader"},
+        {"Mouse", "", {}, "Tab ruler", "While typing: click the strip over the column to add a tab stop; drag to move, drag off to remove; double-click: left / centre / right / decimal; Shift+double-click: dot leader. These are the paragraph's own stops (the selected paragraphs'); \u21BA Reset to style puts back its style's"},
         {"Mouse", "", {}, "Ctrl+Shift+click", "Override a master item on a page (its own copy; Remove override goes back)"},
         {"Mouse", "", {}, "Esc", "Cancel a drag, put down a loaded image, then clear the picks"},
 

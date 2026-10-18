@@ -85,6 +85,7 @@ std::vector<Field> shared_fields(const std::vector<const Item*>& sel) {
         if (f.buttons) {   // actions: the ones every item offers (s014)
             Field g{f.label, "", f.edit, {}};
             g.buttons = true;
+            g.group = f.group;   // s161
             for (const auto& c : f.choices) {
                 bool all = true;
                 for (std::size_t i = 1; i < sel.size() && all; ++i) {
@@ -98,6 +99,7 @@ std::vector<Field> shared_fields(const std::vector<const Item*>& sel) {
             continue;
         }
         Field g{f.label, same ? f.value : std::string(kMixed), {}, {}};
+        g.group = f.group;   // s161
         if (!f.cols.empty()) {   // per column: the value where all agree, Mixed where not
             const auto split = [](const std::string& v) {
                 std::vector<std::string> out(1);

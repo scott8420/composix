@@ -111,6 +111,7 @@ json to(const Record& r) {
                         if (!r.local.empty())   // s030
                             jr["local"] = {{"bold", r.local.bold}, {"italic", r.local.italic},
                                            {"size", r.local.size}, {"color", r.local.color}};
+                            if (r.local.no_break >= 0) jr["local"]["no_break"] = r.local.no_break;   // s159
                         runs.push_back(jr);
                     }
                     jp["runs"] = runs;
@@ -128,6 +129,11 @@ json to(const Record& r) {
                     if (p.over.keep_next) o["keep_next"] = *p.over.keep_next;     // s094
                     if (p.over.keep_lines) o["keep_lines"] = *p.over.keep_lines;
                     if (p.over.hyphenate) o["hyphenate"] = *p.over.hyphenate;
+                    if (p.over.tabs) {   // s157
+                        json tabs = json::array();
+                        for (const auto& t : *p.over.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
+                        o["tabs"] = tabs;
+                    }
                     jp["own"] = o;
                 }
                 if (!p.notes.empty()) {   // s109
@@ -141,6 +147,7 @@ json to(const Record& r) {
                                 if (!r.local.empty())
                                     jr["local"] = {{"bold", r.local.bold}, {"italic", r.local.italic},
                                                    {"size", r.local.size}, {"color", r.local.color}};
+                            if (r.local.no_break >= 0) jr["local"]["no_break"] = r.local.no_break;   // s159
                                 runs.push_back(jr);
                             }
                             jn["runs"] = runs;
@@ -369,7 +376,7 @@ std::optional<Record> from(const json& j) {
                         Run run{val(r, "start", 0), val(r, "end", 0), val<std::string>(r, "style", "")};
                         if (r.contains("local")) {
                             const auto& l = r.at("local");
-                            run.local = {val(l, "bold", -1), val(l, "italic", -1), val(l, "size", 0.0), val<std::string>(l, "color", "")};
+                            run.local = {val(l, "bold", -1), val(l, "italic", -1), val(l, "size", 0.0), val<std::string>(l, "color", "")}; run.local.no_break = val(l, "no_break", -1);   // s159
                         }
                         para.runs.push_back(run);
                     }
@@ -385,6 +392,12 @@ std::optional<Record> from(const json& j) {
                     if (o.contains("keep_next") && o.at("keep_next").is_boolean()) para.over.keep_next = o.at("keep_next").get<bool>();   // s094
                     if (o.contains("hyphenate") && o.at("hyphenate").is_boolean()) para.over.hyphenate = o.at("hyphenate").get<bool>();
                     if (o.contains("keep_lines") && o.at("keep_lines").is_number_integer()) para.over.keep_lines = o.at("keep_lines").get<int>();
+                    if (o.contains("tabs") && o.at("tabs").is_array()) {   // s157
+                        std::vector<TabStop> tabs;
+                        for (const auto& t : o.at("tabs"))
+                            tabs.push_back({val(t, "pos", 0.0), de(t, "align", TabAlign::Left), val<std::string>(t, "leader", "")});
+                        para.over.tabs = tabs;
+                    }
                 }
                 if (p.contains("notes") && p.at("notes").is_array())   // s109
                     for (const auto& n : p.at("notes")) {
@@ -394,7 +407,7 @@ std::optional<Record> from(const json& j) {
                                 Run run{val(r, "start", 0), val(r, "end", 0), val<std::string>(r, "style", "")};
                                 if (r.contains("local")) {
                                     const auto& l = r.at("local");
-                                    run.local = {val(l, "bold", -1), val(l, "italic", -1), val(l, "size", 0.0), val<std::string>(l, "color", "")};
+                                    run.local = {val(l, "bold", -1), val(l, "italic", -1), val(l, "size", 0.0), val<std::string>(l, "color", "")}; run.local.no_break = val(l, "no_break", -1);   // s159
                                 }
                                 note.runs.push_back(run);
                             }

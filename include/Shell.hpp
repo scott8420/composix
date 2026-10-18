@@ -16,6 +16,7 @@
 #include <gtkmm/applicationwindow.h>
 #include <giomm/menu.h>
 #include <gtkmm/dropdown.h>
+#include <gtkmm/checkbutton.h>
 #include <gtkmm/entry.h>
 #include <gtkmm/label.h>
 #include <gtkmm/revealer.h>
@@ -140,6 +141,8 @@ private:
     void on_go_forward();                        // category: handler: s068 -- Alt+Right / Forward: back into what Back left
     void sync_up();                              // category: helper: s068 -- the Up button: shown, named, enabled
     void on_undo();                              // category: handler: Ctrl+Z / menu
+    void on_inspector_apply(const std::vector<std::string>& ids,
+                            const std::vector<std::pair<std::string, std::string>>& edits);   // s162: a style's Set
     void on_redo();                              // category: handler: Ctrl+Shift+Z, Ctrl+Y / menu
 
     // ── helpers ────────────────────────────────────────────────────────────
@@ -407,6 +410,7 @@ private:
     Gtk::DropDown*                   m_find_in = nullptr;
     Gtk::DropDown*                   m_find_apply = nullptr;
     Gtk::DropDown*                   m_find_format = nullptr;   // s051: Any / Bold / Italic / Bold Italic
+    Gtk::CheckButton*                m_find_by_para = nullptr;  // s160: ... the paragraph style counts
     Gtk::DropDown*                   m_find_mode = nullptr;     // s056: Text / Wildcards / Regex
     Gtk::DropDown*                   m_find_scope = nullptr;    // s056: Document / This story / Selection
     std::string                      m_find_story;              // s056: the story and selection when Find opened

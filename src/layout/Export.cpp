@@ -1245,4 +1245,195 @@ void preflight(const core::Doc& d, const std::vector<std::string>& missing, int 
     for (const auto& m : missing) report->warnings.push_back("Missing image: " + m);
 }
 
+
+// ── s163: a style, greeked ──────────────────────────────────────────────────
+namespace {
+std::string greek(int words, int from = 0) {
+    static const char* lorem[] = {"lorem", "ipsum", "dolor", "sit", "amet,", "consectetur", "adipiscing", "elit,", "sed", "do",
+                                  "eiusmod", "tempor", "incididunt", "ut", "labore", "et", "dolore", "magna", "aliqua.", "Ut",
+                                  "enim", "ad", "minim", "veniam,", "quis", "nostrud", "exercitation", "ullamco", "laboris",
+                                  "nisi", "ut", "aliquip", "ex", "ea", "commodo", "consequat.", "Duis", "aute", "irure", "dolor",
+                                  "in", "reprehenderit", "in", "voluptate", "velit", "esse", "cillum", "dolore", "eu", "fugiat",
+                                  "nulla", "pariatur."};
+    const int n = static_cast<int>(sizeof lorem / sizeof lorem[0]);
+    std::string out;
+    for (int i = 0; i < words; ++i) {
+        std::string w = lorem[(from + i) % n];
+        if (i == 0 || (!out.empty() && out.back() == '.')) w[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(w[0])));
+        out += (i ? " " : "") + w;
+    }
+    if (!out.empty() && out.back() != '.') {
+        if (out.back() == ',') out.pop_back();
+        out += '.';
+    }
+    return out;
+}
+}  // namespace
+
+core::Doc style_specimen_doc(const core::Doc& d, const core::Doc::Id& style, bool in_use, double w, double h,
+                             const StyleOver* over) {
+    core::Doc s;
+    core::Doc::Loading load(s);
+    core::Settings st = d.settings();
+    s.put("doc", st);
+    for (const auto& id : d.ids_of<core::Style>()) {
+        core::Style x = *d.as<core::Style>(id);
+        if (over) if (const auto it = over->find(id); it != over->end()) x = it->second;   // s164: as it would be
+        x.start = core::ParaStart::Anywhere;   // one page: a "next page" start would send it nowhere
+        s.put(id, x);
+    }
+    for (const auto& id : d.ids_of<core::Swatch>()) s.put(id, *d.as<core::Swatch>(id));
+    core::Page pg;
+    pg.pos = 1;
+    pg.w = w;
+    pg.h = h;
+    s.put("page.1", pg);
+    const auto* me = d.as<core::Style>(style);
+    // The document's own: its body (the paragraph style used most) and its
+    // heading (the biggest paragraph style), neither the one shown.
+    core::Doc::Id body, head;
+    double biggest = -1;
+    {   // the body: the most TEXT set in it (a folio is on every page, but short), not a list
+        std::map<core::Doc::Id, std::size_t> bytes;
+        for (const auto& sid : d.ids_of<core::Story>())
+            for (const auto& pp : d.as<core::Story>(sid)->paras) bytes[pp.style] += pp.text.size();
+        std::size_t most = 0;
+        for (const auto& id : d.ids_of<core::Style>()) {
+            const auto* x = d.as<core::Style>(id);
+            if (x->kind != core::StyleKind::Paragraph || id == style || x->list.type != core::ListType::None) continue;
+            if (body.empty() || bytes[id] > most) { most = bytes[id]; body = id; }
+        }
+    }
+    for (const auto& id : d.ids_of<core::Style>()) {
+        const auto* x = d.as<core::Style>(id);
+        if (x->kind != core::StyleKind::Paragraph || id == style || id == body) continue;
+        if (x->size > biggest) { biggest = x->size; head = id; }
+    }
+    if (head.empty()) head = body;
+    core::Story story{"Specimen", {}};
+    const auto para = [&](const core::Doc::Id& sid, std::string text) {
+        core::Para p;
+        p.style = sid;
+        p.text = std::move(text);
+        story.paras.push_back(std::move(p));
+    };
+    const bool is_char = me && me->kind == core::StyleKind::Character;
+    const auto char_para = [&](int words, int from) {   // body words, some in the character style
+        const std::string a = greek(words / 3, from), b = greek(words / 3, from + 9), c = greek(words / 3, from + 17);
+        core::Para p;
+        p.style = body;
+        p.text = a.substr(0, a.size() - 1) + " ";
+        const int s0 = static_cast<int>(p.text.size());
+        std::string mid = b.substr(0, b.size() - 1);
+        mid[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(mid[0])));
+        p.text += mid;
+        const int s1 = static_cast<int>(p.text.size());
+        std::string rest = c;
+        rest[0] = static_cast<char>(std::tolower(static_cast<unsigned char>(rest[0])));
+        p.text += " " + rest;
+        p.runs.push_back({s0, s1, style, {}});
+        story.paras.push_back(std::move(p));
+    };
+    const auto* bs = d.as<core::Style>(body);
+    const bool heading_like = me && bs && me->kind == core::StyleKind::Paragraph && me->size > bs->size + 1.5;
+    if (!in_use) {
+        if (is_char) { char_para(48, 0); char_para(36, 20); }
+        else if (heading_like) { para(style, greek(3, 0)); para(style, greek(5, 12)); para(style, greek(4, 30)); }
+        else { para(style, greek(44, 0)); para(style, greek(34, 12)); para(style, greek(26, 30)); }
+    } else if (is_char) {
+        para(head, greek(3, 0));
+        para(body, greek(40, 4));
+        char_para(45, 22);
+        para(body, greek(38, 40));
+    } else {
+        const auto* b = d.as<core::Style>(body);
+        const bool heading = me && b && me->size > b->size + 1.5;
+        const core::Doc::Id after = me && d.as<core::Style>(me->next) ? me->next : body;
+        if (heading) {
+            para(body, greek(30, 33));
+            para(style, greek(3, 5));
+            para(after, greek(42, 9));
+            para(body, greek(36, 21));
+            para(body, greek(30, 2));
+        } else {
+            para(head, greek(3, 0));
+            para(style, greek(40, 4));
+            para(style == body ? style : after, greek(36, 19));
+            para(style, greek(30, 37));
+            para(body.empty() ? style : body, greek(24, 11));
+        }
+    }
+    s.put("story.1", story);
+    core::Frame f;
+    f.owner = "page.1";
+    f.kind = core::FrameKind::Text;
+    const double m = std::min(w, h) * 0.09;
+    f.x = m;
+    f.y = m;
+    f.w = w - 2 * m;
+    f.h = h - 2 * m;
+    f.story = "story.1";
+    s.put("frame.1", f);
+    return s;
+}
+
+void draw_style_specimen(cairo_t* cr, const core::Doc& d, const core::Doc::Id& style, double W, double H,
+                         const StyleOver* over) {
+    if (!d.as<core::Style>(style) || W < 40 || H < 40) return;
+    // "On its own": a half page; "In use": a page at the document's trim.
+    const double tw = d.settings().trim_w > 0 ? d.settings().trim_w : 432, th = d.settings().trim_h > 0 ? d.settings().trim_h : 648;
+    struct Panel { const char* label; double w, h; bool use; };
+    const Panel panels[] = {{"On its own", tw, th * 0.5, false}, {"In use", tw, th, true}};
+    const double gap = 36, pad = 28, top = 26;
+    const double sc = std::min((W - 2 * pad - gap) / (panels[0].w + panels[1].w), (H - 2 * pad - top) / th);
+    if (sc <= 0) return;
+    double x = (W - (panels[0].w + panels[1].w) * sc - gap) / 2;
+    const double y0 = (H - th * sc - top) / 2 + top;
+    for (const auto& p : panels) {
+        const core::Doc sd = style_specimen_doc(d, style, p.use, p.w, p.h, over);
+        FlowCache flows;
+        const double y = p.use ? y0 : y0;
+        // the label over it
+        cairo_save(cr);
+        cairo_set_source_rgba(cr, 0.45, 0.45, 0.5, 1);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 11);
+        cairo_move_to(cr, x, y - 9);
+        cairo_show_text(cr, p.label);
+        // paper, a soft shadow
+        cairo_set_source_rgba(cr, 0, 0, 0, 0.12);
+        cairo_rectangle(cr, x + 2, y + 3, p.w * sc, p.h * sc);
+        cairo_fill(cr);
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_rectangle(cr, x, y, p.w * sc, p.h * sc);
+        cairo_fill(cr);
+        cairo_rectangle(cr, x, y, p.w * sc, p.h * sc);
+        cairo_clip(cr);
+        cairo_translate(cr, x, y);
+        cairo_scale(cr, sc, sc);
+        draw_page(cr, sd, "page.1", flows, {}, nullptr, {});
+        // In use: the style's own paragraphs marked beside them.
+        if (p.use) {
+            const auto& fl = flows.get(sd, "story.1");
+            const auto* st = sd.as<core::Story>("story.1");
+            const auto* fr = sd.as<core::Frame>("frame.1");
+            const bool is_char = d.as<core::Style>(style)->kind == core::StyleKind::Character;
+            cairo_set_source_rgba(cr, 0.85, 0.5, 0.1, 0.9);
+            for (const auto& ft : fl.frames)
+                for (const auto& l : ft.lines) {
+                    if (l.para < 0 || l.para >= static_cast<int>(st->paras.size())) continue;
+                    const auto& pp = st->paras[static_cast<std::size_t>(l.para)];
+                    bool mine = pp.style == style;
+                    if (is_char)
+                        for (const auto& r : pp.runs) mine = mine || (r.style == style && r.start < l.end && r.end > l.start);
+                    if (!mine) continue;
+                    cairo_rectangle(cr, fr->x - 9, fr->y + l.y, 2.5, l.h);
+                    cairo_fill(cr);
+                }
+        }
+        cairo_restore(cr);
+        x += p.w * sc + gap;
+    }
+}
+
 }  // namespace composix::layout

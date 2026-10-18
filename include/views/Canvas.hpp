@@ -166,8 +166,17 @@ private:
         double      scale = 1;
         double      width = 0;     // points: the column less the indents
         std::string style;         // the paragraph style whose tabs these are
+        // s157 (Scott): the stops shown are the caret paragraph's -- its own
+        // when it has them (the strip edits those), else its style's.
+        std::vector<core::TabStop> tabs;
+        bool        own = false;
+        core::Rect  reset;         // "Reset to style" (screen; only with own stops)
     };
     TabStrip tab_strip() const;
+public:   // s158: the input method's callbacks write these
+    std::string m_preedit;    // what's being composed (shown at the caret)
+    int         m_preedit_cur = 0;
+private:
     void draw_tab_strip(const Cairo::RefPtr<Cairo::Context>& cr);
     int  tab_hit(const TabStrip& t, double x) const;   // the stop under screen x, -1 none
     int    m_tab = -1;        // the stop being dragged (-1: a new one)
