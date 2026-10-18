@@ -187,6 +187,10 @@ private:
     core::doc::Carried    m_clip;   // s130: the tooltip over a cross-reference ("" none)
 
     void relayout();
+    // s150: a facing master's panel at (x, y) (layout) handled first -- an
+    // item on both sides is picked, dragged, edited where it was clicked.
+    void front_panel(double x, double y);
+    void order_panels();
     core::Rect selection_box() const;           // union of the picks, layout (doc) space
     void pick(const std::vector<std::string>& ids, bool notify = true);
     void cancel_drag();
@@ -214,6 +218,7 @@ private:
 
     std::vector<std::string>  m_ids;
     std::vector<core::Placed> m_placed;
+    core::Side                m_front = core::Side::Left;   // s150: the master panel last clicked
     core::Viewport            m_vp;
     bool                      m_fit_pending = true;
 

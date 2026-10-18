@@ -399,7 +399,7 @@ void Shell::on_export_pdf() {  // handler
             intent->set_sensitive(pro && conv->get_active());   // s085: only a conversion has an intent
             screen_note->set_visible(!on);
             lists->set_sensitive(marksb->get_active());
-            spreads->set_sensitive(m_doc.settings().facing);
+            spreads->set_sensitive(core::any_facing(m_doc));
             // The card.
             auto* size = static_cast<Gtk::Label*>(card->get_first_child());
             auto* colour = static_cast<Gtk::Label*>(size->get_next_sibling());
@@ -422,7 +422,7 @@ void Shell::on_export_pdf() {  // handler
             go->set_sensitive(true);
             layout::PdfOptions o;
             o.only = only.size() == m_doc.pages().size() ? std::vector<std::string>{} : only;
-            o.spreads = spreads->get_active() && m_doc.settings().facing;
+            o.spreads = spreads->get_active() && core::any_facing(m_doc);
             o.bleed = bleed->get_active();
             o.convert = conv->get_active();
             o.perceptual = intent->get_selected() == 1;
@@ -485,7 +485,7 @@ void Shell::on_export_pdf() {  // handler
             }
             m_pdf_bleed = bleed->get_active();
             m_pdf_marks = marks->get_active();
-            m_pdf_spreads = spreads->get_active() && m_doc.settings().facing;   // s084
+            m_pdf_spreads = spreads->get_active() && core::any_facing(m_doc);   // s084
             m_pdf_print = print->get_active();
             const auto i = prof->get_selected();
             m_pdf_profile = (i > 0 && i - 1 < m_profiles.size()) ? m_profiles[i - 1] : std::string{};
@@ -531,13 +531,16 @@ void Shell::on_export_pdf() {  // handler
     const auto saved = m_export_sync;
     m_export_sync = nullptr;   // quiet while filling
     if (auto* b = named<Gtk::CheckButton>(root, "export.bleed")) {
-        b->set_label("Bleed (" + core::length_text(m_doc.settings().bleed, m_doc.settings().units) + ")");
+        double lo = 1e9, hi = 0;   // s147: each master's bleed
+        for (const auto& p : m_doc.pages()) { const double v = core::bleed_of(m_doc, p); lo = std::min(lo, v); hi = std::max(hi, v); }
+        b->set_label(lo == hi || m_doc.pages().empty() ? "Bleed (" + core::length_text(m_doc.pages().empty() ? m_doc.settings().bleed : hi, m_doc.settings().units) + ")"
+                                                      : std::string("Bleed (each master's)"));
         b->set_active(m_pdf_bleed);
     }
     if (auto* b = named<Gtk::CheckButton>(root, "export.marks")) b->set_active(m_pdf_marks);
     if (auto* b = named<Gtk::ToggleButton>(root, "export.print")) b->set_active(m_pdf_print);
     if (auto* b = named<Gtk::ToggleButton>(root, "export.screen")) b->set_active(!m_pdf_print);
-    if (auto* b = named<Gtk::CheckButton>(root, "export.spreads")) b->set_active(m_pdf_spreads && m_doc.settings().facing);
+    if (auto* b = named<Gtk::CheckButton>(root, "export.spreads")) b->set_active(m_pdf_spreads && core::any_facing(m_doc));
     if (auto* b = named<Gtk::CheckButton>(root, "export.bookmarks")) b->set_active(m_pdf_bookmarks);
     if (auto* e = named<Gtk::Entry>(root, "export.range")) e->set_text(m_pdf_range);
     if (auto* dd = named<Gtk::DropDown>(root, "export.profile")) {
@@ -946,9 +949,14 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         if (key == "master") {
             did = core::doc::set_master(m_journal, m_doc, m_inspected, choice);
         } else if (key == "size") {
-            const auto presets = core::doc::size_presets(m_doc.settings());
+            // s148: a page's presets are its master's size -- pages grouped by master, each its own.
             const auto i = static_cast<std::size_t>(std::stoi(choice));
-            if (i < presets.size()) did = core::doc::set_page_size(m_journal, m_doc, m_inspected, presets[i]);
+            std::map<std::string, std::vector<std::string>> by;
+            for (const auto& id : m_inspected) if (const auto* p = m_doc.as<core::Page>(id)) by[p->master].push_back(id);
+            for (const auto& [m, ids] : by) {
+                const auto presets = core::doc::size_presets(m_doc, ids.front());
+                if (i < presets.size()) did = core::doc::set_page_size(m_journal, m_doc, ids, presets[i]) || did;
+            }
         } else if (key == "numbering") {
             did = core::doc::set_numbering(m_journal, m_doc, m_inspected,
                                            static_cast<core::Numbering>(std::stoi(choice)));
@@ -1283,6 +1291,19 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::edit_styles(m_journal, m_doc, m_inspected, "Align to grid", [&](core::Style& st) {
                 if (st.kind == core::StyleKind::Paragraph) st.align_grid = choice == "1";
             });
+        } else if (key == "mname") {   // s148: a master's own settings
+            did = core::doc::edit_masters(m_journal, m_doc, m_inspected, "Master name", [&](core::Master& m) { if (!choice.empty()) m.name = choice; });
+        } else if (key == "msize") {   // "0:<points>" (W) or "1:<points>" (H)
+            const auto colon = choice.find(':');
+            const int k = std::stoi(choice.substr(0, colon));
+            const double v = std::stod(choice.substr(colon + 1));
+            for (const auto& id : m_inspected)
+                if (const auto* m = m_doc.as<core::Master>(id))
+                    did = core::doc::set_master_size(m_journal, m_doc, id, k == 0 ? v : m->w, k == 1 ? v : m->h) || did;
+        } else if (key == "mbleed") {
+            for (const auto& id : m_inspected) did = core::doc::set_master_bleed(m_journal, m_doc, id, std::stod(choice)) || did;
+        } else if (key == "mfacing") {
+            for (const auto& id : m_inspected) did = core::doc::set_master_facing(m_journal, m_doc, id, choice == "1") || did;
         } else if (key == "mcolumns" || key == "mgutter" || key == "mtop" || key == "mbottom" ||
                    key == "minside" || key == "moutside" || key == "mgrid") {   // s014: a master's margins / columns
             static const std::map<std::string, std::string> labels{

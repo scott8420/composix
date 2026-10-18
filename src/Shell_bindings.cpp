@@ -94,6 +94,7 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     add_action("open-sample",   sigc::mem_fun(*this, &Shell::on_sample));   // s019
     add_action("open-big-book", sigc::mem_fun(*this, &Shell::on_big_book)); // s100
     add_action("open",          sigc::mem_fun(*this, &Shell::on_open));
+    add_action("close-project", sigc::mem_fun(*this, &Shell::on_close_project));   // s145
     add_action("start",         [this] { show_start(); });   // s064
     add_action("zoom-in",       [this] { m_canvas_view.canvas().zoom_step(+1); });
     add_action("zoom-out",      [this] { m_canvas_view.canvas().zoom_step(-1); });
@@ -313,11 +314,11 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_story_ed.signal_edited().connect([this] { set_dirty(m_journal.mark() != m_saved_mark); queue_refresh(); });
     // s031: the navigator brackets them too.
     m_nav.set_grouping([this] {
-        return m_doc.settings().facing ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};
+        return core::any_facing(m_doc) ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};   // s147
     });
     // s028: facing pages tile by spread.
     m_tiles.set_grouping([this] {
-        return m_doc.settings().facing ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};
+        return core::any_facing(m_doc) ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};   // s147
     });
     m_inspector.signal_edit().connect(sigc::mem_fun(*this, &Shell::on_inspector_edit));
 

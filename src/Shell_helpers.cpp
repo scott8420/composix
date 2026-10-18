@@ -444,7 +444,9 @@ void Shell::update_title() {  // helper
     std::string where = m_project_dir.empty() ? "not saved" : m_project_dir;
     const std::string home = Glib::get_home_dir();
     if (!home.empty() && where.rfind(home, 0) == 0) where = "~" + where.substr(home.size());
-    m_subtitle.set_text(core::size_text(s.trim_w, s.trim_h, 0, s.units) + " \u00b7 " + std::to_string(n) +
+    double tw = s.trim_w, th = s.trim_h;   // s148: the first page's size (its master's)
+    if (n > 0) if (const auto* p = m_doc.as<core::Page>(m_doc.pages().front())) { tw = p->w; th = p->h; }
+    m_subtitle.set_text(core::size_text(tw, th, 0, s.units) + " \u00b7 " + std::to_string(n) +
                         (n == 1 ? " page" : " pages") + " \u00b7 " + where);
     set_title(s.title + (m_dirty ? " \u2022" : "") + " \u2014 Composix");
 }

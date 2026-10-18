@@ -178,6 +178,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto file = Gio::Menu::create();
     file->append("New\u2026", "win.new");   // s019
     file->append("Open Project…", "win.open");
+    file->append("Close Project", "win.close-project");   // s145; s146: under Open (Scott)
     m_recents_menu = Gio::Menu::create();
     file->append_submenu("Open Recent", m_recents_menu);
     file->append("Save", "win.save");

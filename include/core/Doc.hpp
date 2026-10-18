@@ -179,6 +179,11 @@ struct Master {
     Margins             margins;         // s014
     double              gutter = 12;     // s014: between the page's columns
     double              grid = 0;        // s036: baseline grid increment (pt) from the top margin; 0 = none
+    // s147 (Scott: "each master should have all the settings"): its pages'
+    // bleed and whether they face (a cover single, the body facing). Its
+    // size is w / h above. A file from before: the document's, on loading.
+    double              bleed = 0.125 * kPt;
+    bool                facing = true;
     bool operator==(const Master&) const = default;
 };
 
@@ -689,6 +694,8 @@ namespace doc {
 // 3-panel foldout (each fold-in panel 1/8 in narrower, so it tucks inside).
 struct SizePreset { std::string label; double w, h; std::vector<double> folds; };
 std::vector<SizePreset> size_presets(const Settings& s);
+// s148: for a page -- its master's size the trim (no master: the document's).
+std::vector<SizePreset> size_presets(const Doc& d, const Doc::Id& page);
 
 std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int count,
                                const Doc::Id& master);
@@ -701,6 +708,12 @@ bool set_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const 
 // (points, >= 0); facing pages on / off.
 bool set_title(DocJournal& j, Doc& d, const std::string& title);
 bool set_trim(DocJournal& j, Doc& d, double w, double h);
+// s147: a master's own page settings. Its size: the pages using it at its
+// old size follow (a page of its own size keeps it). One step each; false
+// if nothing changed or out of range.
+bool set_master_size(DocJournal& j, Doc& d, const Doc::Id& master, double w, double h);
+bool set_master_bleed(DocJournal& j, Doc& d, const Doc::Id& master, double bleed);
+bool set_master_facing(DocJournal& j, Doc& d, const Doc::Id& master, bool facing);
 bool set_bleed(DocJournal& j, Doc& d, double bleed);
 bool set_facing(DocJournal& j, Doc& d, bool facing);
 // s069: wrap pushes only text beneath (Settings::wrap_beneath). One step.
@@ -1202,7 +1215,17 @@ struct Placed {
     Doc::Id id;
     Rect    r;
     bool    master = false;
+    // s150 (Scott): a facing master opens as its spread -- a Left and a
+    // Right panel, the same master, meeting at the spine. Any: a page, or
+    // a single master.
+    Side    side = Side::Any;
 };
+// s150: does frame `fid` show on placed `p`? A page / single master: its
+// own frames all do; a facing master's panel: the items for its side and
+// those on both (Any).
+bool on_panel(const Doc& d, const Placed& p, const Doc::Id& fid);
+// s150: the placed page / panel under (x, y); null over the pasteboard.
+const Placed* panel_at(const std::vector<Placed>& pl, double x, double y);
 std::vector<Placed> layout_pages(const Doc& d, const std::vector<Doc::Id>& ids, double gap = 36);
 inline Rect frame_rect(const Frame& f) { return {f.x, f.y, f.w, f.h}; }
 // s012: a text frame's columns -- how many, each one's width and left edge
@@ -1219,11 +1242,14 @@ std::vector<double> column_weights(const Frame& f, int n);
 // own coordinates. A left-hand page mirrors inside / outside. Empty when it
 // has no master (no margins to show).
 Rect margin_rect(const Doc& d, const Doc::Id& page_or_master);
+// s150: a master's panel -- `side` mirrors it as a page there would be.
+Rect margin_rect(const Doc& d, const Doc::Id& page_or_master, Side side);
 // s062: the margins a page (or master) uses -- its own, else its master's.
 // Null with neither.
 const Margins* margins_of(const Doc& d, const Doc::Id& page_or_master);
 struct ColumnSpan { double x0, x1; };
 std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& page_or_master);
+std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& page_or_master, Side side);   // s150
 // s036: the baseline grid on a page (or master), its own coordinates:
 // lines at start + k * step (k >= 0). step 0 = none (no master, or none set).
 struct BaselineGrid { double start = 0, step = 0; };
@@ -1299,6 +1325,10 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& text_frame);
 // it (a book's first page stands alone on the right); without facing
 // pages each page is its own. In page order.
 std::vector<std::vector<Doc::Id>> spreads(const Doc& d);
+// s147: a page's (or master's) bleed -- its master's; a page with none: the document's.
+double bleed_of(const Doc& d, const Doc::Id& owner);
+// s147: any master with facing pages (the views group by spread only then).
+bool any_facing(const Doc& d);
 std::vector<Doc::Id> spread_of(const Doc& d, const Doc::Id& page);
 // The masters a page shows, most basic first (a master's based-on chain).
 std::vector<Doc::Id> master_chain(const Doc& d, const Doc::Id& page_or_master);

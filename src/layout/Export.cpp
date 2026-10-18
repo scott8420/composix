@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <cstring>
 #include <tuple>
 #include <cctype>
@@ -114,6 +115,169 @@ void crop_marks(cairo_t* cr, double w, double h, double bleed) {
 }
 
 }  // namespace
+
+MockupSize mockup_size(const core::Doc& d, const core::Doc::Id& master) {   // s149
+    const auto* m = d.as<core::Master>(master);
+    if (!m) return {};
+    return {m->facing && m->folds.empty() ? 2 * m->w : m->w, m->h};   // a foldout: one sheet, its folds
+}
+
+void draw_master_mockup(cairo_t* cr, const core::Doc& d, const core::Doc::Id& master, FlowCache& flows,
+                        const ImageSource& images, double x, double y, double w, double h) {   // s149
+    const auto* m = d.as<core::Master>(master);
+    if (!m || w < 2 || h < 2) return;
+    const auto sz = mockup_size(d, master);
+    const double s = std::min(w / sz.w, h / sz.h);
+    const double ox = x + (w - sz.w * s) / 2, oy = y + (h - sz.h * s) / 2;
+    const std::vector<core::Side> sides = m->facing && m->folds.empty() ? std::vector<core::Side>{core::Side::Left, core::Side::Right}
+                                                                        : std::vector<core::Side>{core::Side::Any};
+    // A page to draw it as, each side: the first that uses it on that side; else a copy of the
+    // document with pages of it added (nothing kept), so its items and numbers show as they would.
+    std::vector<core::Doc::Id> sample(sides.size());
+    for (std::size_t k = 0; k < sides.size(); ++k)
+        for (const auto& p : d.pages())
+            if (d.as<core::Page>(p)->master == master && (sides[k] == core::Side::Any || d.side_of(p) == sides[k])) { sample[k] = p; break; }
+    std::unique_ptr<core::Doc> scratch;
+    std::unique_ptr<FlowCache> scratch_flows;
+    if (std::any_of(sample.begin(), sample.end(), [](const auto& p) { return p.empty(); })) {
+        scratch = std::make_unique<core::Doc>(d);
+        scratch->set_on_change({});
+        scratch->set_door({});
+        core::Doc::Loading load(*scratch);
+        double pos = 0;
+        for (const auto& p : scratch->pages()) pos = std::max(pos, scratch->as<core::Page>(p)->pos);
+        for (int n = 0; n < 3 && std::any_of(sample.begin(), sample.end(), [](const auto& p) { return p.empty(); }); ++n) {
+            const std::string id = "page.mockup" + std::to_string(n);
+            scratch->put(id, core::Page{pos + 1 + n, m->w, m->h, {}, master});
+            for (std::size_t k = 0; k < sides.size(); ++k)
+                if (sample[k].empty() && (sides[k] == core::Side::Any || scratch->side_of(id) == sides[k])) sample[k] = id;
+        }
+        scratch_flows = std::make_unique<FlowCache>();
+    }
+    const core::Doc& dd = scratch ? *scratch : d;
+    FlowCache& ff = scratch ? *scratch_flows : flows;
+    for (std::size_t k = 0; k < sides.size(); ++k) {
+        const double px = ox + k * m->w * s;
+        const bool left = sides[k] == core::Side::Left;
+        // Its columns, faintly: where the text goes.
+        const double ml = left ? m->margins.outside : m->margins.inside, mr = left ? m->margins.inside : m->margins.outside;
+        const double tw = m->w - ml - mr, th = m->h - m->margins.top - m->margins.bottom;
+        const int cols = std::max(1, m->columns);
+        const double cw = (tw - m->gutter * (cols - 1)) / cols;
+        cairo_save(cr);
+        for (int c = 0; c < cols; ++c) {
+            cairo_rectangle(cr, px + (ml + c * (cw + m->gutter)) * s, oy + m->margins.top * s, cw * s, th * s);
+            cairo_set_source_rgba(cr, 0.45, 0.55, 0.95, 0.07);
+            cairo_fill(cr);
+        }
+        // The baseline grid, when its lines are far enough apart to read.
+        if (m->grid >= 1 && m->grid * s >= 2.5) {
+            cairo_set_source_rgba(cr, 0.35, 0.6, 0.95, 0.22);
+            cairo_set_line_width(cr, 0.5);
+            for (double gy = m->margins.top + m->grid; gy <= m->h - m->margins.bottom + 0.01; gy += m->grid) {
+                cairo_move_to(cr, px + ml * s, std::round(oy + gy * s) + 0.25);
+                cairo_line_to(cr, px + (m->w - mr) * s, std::round(oy + gy * s) + 0.25);
+            }
+            cairo_stroke(cr);
+        }
+        // Its own items, as on that page (running heads, numbers filled in).
+        cairo_save(cr);
+        cairo_rectangle(cr, px, oy, m->w * s, m->h * s);
+        cairo_clip(cr);
+        cairo_translate(cr, px, oy);
+        cairo_scale(cr, s, s);
+        for (const auto& mc : core::master_chain(dd, sample[k])) draw_frames(cr, dd, mc, ff, images, nullptr, PageDraw{true}, sample[k]);
+        cairo_restore(cr);
+        // Its running heads, feet and numbers, readable at any size: each text frame outlined,
+        // its words (as on that page) set no smaller than a label.
+        cairo_save(cr);
+        cairo_rectangle(cr, px, oy, m->w * s, m->h * s);
+        cairo_clip(cr);
+        for (const auto& mc : core::master_chain(dd, sample[k]))
+            for (const auto& fid : dd.frames_on(mc)) {
+                const auto& f = *dd.as<core::Frame>(fid);
+                if (f.kind != core::FrameKind::Text || f.story.empty() || !core::master_item_on(dd, fid, sample[k])) continue;
+                const auto* st = dd.as<core::Story>(f.story);
+                if (!st || st->paras.empty()) continue;
+                const auto& rs = ff.resolved(dd, f.story, sample[k]);
+                const auto& para = (rs.any ? rs.text : *st).paras.front();
+                std::string words;
+                for (std::size_t i = 0; i < para.text.size();) {
+                    if (static_cast<unsigned char>(para.text[i]) == 0xEE && i + 2 < para.text.size() &&
+                        static_cast<unsigned char>(para.text[i + 1]) == 0x80) { i += 3; continue; }
+                    words += para.text[i] == '\t' ? ' ' : para.text[i];
+                    ++i;
+                }
+                const core::Rect r{px + f.x * s, oy + f.y * s, f.w * s, f.h * s};
+                cairo_set_source_rgba(cr, 0.93, 0.47, 0.05, 0.75);   // the item: orange, dashed
+                cairo_set_line_width(cr, 1);
+                const double dash[] = {3, 2};
+                cairo_set_dash(cr, dash, 2, 0);
+                cairo_rectangle(cr, std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::max(2.0, std::round(r.w) - 1), std::max(2.0, std::round(r.h) - 1));
+                cairo_stroke(cr);
+                cairo_set_dash(cr, nullptr, 0, 0);
+                if (words.find_first_not_of(' ') == std::string::npos) continue;
+                const auto* sty = dd.as<core::Style>(para.style);
+                const double size = std::max(8.0, (sty && sty->size > 0 ? sty->size : 10.0) * s);
+                cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+                cairo_set_font_size(cr, size);
+                cairo_text_extents_t te;
+                cairo_text_extents(cr, words.c_str(), &te);
+                const auto align = para.over.align ? *para.over.align : (sty ? sty->align : core::Align::Left);
+                double tx = r.x + 1;
+                if (align == core::Align::Center) tx = r.x + (r.w - te.x_advance) / 2;
+                else if (align == core::Align::Right) tx = r.r() - te.x_advance - 1;
+                const double ty = r.y + std::max(size, std::min(r.h, size * 1.15));
+                cairo_set_source_rgba(cr, 0.75, 0.33, 0.0, 0.95);
+                cairo_move_to(cr, tx, ty);
+                cairo_show_text(cr, words.c_str());
+            }
+        cairo_restore(cr);
+        // Margins (magenta), column edges (violet), guides (cyan) -- as the canvas draws them.
+        cairo_set_line_width(cr, 1);
+        cairo_set_source_rgba(cr, 0.85, 0.25, 0.65, 0.8);
+        cairo_rectangle(cr, std::round(px + ml * s) + 0.5, std::round(oy + m->margins.top * s) + 0.5, std::round(tw * s), std::round(th * s));
+        cairo_stroke(cr);
+        if (cols > 1) {
+            cairo_set_source_rgba(cr, 0.5, 0.35, 0.85, 0.7);
+            for (int c = 1; c < cols; ++c) {
+                for (const double gx : {ml + c * cw + (c - 1) * m->gutter, ml + c * (cw + m->gutter)}) {
+                    cairo_move_to(cr, std::round(px + gx * s) + 0.5, oy + m->margins.top * s);
+                    cairo_line_to(cr, std::round(px + gx * s) + 0.5, oy + (m->h - m->margins.bottom) * s);
+                }
+            }
+            cairo_stroke(cr);
+        }
+        cairo_set_source_rgba(cr, 0.1, 0.7, 0.85, 0.7);
+        for (const auto& gid : d.ids_of<core::Guide>()) {
+            const auto& g = *d.as<core::Guide>(gid);
+            if (g.owner != master) continue;
+            if (g.vertical) { cairo_move_to(cr, std::round(px + g.pos * s) + 0.5, oy); cairo_line_to(cr, std::round(px + g.pos * s) + 0.5, oy + m->h * s); }
+            else { cairo_move_to(cr, px, std::round(oy + g.pos * s) + 0.5); cairo_line_to(cr, px + m->w * s, std::round(oy + g.pos * s) + 0.5); }
+        }
+        cairo_stroke(cr);
+        cairo_restore(cr);
+    }
+    if (!m->folds.empty()) {   // a foldout's folds, dashed
+        cairo_save(cr);
+        cairo_set_source_rgba(cr, 0.2, 0.4, 0.9, 0.7);
+        cairo_set_line_width(cr, 1);
+        const double dash[] = {4, 3};
+        cairo_set_dash(cr, dash, 2, 0);
+        for (const double fx : m->folds) { cairo_move_to(cr, std::round(ox + fx * s) + 0.5, oy); cairo_line_to(cr, std::round(ox + fx * s) + 0.5, oy + m->h * s); }
+        cairo_stroke(cr);
+        cairo_restore(cr);
+    }
+    if (sides.size() == 2) {   // the spine
+        cairo_save(cr);
+        cairo_set_source_rgba(cr, 0, 0, 0, 0.18);
+        cairo_set_line_width(cr, 1);
+        cairo_move_to(cr, std::round(ox + m->w * s) + 0.5, oy);
+        cairo_line_to(cr, std::round(ox + m->w * s) + 0.5, oy + m->h * s);
+        cairo_stroke(cr);
+        cairo_restore(cr);
+    }
+}
 
 void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& id, FlowCache& flows, const ImageSource& images,
                std::set<std::string>* missing, const PageDraw& how) {
@@ -914,7 +1078,11 @@ ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOpti
     if (!pages.empty()) {
         const auto* pg = d.as<core::Page>(pages.front());
         s.size += " \u00b7 " + core::size_text(pg->w, pg->h, 0, units);
-        if (opt.bleed && d.settings().bleed > 0) s.size += " + " + core::length_text(d.settings().bleed, units) + " bleed";
+        if (opt.bleed) {   // s147: each master its own -- one figure when they agree
+        double lo = 1e9, hi = 0;
+        for (const auto& p : pages) { const double b = core::bleed_of(d, p); lo = std::min(lo, b); hi = std::max(hi, b); }
+        if (hi > 0) s.size += lo == hi ? " + " + core::length_text(hi, units) + " bleed" : std::string(" + bleed by master");
+    }
     }
     const bool x = print && opt.standard != plate_standard::None;
     if (!print) {
@@ -964,11 +1132,16 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
                 PdfReport* report, std::string* err) {
     const auto pages = pages_to_export(d, opt);
     if (pages.empty()) { if (err) *err = "The document has no pages."; return false; }
-    const double bleed = opt.bleed ? std::max(0.0, d.settings().bleed) : 0;
-    const double off = bleed + (opt.marks ? kSlug : 0);
-
     const auto sheets = pdf_sheets(d, pages, opt.spreads);   // s084
-    cairo_surface_t* surf = cairo_pdf_surface_create(path.c_str(), sheets.front().w + 2 * off, sheets.front().h + 2 * off);
+    // s147: each sheet's bleed -- its pages' masters' (the most of them).
+    std::vector<double> sbleed;
+    for (const auto& sh : sheets) {
+        double b = 0;
+        if (opt.bleed) for (const auto& p : sh.pages) b = std::max(b, core::bleed_of(d, p));
+        sbleed.push_back(b);
+    }
+    const auto off_of = [&](int i) { return sbleed[static_cast<std::size_t>(std::max(0, i))] + (opt.marks ? kSlug : 0); };
+    cairo_surface_t* surf = cairo_pdf_surface_create(path.c_str(), sheets.front().w + 2 * off_of(0), sheets.front().h + 2 * off_of(0));
     if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
         if (err) *err = std::string("Can't write the PDF: ") + cairo_status_to_string(cairo_surface_status(surf));
         cairo_surface_destroy(surf);
@@ -997,6 +1170,8 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
     std::set<std::string> missing;
     int n = 0;
     for (const auto& sh : sheets) {
+        const int si = static_cast<int>(&sh - sheets.data());
+        const double bleed = sbleed[static_cast<std::size_t>(si)], off = off_of(si);   // s147: this sheet's
         cairo_pdf_surface_set_size(surf, sh.w + 2 * off, sh.h + 2 * off);   // before anything is drawn on it
         cairo_pdf_surface_set_page_label(surf, sh.label.c_str());
         for (std::size_t k = 0; k < sh.pages.size(); ++k) {
@@ -1019,7 +1194,7 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
                 if (to.sheet < 0) continue;
                 char attr[160];
                 std::snprintf(attr, sizeof attr, "rect=[%g %g %g %g] page=%d pos=[%g %g]", off + sh.x[k] + l.box.x, off + l.box.y,
-                              l.box.w, l.box.h, to.sheet + 1, off + to.x, off + l.to_y);
+                              l.box.w, l.box.h, to.sheet + 1, off_of(to.sheet) + to.x, off_of(to.sheet) + l.to_y);
                 cairo_tag_begin(cr, CAIRO_TAG_LINK, attr);
                 cairo_tag_end(cr, CAIRO_TAG_LINK);
             }
@@ -1041,7 +1216,7 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
             const int lv = std::clamp(b.level, 1, static_cast<int>(parent_at.size()));
             parent_at.resize(static_cast<std::size_t>(lv));
             char dest[96];
-            std::snprintf(dest, sizeof dest, "page=%d pos=[%g %g]", at.sheet + 1, off + at.x, off + b.y);
+            std::snprintf(dest, sizeof dest, "page=%d pos=[%g %g]", at.sheet + 1, off_of(at.sheet) + at.x, off_of(at.sheet) + b.y);
             parent_at.push_back(cairo_pdf_surface_add_outline(surf, parent_at[static_cast<std::size_t>(lv - 1)], b.title.c_str(), dest,
                                                               CAIRO_PDF_OUTLINE_FLAG_OPEN));
         }

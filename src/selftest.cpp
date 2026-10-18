@@ -520,7 +520,7 @@ int main() {
         check("shared: read-only stays read-only", get(two, "Folio")->edit.empty());
         const auto cross = core::shared_fields({o.find("page.6"), o.find("master.2")});
         check("shared: across segments only common labels survive",
-              cross.size() == 1 && cross.front().label == "Size" && cross.front().edit.empty());
+              cross.empty());   // s148: a master's "Size (in)" is its own row now -- nothing in common with a page's
         check("shared: empty selection -> nothing", core::shared_fields({}).empty());
 
         check("title: one item", core::selection_title({fo}) == "Page 7");
@@ -3451,6 +3451,11 @@ int main() {
             auto st = e.settings();
             st.facing = false;
             e.put("doc", st);
+            for (const auto& mid : e.ids_of<core::Master>()) {   // s147: facing is each master's
+                auto m = *e.as<core::Master>(mid);
+                m.facing = false;
+                e.put(mid, m);
+            }
             check("sheets: no facing pages -- one a page anyway", L::pdf_sheets(e, e.pages(), true).size() == e.pages().size());
         }
         const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
@@ -3919,11 +3924,10 @@ int main() {
                                                               b->value.rfind("19.05\t", 0) == 0, b ? b->value : "");
         const auto o = core::project(d, "");
         bool trim = false, units = false;
-        for (const auto& f : o.find("doc")->fields) {
-            trim = trim || (f.edit == "dtrim" && f.label == "Trim (mm)" && f.value == "152.4\t228.6");
-            units = units || (f.edit == "dunits" && f.value == "Millimetres" && f.choices.size() == 4);
-        }
-        check("inspector: Trim in mm, Units offered", trim && units);
+        for (const auto& f : o.find("doc")->fields) units = units || (f.edit == "dunits" && f.value == "Millimetres" && f.choices.size() == 4);
+        for (const auto& f : o.find(d.ids_of<core::Master>().front())->fields)   // s148: the size is the master's
+            trim = trim || (f.edit == "msize" && f.label == "Size (mm)" && f.value == "152.4\t228.6");
+        check("inspector: a master's Size in mm, Units offered", trim && units);
         std::string err;
         core::Doc e;
         check("json: units kept", core::from_json(e, core::to_json(d), &err) && e.settings().units == U::Millimetres, err);
@@ -4467,6 +4471,11 @@ int main() {
             auto st = e.settings();
             st.facing = false;
             e.put("doc", st);
+            for (const auto& mid : e.ids_of<core::Master>()) {   // s147: facing is each master's
+                auto m = *e.as<core::Master>(mid);
+                m.facing = false;
+                e.put(mid, m);
+            }
             check("spreads: not facing, one page each", core::spreads(e).size() == e.pages().size());
         }
         // A frame dragged across the spine belongs to the other page.
@@ -8296,6 +8305,282 @@ int main() {
         check("Almanac: once (in a citation of two)", rows[0].cites == 1 && rows[0].pages == std::vector<std::string>{folio(5)});
         check("Harbor: not cited", rows[1].cites == 0 && rows[1].pages.empty());
         check("the words without the anchor's mark", rows[2].words == "Letters of the Surveyor General.");
+    }
+
+    {
+        std::cout << "\n-- the bare document Close Project leaves (s146) --\n";
+        core::Doc d;
+        core::NewDoc n;
+        n.title = "Untitled";
+        n.pages = 1;
+        n.text_frames = false;
+        n.folios = false;
+        check("made", core::new_document(d, n));
+        check("one page, one master, one section", d.pages().size() == 1 && d.ids_of<core::Master>().size() == 1 &&
+                                                   d.ids_of<core::Section>().size() == 1);
+        check("no frames, no stories", d.ids_of<core::Frame>().empty() && d.ids_of<core::Story>().empty());
+        check("the colours and the base styles", d.ids_of<core::Swatch>().size() >= 2 && !d.ids_of<core::Style>().empty());
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        check("a page can be added after it", !core::doc::add_pages(j, d, d.pages().front(), 1, d.ids_of<core::Master>().front()).empty() &&
+                                              d.pages().size() == 2);
+    }
+
+    {
+        std::cout << "\n-- masters own their page settings (s147) --\n";
+        using core::kPt;
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::NewDoc n;
+        n.pages = 6;
+        n.text_frames = false;
+        core::new_document(d, n);
+        const auto body = d.ids_of<core::Master>().front();
+        // A cover master: single, its own size and bleed, on page 1.
+        core::Master cover = *d.as<core::Master>(body);
+        cover.prefix = "C";
+        cover.name = "Cover";
+        cover.pos = 0.5;
+        j.run("cover", {}, [&]() -> std::vector<core::Doc::Id> { d.put("master.cover", cover); return {"master.cover"}; });
+        {
+            auto pg = *d.as<core::Page>(d.pages().front());
+            pg.master = "master.cover";
+            j.run("p1", {d.pages().front()}, [&] { d.put(d.pages().front(), pg); });
+        }
+        check("its size: one step, its pages follow", D::set_master_size(j, d, "master.cover", 6.25 * kPt, 9.25 * kPt) &&
+                                                       d.as<core::Page>(d.pages().front())->w == 6.25 * kPt &&
+                                                       d.as<core::Page>(d.pages()[1])->w == 6 * kPt);
+        check("  the same again: nothing", !D::set_master_size(j, d, "master.cover", 6.25 * kPt, 9.25 * kPt));
+        {   // A page of its own size (a foldout) keeps it.
+            auto pg = *d.as<core::Page>(d.pages()[3]);
+            pg.w = 11.75 * kPt;
+            j.run("fold", {d.pages()[3]}, [&] { d.put(d.pages()[3], pg); });
+            D::set_master_size(j, d, body, 5.5 * kPt, 8.5 * kPt);
+            check("  a page of its own size keeps it", d.as<core::Page>(d.pages()[3])->w == 11.75 * kPt &&
+                                                       d.as<core::Page>(d.pages()[2])->w == 5.5 * kPt);
+        }
+        check("single cover, facing body: page 1 alone, then pairs", D::set_master_facing(j, d, "master.cover", false) &&
+                                                                    d.side_of(d.pages().front()) == core::Side::Any &&
+                                                                    core::spreads(d).front().size() == 1 && core::spreads(d)[1].size() == 2);
+        check("bleed: each master's", D::set_master_bleed(j, d, "master.cover", 18) && core::bleed_of(d, d.pages().front()) == 18 &&
+                                      core::bleed_of(d, d.pages()[1]) == n.bleed);
+        {   // The PDF: the cover's sheet the larger bleed.
+            const auto base = fs::temp_directory_path() / "composix_s147";
+            fs::create_directories(base);
+            const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+            L::PdfOptions o;
+            o.compress = false;
+            o.bleed = true;
+            L::PdfReport rep;
+            std::string err;
+            const auto out = (base / "p.pdf").string();
+            const bool ok = L::export_print_pdf(d, out, o, src, &rep, &err);
+            std::ifstream in(out, std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            char want[64];
+            std::snprintf(want, sizeof want, "/BleedBox [0 0 %g %g]", 6.25 * kPt + 36, 9.25 * kPt + 36);
+            check("  the print PDF: the cover sheet bled 1/4 in", ok && ss.str().find(want) != std::string::npos, err);
+            std::error_code ec;
+            if (!std::getenv("KEEP_PDF")) fs::remove_all(base, ec);
+        }
+        {   // A file from before: masters without bleed / facing take the document's.
+            // (every "bleed" / "facing" key out -- never an object's first -- the document's too, so defaults then)
+            const std::string js = std::regex_replace(core::to_json(d), std::regex(R"re(,\s*"(bleed|facing)"\s*:\s*[^,}\]]+)re"), "");
+            core::Doc e;
+            std::string err;
+            check("old file: loads", core::from_json(e, js, &err), err);
+            const auto* m = e.as<core::Master>("master.cover");
+            check("  its masters: the document's bleed and facing", m && m->bleed == e.settings().bleed && m->facing == e.settings().facing);
+        }
+        while (j.can_undo()) j.undo();
+        check("undo all", d.strays() == 0 && !d.as<core::Master>("master.cover"));
+    }
+
+    {
+        std::cout << "\n-- masters before pages; a grid of any measure (s150) --\n";
+        namespace D = core::doc;
+        int im = -1, ip = -1, i = 0;
+        for (const auto& s : core::segments()) {
+            if (s.id == core::Segment::Masters) im = i;
+            if (s.id == core::Segment::Pages) ip = i;
+            ++i;
+        }
+        check("the navigator: Masters before Pages", im >= 0 && ip >= 0 && im < ip);
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto mid = d.ids_of<core::Master>().front();
+        auto grid_field = [&]() -> std::optional<core::Field> {
+            const auto o = core::project(d, "");
+            for (const auto& f : o.find(mid)->fields)
+                if (f.edit == "mgrid") return f;
+            return std::nullopt;
+        };
+        const auto g0 = grid_field();
+        check("the grid: typed, its presets beside", g0 && g0->unit > 0 && g0->hi >= 72 && !g0->choices.empty());
+        D::edit_masters(j, d, {mid}, "Baseline grid", [](core::Master& m) { m.grid = 13.5; });
+        const auto g1 = grid_field();
+        check("a measure not in the presets: kept and shown", d.as<core::Master>(mid)->grid == 13.5 && g1 && g1->value == "13.5 pt");
+        j.undo();
+        check("undo: the grid back", d.as<core::Master>(mid)->grid != 13.5);
+    }
+
+    {
+        std::cout << "\n-- a facing master opens as its left / right spread (s150) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        core::Doc::Id fm, sm;
+        for (const auto& m : d.ids_of<core::Master>()) {
+            const auto* M = d.as<core::Master>(m);
+            if (M->facing && M->folds.empty() && fm.empty()) fm = m;
+        }
+        check("the sample has a facing master", !fm.empty());
+        const auto pl = core::layout_pages(d, {fm});
+        check("two panels: Left then Right, meeting at the spine",
+              pl.size() == 2 && pl[0].id == fm && pl[1].id == fm && pl[0].side == core::Side::Left &&
+                  pl[1].side == core::Side::Right && std::abs(pl[0].r.r() - pl[1].r.x) < 1e-9 && pl[0].master && pl[1].master);
+        D::set_master_facing(j, d, fm, false);
+        check("single: one panel", core::layout_pages(d, {fm}).size() == 1 && core::layout_pages(d, {fm})[0].side == core::Side::Any);
+        j.undo();
+        // Its items: one for each side, one for both.
+        const auto& M = *d.as<core::Master>(fm);
+        const auto mk = [&](core::Side side, double x) {
+            core::Frame f;
+            f.owner = fm;
+            f.kind = core::FrameKind::Shape;
+            f.x = x; f.y = 20; f.w = 30; f.h = 30;
+            f.side = side;
+            const auto id = "frame.s150." + std::to_string(static_cast<int>(side));
+            j.run("item", {}, [&]() -> std::vector<core::Doc::Id> { d.put(id, f); return {id}; });
+            return id;
+        };
+        const auto fl = mk(core::Side::Left, 40), fr = mk(core::Side::Right, M.w - 70), fa = mk(core::Side::Any, M.w / 2 - 15);
+        const auto pl2 = core::layout_pages(d, {fm});
+        check("on the left panel: left and both, not right",
+              core::on_panel(d, pl2[0], fl) && core::on_panel(d, pl2[0], fa) && !core::on_panel(d, pl2[0], fr));
+        check("on the right panel: right and both, not left",
+              core::on_panel(d, pl2[1], fr) && core::on_panel(d, pl2[1], fa) && !core::on_panel(d, pl2[1], fl));
+        const double cy = 35;
+        check("a both-sides item picked on either panel",
+              core::hit_frame(d, pl2, pl2[0].r.x + M.w / 2, cy, 0) == fa && core::hit_frame(d, pl2, pl2[1].r.x + M.w / 2, cy, 0) == fa);
+        check("a right item not picked where it would be on the left",
+              core::hit_frame(d, pl2, pl2[0].r.x + M.w - 55, cy, 0).empty() && core::hit_frame(d, pl2, pl2[1].r.x + M.w - 55, cy, 0) == fr);
+        const auto all = core::frames_in(d, pl2, pl2[0].r.unite(pl2[1].r));
+        check("a marquee over the spread: each item once",
+              std::count(all.begin(), all.end(), fa) == 1 && std::count(all.begin(), all.end(), fl) == 1 &&
+                  std::count(all.begin(), all.end(), fr) == 1);
+        check("the right item laid out on the right panel", core::frame_in_layout(d, pl2, fr).x == pl2[1].r.x + M.w - 70);
+        const auto ml = core::margin_rect(d, fm, core::Side::Left), mr = core::margin_rect(d, fm, core::Side::Right);
+        check("margins mirrored: the inside by the spine on both",
+              std::abs(ml.x - M.margins.outside) < 1e-9 && std::abs(mr.x - M.margins.inside) < 1e-9 &&
+                  std::abs((M.w - ml.r()) - M.margins.inside) < 1e-9);
+        check("the master's own margins, no side: as before (a right page)",
+              std::abs(core::margin_rect(d, fm).x - M.margins.inside) < 1e-9);
+        while (j.can_undo()) j.undo();
+        check("undo all", d.strays() == 0);
+    }
+
+    {
+        std::cout << "\n-- a master's inspector holds its page settings (s148) --\n";
+        namespace D = core::doc;
+        using core::kPt;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto mid = d.ids_of<core::Master>().front();
+        const auto o = core::project(d, "");
+        std::map<std::string, std::string> mf, df;
+        for (const auto& f : o.find(mid)->fields) mf[f.edit.empty() ? f.label : f.edit] = f.value;
+        for (const auto& f : o.find("doc")->fields) df[f.edit.empty() ? f.label : f.edit] = f.value;
+        check("the master: name, size, bleed, pages, columns, margins", mf.count("mname") && mf.count("msize") && mf.count("mbleed") &&
+                                                                         mf.count("mfacing") && mf.count("mcolumns") && mf.count("mtop"));
+        check("the document: no trim, bleed or pages; title, units, footnotes stay",
+              !df.count("dtrim") && !df.count("dbleed") && !df.count("dfacing") && df.count("dtitle") && df.count("dunits") &&
+                  df.count("dnote_restart"));
+        check("the document item: \"Document\"", o.find("doc")->title == "Document");
+        // A cover master 8 x 10: its page's size presets start from it; a page added with it takes its size.
+        core::Master cover = *d.as<core::Master>(mid);
+        cover.w = 8 * kPt;
+        cover.h = 10 * kPt;
+        j.run("cover", {}, [&]() -> std::vector<core::Doc::Id> { d.put("master.cover", cover); return {"master.cover"}; });
+        const auto made = D::add_pages(j, d, d.pages().front(), 1, "master.cover");
+        check("a page added with it: its size", made.size() == 1 && d.as<core::Page>(made[0])->w == 8 * kPt && d.as<core::Page>(made[0])->h == 10 * kPt);
+        const auto pr = D::size_presets(d, made[0]);
+        check("its size presets: from its master (8 x 10, foldouts of it)", pr.size() == 3 && pr[0].w == 8 * kPt && pr[1].folds.front() == 8 * kPt);
+        check("rename: one step", D::edit_masters(j, d, {"master.cover"}, "Master name", [](core::Master& m) { m.name = "Cover"; }) &&
+                                  d.as<core::Master>("master.cover")->name == "Cover");
+    }
+
+    {
+        std::cout << "\n-- a master's mock-up (s149) --\n";
+        namespace L = composix::layout;
+        using core::kPt;
+        core::Doc d;
+        core::load_sample(d);
+        L::FlowCache fl;
+        const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+        const auto body = std::string("master.2");
+        check("its size: a facing master is a spread", std::abs(L::mockup_size(d, body).w - 2 * d.as<core::Master>(body)->w) < 1e-9);
+        check("a foldout master: one sheet", [&] {
+            for (const auto& mid : d.ids_of<core::Master>())
+                if (!d.as<core::Master>(mid)->folds.empty()) return std::abs(L::mockup_size(d, mid).w - d.as<core::Master>(mid)->w) < 1e-9;
+            return true;
+        }());
+        // Drawn: the margin's magenta where the right page's top margin is (A-Front: no guides over it).
+        const int W = 432, H = 324;   // 2 x 6 in by 9 in at 36 px an inch: exact fit
+        cairo_surface_t* img = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, W, H);
+        cairo_t* cr = cairo_create(img);
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_paint(cr);
+        const std::string front = "master.1";
+        L::draw_master_mockup(cr, d, front, fl, src, 0, 0, W, H);
+        cairo_surface_flush(img);
+        const auto* m = d.as<core::Master>(front);
+        const double sc = W / L::mockup_size(d, front).w;
+        const int mx = static_cast<int>(W / 2 + (m->margins.inside + 20) * sc), my = static_cast<int>(std::round(m->margins.top * sc));
+        const auto px = [&](int x, int y) {
+            const auto* row = cairo_image_surface_get_data(img) + y * cairo_image_surface_get_stride(img);
+            const std::uint32_t v = reinterpret_cast<const std::uint32_t*>(row)[x];
+            return v;
+        };
+        bool magenta = false;
+        for (int dy = -1; dy <= 1; ++dy) {
+            const auto v = px(mx, my + dy);
+            const int r = (v >> 16) & 0xff, g = (v >> 8) & 0xff, b = v & 0xff;
+            magenta = magenta || (r > 180 && g < 150 && b > 150);
+        }
+        check("drawn: the right page's top margin in magenta", magenta);
+        cairo_destroy(cr);
+        cairo_surface_destroy(img);
+        // A master no page uses on one side (the bare document's left): drawn all the same.
+        core::Doc bare;
+        core::NewDoc n;
+        n.pages = 1;
+        n.text_frames = false;
+        core::new_document(bare, n);
+        cairo_surface_t* img2 = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 100, 80);
+        cairo_t* cr2 = cairo_create(img2);
+        L::FlowCache f2;
+        L::draw_master_mockup(cr2, bare, bare.ids_of<core::Master>().front(), f2, src, 0, 0, 100, 80);
+        check("a side no page uses: drawn from a page made for it, nothing kept", bare.pages().size() == 1 && cairo_status(cr2) == CAIRO_STATUS_SUCCESS);
+        cairo_destroy(cr2);
+        cairo_surface_destroy(img2);
+        {   // The tiles: masters, sections and the document show the mock-up.
+            const auto o = core::project(d, "");
+            check("tiles: a master's, a section's, the document's are its master's mock-up",
+                  o.find(body)->thumb.page == "mockup:" + body && o.find("doc")->thumb.page.rfind("mockup:", 0) == 0 &&
+                      o.find(d.ids_of<core::Section>().front())->thumb.page.rfind("mockup:", 0) == 0);
+        }
     }
 
     std::cout << "-----------------------------------------------\n";

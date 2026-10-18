@@ -194,6 +194,17 @@ struct PageDraw {
 };
 void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& page_or_master, FlowCache& flows,
                const ImageSource& images, std::set<std::string>* missing = nullptr, const PageDraw& how = {});
+// s149 (Scott): a master as a mock-up, fitted into x, y, w, h (the paper's
+// box, in `cr`'s units): its pages -- a facing master as its spread, left
+// and right -- with the margins, the columns and gutters, the baseline grid
+// and its guides drawn over its own items; running heads and page numbers
+// filled in as on a page that uses it (a page made for the purpose when
+// none does). mockup_size: its width and height in points (a spread: two
+// pages wide).
+void draw_master_mockup(cairo_t* cr, const core::Doc& d, const core::Doc::Id& master, FlowCache& flows,
+                        const ImageSource& images, double x, double y, double w, double h);
+struct MockupSize { double w = 0, h = 0; };
+MockupSize mockup_size(const core::Doc& d, const core::Doc::Id& master);
 
 // s020: everything that decides how a page LOOKS, to compare: its record,
 // its masters', the frames on them and their assets, every style and swatch,

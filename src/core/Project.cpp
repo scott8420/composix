@@ -71,6 +71,8 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
         {"dnote_rule_w", 1, 0.1, 6}, {"dnote_space", 1, 0, 36},   // s118
         {"dtrim", 72, 36, 5000}, {"dbleed", 72, 0, 72},   // s066
+        {"msize", 72, 36, 5000}, {"mbleed", 72, 0, 72},   // s148
+        {"mgrid", 1, 0, 144},   // s150 (Scott): a baseline grid of any measure, the presets beside
         {"pic_off", 72, -20000, 20000},   // s076
         {"plindent", 1, 0, 1000}, {"prindent", 1, 0, 1000}, {"pfindent", 1, -1000, 1000}, {"pbefore", 1, 0, 1000}, {"pafter", 1, 0, 1000},   // s093
         {"ptop", 72, 0, 5000}, {"pbottom", 72, 0, 5000}, {"pinside", 72, 0, 5000}, {"poutside", 72, 0, 5000}};   // s062
@@ -162,9 +164,6 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
     // ── choices the inspector offers (shared by every item that edits them) ──
     std::vector<Choice> master_choices{{"", "None"}};
     for (const auto& m : d.ids_of<Master>()) master_choices.push_back({m, master_label(d, m)});
-    std::vector<Choice> size_choices;
-    const auto presets = doc::size_presets(d.settings());
-    for (std::size_t i = 0; i < presets.size(); ++i) size_choices.push_back({std::to_string(i), presets[i].label});
     std::vector<Choice> numbering_choices;
     for (int i = 0; i <= static_cast<int>(Numbering::AlphaUpper); ++i)
         numbering_choices.push_back({std::to_string(i), numbering_text(static_cast<Numbering>(i))});
@@ -183,14 +182,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         Field title{"Title", st.title, "dtitle"};
         title.text = true;
         const auto U = st.units;   // s073
-        Field trim{"Trim (" + unit_name(U) + ")", length_in(st.trim_w, U) + "\t" + length_in(st.trim_h, U)};
-        trim.cols = {"W", "H"};
-        trim.edit = "dtrim";
-        std::vector<Choice> bc;
-        for (double v : {0.0, 0.0625, 0.125, 0.25}) bc.push_back({pts(v * kPt), length_text(v * kPt, U)});
-        std::vector<Field> f{title, trim,
-                             {"Bleed", length_text(st.bleed, U), "dbleed", bc},
-                             {"Pages", st.facing ? "Facing" : "Single", "dfacing", {{"1", "Facing"}, {"0", "Single"}}},
+        // s148 (Scott): the page settings -- trim, bleed, facing -- are each master's now (Masters).
+        std::vector<Field> f{title,
                              {"Units", unit_label(U), "dunits",   // s073
                               {{"0", unit_label(Units::Inches)}, {"1", unit_label(Units::Millimetres)},
                                {"2", unit_label(Units::Picas)}, {"3", unit_label(Units::Points)}}},
@@ -243,7 +236,14 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                              }(),
                              {"Length", std::to_string(d.pages().size()) + (d.pages().size() == 1 ? " page" : " pages")}};
         mark_typed(f, unit_pt(d.settings().units));
-        o.add({"doc", G::Document, "Document settings", "", {K::Section, 6, 9, 0x9a8f88}, f});
+        Thumb th{K::Section, 6, 9, 0x9a8f88};
+        if (!d.pages().empty())   // s149: the first page's master, as a mock-up (else the stock picture)
+            if (const auto* m = d.as<Master>(d.as<Page>(d.pages().front())->master)) {
+                th.w_in = (m->facing && m->folds.empty() ? 2 * m->w : m->w) / kPt;
+                th.h_in = m->h / kPt;
+                th.page = "mockup:" + d.as<Page>(d.pages().front())->master;
+            }
+        o.add({"doc", G::Document, "Document", "", th, f});   // s148: was "Document settings"
     }
     {
         std::size_t i = 0;
@@ -268,7 +268,18 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 act.buttons = true;
                 f.push_back(act);
             }
-            o.add({sid, G::Document, s.name, "", {K::Section, 6, 9, tint(i++)}, f});
+            Thumb th{K::Section, 6, 9, tint(i++)};
+            {   // s149: its master as a mock-up (its own, else its first page's)
+                std::string mid = s.master;
+                if (!d.as<Master>(mid))
+                    if (const auto* p = d.as<Page>(s.start_page)) mid = p->master;
+                if (const auto* m = d.as<Master>(mid)) {
+                    th.w_in = (m->facing && m->folds.empty() ? 2 * m->w : m->w) / kPt;
+                    th.h_in = m->h / kPt;
+                    th.page = "mockup:" + mid;
+                }
+            }
+            o.add({sid, G::Document, s.name, "", th, f});
         }
     }
 
@@ -286,7 +297,12 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         if (!starts) acts.choices.push_back({"section", "Start section"});
         acts.buttons = true;
         std::vector<Field> pf{{"Folio", d.folio(pid)},
-                              {"Size", size_text(p.w, p.h, p.folds.size(), d.settings().units), "size", size_choices},
+                              {"Size", size_text(p.w, p.h, p.folds.size(), d.settings().units), "size", [&] {   // s148: its master's size the trim
+                                   std::vector<Choice> c;
+                                   const auto pr = doc::size_presets(d, pid);
+                                   for (std::size_t i = 0; i < pr.size(); ++i) c.push_back({std::to_string(i), pr[i].label});
+                                   return c;
+                               }()},
                               {"Master", master_label(d, p.master), "master", master_choices},
                               {"Section", sec.empty() ? "—" : d.as<Section>(sec)->name},
                               {"Side", side_text(d.side_of(pid))}};
@@ -329,9 +345,10 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         const auto& m = *d.as<Master>(mid);
         int n = 0;
         for (const auto& pid : pages) n += d.as<Page>(pid)->master == mid;
-        Thumb th{K::Page, m.w / kPt, m.h / kPt, 0xffffff, !m.folds.empty()};
-        th.panels = static_cast<int>(m.folds.size()) + 1;
-        th.page = mid;   // s020
+        // s149 (Scott): a master's tile is its mock-up -- its spread when it faces, the
+        // margins, columns, grid and guides over its own items, numbers filled in.
+        Thumb th{K::Page, (m.facing && m.folds.empty() ? 2 * m.w : m.w) / kPt, m.h / kPt, 0xffffff, false};
+        th.page = "mockup:" + mid;
         // s014: margins and columns, editable.
         static const double margins[] = {0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1, 1.25, 1.5, 2, 2.5, 3};
         std::vector<Choice> mc;
@@ -341,7 +358,17 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         for (int k = 1; k <= 6; ++k) cc.push_back({std::to_string(k), std::to_string(k)});
         for (double g : {6.0, 9.0, 12.0, 14.0, 18.0, 24.0, 36.0}) gc.push_back({pts(g), pts(g) + " pt"});
         const auto in = [U](double v) { return length_text(v, U); };
-        std::vector<Field> f{{"Size", size_text(m.w, m.h, m.folds.size(), U)},
+        // s148 (Scott): every page setting is the master's -- its name, size, bleed, facing, then the rest.
+        Field name{"Name", m.name, "mname"};
+        name.text = true;
+        Field size{"Size (" + unit_name(U) + ")", length_in(m.w, U) + "\t" + length_in(m.h, U)};
+        size.cols = {"W", "H"};
+        size.edit = "msize";
+        std::vector<Choice> bc;
+        for (double v : {0.0, 0.0625, 0.125, 0.25}) bc.push_back({pts(v * kPt), length_text(v * kPt, U)});
+        std::vector<Field> f{name, size,
+                             {"Bleed", length_text(m.bleed, U), "mbleed", bc},
+                             {"Pages", m.facing ? "Facing" : "Single", "mfacing", {{"1", "Facing"}, {"0", "Single"}}},
                              {"Columns", std::to_string(m.columns), "mcolumns", cc}};
         if (m.columns > 1) f.push_back({"Gutter", pts(m.gutter) + " pt", "mgutter", gc});
         {   // s036: the baseline grid, from the top margin.

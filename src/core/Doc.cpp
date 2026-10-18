@@ -181,7 +181,10 @@ std::string Doc::folio(const Id& page) const {
 }
 
 Side Doc::side_of(const Id& page) const {
-    if (!settings().facing) return Side::Any;
+    // s147: whether it faces is its master's (no master: the document's).
+    const auto* pg = as<Page>(page);
+    const auto* m = pg ? as<Master>(pg->master) : nullptr;
+    if (m ? !m->facing : !settings().facing) return Side::Any;
     const int at = page_index(page);
     return at % 2 == 0 ? Side::Right : Side::Left;   // the first page is a right-hand page
 }
@@ -846,6 +849,13 @@ std::vector<SizePreset> size_presets(const Settings& s) {
     };
 }
 
+std::vector<SizePreset> size_presets(const Doc& d, const Doc::Id& page) {   // s148
+    Settings s = d.settings();
+    if (const auto* p = d.as<Page>(page))
+        if (const auto* m = d.as<Master>(p->master)) { s.trim_w = m->w; s.trim_h = m->h; }
+    return size_presets(s);
+}
+
 std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int count,
                                const Doc::Id& master) {
     std::vector<Doc::Id> made;
@@ -859,6 +869,7 @@ std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int 
             pg.pos = d.pos_after<Page>(prev);
             pg.w = s.trim_w;
             pg.h = s.trim_h;
+            if (const auto* m = d.as<Master>(master)) { pg.w = m->w; pg.h = m->h; }   // s148: its master's size
             pg.master = master;
             d.put(id, pg);
             made.push_back(id);
@@ -1230,21 +1241,81 @@ bool set_trim(DocJournal& j, Doc& d, double w, double h) {
     });
 }
 
+bool set_master_size(DocJournal& j, Doc& d, const Doc::Id& master, double w, double h) {   // s147
+    const auto* m = d.as<Master>(master);
+    if (!m || w < 36 || h < 36 || w > 5000 || h > 5000) return false;
+    if (std::abs(w - m->w) < 1e-9 && std::abs(h - m->h) < 1e-9) return false;
+    const Master old = *m;
+    std::vector<Doc::Id> ids{master};
+    for (const auto& p : d.pages())
+        if (const auto* pg = d.as<Page>(p); pg->master == master && std::abs(pg->w - old.w) < 0.01 && std::abs(pg->h - old.h) < 0.01)
+            ids.push_back(p);
+    const double kx = w / old.w;
+    return j.run(master_label(d, master) + ": size " + inches(w) + " \u00d7 " + inches(h) + " in", ids, [&] {
+        Master ms = old;
+        ms.w = w;
+        ms.h = h;
+        for (auto& f : ms.folds) f *= kx;
+        d.put(master, ms);
+        for (std::size_t i = 1; i < ids.size(); ++i) {
+            Page pg = *d.as<Page>(ids[i]);
+            pg.w = w;
+            pg.h = h;
+            for (auto& f : pg.folds) f *= kx;
+            d.put(ids[i], pg);
+        }
+    });
+}
+
+bool set_master_bleed(DocJournal& j, Doc& d, const Doc::Id& master, double bleed) {   // s147
+    const auto* m = d.as<Master>(master);
+    if (!m || bleed < 0 || bleed > 72 || std::abs(bleed - m->bleed) < 1e-9) return false;
+    return j.run(master_label(d, master) + ": bleed " + inches(bleed) + " in", {master}, [&] {
+        Master ms = *d.as<Master>(master);
+        ms.bleed = bleed;
+        d.put(master, ms);
+    });
+}
+
+bool set_master_facing(DocJournal& j, Doc& d, const Doc::Id& master, bool facing) {   // s147
+    const auto* m = d.as<Master>(master);
+    if (!m || m->facing == facing) return false;
+    return j.run(master_label(d, master) + (facing ? ": facing pages" : ": single pages"), {master}, [&] {
+        Master ms = *d.as<Master>(master);
+        ms.facing = facing;
+        d.put(master, ms);
+    });
+}
+
 bool set_bleed(DocJournal& j, Doc& d, double bleed) {
     if (bleed < 0 || bleed > 72 || std::abs(bleed - d.settings().bleed) < 1e-9) return false;
-    return j.run("Bleed " + inches(bleed) + " in", {"doc"}, [&] {
+    std::vector<Doc::Id> ids{"doc"};   // s147: the document's default, and every master's
+    for (const auto& m : d.ids_of<Master>()) ids.push_back(m);
+    return j.run("Bleed " + inches(bleed) + " in", ids, [&] {
         Settings s = d.settings();
         s.bleed = bleed;
         d.put("doc", s);
+        for (std::size_t i = 1; i < ids.size(); ++i) {
+            Master m = *d.as<Master>(ids[i]);
+            m.bleed = bleed;
+            d.put(ids[i], m);
+        }
     });
 }
 
 bool set_facing(DocJournal& j, Doc& d, bool facing) {
     if (facing == d.settings().facing) return false;
-    return j.run(facing ? "Facing pages" : "Single pages", {"doc"}, [&] {
+    std::vector<Doc::Id> ids{"doc"};   // s147: the document's default, and every master's
+    for (const auto& m : d.ids_of<Master>()) ids.push_back(m);
+    return j.run(facing ? "Facing pages" : "Single pages", ids, [&] {
         Settings s = d.settings();
         s.facing = facing;
         d.put("doc", s);
+        for (std::size_t i = 1; i < ids.size(); ++i) {
+            Master m = *d.as<Master>(ids[i]);
+            m.facing = facing;
+            d.put(ids[i], m);
+        }
     });
 }
 
@@ -3428,6 +3499,9 @@ const std::vector<Verb>& verbs() {
         {"set_title", [](DocJournal& j, Doc& d) { set_title(j, d, "The Outer Ports"); }},   // s066
         {"set_trim", [](DocJournal& j, Doc& d) { set_trim(j, d, 5.5 * kPt, 8.5 * kPt); }},
         {"set_bleed", [](DocJournal& j, Doc& d) { set_bleed(j, d, d.settings().bleed + 9); }},
+        {"set_master_size", [](DocJournal& j, Doc& d) { set_master_size(j, d, d.ids_of<Master>().front(), 8.5 * kPt, 11 * kPt); }},   // s147
+        {"set_master_bleed", [](DocJournal& j, Doc& d) { set_master_bleed(j, d, d.ids_of<Master>().front(), 18); }},
+        {"set_master_facing", [](DocJournal& j, Doc& d) { set_master_facing(j, d, d.ids_of<Master>().front(), false); }},
         {"set_facing", [](DocJournal& j, Doc& d) { set_facing(j, d, !d.settings().facing); }},
         {"set_wrap_beneath", [](DocJournal& j, Doc& d) { set_wrap_beneath(j, d, true); }},   // s069
         {"set_note_numbering", [](DocJournal& j, Doc& d) { set_note_numbering(j, d, NoteRestart::Page, NoteStyle::Symbols); }},   // s111
@@ -3615,7 +3689,7 @@ std::vector<std::vector<Doc::Id>> spreads(const Doc& d) {
     std::vector<std::vector<Doc::Id>> out;
     const auto pages = d.pages();
     for (std::size_t i = 0; i < pages.size(); ++i) {
-        if (d.settings().facing && d.side_of(pages[i]) == Side::Left && i + 1 < pages.size() &&
+        if (d.side_of(pages[i]) == Side::Left && i + 1 < pages.size() &&   // s147: facing is per master now
             d.side_of(pages[i + 1]) == Side::Right) {
             out.push_back({pages[i], pages[i + 1]});
             ++i;
@@ -3646,7 +3720,15 @@ std::vector<Placed> layout_pages(const Doc& d, const std::vector<Doc::Id>& ids, 
         double w = 0, h = 0;
         bool master = false;
         if (const auto* p = d.as<Page>(id))        { w = p->w; h = p->h; }
-        else if (const auto* m = d.as<Master>(id)) { w = m->w; h = m->h; master = true; }
+        else if (const auto* m = d.as<Master>(id)) {
+            w = m->w; h = m->h; master = true;
+            if (m->facing && m->folds.empty()) {   // s150 (Scott): its spread, left then right
+                out.push_back({id, {x, 0, w, h}, true, Side::Left});
+                out.push_back({id, {x + w, 0, w, h}, true, Side::Right});
+                x += 2 * w + gap;
+                continue;
+            }
+        }
         else continue;
         out.push_back({id, {x, 0, w, h}, master});
         x += w + (spine(i) ? 0 : gap);
@@ -3715,7 +3797,19 @@ double text_width(const Doc& d) {
     const auto ms = d.ids_of<Master>();
     if (ms.empty()) return st.trim_w - 1.5 * kPt;
     const auto& m = *d.as<Master>(ms.front());
-    return std::max(36.0, st.trim_w - m.margins.inside - m.margins.outside);
+    return std::max(36.0, m.w - m.margins.inside - m.margins.outside);   // s147: the master's own width
+}
+
+double bleed_of(const Doc& d, const Doc::Id& owner) {   // s147
+    if (const auto* m = d.as<Master>(owner)) return m->bleed;
+    if (const auto* p = d.as<Page>(owner))
+        if (const auto* m = d.as<Master>(p->master)) return m->bleed;
+    return d.settings().bleed;
+}
+
+bool any_facing(const Doc& d) {   // s147
+    for (const auto& id : d.ids_of<Master>()) if (d.as<Master>(id)->facing) return true;
+    return d.ids_of<Master>().empty() && d.settings().facing;
 }
 
 std::string tabs_text(const std::vector<TabStop>& tabs) {
@@ -3871,11 +3965,25 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
     return out;
 }
 
+bool on_panel(const Doc& d, const Placed& p, const Doc::Id& fid) {
+    const auto* f = d.as<Frame>(fid);
+    if (!f || f->owner != p.id) return false;
+    return p.side == Side::Any || f->side == Side::Any || f->side == p.side;
+}
+
+const Placed* panel_at(const std::vector<Placed>& pl, double x, double y) {
+    for (const auto& p : pl)
+        if (p.r.contains(x, y)) return &p;
+    return nullptr;
+}
+
+// s150: the first panel it shows on (the canvas puts the panel last used
+// first, so an item on both sides is handled where it was picked).
 Rect frame_in_layout(const Doc& d, const std::vector<Placed>& pl, const Doc::Id& id) {
     const auto* f = d.as<Frame>(id);
     if (!f) return {};
     for (const auto& p : pl)
-        if (p.id == f->owner) return {p.r.x + f->x, p.r.y + f->y, f->w, f->h};
+        if (on_panel(d, p, id)) return {p.r.x + f->x, p.r.y + f->y, f->w, f->h};
     return {};
 }
 
@@ -3885,7 +3993,9 @@ Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double 
     for (const auto& p : pl) {
         const auto own = d.frames_on(p.id);
         for (auto it = own.rbegin(); it != own.rend(); ++it) {   // topmost first
-            const Rect r = frame_in_layout(d, pl, *it);
+            if (!on_panel(d, p, *it)) continue;
+            const auto& fr = *d.as<Frame>(*it);
+            const Rect r{p.r.x + fr.x, p.r.y + fr.y, fr.w, fr.h};
             if (Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) return *it;
         }
     }
@@ -3924,8 +4034,11 @@ Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, d
 std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r) {
     std::vector<Doc::Id> out;
     for (const auto& p : pl)
-        for (const auto& f : d.frames_on(p.id))
-            if (frame_in_layout(d, pl, f).intersects(r)) out.push_back(f);
+        for (const auto& f : d.frames_on(p.id)) {
+            if (!on_panel(d, p, f) || std::find(out.begin(), out.end(), f) != out.end()) continue;
+            const auto& fr = *d.as<Frame>(f);
+            if (Rect{p.r.x + fr.x, p.r.y + fr.y, fr.w, fr.h}.intersects(r)) out.push_back(f);   // s150: per panel
+        }
     return out;
 }
 
@@ -3994,7 +4107,9 @@ const Margins* margins_of(const Doc& d, const Doc::Id& id) {
     return m ? &m->margins : nullptr;
 }
 
-Rect margin_rect(const Doc& d, const Doc::Id& id) {
+Rect margin_rect(const Doc& d, const Doc::Id& id) { return margin_rect(d, id, Side::Any); }
+
+Rect margin_rect(const Doc& d, const Doc::Id& id, Side side) {
     const auto* m = master_of(d, id);
     const auto* pg = d.as<Page>(id);
     if (!m && !(pg && pg->margins)) return {};
@@ -4002,7 +4117,7 @@ Rect margin_rect(const Doc& d, const Doc::Id& id) {
     if (pg) { w = pg->w; h = pg->h; }
     const auto& mg = *margins_of(d, id);
     // A left-hand page: the spine is on its right.
-    const bool left = d.as<Page>(id) && d.side_of(id) == Side::Left;
+    const bool left = d.as<Page>(id) ? d.side_of(id) == Side::Left : side == Side::Left;   // s150: a master's left panel
     const double l = left ? mg.outside : mg.inside, r = left ? mg.inside : mg.outside;
     if (w - l - r < 1 || h - mg.top - mg.bottom < 1) return {};
     return {l, mg.top, w - l - r, h - mg.top - mg.bottom};
@@ -4020,8 +4135,10 @@ std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& id) {
     return {std::clamp(m->columns, 1, 24), std::max(0.0, m->gutter)};
 }
 
-std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& id) {
-    const Rect r = margin_rect(d, id);
+std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& id) { return page_columns(d, id, Side::Any); }
+
+std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& id, Side side) {
+    const Rect r = margin_rect(d, id, side);
     if (r.w <= 0) return {};
     const auto [n, g] = page_column_setup(d, id);
     const double cw = (r.w - g * (n - 1)) / n;
@@ -4042,9 +4159,9 @@ SnapTargets snap_targets(const Doc& d, const std::vector<Placed>& pl, const std:
         else if (const auto* m = d.as<Master>(p.id)) folds = &m->folds;
         if (folds) for (double f : *folds) t.xs.push_back(p.r.x + f);
         // s014: margins and the page's column edges.
-        if (const Rect mr = margin_rect(d, p.id); mr.w > 0) {
+        if (const Rect mr = margin_rect(d, p.id, p.side); mr.w > 0) {
             t.ys.insert(t.ys.end(), {p.r.y + mr.y, p.r.y + mr.b()});
-            for (const auto& c : page_columns(d, p.id)) t.xs.insert(t.xs.end(), {p.r.x + c.x0, p.r.x + c.x1});
+            for (const auto& c : page_columns(d, p.id, p.side)) t.xs.insert(t.xs.end(), {p.r.x + c.x0, p.r.x + c.x1});
         }
         auto owners = p.master ? std::vector<Doc::Id>{} : master_chain(d, p.id);
         owners.push_back(p.id);
@@ -4055,6 +4172,7 @@ SnapTargets snap_targets(const Doc& d, const std::vector<Placed>& pl, const std:
             }
             for (const auto& f : d.frames_on(o)) {
                 if (skip(f)) continue;
+                if (o == p.id ? !on_panel(d, p, f) : !master_item_on(d, f, p.id)) continue;   // s150: what shows here
                 const auto& fr = *d.as<Frame>(f);
                 const Rect r{p.r.x + fr.x, p.r.y + fr.y, fr.w, fr.h};
                 t.xs.insert(t.xs.end(), {r.x, r.cx(), r.r()});

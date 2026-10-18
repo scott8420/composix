@@ -71,6 +71,7 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
             grab_focus();
             double lx = 0, ly = 0;
             m_vp.to_doc(x, y, lx, ly);
+            front_panel(lx, ly);   // s150
             ContextHit h;
             h.x = x;
             h.y = y;
@@ -223,8 +224,25 @@ void Canvas::model_changed() {
     queue_draw();
 }
 
+void Canvas::order_panels() {
+    // Each facing master's two panels sit side by side in m_placed; the
+    // front one first (their rects don't change, only which is asked first).
+    for (std::size_t i = 0; i + 1 < m_placed.size(); ++i)
+        if (m_placed[i].id == m_placed[i + 1].id && m_placed[i].side != m_front && m_placed[i + 1].side == m_front)
+            std::swap(m_placed[i], m_placed[i + 1]);
+}
+
+void Canvas::front_panel(double x, double y) {
+    const auto* p = core::panel_at(m_placed, x, y);
+    if (!p || p->side == core::Side::Any || p->side == m_front) return;
+    m_front = p->side;
+    order_panels();
+    queue_draw();
+}
+
 void Canvas::relayout() {
     m_placed = core::layout_pages(m_doc, m_ids);
+    order_panels();
     Rect all;
     for (const auto& p : m_placed) all = all.unite(p.r);
     // Content = the pages plus a margin of pasteboard, so frames hanging off
@@ -338,13 +356,13 @@ void Canvas::draw_guides(const Cairo::RefPtr<Cairo::Context>& cr, const core::Pl
     const Rect sr = m_vp.to_screen(p.r);
     const double s = m_vp.scale();
     // s014: the margins (magenta) and the page's columns (violet), from its master.
-    if (const Rect mr = core::margin_rect(m_doc, p.id); mr.w > 0) {
+    if (const Rect mr = core::margin_rect(m_doc, p.id, p.side); mr.w > 0) {   // s150: a master's panel mirrors
         const Rect smr = m_vp.to_screen(Rect{p.r.x + mr.x, p.r.y + mr.y, mr.w, mr.h});
         cr->set_line_width(1);
         cr->set_source_rgba(0.85, 0.25, 0.65, 0.7);
         cr->rectangle(std::round(smr.x) + 0.5, std::round(smr.y) + 0.5, std::round(smr.w), std::round(smr.h));
         cr->stroke();
-        const auto cols = core::page_columns(m_doc, p.id);
+        const auto cols = core::page_columns(m_doc, p.id, p.side);
         cr->set_source_rgba(0.5, 0.35, 0.9, 0.6);
         for (std::size_t c = 0; c + 1 < cols.size(); ++c)
             for (double x : {cols[c].x1, cols[c + 1].x0}) {
@@ -382,7 +400,7 @@ void Canvas::draw_guides(const Cairo::RefPtr<Cairo::Context>& cr, const core::Pl
 // step from the top margin to the bottom one (none when too dense to read).
 void Canvas::draw_grid(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p) {
     const auto g = core::baseline_grid(m_doc, p.id);
-    const Rect mr = core::margin_rect(m_doc, p.id);
+    const Rect mr = core::margin_rect(m_doc, p.id, p.side);
     const double s = m_vp.scale();
     if (g.step <= 0 || mr.w <= 0 || g.step * s < 4) return;
     const Rect sr = m_vp.to_screen(p.r);
@@ -411,6 +429,7 @@ void Canvas::drop_guide(bool vertical, double x, double y) {
     queue_draw();
     double dx, dy;
     m_vp.to_doc(x, y, dx, dy);
+    front_panel(dx, dy);   // s150
     const auto page = core::page_at(m_placed, dx, dy);
     if (page.empty() || x < 0 || y < 0) return;
     for (const auto& p : m_placed)
@@ -438,7 +457,8 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
     v.show_hidden = m_show_hidden;
     v.live_story = m_edit_story;
     for (const auto& q : m_placed) {   // s027: in a spread the bleed runs round it -- none at the spine
-        if (q.id == p.id || q.master || p.master) continue;
+        if (q.id == p.id && q.side == p.side) continue;
+        if ((q.master || p.master) && !(q.master && p.master && q.id == p.id)) continue;   // s150: a master's own spread
         v.spine_left = v.spine_left || std::abs(q.r.x + q.r.w - p.r.x) < 0.01;
         v.spine_right = v.spine_right || std::abs(p.r.x + p.r.w - q.r.x) < 0.01;
     }
@@ -490,7 +510,8 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
         return render_canvas_page(d, fl, v, placed, box, ds, proof.get());
     };
     const int pw = static_cast<int>(std::ceil(box.w * ds)), ph = static_cast<int>(std::ceil(box.h * ds));
-    const auto look = m_pages.look(m_doc, flows(), {}, p.id, p.id, var, pw, ph, render,
+    const std::string slot = p.side == core::Side::Left ? p.id + "#L" : p.side == core::Side::Right ? p.id + "#R" : p.id;   // s150
+    const auto look = m_pages.look(m_doc, flows(), {}, slot, p.id, var, pw, ph, render,
                                    live ? layout::ThumbStore::Miss::Now : layout::ThumbStore::Miss::NowIfNone);
     if (m_pages.asking() && !m_pg_flush.connected())
         m_pg_flush = Glib::signal_idle().connect([this] {
@@ -520,7 +541,8 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
     const Rect sr = m_vp.to_screen(p.r);
     const auto fg = get_color();
     std::string name;
-    if (p.master) name = core::master_label(m_doc, p.id);
+    if (p.master) name = core::master_label(m_doc, p.id) +
+                         (p.side == core::Side::Left ? " \u2014 Left" : p.side == core::Side::Right ? " \u2014 Right" : "");   // s150
     else          name = "Page " + m_doc.folio(p.id);
     auto lay = create_pango_layout(name);
     lay->set_font_description(Pango::FontDescription("Sans 9"));
@@ -568,6 +590,7 @@ Rect Canvas::port_rect(const std::string& frame, bool out) const {
 std::string Canvas::out_port_hit(double sx, double sy) const {
     for (const auto& p : m_placed)
         for (const auto& id : m_doc.frames_on(p.id)) {
+            if (!core::on_panel(m_doc, p, id)) continue;   // s150
             if (m_doc.as<core::Frame>(id)->kind != core::FrameKind::Text) continue;
             const Rect pr = port_rect(id, true);
             if (pr.w > 0 && Rect{pr.x - 3, pr.y - 3, pr.w + 6, pr.h + 6}.contains(sx, sy)) return id;
@@ -696,6 +719,7 @@ void Canvas::on_drag_begin(double x, double y) {
 
     double px0, py0;
     m_vp.to_doc(x, y, px0, py0);
+    front_panel(px0, py0);   // s150
 
     // s010: clicks counted by hand (double-click = edit / pick a word).
     const gint64 now = g_get_monotonic_time();
@@ -1127,10 +1151,10 @@ void Canvas::on_drag_end(double, double) {
         if (!drawn && m_tool == Tool::Text) {
             for (const auto& p : m_placed) {
                 if (p.id != m_draw_page) continue;
-                const Rect mr = core::margin_rect(m_doc, p.id);
+                const Rect mr = core::margin_rect(m_doc, p.id, p.side);
                 const double lx = m_dx0 - p.r.x, ly = m_dy0 - p.r.y;
                 if (mr.w <= 0 || ly < mr.y || ly > mr.b()) break;
-                for (const auto& c : core::page_columns(m_doc, p.id))
+                for (const auto& c : core::page_columns(m_doc, p.id, p.side))
                     if (lx >= c.x0 && lx <= c.x1) {
                         const auto id = core::doc::add_frame(m_journal, m_doc, p.id, core::FrameKind::Text,
                                                              {c.x0, mr.y, c.x1 - c.x0, mr.h});
@@ -1150,7 +1174,7 @@ void Canvas::on_drag_end(double, double) {
                                                             core::FrameKind::Image, core::FrameKind::Shape};
                     // s014: a text frame drawn across the margins takes the page's columns.
                     const Rect own{m_draw.x - p.r.x, m_draw.y - p.r.y, m_draw.w, m_draw.h};
-                    const Rect mr = core::margin_rect(m_doc, p.id);
+                    const Rect mr = core::margin_rect(m_doc, p.id, p.side);
                     auto [cols, gut] = core::page_column_setup(m_doc, p.id);
                     if (!(mr.w > 0 && std::abs(own.x - mr.x) < 1 && std::abs(own.r() - mr.r()) < 1)) cols = 1;
                     const auto id = core::doc::add_frame(m_journal, m_doc, p.id, kinds[static_cast<int>(m_tool)],
@@ -1802,6 +1826,7 @@ void Canvas::place_loaded(double lx, double ly, const Rect* drawn) {
     if (m_load.empty()) return;
     const core::ImageFile file = m_load.current();
     std::string made;
+    front_panel(lx, ly);   // s150
     if (!drawn) {
         const auto hit = core::hit_frame(m_doc, m_placed, lx, ly, 3 / m_vp.scale());
         if (const auto* f = m_doc.as<core::Frame>(hit); f && f->kind == core::FrameKind::Image) {

@@ -129,6 +129,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"General", "win.open",          {"<Ctrl>o"}, "", "Open a project"},
         {"General", "win.save",          {"<Ctrl>s"}, "", "Save"},
         {"General", "win.save-as",       {"<Ctrl><Shift>s"}, "", "Save as a new project folder"},
+        {"General", "win.close-project", {"<Ctrl>w"}, "", "Close the project (asking to save changes) -- an empty Untitled one in its place"},   // s145
         {"General", "win.export-pdf",    {"<Ctrl>e"}, "", "Export PDF"},
         {"General", "win.story-editor",  {"<Ctrl><Shift>y"}, "", "Story editor: the story being edited / picked, as running text"},
         {"General", "win.find",          {"<Ctrl>f"}, "", "Find / Change (across every story)"},

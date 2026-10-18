@@ -27,6 +27,33 @@ void Shell::on_new() {  // handler
     confirm_discard([this] { show_new_sheet(); });
 }
 
+// s145 (Scott): Close Project -- unsaved changes asked about first; then an
+// empty Untitled document, not saved, clean until it's changed (then dirty:
+// Save, closing and quitting ask as usual). s146 (Scott: "nothing but the
+// bare minimum"): one page (a document's section starts on one), its master
+// with the margins only -- no text frames, no folio, no story -- the
+// colours and the base styles; the New sheet's trim, margins and units.
+void Shell::on_close_project() {  // handler
+    confirm_discard([this] {
+        core::Doc fresh;
+        core::NewDoc n = core::new_from_settings(m_settings);
+        n.title = "Untitled";
+        n.pages = 1;
+        n.text_frames = false;
+        n.folios = false;
+        if (!core::new_document(fresh, n)) {   // the remembered choices refused: the defaults
+            n = core::NewDoc{};
+            n.pages = 1;
+            n.text_frames = false;
+            n.folios = false;
+            core::new_document(fresh, n);
+        }
+        const std::string was = m_project_dir;
+        adopt(fresh, "");
+        if (auto lg = log::get(log::Area::Io)) lg->info("closed '{}' -> Untitled", was.empty() ? std::string("(not saved)") : was);
+    });
+}
+
 void Shell::on_sample() {  // handler
     confirm_discard([this] {
         core::Doc fresh;

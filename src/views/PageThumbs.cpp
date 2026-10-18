@@ -57,6 +57,12 @@ void PageThumbs::forget() {
 
 bool PageThumbs::paint(const Cairo::RefPtr<Cairo::Context>& cr, const std::string& id, double x, double y, double w,
                        double h, bool large) {
+    if (id.rfind("mockup:", 0) == 0) {   // s149: a master's mock-up -- drawn here and now (a master is few frames)
+        const auto mid = id.substr(7);
+        if (!m_doc.as<core::Master>(mid) || w < 2 || h < 2) return false;
+        layout::draw_master_mockup(cr->cobj(), m_doc, mid, *m_flowp, images(), x, y, w, h);
+        return true;
+    }
     if (!m_doc.as<core::Page>(id) && !m_doc.as<core::Master>(id)) return false;
     if (w < 1 || h < 1) return false;
     // At the screen's own pixels (2x on a HiDPI display), so it stays sharp.

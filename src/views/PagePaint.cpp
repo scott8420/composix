@@ -62,7 +62,7 @@ void paint_canvas_page(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook
 
     // Bleed: a thin red line outside the trim.
     // s027: in a spread the bleed runs round the spread -- none at the spine.
-    const double bleed = P.doc.settings().bleed * s;
+    const double bleed = core::bleed_of(P.doc, p.id) * s;   // s147: its master's
     if (bleed > 1) {
         const bool at_left = P.spine_left, at_right = P.spine_right;   // a page touching this one at the spine
         const double x0 = std::round(sr.x - (at_left ? 0 : bleed)) + 0.5, x1 = std::round(sr.r() + (at_right ? 0 : bleed)) + 0.5;
@@ -108,7 +108,8 @@ void paint_canvas_page(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook
                 if (core::master_item_on(P.doc, fid, p.id))   // s025: its side, not overridden here
                     paint_frame(cr, P, *P.doc.as<core::Frame>(fid), p.r.x, p.r.y, true, fid, p.id);
     for (const auto& fid : P.doc.frames_on(p.id))
-        paint_frame(cr, P, *P.doc.as<core::Frame>(fid), p.r.x, p.r.y, false, fid, p.id);
+        if (core::on_panel(P.doc, p, fid))   // s150: a master's panel -- its side's items and both sides'
+            paint_frame(cr, P, *P.doc.as<core::Frame>(fid), p.r.x, p.r.y, false, fid, p.id);
 
 }
 
@@ -384,7 +385,7 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
 
 PixBox canvas_page_box(const core::Doc& d, const core::Placed& p, const CanvasParams& v) {
     Rect b = p.r;
-    const double bleed = d.settings().bleed;
+    const double bleed = core::bleed_of(d, p.id);   // s147
     b = Rect{b.x - bleed, b.y - bleed, b.w + 2 * bleed, b.h + 2 * bleed};
     double stroke = 0;
     const auto add = [&](const std::string& fid) {
@@ -397,7 +398,8 @@ PixBox canvas_page_box(const core::Doc& d, const core::Placed& p, const CanvasPa
         for (const auto& m : core::master_chain(d, p.id))
             for (const auto& fid : d.frames_on(m))
                 if (core::master_item_on(d, fid, p.id)) add(fid);
-    for (const auto& fid : d.frames_on(p.id)) add(fid);
+    for (const auto& fid : d.frames_on(p.id))
+        if (core::on_panel(d, p, fid)) add(fid);
     const Rect s = v.to_screen(b);
     // Shadow (4 px), ports (7 px, 3.5 px out), half a stroke, a pixel's rounding.
     const double m = 14 + stroke * v.s / 2;

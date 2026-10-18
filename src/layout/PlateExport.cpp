@@ -206,8 +206,6 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
     if (!opt.only.empty())   // s054: a page range
         std::erase_if(pages, [&](const std::string& p) { return std::find(opt.only.begin(), opt.only.end(), p) == opt.only.end(); });
     if (pages.empty()) { if (err) *err = "The document has no pages."; return false; }
-    const double bleed = opt.bleed ? std::max(0.0, d.settings().bleed) : 0;
-    const double off = bleed + (opt.marks ? kSlug : 0);
 
     plate::Document doc;
     doc.set_title(opt.title.empty() ? d.settings().title : opt.title);
@@ -250,7 +248,17 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         });
     std::size_t written = 0;
     const auto sheets = pdf_sheets(d, pages, opt.spreads);   // s084
+    // s147: each sheet's bleed -- its pages' masters' (the most of them).
+    std::vector<double> sbleed;
     for (const auto& sh : sheets) {
+        double b = 0;
+        if (opt.bleed) for (const auto& p : sh.pages) b = std::max(b, core::bleed_of(d, p));
+        sbleed.push_back(b);
+    }
+    const auto off_of = [&](int i) { return sbleed[static_cast<std::size_t>(std::max(0, i))] + (opt.marks ? kSlug : 0); };
+    for (const auto& sh : sheets) {
+        const int si = static_cast<int>(&sh - sheets.data());
+        const double bleed = sbleed[static_cast<std::size_t>(si)], off = off_of(si);   // s147: this sheet's
         auto& pg = doc.add_page(sh.w + 2 * off, sh.h + 2 * off);
         pg.set_trim_box({off, off, sh.w, sh.h});
         pg.set_bleed_box({off - bleed, off - bleed, sh.w + 2 * bleed, sh.h + 2 * bleed});
@@ -286,15 +294,15 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         for (const auto& l : links) {
             const auto at = sheet_of(sheets, l.page), to = sheet_of(sheets, l.to);   // s084: by sheet
             if (at.sheet >= 0 && to.sheet >= 0)
-                doc.add_link(static_cast<std::size_t>(at.sheet), off + at.x + l.box.x, off + l.box.y, l.box.w, l.box.h,
-                             static_cast<std::size_t>(to.sheet), off + l.to_y);
+                doc.add_link(static_cast<std::size_t>(at.sheet), off_of(at.sheet) + at.x + l.box.x, off_of(at.sheet) + l.box.y, l.box.w, l.box.h,
+                             static_cast<std::size_t>(to.sheet), off_of(to.sheet) + l.to_y);
         }
     }
     if (opt.bookmarks) {   // s054
         FlowCache& flows = c.flows;   // s102: as above
         for (const auto& b : bookmarks(d, flows, opt.mark_lists, pages))
             if (const auto at = sheet_of(sheets, b.page); at.sheet >= 0)
-                doc.add_bookmark(b.title, b.level, static_cast<std::size_t>(at.sheet), off + b.y);
+                doc.add_bookmark(b.title, b.level, static_cast<std::size_t>(at.sheet), off_of(at.sheet) + b.y);
     }
     if (opt.progress) opt.progress(0.92, "Saving the file\u2026");   // s102: fonts subset, images compressed
     if (!doc.save(path, err)) return false;

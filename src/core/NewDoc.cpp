@@ -111,6 +111,8 @@ bool new_document(Doc& d, const NewDoc& n) {
     d.put("doc", s);
 
     Master m{"A", "Master", 1, n.trim_w, n.trim_h, {}, n.columns, ""};
+    m.bleed = n.bleed;     // s147: the master's own
+    m.facing = n.facing;
     m.margins = n.margins;
     m.gutter = n.gutter;
     d.put("master.1", m);

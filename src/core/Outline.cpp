@@ -8,8 +8,8 @@ namespace composix::core {
 const std::vector<SegmentInfo>& segments() {
     static const std::vector<SegmentInfo> k = {
         {Segment::Document,  "document",  "Document",        "x-office-document-symbolic"},
+        {Segment::Masters,   "masters",   "Masters",         "view-dual-symbolic"},   // s150 (Scott): masters before pages
         {Segment::Pages,     "pages",     "Pages & Spreads", "view-grid-symbolic"},
-        {Segment::Masters,   "masters",   "Masters",         "view-dual-symbolic"},
         {Segment::Stories,   "stories",   "Stories",         "format-justify-left-symbolic"},
         {Segment::Notes,     "notes",     "Footnotes",       "composix-footnote-symbolic"},   // s115 (bundled)
         {Segment::Styles,    "styles",    "Styles",          "format-text-bold-symbolic"},

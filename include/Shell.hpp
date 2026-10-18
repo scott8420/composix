@@ -112,6 +112,7 @@ private:
     void on_story_editor();                      // category: handler: s033 -- Ctrl+Y: the story being edited / picked
     void on_save();                              // category: handler: save (Save As the first time)
     void on_save_as();                           // category: handler: name a new project folder -> save
+    void on_close_project();                     // category: handler: s145 -- ask about unsaved changes, then an empty Untitled
     void on_place();                             // category: handler: pick an image file -> into a frame / loaded on the canvas
     void pick_images(std::function<void(std::vector<core::ImageFile>)> then);   // category: helper: s063 -- Place: several files
     void build_start();                          // category: zone: s064 -- the start screen

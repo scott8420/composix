@@ -224,6 +224,18 @@ void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W
         break;
 
     case K::Section: {   // a small stack of pages with the section's colour band
+        if (!t.page.empty() && painter()) {   // s149: its master's mock-up, on a stack, its colour a tab above
+            double w, h;
+            fit(W, H, t.w_in / t.h_in, large ? 28 : 12, w, h);
+            const double x = std::round((W - w) / 2), y = std::round((H - h) / 2) + 3;
+            for (int i = 2; i >= 1; --i) paper(cr, x + i * 4, y - i * 4, w, h);
+            paper(cr, x, y, w, h);
+            painter()(cr, t.page, x, y, w, h, large);
+            cr->set_source_rgb(c.r, c.g, c.b);
+            cr->rectangle(x, y - 5, std::min(w * 0.3, 60.0), 4);
+            cr->fill();
+            break;
+        }
         double w, h;
         fit(W, H, 6.0 / 9.0, H * 0.14, w, h);
         const double x = (W - w) / 2, y = (H - h) / 2;

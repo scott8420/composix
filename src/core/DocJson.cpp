@@ -78,7 +78,7 @@ json to(const Record& r) {
             j = {{"kind", "master"}, {"prefix", v.prefix}, {"name", v.name}, {"pos", v.pos}, {"w", v.w},
                  {"h", v.h}, {"folds", v.folds}, {"columns", v.columns}, {"based_on", v.based_on},
                  {"margins", {v.margins.top, v.margins.bottom, v.margins.inside, v.margins.outside}},
-                 {"gutter", v.gutter}, {"grid", v.grid}};
+                 {"gutter", v.gutter}, {"grid", v.grid}, {"bleed", v.bleed}, {"facing", v.facing}};   // s147
         } else if constexpr (std::is_same_v<T, Frame>) {
             j = {{"kind", "frame"}, {"owner", v.owner}, {"type", en(v.kind)}, {"x", v.x}, {"y", v.y},
                  {"w", v.w}, {"h", v.h}, {"rot", v.rot}, {"z", v.z}, {"story", v.story},
@@ -299,6 +299,9 @@ std::optional<Record> from(const json& j) {
         }
         v.gutter = val(j, "gutter", 12.0);
         v.grid = val(j, "grid", 0.0);   // s036
+        // s147: its bleed and facing; a file from before has neither -- -1, the document's (from_json).
+        v.bleed = j.contains("bleed") ? val(j, "bleed", v.bleed) : -1.0;
+        v.facing = val(j, "facing", true);
         return v;
     }
     if (k == "frame") {
@@ -542,6 +545,15 @@ bool from_json(Doc& d, const std::string& text, std::string* err) {
             if (id.empty()) continue;
             if (auto r = from(j)) d.put(id, *r);
         }
+        // s147: masters from before had no bleed / facing of their own -- the document's.
+        const auto& st = d.settings();
+        for (const auto& mid : d.ids_of<Master>()) {
+            Master m = *d.as<Master>(mid);
+            if (m.bleed >= 0) continue;
+            m.bleed = st.bleed;
+            m.facing = st.facing;
+            d.put(mid, m);
+        }
     } catch (const std::exception& e) {
         if (err) *err = std::string("bad record: ") + e.what();
         return false;
@@ -628,6 +640,8 @@ ProjectSummary summarize_project(const std::string& dir, Doc* keep) {
     out.trim_w = d.settings().trim_w;
     out.units = d.settings().units;   // s096
     out.trim_h = d.settings().trim_h;
+    if (!d.pages().empty())   // s148: the first page's size (its master's) -- the document's trim is only a default now
+        if (const auto* p = d.as<Page>(d.pages().front())) { out.trim_w = p->w; out.trim_h = p->h; }
     out.pages = static_cast<int>(d.pages().size());
     std::error_code ec;
     const auto t = fs::last_write_time(fs::path(dir) / "document.json", ec);
