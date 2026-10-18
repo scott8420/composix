@@ -114,6 +114,10 @@ std::vector<PdfLink> note_links(const core::Doc& d, FlowCache& flows);
 // take) to the place it points at -- the anchor's line; a note's, the note
 // where it is set. Gone or not on a page: no link. Frames turned left out.
 std::vector<PdfLink> xref_links(const core::Doc& d, FlowCache& flows);
+// s137: a built index's page numbers -- each number (a range: its first
+// page) a link to its page, at the entry's mark there. Only paragraphs
+// that read as the marks make them now (a stale index: what still matches).
+std::vector<PdfLink> index_links(const core::Doc& d, FlowCache& flows);
 
 // s134: the index as the marks make it -- one entry for each term (and
 // each sub-entry under it), sorted as a reader looks them up (case folded,
@@ -125,6 +129,11 @@ struct IndexEntry {
     std::vector<std::string> pages;        // page ids
     std::vector<std::string> folios;       // ... as numbered
     std::string pages_text;                // s136: the folios, runs of 3+ joined ("1, 3\u20135")
+    // s137: pages_text piece by piece -- each number or range, the page it
+    // goes to (a range: its first) and how far down that page the entry's
+    // first mark there is.
+    struct Run { std::string text, page; double y = 0; bool operator==(const Run&) const = default; };
+    std::vector<Run> runs;
     std::vector<std::string> see, also;    // s136: where else to look (sorted)
     int marks = 0;
     bool operator==(const IndexEntry&) const = default;
@@ -158,6 +167,7 @@ struct ExportSummary {
     int pages = 0, sheets = 0, bookmarks = 0, links = 0;
     int note_links = 0;   // s123
     int xref_links = 0;   // s131
+    int index_links = 0;  // s137
     std::string size;     // "16 pages \u2192 9 sheets \u00b7 6 \u00d7 9 in + 0.125 in bleed"
     std::string colour;   // "CMYK for FOGRA39 \u2014 RGB converted, perceptual"
     std::string nav;      // "5 bookmarks \u00b7 2 contents links"

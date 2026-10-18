@@ -7841,6 +7841,92 @@ int main() {
         check("undo all", d.strays() == 0 && d.as<core::Story>("story.1")->paras[1].index.empty());
     }
 
+    {
+        std::cout << "\n-- index links in the PDF (s137) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page_numbered = [&](const std::string& f) {
+            for (const auto& pg : d.pages()) if (d.folio(pg) == f) return pg;
+            return std::string{};
+        };
+        std::map<std::string, std::string> story_on;
+        for (const char* f : {"4", "5", "6", "8"}) {
+            const auto fr = D::add_frame(j, d, page_numbered(f), core::FrameKind::Text, {72, 144, 200, 100});
+            story_on[f] = d.as<core::Frame>(fr)->story;
+            D::edit_text(j, d, story_on[f], {0, 0}, {0, 0}, "x");
+            D::insert_index_mark(j, d, story_on[f], {0, 1}, "Ships");
+        }
+        D::insert_index_mark(j, d, "story.1", {1, 4}, "harbor");
+        D::insert_index_mark(j, d, "story.1", {1, 0}, core::IndexMark{"Charts", "", "Maps"});
+        L::FlowCache fl;
+        check("no index built: no links", L::index_links(d, fl).empty());
+        const auto ix = D::add_list(j, d, core::ListKind::Index, "Index", d.pages().back());
+        L::build_list(j, d, ix);
+        auto links = L::index_links(d, fl);
+        // Ships: "4\u20136" and "8" -- two links; harbor: one; Charts (a see): none.
+        int ships = 0, to4 = 0, to8 = 0, harbor = 0;
+        for (const auto& l : links) {
+            if (l.to == page_numbered("4")) { ++to4; ++ships; }
+            if (l.to == page_numbered("8")) { ++to8; ++ships; }
+            if (l.to == d.as<core::Frame>(L::flow_story(d, "story.1").frames.front().frame)->owner) ++harbor;
+        }
+        check("three links: a range to its first page, a number, harbor's", links.size() == 3 && to4 == 1 && to8 == 1 && harbor == 1,
+              std::to_string(links.size()));
+        bool ok = true;
+        for (const auto& l : links) {
+            const auto* pg = d.as<core::Page>(l.page);
+            ok = ok && l.page == d.pages().back() && pg && l.box.w > 0 && l.box.h > 0 && l.box.r() <= pg->w + 0.5 && l.box.b() <= pg->h;
+        }
+        check("each box on the index's page", ok);
+        {   // The range's box is wider than the single number's.
+            double wr = 0, w8 = 0, y4 = -1;
+            for (const auto& l : links) {
+                if (l.to == page_numbered("4")) { wr = l.box.w; y4 = l.to_y; }
+                if (l.to == page_numbered("8")) w8 = l.box.w;
+            }
+            check("the range's box: the whole \"4\u20136\"", wr > w8 * 1.5, std::to_string(wr) + " / " + std::to_string(w8));
+            check("to the mark: down its page where the frame is", y4 > 100 && y4 < 200, std::to_string(y4));
+        }
+        // Stale: a mark gone -- that line no longer reads right, its link goes; the rest stay.
+        D::insert_index_mark(j, d, "story.1", {2, 0}, "harbor");      // the same page: the line still reads "harbor, 1"
+        D::insert_index_mark(j, d, story_on["8"], {0, 1}, "harbor");  // page 8: now "harbor, 1, 8" -- stale
+        links = L::index_links(d, fl);
+        check("stale: the line that changed has no link; the others keep theirs", links.size() == 2, std::to_string(links.size()));
+        L::build_list(j, d, ix);
+        check("rebuilt: harbor's two numbers linked", L::index_links(d, fl).size() == 4);
+        // Written: both PDFs; the Export sheet counts them.
+        const auto base = fs::temp_directory_path() / "composix_s137";
+        fs::create_directories(base);
+        const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+        L::PdfOptions o;
+        o.compress = false;
+        L::PdfReport rep;
+        std::string err;
+        const auto count = [](const std::string& f) {
+            std::ifstream in(f, std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            const auto hay = ss.str();
+            int k = 0;
+            for (auto at = hay.find("/Subtype /Link"); at != std::string::npos; at = hay.find("/Subtype /Link", at + 1)) ++k;
+            return k;
+        };
+        const int want = static_cast<int>(L::contents_links(d, fl).size() + L::note_links(d, fl).size() + L::xref_links(d, fl).size() +
+                                          L::index_links(d, fl).size());
+        const auto pout = (base / "print.pdf").string(), sout = (base / "screen.pdf").string();
+        check("print PDF: the index links written", L::export_print_pdf(d, pout, o, src, &rep, &err) && count(pout) == want, err);
+        check("screen PDF: the index links written", L::export_pdf(d, sout, o, src, &rep, &err) && count(sout) == want, err);
+        const auto sum = L::export_summary(d, fl, o, false, "");
+        check("the Export sheet counts them", sum.index_links == 4 && sum.nav.find("4 index links") != std::string::npos, sum.nav);
+        std::error_code ec;
+        if (!std::getenv("KEEP_PDF")) fs::remove_all(base, ec);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

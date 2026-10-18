@@ -377,6 +377,7 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
         return Key{collated(term), collated(sub), folded(term), folded(sub)};
     };
     std::map<Key, IndexEntry> by;
+    std::map<Key, std::map<std::string, double>> top;   // s137: an entry's highest mark on each page
     for (const auto& sid : d.ids_of<core::Story>()) {
         const auto& st = *d.as<core::Story>(sid);
         if (std::none_of(st.paras.begin(), st.paras.end(), [](const core::Para& p) { return !p.index.empty(); })) continue;
@@ -389,10 +390,15 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
                 const auto& m = para.index[static_cast<std::size_t>(k)];
                 if (m.term.empty()) continue;
                 std::string page;
+                double y = 0;
                 for (const auto& ft : flow.frames) {
                     for (const auto& l : ft.lines)
                         if (l.para == p && static_cast<int>(i) >= l.start && static_cast<int>(i) <= std::max(l.end, l.start + 1))
-                            if (const auto* f = d.as<core::Frame>(ft.frame); f && d.as<core::Page>(f->owner)) { page = f->owner; break; }
+                            if (const auto* f = d.as<core::Frame>(ft.frame); f && d.as<core::Page>(f->owner)) {
+                                page = f->owner;
+                                y = f->y + l.y;
+                                break;
+                            }
                     if (!page.empty()) break;
                 }
                 // A sub-entry's term heads it (a line of its own, perhaps with no pages).
@@ -409,11 +415,16 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
                     continue;
                 }
                 if (!page.empty() && std::find(e.pages.begin(), e.pages.end(), page) == e.pages.end()) e.pages.push_back(page);
+                if (!page.empty()) {   // s137
+                    auto& t = top[key(m.term, m.sub)];
+                    if (const auto it = t.find(page); it == t.end() || y < it->second) t[page] = y;
+                }
             }
         }
     }
     std::vector<IndexEntry> out;
-    for (auto& [key, e] : by) {
+    for (auto& [kk, e] : by) {
+        const auto& tops = top[kk];
         std::sort(e.pages.begin(), e.pages.end(), [&](const std::string& a, const std::string& b) { return d.page_index(a) < d.page_index(b); });
         for (const auto& pg : e.pages) e.folios.push_back(d.folio(pg));
         // s136: runs of three or more pages in a row as a range ("3\u20135"): the
@@ -427,14 +438,57 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
             while (b + 1 < e.pages.size() && d.page_index(e.pages[b + 1]) == d.page_index(e.pages[b]) + 1 && num(e.folios[b]) >= 0 &&
                    num(e.folios[b + 1]) == num(e.folios[b]) + 1)
                 ++b;
-            if (!e.pages_text.empty()) e.pages_text += ", ";
-            if (b - a >= 2) e.pages_text += e.folios[a] + "\u2013" + e.folios[b];
-            else for (std::size_t q = a; q <= b; ++q) e.pages_text += (q > a ? ", " : "") + e.folios[q];
+            const auto run = [&](std::size_t q, std::string text) {   // s137
+                const auto it = tops.find(e.pages[q]);
+                e.runs.push_back({std::move(text), e.pages[q], it == tops.end() ? 0.0 : it->second});
+            };
+            if (b - a >= 2) run(a, e.folios[a] + "\u2013" + e.folios[b]);
+            else for (std::size_t q = a; q <= b; ++q) run(q, e.folios[q]);
             a = b + 1;
         }
+        for (const auto& r : e.runs) e.pages_text += (e.pages_text.empty() ? "" : ", ") + r.text;
         std::sort(e.see.begin(), e.see.end(), [](const std::string& x, const std::string& y) { return collated(x) < collated(y); });
         std::sort(e.also.begin(), e.also.end(), [](const std::string& x, const std::string& y) { return collated(x) < collated(y); });
         out.push_back(std::move(e));
+    }
+    return out;
+}
+
+std::vector<PdfLink> index_links(const core::Doc& d, FlowCache& flows) {   // s137
+    std::vector<PdfLink> out;
+    std::vector<IndexEntry> all;
+    bool have = false;
+    for (const auto& lid : d.ids_of<core::GenList>()) {
+        const auto& l = *d.as<core::GenList>(lid);
+        if (l.kind != core::ListKind::Index || !l.numbers) continue;
+        const auto* st = l.story.empty() ? nullptr : d.as<core::Story>(l.story);
+        if (!st || l.built_entries < 0) continue;
+        if (!have) { all = index_entries(d, flows); have = true; }
+        const auto en = list_entries(d, flows, lid);
+        const auto& flow = flows.get(d, l.story);
+        // The written paragraphs after a title, matched in order: each entry line, its IndexEntry.
+        auto p = static_cast<std::size_t>(core::doc::list_title_paras(*st, l.kind));
+        std::size_t ie = 0;
+        for (const auto& e : en) {
+            if (p >= st->paras.size()) break;
+            const auto& para = st->paras[p];
+            const std::size_t at = p++;
+            if (e.level == 0) continue;
+            const auto& entry = all[ie++];
+            if (e.folio.empty() || para.text != e.text + ", " + e.folio) continue;   // stale here: no links
+            std::size_t pos = e.text.size() + 2;
+            for (const auto& r : entry.runs) {
+                if (para.text.compare(pos, r.text.size(), r.text) != 0) break;
+                for (const auto& ft : flow.frames) {
+                    const auto* f = d.as<core::Frame>(ft.frame);
+                    if (!f || f->rot != 0 || !d.as<core::Page>(f->owner)) continue;
+                    const core::TextPos a{static_cast<int>(at), static_cast<int>(pos)}, b{static_cast<int>(at), static_cast<int>(pos + r.text.size())};
+                    for (const auto& rc : selection_rects(d, l.story, flow, ft.frame, a, b))
+                        out.push_back({f->owner, {f->x + rc.x, f->y + rc.y, rc.w, rc.h}, r.page, std::max(0.0, r.y - 4)});
+                }
+                pos += r.text.size() + 2;
+            }
+        }
     }
     return out;
 }
@@ -749,6 +803,8 @@ ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOpti
             if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.note_links;
         for (const auto& l : xref_links(d, flows))   // s131
             if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.xref_links;
+        for (const auto& l : index_links(d, flows))   // s137
+            if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.index_links;
     }
     const auto n = [](int k, const char* one, const char* many) {
         return (k == 0 ? std::string("No") : std::to_string(k)) + " " + (k == 1 ? one : many);
@@ -757,6 +813,7 @@ ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOpti
             (x ? std::string("contents links left out (PDF/X)") : n(s.links, "contents link", "contents links"));
     if (!x && s.note_links > 0) s.nav += " \u00b7 " + n(s.note_links, "note link", "note links");   // s123
     if (!x && s.xref_links > 0) s.nav += " \u00b7 " + n(s.xref_links, "cross-reference link", "cross-reference links");   // s131
+    if (!x && s.index_links > 0) s.nav += " \u00b7 " + n(s.index_links, "index link", "index links");   // s137
     return s;
 }
 
@@ -803,6 +860,7 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
     auto links = contents_links(d, flows);   // s083
     for (auto& l : note_links(d, flows)) links.push_back(std::move(l));   // s123: and the notes'
     for (auto& l : xref_links(d, flows)) links.push_back(std::move(l));   // s131: and the cross-references'
+    for (auto& l : index_links(d, flows)) links.push_back(std::move(l));   // s137: and the index'
     std::set<std::string> missing;
     int n = 0;
     for (const auto& sh : sheets) {
