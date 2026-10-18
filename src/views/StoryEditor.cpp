@@ -30,8 +30,7 @@ std::string shown_text(const core::Story& st) {
         std::string t = st.paras[i].text;
         for (std::size_t k = 0; k + 3 <= t.size(); ++k)
             if (const int m = core::marker_at(t, k); m >= 0) {
-                static const char* sign[] = {"\xEF\xBC\x83", "\xE2\xB8\xB9", "\xE3\x80\x8B", "\xE3\x80\x8A"};
-                t.replace(k, 3, sign[m]);
+                t.replace(k, 3, core::marker_sign(m));   // s128: one table of signs
                 k += 2;
             } else if (core::note_at(t, k)) {   // s112: a footnote -- where its chip goes (U+FFFC, an anchor)
                 t.replace(k, 3, "\xEF\xBF\xBC");

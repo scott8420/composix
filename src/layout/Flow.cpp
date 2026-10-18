@@ -245,8 +245,7 @@ LayoutPtr make_layout(const core::Style& st, const char* text, int len, double w
     std::string shown(text, static_cast<std::size_t>(len));
     for (std::size_t i = 0; i + 3 <= shown.size(); ++i)
         if (const int k = core::marker_at(shown, i); k >= 0) {
-            static const char* sign[] = {"\xEF\xBC\x83", "\xE2\xB8\xB9", "\xE3\x80\x8B", "\xE3\x80\x8A"};   // ＃ ⸹ 》 《
-            shown.replace(i, 3, sign[k]);
+            shown.replace(i, 3, core::marker_sign(k));   // ＃ ⸹ 》 《, s128: → and an unseen anchor
             i += 2;
         }
     pango_layout_set_text(l.get(), shown.c_str(), len);
@@ -1839,6 +1838,39 @@ std::string marker_value(const core::Doc& d, int k, const std::string& page, con
     return {};
 }
 
+// s128: what a cross-reference shows -- where its anchor is set (the target
+// story's flow, from `flows` -- one each, made as needed): the page's number,
+// its paragraph's words (to the first tab, 60 bytes), or both. "??" when the
+// anchor is gone or not set.
+std::string ref_value(const core::Doc& d, const core::XRef& r, std::map<std::string, StoryFlow>& flows) {   // s128
+    const auto at = core::doc::find_anchor(d, r.target);
+    if (at.story.empty()) return "??";
+    const auto& st = *d.as<core::Story>(at.story);
+    std::string words;
+    if (r.show != core::RefShow::Page) {
+        const auto& t = st.paras[static_cast<std::size_t>(at.at.para)].text;
+        for (std::size_t i = 0; i < t.size() && words.size() < 60 && t[i] != '\t';) {
+            if (static_cast<unsigned char>(t[i]) == 0xEE && i + 2 < t.size() && static_cast<unsigned char>(t[i + 1]) == 0x80) { i += 3; continue; }
+            words += t[i++];
+        }
+        while (!words.empty() && (static_cast<unsigned char>(words.back()) & 0xC0) == 0x80) words.pop_back();
+        while (!words.empty() && words.back() == ' ') words.pop_back();
+        if (r.show == core::RefShow::Text) return words.empty() ? std::string("??") : words;
+    }
+    auto it = flows.find(at.story);
+    if (it == flows.end()) it = flows.emplace(at.story, flow_story(d, at.story)).first;
+    std::string page;
+    for (const auto& ft : it->second.frames)
+        for (const auto& l : ft.lines)
+            if (l.para == at.at.para && at.at.byte >= l.start && at.at.byte <= std::max(l.end, l.start + 1)) {
+                if (const auto* f = d.as<core::Frame>(ft.frame); f && d.as<core::Page>(f->owner)) page = f->owner;
+                break;
+            }
+    const std::string n = page.empty() ? std::string("??") : d.folio(page);
+    if (r.show == core::RefShow::Page) return n;
+    return "\u201c" + words + "\u201d on page " + n;
+}
+
 Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page) {
     Resolved r;
     const auto* st = d.as<core::Story>(story);
@@ -1847,6 +1879,8 @@ Resolved resolve_story(const core::Doc& d, const std::string& story, const std::
     r.text = *st;
     // Where each marker is set (page frames): from the plain flow.
     const StoryFlow plain = on_page.empty() ? flow_story(d, story) : StoryFlow{};
+    std::map<std::string, StoryFlow> targets;   // s128: the stories references point into
+    if (on_page.empty()) targets.emplace(story, plain);
     const auto frame_of = [&](int para, int byte) -> std::string {
         for (const auto& ft : plain.frames)
             for (const auto& l : ft.lines)
@@ -1866,7 +1900,16 @@ Resolved resolve_story(const core::Doc& d, const std::string& story, const std::
                 frame = frame_of(p, static_cast<int>(i));
                 if (const auto* f = d.as<core::Frame>(frame)) page = f->owner;
             }
-            std::string v = d.as<core::Page>(page) ? marker_value(d, k, page, frame) : src.substr(i, 3);
+            std::string v;
+            if (k == 5) {   // s128: a cross-reference -- where its anchor is
+                const auto& refs = st->paras[static_cast<std::size_t>(p)].refs;
+                const int idx = core::marks_in(src, core::kMarkRef, 0, i);
+                v = idx < static_cast<int>(refs.size()) ? ref_value(d, refs[static_cast<std::size_t>(idx)], targets) : std::string("??");
+            } else if (k == 6) {
+                v.clear();   // an anchor: nothing to see
+            } else {
+                v = d.as<core::Page>(page) ? marker_value(d, k, page, frame) : src.substr(i, 3);
+            }
             shifts.emplace_back(static_cast<int>(i), static_cast<int>(v.size()) - 3);
             out += v;
             i += 3;

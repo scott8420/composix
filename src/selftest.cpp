@@ -7245,6 +7245,74 @@ int main() {
         check("plain: \"1\", as before", first_line(&raised).rfind("1 The foldout", 0) == 0 && !raised);
     }
 
+    {
+        std::cout << "\n-- cross-references (s128) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = d.records();
+        const auto P = [&](int p) -> const core::Para& { return d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(p)]; };
+        // A reference in Chapter One to Chapter Two's heading (paragraph 4).
+        check("a reference to a heading: one step", D::insert_ref_to(j, d, "story.1", {1, 4}, "story.1", 4, core::RefShow::Page) && j.size() == 1);
+        check("the heading got an anchor at its start, the reference its target",
+              P(4).anchors.size() == 1 && P(4).text.rfind(core::kMarkAnchor, 0) == 0 && P(1).refs.size() == 1 &&
+                  P(1).refs[0].target == P(4).anchors[0] && P(1).text.substr(4, 3) == core::kMarkRef);
+        check("find_anchor: where it is", [&] {
+            const auto a = D::find_anchor(d, P(4).anchors[0]);
+            return a.story == "story.1" && a.at.para == 4 && a.at.byte == 0;
+        }());
+        D::insert_ref_to(j, d, "story.1", {2, 0}, "story.1", 4, core::RefShow::Text);
+        check("a second reference: the same anchor", P(4).anchors.size() == 1 && P(2).refs.size() == 1 && P(2).refs[0].target == P(4).anchors[0]);
+        // Shown on the page: the page's number, the words, both; the anchor unseen.
+        const auto shown = [&](int p) {
+            const auto r = L::resolve_story(d, "story.1", "");
+            return r.any ? r.text.paras[static_cast<std::size_t>(p)].text : std::string{};
+        };
+        const auto folio3 = d.folio(d.as<core::Frame>(L::flow_story(d, "story.1").frames.back().frame)->owner);
+        check("shows: the heading's page", shown(1).substr(4, folio3.size()) == folio3, shown(1).substr(0, 20));
+        check("shows: the heading's words", shown(2).rfind("Chapter Two", 0) == 0, shown(2).substr(0, 20));
+        check("the anchor: nothing to see", shown(4).rfind("Chapter Two", 0) == 0);
+        D::insert_ref_to(j, d, "story.1", {3, 0}, "story.1", 4, core::RefShow::TextPage);
+        check("shows: both", shown(3).rfind("“Chapter Two” on page " + folio3, 0) == 0, shown(3).substr(0, 30));
+        // Editing carries them.
+        D::edit_text(j, d, "story.1", {1, 2}, {1, 2}, "\n", "Typing", "");
+        check("a split: the reference goes with its mark", P(1).refs.empty() && P(2).refs.size() == 1);
+        const int m = static_cast<int>(P(2).text.find(core::kMarkRef));
+        D::edit_text(j, d, "story.1", {2, m}, {2, m + 3}, "", "Delete", "");
+        check("its mark deleted: the reference goes", P(2).refs.empty());
+        D::edit_text(j, d, "story.1", {0, 0}, {0, 0}, std::string(core::kMarkRef) + core::kMarkAnchor, "Paste", "");
+        check("pasted marks: a reference with no target, an anchor with no id",
+              P(0).refs.size() == 1 && P(0).refs[0].target.empty() && P(0).anchors.size() == 1 && P(0).anchors[0].empty());
+        check("no target: \"??\"", shown(0).rfind("??", 0) == 0);
+        D::set_char_style(j, d, "story.1", {5, 0}, {5, 4}, "style.5");
+        check("a character style over the anchor keeps it", P(5).anchors.size() == 1 && !P(5).anchors[0].empty());
+        {
+            core::Doc e;
+            std::string err;
+            check("json: refs and anchors kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        }
+        // The heading goes: references to it show "??".
+        D::edit_text(j, d, "story.1", {5, 0}, {5, static_cast<int>(P(5).text.size())}, "", "Delete", "");
+        check("the target gone: \"??\"", shown(4).find("??") != std::string::npos, shown(4).substr(0, 30));
+        // The page's key follows a reference's value.
+        while (j.can_undo()) j.undo();
+        check("undo all: as it was", d.records() == before && d.strays() == 0);
+        D::insert_ref_to(j, d, "story.1", {1, 4}, "story.1", 4, core::RefShow::Text);
+        L::FlowCache flows;
+        const auto page1 = d.as<core::Frame>(L::flow_story(d, "story.1").frames.front().frame)->owner;
+        std::string page_with_ref;
+        for (const auto& ft : L::flow_story(d, "story.1").frames)
+            for (const auto& l : ft.lines)
+                if (l.para == 1 && l.start <= 4 && l.end > 4) page_with_ref = d.as<core::Frame>(ft.frame)->owner;
+        (void)page1;
+        const auto k1 = L::page_key(d, flows, page_with_ref);
+        D::edit_text(j, d, "story.1", {4, 3}, {4, 3}, "The ", "Typing", "");   // the heading's words change
+        check("the referring page's key moves when the heading's words do", !(L::page_key(d, flows, page_with_ref) == k1));
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

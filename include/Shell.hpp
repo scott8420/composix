@@ -167,6 +167,7 @@ private:
     void poll_work();
     void edit_note(const std::string& story, int p, int k, int sel_a = -1, int sel_b = -1, bool take_focus = true);   // s113: a Find hit's words selected, the keyboard left where it is
     void go_to_note(const std::string& id);    // category: helper: s115 -- a footnote's page, its words open
+    void on_insert_xref();                      // category: handler: s128 -- a cross-reference at the cursor
     void open_notes_panel();                     // category: helper: s121 -- Footnotes & Endnotes, one panel
     void notes_panel_sync();                     // category: helper: s121 -- the panel from the document
     void draw_notes_preview(const Cairo::RefPtr<Cairo::Context>& cr, int cw, int ch);   // category: helper: s121
@@ -286,6 +287,8 @@ private:
     // s074: the canvas's right-click menu, and what it was opened on.
     std::unique_ptr<Gtk::PopoverMenu> m_ctx_menu;
     bool                              m_note_pop_find = false;   // s113: the popover is Find's (shows a hit)
+    std::unique_ptr<Gtk::Popover>     m_xref_pop;   // s128: the cross-reference picker
+    int                               m_xref_show = 0;   // s128: what the last reference showed (page / words / both)
     std::unique_ptr<Gtk::Popover>     m_note_pop;   // s110: a footnote's words, edited at the caret
     views::Canvas::ContextHit         m_ctx;   // s070: kept, so the Edit section's rebuild keeps it
     Glib::RefPtr<Gio::SimpleAction> m_act_undo, m_act_redo;

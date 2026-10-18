@@ -121,6 +121,7 @@ void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& id, FlowCac
 
 PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) {
     PageKey k;
+    std::map<std::string, StoryFlow> ref_flows;   // s128: where references' targets are set
     const auto rec = [&](const std::string& rid) {
         if (const auto it = d.records().find(rid); it != d.records().end()) k.recs.emplace_back(rid, it->second);
     };
@@ -152,6 +153,12 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
                     for (std::size_t i = p.text.find(core::kMarkNote, static_cast<std::size_t>(l.start));
                          i != std::string::npos && static_cast<int>(i) < l.end; i = p.text.find(core::kMarkNote, i + 3))
                         line += "#" + std::to_string(core::note_number(d, *st, l.para, core::notes_in(p.text, 0, i)));
+                    // s128: a cross-reference's value (where its target is set) -- it moves with other pages.
+                    for (std::size_t i = p.text.find(core::kMarkRef, static_cast<std::size_t>(l.start));
+                         i != std::string::npos && static_cast<int>(i) < l.end; i = p.text.find(core::kMarkRef, i + 3)) {
+                        const int idx = core::marks_in(p.text, core::kMarkRef, 0, i);
+                        if (idx < static_cast<int>(p.refs.size())) line += "@" + ref_value(d, p.refs[static_cast<std::size_t>(idx)], ref_flows);
+                    }
                     k.lines.push_back(std::move(line));
                 }
                 for (const auto& np : ft.notes) {   // s109: the notes at the foot

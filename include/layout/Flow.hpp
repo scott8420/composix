@@ -142,6 +142,10 @@ struct Resolved {
     StoryFlow   flow;
 };
 Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page);
+// s128: what a cross-reference shows -- its anchor's page number, its
+// paragraph's words, or both ("\u201cwords\u201d on page n"); "??" when the
+// anchor is gone or not set. `flows`: stories' flows, made as needed.
+std::string ref_value(const core::Doc& d, const core::XRef& r, std::map<std::string, StoryFlow>& flows);
 // The value a marker takes on `page` (k as core::marker_at). `frame`: the
 // frame it sits in, for next / previous (its thread's neighbours).
 std::string marker_value(const core::Doc& d, int k, const std::string& page, const std::string& frame);

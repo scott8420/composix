@@ -270,6 +270,17 @@ struct Note {
     bool operator==(const Note&) const = default;
 };
 
+// s128: a cross-reference -- a mark in the text (kMarkRef) that shows where
+// an anchor (kMarkAnchor, by its id) is: its page's number, its paragraph's
+// words, or both. Kept with the paragraph its mark is in (the k-th mark is
+// refs[k]), as notes are.
+enum class RefShow { Page, Text, TextPage };
+struct XRef {
+    std::string target;                  // an anchor's id ("" or gone: shows "??")
+    RefShow     show = RefShow::Page;
+    bool operator==(const XRef&) const = default;
+};
+
 struct Para {
     std::string      style;              // a paragraph style id
     std::string      text;
@@ -280,6 +291,8 @@ struct Para {
     ParaStart        brk = ParaStart::Anywhere;
     ParaLocal        over;               // s093: its own settings over the style's
     std::vector<Note> notes;             // s109: one for each kMarkNote in text, in order
+    std::vector<XRef> refs;              // s128: one for each kMarkRef in text, in order
+    std::vector<std::string> anchors;    // s128: one id for each kMarkAnchor in text, in order
     bool operator==(const Para&) const = default;
 };
 
@@ -823,6 +836,16 @@ bool set_note_text(DocJournal& j, Doc& d, const Doc::Id& story, int p, int k, co
                    const std::string& merge_key = {});
 // The note at mark `at` (a mark's first byte): its paragraph and index; -1 none.
 int note_index_at(const Story& s, TextPos at);
+// s128: cross-references. An anchor at `at` (a fresh id) -- one step; the
+// id. A reference at `at` to anchor `target`, shown as `show` -- one step.
+// The anchor at paragraph p's start (made there if it has none) and a
+// reference to it at `at` -- one step; false if nothing changed.
+std::string insert_anchor(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at);
+TextPos     insert_ref(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& target, RefShow show);
+bool        insert_ref_to(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para, RefShow show);
+// Where an anchor is: its story, paragraph and byte; story "" when none.
+struct AnchorAt { Doc::Id story; TextPos at; };
+AnchorAt find_anchor(const Doc& d, const std::string& id);
 // s113: where paragraph p's k-th note's mark is (its first byte); -1 none.
 int note_mark_byte(const Story& s, int p, int k);
 // s113: a stretch [a, b) of paragraph p's k-th note's words -- replaced by
@@ -1113,6 +1136,8 @@ inline constexpr const char* kMarkPrev    = "\xEE\x80\x83";   // U+E003: the pre
 // s109: a footnote's reference: drawn as its number, raised; the note is the
 // paragraph's notes[k] for the k-th of these in its text.
 inline constexpr const char* kMarkNote    = "\xEE\x80\x84";   // U+E004
+inline constexpr const char* kMarkRef     = "\xEE\x80\x85";   // U+E005: s128, a cross-reference (Para::refs)
+inline constexpr const char* kMarkAnchor  = "\xEE\x80\x86";   // U+E006: s128, a place references point at (Para::anchors)
 bool note_at(const std::string& text, std::size_t i);
 int  notes_in(const std::string& text, std::size_t from = 0, std::size_t to = std::string::npos);   // the marks in [from, to)
 // The number the k-th note of paragraph p takes (1-based, through the story).
@@ -1124,8 +1149,17 @@ int  note_number(const Doc& d, const Story& s, int p, int k);
 // The paragraph's notes made to match its marks (missing ones empty, extras dropped).
 void fit_notes(Para& p);
 // Which marker starts at text[i] (0 page, 1 section, 2 next, 3 previous;
-// -1 none).
+// s128: 5 a cross-reference, 6 an anchor; -1 none -- a footnote's mark is
+// note_at's).
 int marker_at(const std::string& text, std::size_t i);
+// s128: how a marker shows where its value isn't filled in (the editors, a
+// flow for places): a sign of the same three bytes. An anchor: a word
+// joiner (nothing to see).
+const char* marker_sign(int k);
+// s128: how many of `mark` (a three-byte marker) are in text[from, to).
+int marks_in(const std::string& text, const char* mark, std::size_t from = 0, std::size_t to = std::string::npos);
+// s128: a paragraph's refs and anchors made to match its marks.
+void fit_marks(Para& p);
 bool has_markers(const Story& s);
 // s026: the width text is usually set at -- the trim less the first
 // master's inside and outside margins (tab presets measure from it).

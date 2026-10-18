@@ -1795,6 +1795,25 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         notes.insert(notes.end(), fb.notes.end() - nt, fb.notes.end());
     }
 
+    // s128: refs and anchors ride with their marks, as notes do; a pasted
+    // reference keeps its target, a pasted anchor gets no id (one place, one id).
+    std::vector<XRef> refs;
+    std::vector<std::string> anchors;
+    {
+        Para fa = pa, fb = pb;
+        fit_marks(fa);
+        fit_marks(fb);
+        const auto carry = [&](const auto& ha, const auto& tb, const char* mark, auto& out, auto blank) {
+            const int nh = marks_in(fa.text, mark, 0, static_cast<std::size_t>(a.byte));
+            out.assign(ha.begin(), ha.begin() + nh);
+            for (int i = 0; i < marks_in(text, mark); ++i) out.push_back(blank);
+            const int nt = marks_in(fb.text, mark, static_cast<std::size_t>(b.byte));
+            out.insert(out.end(), tb.end() - nt, tb.end());
+        };
+        carry(fa.refs, fb.refs, kMarkRef, refs, XRef{});
+        carry(fa.anchors, fb.anchors, kMarkAnchor, anchors, std::string{});
+    }
+
     std::vector<Para> made;
     std::string prev = style;
     for (std::size_t i = 0; i < pieces.size(); ++i) {
@@ -1819,6 +1838,13 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         for (auto& m : made) {
             const auto n = static_cast<std::size_t>(notes_in(m.text));
             for (std::size_t k = 0; k < n; ++k) m.notes.push_back(at < notes.size() ? notes[at++] : Note{});
+        }
+    }
+    {   // s128: and its refs and anchors
+        std::size_t ar = 0, aa = 0;
+        for (auto& m : made) {
+            for (int k = 0; k < marks_in(m.text, kMarkRef); ++k) m.refs.push_back(ar < refs.size() ? refs[ar++] : XRef{});
+            for (int k = 0; k < marks_in(m.text, kMarkAnchor); ++k) m.anchors.push_back(aa < anchors.size() ? anchors[aa++] : std::string{});
         }
     }
     s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
@@ -1868,6 +1894,8 @@ bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
         para.brk = was.brk;                    // s055
         para.over = was.over;                  // s113: its own settings (were dropped)
         para.notes = std::move(was.notes);     // s113: and its footnotes (were dropped)
+        para.refs = std::move(was.refs);       // s128
+        para.anchors = std::move(was.anchors);
     }
     if (s == *st) return false;
     return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
@@ -1897,6 +1925,8 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
         para.brk = was.brk;                    // s055
         para.over = was.over;                  // s113: its own settings (were dropped)
         para.notes = std::move(was.notes);     // s113: and its footnotes (were dropped)
+        para.refs = std::move(was.refs);       // s128
+        para.anchors = std::move(was.anchors);
     }
     if (s == *st) return false;
     return j.run(label, {story}, [&] { d.put(story, s); });
@@ -2314,6 +2344,92 @@ int note_index_at(const Story& s, TextPos at) {
     const auto& t = s.paras[static_cast<std::size_t>(at.para)].text;
     if (!note_at(t, static_cast<std::size_t>(at.byte))) return -1;
     return notes_in(t, 0, static_cast<std::size_t>(at.byte));
+}
+
+// ── cross-references (s128) ────────────────────────────────────────────────
+AnchorAt find_anchor(const Doc& d, const std::string& id) {
+    if (id.empty()) return {};
+    for (const auto& sid : d.ids_of<Story>()) {
+        const auto& st = *d.as<Story>(sid);
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            const auto& para = st.paras[static_cast<std::size_t>(p)];
+            int k = 0;
+            for (std::size_t i = para.text.find(kMarkAnchor); i != std::string::npos; i = para.text.find(kMarkAnchor, i + 3), ++k)
+                if (k < static_cast<int>(para.anchors.size()) && para.anchors[static_cast<std::size_t>(k)] == id)
+                    return {sid, {p, static_cast<int>(i)}};
+        }
+    }
+    return {};
+}
+
+namespace {
+std::string fresh_anchor_id(const Doc& d) {
+    for (int n = 1;; ++n) {
+        const std::string id = "anchor." + std::to_string(n);
+        if (find_anchor(d, id).story.empty()) return id;
+    }
+}
+// The anchor id and the reference written into a copy of the story.
+void put_mark(Story& s, TextPos at, const char* mark) {
+    auto& para = s.paras[static_cast<std::size_t>(at.para)];
+    para.text.insert(static_cast<std::size_t>(at.byte), mark);
+    // Runs past the place move on.
+    for (auto& r : para.runs) {
+        if (r.start >= at.byte) r.start += 3;
+        if (r.end > at.byte) r.end += 3;
+    }
+}
+}  // namespace
+
+std::string insert_anchor(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at) {
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return {};
+    Story s = *st;
+    at = clamp_pos(s, at);
+    const std::string id = fresh_anchor_id(d);
+    auto& para = s.paras[static_cast<std::size_t>(at.para)];
+    fit_marks(para);
+    const int k = marks_in(para.text, kMarkAnchor, 0, static_cast<std::size_t>(at.byte));
+    put_mark(s, at, kMarkAnchor);
+    para.anchors.insert(para.anchors.begin() + k, id);
+    j.run("Insert Anchor", {story}, [&] { d.put(story, s); });
+    return id;
+}
+
+TextPos insert_ref(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& target, RefShow show) {
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return at;
+    Story s = *st;
+    at = clamp_pos(s, at);
+    auto& para = s.paras[static_cast<std::size_t>(at.para)];
+    fit_marks(para);
+    const int k = marks_in(para.text, kMarkRef, 0, static_cast<std::size_t>(at.byte));
+    put_mark(s, at, kMarkRef);
+    para.refs.insert(para.refs.begin() + k, XRef{target, show});
+    j.run("Insert Cross-Reference", {story}, [&] { d.put(story, s); });
+    return {at.para, at.byte + 3};
+}
+
+bool insert_ref_to(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para, RefShow show) {
+    const auto* ts = d.as<Story>(to_story);
+    if (!ts || to_para < 0 || to_para >= static_cast<int>(ts->paras.size()) || !d.as<Story>(story)) return false;
+    // The paragraph's anchor: the first in it, else one made at its start.
+    std::string id;
+    {
+        const auto& para = ts->paras[static_cast<std::size_t>(to_para)];
+        if (const auto i = para.text.find(kMarkAnchor); i != std::string::npos && !para.anchors.empty() && !para.anchors.front().empty())
+            id = para.anchors.front();
+    }
+    bool did = false;
+    j.run("Insert Cross-Reference", {story, to_story}, [&] {
+        if (id.empty()) {
+            id = insert_anchor(j, d, to_story, {to_para, 0});
+            if (story == to_story && at.para == to_para) at.byte += 3;   // the anchor went in before it
+        }
+        insert_ref(j, d, story, at, id, show);
+        did = true;
+    });
+    return did;
 }
 
 int note_mark_byte(const Story& s, int p, int k) {   // s113
@@ -2885,6 +3001,8 @@ const std::vector<Verb>& verbs() {
         {"set_note_look", [](DocJournal& j, Doc& d) { set_note_look(j, d, 100, 1, 3, "(continued)"); }},   // s118
         {"set_note_place", [](DocJournal& j, Doc& d) { set_note_place(j, d, NoteAt::StoryEnd, "Endnotes"); }},   // s120
         {"set_note_num", [](DocJournal& j, Doc& d) { set_note_num(j, d, Settings::NoteNum::Period); }},   // s126
+        {"insert_anchor", [](DocJournal& j, Doc& d) { insert_anchor(j, d, "story.1", {4, 0}); }},   // s128
+        {"insert_ref_to", [](DocJournal& j, Doc& d) { insert_ref_to(j, d, "story.1", {1, 4}, "story.1", 4, RefShow::TextPage); }},
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
         {"delete_query", [](DocJournal& j, Doc& d) { delete_query(j, d, "Double spaces"); }},
@@ -3182,7 +3300,31 @@ int marker_at(const std::string& t, std::size_t i) {
     if (i + 3 > t.size()) return -1;
     if (static_cast<unsigned char>(t[i]) != 0xEE || static_cast<unsigned char>(t[i + 1]) != 0x80) return -1;
     const int k = static_cast<unsigned char>(t[i + 2]) - 0x80;
-    return k >= 0 && k <= 3 ? k : -1;
+    return (k >= 0 && k <= 3) || k == 5 || k == 6 ? k : -1;   // s128: 5 a reference, 6 an anchor
+}
+
+const char* marker_sign(int k) {   // s128 (the signs were s023's, in two places)
+    switch (k) {
+    case 0: return "\xEF\xBC\x83";   // ＃
+    case 1: return "\xE2\xB8\xB9";   // ⸹
+    case 2: return "\xE3\x80\x8B";   // 》
+    case 3: return "\xE3\x80\x8A";   // 《
+    case 5: return "\xE2\x86\x92";   // → a cross-reference
+    case 6: return "\xE2\x81\xA0";   // word joiner: an anchor, unseen
+    default: return "\xEF\xBF\xBD";
+    }
+}
+
+int marks_in(const std::string& t, const char* mark, std::size_t from, std::size_t to) {   // s128
+    to = std::min(to, t.size());
+    int n = 0;
+    for (std::size_t i = t.find(mark, from); i != std::string::npos && i + 3 <= to; i = t.find(mark, i + 3)) ++n;
+    return n;
+}
+
+void fit_marks(Para& p) {   // s128
+    p.refs.resize(static_cast<std::size_t>(marks_in(p.text, kMarkRef)));
+    p.anchors.resize(static_cast<std::size_t>(marks_in(p.text, kMarkAnchor)));
 }
 
 bool note_at(const std::string& t, std::size_t i) {   // s109

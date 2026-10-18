@@ -142,6 +142,7 @@ add_executable(composix
     src/Shell_preflight.cpp
     src/Shell_notes.cpp    # s110: footnotes -- insert, and their words in a popover
     src/Shell_notes_panel.cpp   # s121: Footnotes & Endnotes, one panel
+    src/Shell_xref.cpp     # s128: cross-references -- insert one at the cursor
     src/Shell_reflow.cpp   # s106: the far end of a long story on a worker
     src/Shell_busy.cpp
     src/Shell_helpers.cpp
