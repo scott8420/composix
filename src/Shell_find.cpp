@@ -32,6 +32,7 @@ Glib::RefPtr<Gio::Menu> Shell::special_menu() {  // zone
     notes->append("Cross-Reference\u2026", "win.insert-xref");   // s128
     notes->append("Edit Cross-Reference\u2026", "win.edit-xref");   // s130
     notes->append("All Cross-References\u2026", "win.xrefs-panel");   // s133
+    notes->append("Sources & Citations\u2026", "win.sources-panel");   // s144
     m->append_section(notes);
     auto index = Gio::Menu::create();   // s138
     index->append("Index Entry\u2026", "win.index-mark");

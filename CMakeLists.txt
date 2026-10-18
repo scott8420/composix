@@ -144,6 +144,7 @@ add_executable(composix
     src/Shell_notes_panel.cpp   # s121: Footnotes & Endnotes, one panel
     src/Shell_xref_panel.cpp    # s133: Cross-References, one panel
     src/Shell_index.cpp         # s138: the index -- mark, edit, new
+    src/Shell_sources_panel.cpp # s144: Sources, one panel
     src/Shell_xref.cpp     # s128: cross-references -- insert one at the cursor
     src/Shell_reflow.cpp   # s106: the far end of a long story on a worker
     src/Shell_busy.cpp

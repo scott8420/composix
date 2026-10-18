@@ -167,6 +167,16 @@ struct XRefRow {
     bool broken = false;
 };
 std::vector<XRefRow> xref_list(const core::Doc& d, FlowCache& flows);
+// s144: the sources a bibliography gathers, story by story in their order:
+// each one's number (as a citation shows it), its words, how many citations
+// name it and the pages they are on (folios, in book order, each once).
+struct SourceRow {
+    std::string story;
+    int para = 0, number = 0, cites = 0;
+    std::string words;
+    std::vector<std::string> pages;
+};
+std::vector<SourceRow> source_list(const core::Doc& d, FlowCache& flows);
 // The value a marker takes on `page` (k as core::marker_at). `frame`: the
 // frame it sits in, for next / previous (its thread's neighbours).
 std::string marker_value(const core::Doc& d, int k, const std::string& page, const std::string& frame);

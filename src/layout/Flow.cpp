@@ -1923,6 +1923,60 @@ std::string ref_value(const core::Doc& d, const core::XRef& r, FlowCache& flows)
     return ref_value_by(d, r, [&](const std::string& story) -> const StoryFlow& { return flows.get(d, story); });
 }
 
+std::vector<SourceRow> source_list(const core::Doc& d, FlowCache& flows) {   // s144
+    std::vector<SourceRow> out;
+    // Where each anchor is cited: (page index, folio) per citation.
+    std::map<std::string, std::vector<std::pair<int, std::string>>> cited;
+    for (const auto& sid : d.ids_of<core::Story>()) {
+        const auto& st = *d.as<core::Story>(sid);
+        if (std::none_of(st.paras.begin(), st.paras.end(), [](const core::Para& p) { return !p.refs.empty(); })) continue;
+        const auto& flow = flows.get(d, sid);
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            const auto& para = st.paras[static_cast<std::size_t>(p)];
+            int k = 0;
+            for (auto i = para.text.find(core::kMarkRef); i != std::string::npos && k < static_cast<int>(para.refs.size());
+                 i = para.text.find(core::kMarkRef, i + 3), ++k) {
+                const auto& r = para.refs[static_cast<std::size_t>(k)];
+                if (r.show != core::RefShow::Cite) continue;
+                int pi = -1;
+                std::string folio;
+                const auto c = caret_at(d, sid, flow, {p, static_cast<int>(i)});
+                if (const auto* f = c.ok ? d.as<core::Frame>(c.frame) : nullptr; f && d.as<core::Page>(f->owner)) {
+                    pi = d.page_index(f->owner);
+                    folio = d.folio(f->owner);
+                }
+                std::vector<std::string> ids{r.target};
+                ids.insert(ids.end(), r.more.begin(), r.more.end());
+                for (const auto& id : ids) if (!id.empty()) cited[id].push_back({pi, folio});
+            }
+        }
+    }
+    for (const auto& sid : d.ids_of<core::Story>()) {
+        const auto& st = *d.as<core::Story>(sid);
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            const int n = core::source_number(d, st, p);
+            if (n == 0) continue;
+            const auto& para = st.paras[static_cast<std::size_t>(p)];
+            SourceRow row{sid, p, n};
+            for (std::size_t i = 0; i < para.text.size();) {
+                if (static_cast<unsigned char>(para.text[i]) == 0xEE && i + 2 < para.text.size() &&
+                    static_cast<unsigned char>(para.text[i + 1]) == 0x80) { i += 3; continue; }
+                row.words += para.text[i] == '\t' ? ' ' : para.text[i];
+                ++i;
+            }
+            std::vector<std::pair<int, std::string>> at;
+            for (const auto& id : para.anchors)
+                if (const auto it = cited.find(id); !id.empty() && it != cited.end()) at.insert(at.end(), it->second.begin(), it->second.end());
+            row.cites = static_cast<int>(at.size());
+            std::sort(at.begin(), at.end());
+            for (const auto& [pi, folio] : at)
+                if (pi >= 0 && std::find(row.pages.begin(), row.pages.end(), folio) == row.pages.end()) row.pages.push_back(folio);
+            out.push_back(std::move(row));
+        }
+    }
+    return out;
+}
+
 std::vector<XRefRow> xref_list(const core::Doc& d, FlowCache& flows) {   // s133
     std::vector<XRefRow> out;
     // UTF-8: back / on to a character's start.

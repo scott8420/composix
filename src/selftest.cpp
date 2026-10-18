@@ -8271,6 +8271,33 @@ int main() {
         check("undo all", d.strays() == 0 && d.as<core::Story>("story.1")->paras[2].refs.empty());
     }
 
+    {
+        std::cout << "\n-- the sources, listed (s144) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        L::FlowCache fl;
+        auto rows = L::source_list(d, fl);
+        check("the sample's three sources, numbered, none cited", rows.size() == 3 && rows[0].number == 1 && rows[2].number == 3 &&
+                                                                   rows[0].words.rfind("Almanac", 0) == 0 &&
+                                                                   std::all_of(rows.begin(), rows.end(), [](const auto& r) { return r.cites == 0; }));
+        D::insert_citation(j, d, "story.1", {1, 0}, "story.4", 2);   // page 1
+        D::insert_citation(j, d, "story.1", {5, 0}, {{"story.4", 2}, {"story.4", 0}});   // Chapter Two's page: both
+        const auto folio = [&](int p) {
+            const auto c = L::caret_at(d, "story.1", fl.get(d, "story.1"), {p, 0});
+            return c.ok ? d.folio(d.as<core::Frame>(c.frame)->owner) : std::string{};
+        };
+        rows = L::source_list(d, fl);
+        check("Letters: cited twice, its pages in order", rows.size() == 3 && rows[2].cites == 2 &&
+                                                          rows[2].pages == (std::vector<std::string>{folio(1), folio(5)}));
+        check("Almanac: once (in a citation of two)", rows[0].cites == 1 && rows[0].pages == std::vector<std::string>{folio(5)});
+        check("Harbor: not cited", rows[1].cites == 0 && rows[1].pages.empty());
+        check("the words without the anchor's mark", rows[2].words == "Letters of the Surveyor General.");
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

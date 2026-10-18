@@ -114,6 +114,7 @@ void Shell::refresh() {  // helper
     if (m_journal.in_gesture()) { m_canvas_view.canvas().queue_draw(); return; }
     if (m_np && m_np->get_visible()) notes_panel_sync();   // s121
     if (m_xp && m_xp->get_visible()) xrefs_panel_sync();   // s133
+    if (m_sp && m_sp->get_visible()) sources_panel_sync();   // s144
     m_pf_flows.set_reflow_budget(reflow_budget());   // s106 (a forget() or an adopt() replaced the cache)
     // s101: a slow refresh (100 ms+) says so -- with the canvas's draw line,
     // what a change costs. The flow it pays is shared with the canvas.

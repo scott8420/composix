@@ -172,6 +172,8 @@ private:
     void on_edit_xref();                        // category: handler: s130 -- the one beside the cursor, changed
     void open_xref(int edit_para, int edit_k);  // s130: the picker (edit_k >= 0: changing that reference)
     void open_xrefs_panel();                    // category: helper: s133 -- every cross-reference, one panel
+    void open_sources_panel();                  // category: helper: s144 -- the bibliography's sources, one panel
+    void sources_panel_sync();                  // category: helper: s144 -- the panel from the document
     void on_index_mark();                       // category: handler: s138 -- Index Entry... at the selection
     void on_edit_index();                       // category: handler: s138 -- the mark beside the cursor
     void open_index_pop(int edit_para, int edit_k);   // category: helper: s138 -- the index entry popover
@@ -318,6 +320,12 @@ private:
     Gtk::Label*                      m_start_empty = nullptr;
     std::map<const Gtk::FlowBoxChild*, std::string> m_start_paths;
     std::unique_ptr<Gtk::Window>     m_swed;
+    // s144: the Sources panel.
+    std::unique_ptr<Gtk::Window>     m_sp;
+    Gtk::ListBox*                    m_sp_list = nullptr;
+    Gtk::Label*                      m_sp_count = nullptr;
+    Gtk::ToggleButton*               m_sp_uncited = nullptr;
+    std::vector<std::tuple<std::string, int, int>> m_sp_rows;   // a source (k -1) or a broken citation (its k)
     // s133: the Cross-References panel.
     std::unique_ptr<Gtk::Window>     m_xp;
     Gtk::ListBox*                    m_xp_list = nullptr;
