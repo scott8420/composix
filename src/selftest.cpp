@@ -7604,6 +7604,156 @@ int main() {
         check("its place deleted: broken", broken == 2, std::to_string(broken));
     }
 
+    {
+        std::cout << "\n-- index marks (s134) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto S = [&]() -> const core::Story& { return *d.as<core::Story>("story.1"); };
+        const auto P = [&](int p) -> const core::Para& { return S().paras[static_cast<std::size_t>(p)]; };
+        L::FlowCache flows;
+        check("none: an empty index", L::index_entries(d, flows).empty());
+        const auto n0 = j.size();
+        const auto after = D::insert_index_mark(j, d, "story.1", {1, 4}, "  harbor  ", "smells");
+        check("a mark: one step, after it", j.size() == n0 + 1 && after == core::TextPos{1, 7});
+        check("  its term and sub-entry, trimmed", P(1).index.size() == 1 && P(1).index[0] == core::IndexMark{"harbor", "smells"} &&
+                                                   P(1).text.compare(4, 3, core::kMarkIndex) == 0);
+        check("an empty term: nothing", D::insert_index_mark(j, d, "story.1", {1, 0}, "   ") == core::TextPos{1, 0} && j.size() == n0 + 1);
+        check("found at / just before the cursor", D::index_near(S(), {1, 4}).k == 0 && D::index_near(S(), {1, 7}).k == 0 &&
+                                                   D::index_near(S(), {1, 8}).k < 0);
+        {   // Nothing shows on the page: the words as they were.
+            const auto r = L::resolve_story(d, "story.1", "");
+            check("on the page: nothing to see", r.any && r.text.paras[1].text == "The harbor smelled of diesel and oranges the morning the ship came in.");
+        }
+        // More: the same term on Chapter Two's page, another case; a term of its own; one in the caption.
+        D::insert_index_mark(j, d, "story.1", {5, 0}, "Harbor", "smells");
+        D::insert_index_mark(j, d, "story.1", {4, 0}, "Maps");
+        D::insert_index_mark(j, d, "story.1", {3, 0}, "Guild");
+        D::insert_index_mark(j, d, "story.1", {2, 0}, "harbor");
+        auto ix = L::index_entries(d, flows);
+        const auto folio = [&](int p) {
+            const auto c = L::caret_at(d, "story.1", flows.get(d, "story.1"), {p, 0});
+            return c.ok ? d.folio(d.as<core::Frame>(c.frame)->owner) : std::string{};
+        };
+        check("entries sorted, case folded: guild, harbor, harbor/smells, maps",
+              ix.size() == 4 && ix[0].term == "Guild" && ix[1].term == "harbor" && ix[1].sub.empty() && ix[2].sub == "smells" &&
+                  ix[3].term == "Maps", std::to_string(ix.size()));
+        if (ix.size() == 4) {
+            check("one entry for both cases; its pages in order, each once",
+                  ix[2].marks == 2 && ix[2].folios == std::vector<std::string>{folio(1), folio(5)} && folio(1) != folio(5));
+            check("the term's own line: its own marks' pages", ix[1].marks == 1 && ix[1].folios == std::vector<std::string>{folio(2)});
+        }
+        {   // A sub-entry alone still heads under its term.
+            core::Doc e;
+            core::DocJournal je{e};
+            e.set_door([&je] { return je.open(); });
+            core::load_sample(e);
+            D::insert_index_mark(je, e, "story.1", {1, 0}, "Ships", "cargo");
+            L::FlowCache fe;
+            const auto ex = L::index_entries(e, fe);
+            check("a sub-entry alone: its term heads it, with no pages", ex.size() == 2 && ex[0].term == "Ships" && ex[0].sub.empty() &&
+                                                                          ex[0].pages.empty() && ex[0].marks == 0 && ex[1].sub == "cargo");
+        }
+        // Changed: one step; the same again nothing.
+        check("changed: one step", D::set_index_mark(j, d, "story.1", 4, 0, "Charts", "folding"));
+        check("the same again: nothing", !D::set_index_mark(j, d, "story.1", 4, 0, "Charts", "folding"));
+        check("an empty term: nothing", !D::set_index_mark(j, d, "story.1", 4, 0, " "));
+        // Kept through a character style and through copy / paste; saved.
+        D::set_char_style(j, d, "story.1", {1, 0}, {1, 20}, "style.5");
+        check("a character style keeps it", P(1).index.size() == 1 && P(1).index[0].term == "harbor");
+        const auto c = D::carried_between(S(), {1, 0}, {1, 10});
+        D::edit_text(j, d, "story.1", {3, 0}, {3, 0}, core::text_between(S(), {1, 0}, {1, 10}), "Paste", "", &c);
+        check("pasted: the mark keeps its term", P(3).index.size() == 2 && P(3).index[0] == core::IndexMark{"harbor", "smells"});
+        {
+            core::Doc e;
+            std::string err;
+            check("json: kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        }
+        while (j.can_undo()) j.undo();
+        check("undo all: no marks", P(1).index.empty() && d.strays() == 0);
+    }
+
+    {
+        std::cout << "\n-- the index, built (s135) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto last = d.pages().back();
+        check("a list on no page that isn't one: nothing", D::add_list(j, d, core::ListKind::Index, "Index", "frame.1").empty());
+        const auto n0 = j.size();
+        const auto ix = D::add_list(j, d, core::ListKind::Index, "Index", last);
+        check("a new index: one step, never built", !ix.empty() && j.size() == n0 + 1 && d.as<core::GenList>(ix)->built_entries < 0 &&
+                                                    d.as<core::GenList>(ix)->kind == core::ListKind::Index);
+        L::FlowCache fl;
+        const auto stale_of = [&](const std::string& id) {
+            L::FlowCache f;
+            for (const auto& x : L::stale_lists(d, f)) if (x.list == id) return x.why;
+            return std::string{};
+        };
+        check("not built yet: stale", stale_of(ix) == "Not built yet");
+        D::insert_index_mark(j, d, "story.1", {1, 4}, "harbor", "smells");
+        D::insert_index_mark(j, d, "story.1", {5, 0}, "Harbor", "smells");
+        D::insert_index_mark(j, d, "story.1", {2, 0}, "harbor");
+        D::insert_index_mark(j, d, "story.1", {3, 0}, "guild");
+        D::insert_index_mark(j, d, "story.1", {4, 0}, "Maps");
+        const auto en = L::list_entries(d, fl, ix);
+        const auto f = [&](int p) {
+            const auto c = L::caret_at(d, "story.1", fl.get(d, "story.1"), {p, 0});
+            return c.ok ? d.folio(d.as<core::Frame>(c.frame)->owner) : std::string{};
+        };
+        check("entries: a letter heading each initial; term, its sub-entries",
+              en.size() == 7 && en[0].text == "G" && en[0].level == 0 && en[1].text == "guild" && en[2].text == "H" &&
+                  en[3].text == "harbor" && en[3].level == 1 && en[4].text == "smells" && en[4].level == 2 &&
+                  en[4].folio == f(1) + ", " + f(5) && en[5].text == "M" && en[6].text == "Maps",
+              std::to_string(en.size()));
+        check("built: one step", L::build_list(j, d, ix));
+        const auto* l = d.as<core::GenList>(ix);
+        const auto* st = d.as<core::Story>(l->story);
+        check("written into a new story on its page", st && st->paras.size() == 7 && l->built_entries == 7);
+        if (st && st->paras.size() == 7) {
+            check("  \"harbor, n\" -- a comma, not a tab", st->paras[3].text == "harbor, " + f(2) && st->paras[4].text == "smells, " + f(1) + ", " + f(5));
+            const auto* hs = d.as<core::Style>(st->paras[0].style);
+            const auto* s1 = d.as<core::Style>(st->paras[1].style);
+            const auto* s2 = d.as<core::Style>(st->paras[4].style);
+            check("  letters in a \"Letter\" style, bold; sub-entries indented",
+                  hs && s1 && s2 && hs->name == s1->name + " Letter" && hs->bold && s2->left_indent > s1->left_indent);
+        }
+        check("built: current", stale_of(ix).empty(), stale_of(ix));
+        check("again: nothing", !L::build_list(j, d, ix));
+        D::insert_index_mark(j, d, "story.1", {0, 0}, "anchors");
+        check("a new mark: stale, saying which", stale_of(ix) == "\u201cA\u201d not listed yet", stale_of(ix));
+        L::build_list(j, d, ix);
+        D::edit_text(j, d, "story.1", {2, 0}, {2, 3}, "", "Delete", "");   // the harbor mark at {2,0} gone
+        check("a mark gone: stale", !stale_of(ix).empty(), stale_of(ix));
+        {   // A title written above the entries: kept by a rebuild.
+            core::Story t = *d.as<core::Story>(d.as<core::GenList>(ix)->story);
+            t.paras.insert(t.paras.begin(), core::Para{t.paras[1].style, "Index"});
+            j.run("title", {d.as<core::GenList>(ix)->story}, [&] { d.put(d.as<core::GenList>(ix)->story, t); });
+            L::build_list(j, d, ix);
+            const auto& w = d.as<core::Story>(d.as<core::GenList>(ix)->story)->paras;
+            check("a title above: kept; the letters after it", w.size() > 2 && w[0].text == "Index" && w[1].text == "A");
+        }
+        {   // The inspector: Build offered; marks counted.
+            const auto o = core::project(d, "", nullptr, nullptr, nullptr);
+            bool build = false, marks = false;
+            for (const auto& it : o.items())
+                if (it.id == ix)
+                    for (const auto& fd : it.fields) {
+                        build = build || (fd.edit == "genlist" && !fd.choices.empty());
+                        marks = marks || (fd.label == "Marks" && fd.value == "5");
+                    }
+            check("the inspector: Build offered, the marks counted", build && marks);
+        }
+        while (j.can_undo()) j.undo();
+        check("undo all: no index", !d.as<core::GenList>(ix) && d.strays() == 0);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

@@ -115,6 +115,20 @@ std::vector<PdfLink> note_links(const core::Doc& d, FlowCache& flows);
 // where it is set. Gone or not on a page: no link. Frames turned left out.
 std::vector<PdfLink> xref_links(const core::Doc& d, FlowCache& flows);
 
+// s134: the index as the marks make it -- one entry for each term (and
+// each sub-entry under it), sorted as a reader looks them up (case folded,
+// then as written), with the pages its marks land on: in page order, each
+// once. A mark on no page (overset, a story not placed) counts its entry
+// but adds no page.
+struct IndexEntry {
+    std::string term, sub;                 // sub "": the term's own line
+    std::vector<std::string> pages;        // page ids
+    std::vector<std::string> folios;       // ... as numbered
+    int marks = 0;
+    bool operator==(const IndexEntry&) const = default;
+};
+std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows);
+
 // s087: a generated list's entries -- each paragraph it gathers, in reading
 // order: its text (tabs as spaces, trimmed) and the folio of the page it
 // lands on. Overset / master paragraphs left out.

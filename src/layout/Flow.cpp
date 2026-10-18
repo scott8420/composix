@@ -1993,7 +1993,7 @@ Resolved resolve_story(const core::Doc& d, const std::string& story, const std::
                 const int idx = core::marks_in(src, core::kMarkRef, 0, i);
                 v = idx < static_cast<int>(refs.size()) ? ref_value(d, refs[static_cast<std::size_t>(idx)], targets) : std::string("??");
                 r.refs.push_back({p, idx, static_cast<int>(out.size()), static_cast<int>(out.size() + v.size())});   // s131
-            } else if (k == 6) {
+            } else if (k == 6 || k == 7) {   // s134: an index entry -- nothing to see either
                 v.clear();   // an anchor: nothing to see
             } else {
                 v = d.as<core::Page>(page) ? marker_value(d, k, page, frame) : src.substr(i, 3);

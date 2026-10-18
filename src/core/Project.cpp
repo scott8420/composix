@@ -686,11 +686,16 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             now += used[st];
             from += (from.empty() ? "" : ", ") + style_name(d, st);
         }
+        if (l.kind == ListKind::Index) {   // s135: an index counts its marks
+            now = 0;
+            for (const auto& sid : d.ids_of<Story>())
+                for (const auto& p : d.as<Story>(sid)->paras) now += static_cast<int>(p.index.size());
+        }
         const bool never = l.built_entries < 0;
         bool stale = !never && l.built_entries != now;
         std::string built = never ? "Never" : stale ? "Stale — built with " + std::to_string(l.built_entries)
                                                     : "Current";
-        if (stale_lists && l.kind == ListKind::Contents && !never) {   // s089: what Build would change
+        if (stale_lists && (l.kind == ListKind::Contents || l.kind == ListKind::Index) && !never) {   // s135: an index too   // s089: what Build would change
             const auto it = stale_lists->find(lid);
             stale = it != stale_lists->end();
             built = stale ? "Out of date — " + it->second : "Current";
@@ -733,13 +738,19 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 drop,
                 [&] {   // s087: Build -- writes the entries, with their folios, into the list's story
                     Field act{"", "", "genlist", {}};
-                    if (l.kind == ListKind::Contents && (!l.story.empty() || !l.placed_on.empty()))
+                    if ((l.kind == ListKind::Contents || l.kind == ListKind::Index) && (!l.story.empty() || !l.placed_on.empty()))
                         act.choices.push_back({"build", never ? "Build" : "Rebuild"});
                     act.buttons = true;
                     return act;
                 }()}};
         // s090: the entry rows before the Build action
         it.fields.insert(it.fields.end() - 1, entry_rows.begin(), entry_rows.end());
+        if (l.kind == ListKind::Index) {   // s135: made from index marks, not styles -- no levels to pick
+            std::erase_if(it.fields, [](const Field& f) { return f.edit == "list_add" || f.edit == "list_remove"; });
+            for (auto& f : it.fields)
+                if (f.label == "From") f.value = "Index marks";
+                else if (f.label == "Entries") f.label = "Marks";
+        }
         o.add(std::move(it));
     }
 

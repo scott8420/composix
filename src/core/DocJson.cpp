@@ -156,6 +156,15 @@ json to(const Record& r) {
                     jp["refs"] = rs;
                 }
                 if (!p.anchors.empty()) jp["anchors"] = p.anchors;   // s128
+                if (!p.index.empty()) {   // s134
+                    json xs = json::array();
+                    for (const auto& m : p.index) {
+                        json jm = {{"term", m.term}};
+                        if (!m.sub.empty()) jm["sub"] = m.sub;
+                        xs.push_back(jm);
+                    }
+                    jp["index"] = xs;
+                }
                 paras.push_back(jp);
             }
             j = {{"kind", "story"}, {"name", v.name}, {"paras", paras}};
@@ -380,6 +389,8 @@ std::optional<Record> from(const json& j) {
                                              val<std::string>(r, "pattern", "")});   // s129
                 if (p.contains("anchors") && p.at("anchors").is_array())
                     for (const auto& a : p.at("anchors")) para.anchors.push_back(a.is_string() ? a.get<std::string>() : std::string{});
+                if (p.contains("index") && p.at("index").is_array())   // s134
+                    for (const auto& m : p.at("index")) para.index.push_back({val<std::string>(m, "term", ""), val<std::string>(m, "sub", "")});
                 fit_marks(para);
                 v.paras.push_back(std::move(para));
             }

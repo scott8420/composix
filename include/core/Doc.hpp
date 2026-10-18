@@ -281,6 +281,14 @@ struct XRef {
     std::string pattern;                 // s129: Custom -- # the page, % the words, * the note's number
     bool operator==(const XRef&) const = default;
 };
+// s134: an index entry marked in the text (kMarkIndex): its term, and a
+// sub-entry under it if any ("Harbors" / "fees"). Kept with its paragraph
+// as notes and references are (the k-th mark is index[k]).
+struct IndexMark {
+    std::string term;
+    std::string sub;
+    bool operator==(const IndexMark&) const = default;
+};
 // s129: the pattern a reference shows by (Custom: its own).
 std::string ref_pattern(const XRef& r);
 
@@ -296,6 +304,7 @@ struct Para {
     std::vector<Note> notes;             // s109: one for each kMarkNote in text, in order
     std::vector<XRef> refs;              // s128: one for each kMarkRef in text, in order
     std::vector<std::string> anchors;    // s128: one id for each kMarkAnchor in text, in order
+    std::vector<IndexMark> index;        // s134: one for each kMarkIndex in text, in order
     bool operator==(const Para&) const = default;
 };
 
@@ -835,6 +844,7 @@ struct Carried {
     std::vector<Note> notes;
     std::vector<XRef> refs;
     std::vector<std::string> anchors;
+    std::vector<IndexMark> index;   // s134
     bool operator==(const Carried&) const = default;
 };
 Carried carried_between(const Story& s, TextPos a, TextPos b);
@@ -874,6 +884,18 @@ RefAt ref_near(const Story& s, TextPos at);
 bool set_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, RefShow show, const std::string& pattern = {});
 bool retarget_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const Doc::Id& to_story, int to_para,
                   int note_k, RefShow show, const std::string& pattern = {});
+// s134: an index entry at `at` -- its mark in the text, its term (trimmed;
+// empty: nothing) and sub-entry. One step; the place after the mark
+// (`at` when nothing changed).
+TextPos insert_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& term,
+                          const std::string& sub = {});
+// s134: the index mark at `at` or ending there: its paragraph and index; k -1 none.
+struct IndexAt { int para = -1, k = -1, byte = -1; };
+IndexAt index_near(const Story& s, TextPos at);
+// s134: a mark's term and sub-entry changed (term empty: nothing). One step;
+// false if nothing changed.
+bool set_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const std::string& term,
+                    const std::string& sub = {});
 // Where an anchor is: its story, paragraph and byte; story "" when none.
 struct AnchorAt { Doc::Id story; TextPos at; };
 AnchorAt find_anchor(const Doc& d, const std::string& id);
@@ -989,6 +1011,9 @@ bool    remove_guide(DocJournal& j, Doc& d, const Doc::Id& guide);
 // else level 1's as found, else (deeper levels) a style "<level 1's name>
 // <n>" -- found by name or made: based on level 1's, indented 12 pt a level
 // (its tab stops pulled in as much, so they stay put on the page).
+// s135: an index's entries: page numbers after ", " (not a tab), and level 0
+// a letter heading ("H") -- no number, in "<level 1's name> Letter" (found
+// by name or made: based on level 1's, bold, 6 pt more space before).
 struct ListEntry {
     std::string text, folio;
     int         level = 1;
@@ -999,6 +1024,9 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
 // first, when it has words and no tab and either stands alone or some later
 // paragraph is in another style. (Entries may have no tab -- page numbers off.)
 int list_title_paras(const Story& st);
+// s135: the same for an index -- a first paragraph of one character is its
+// first letter heading, not a title.
+int list_title_paras(const Story& st, ListKind kind);
 // s088: the paragraph styles a list gathers, in level order (others dropped,
 // each once). One step; the same -> no step.
 bool set_list_styles(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Doc::Id>& styles);
@@ -1006,6 +1034,9 @@ bool set_list_styles(DocJournal& j, Doc& d, const Doc::Id& list, const std::vect
 // page numbers on / off. One step; no change -> no step.
 bool set_list_entry_style(DocJournal& j, Doc& d, const Doc::Id& list, int level, const Doc::Id& style);
 bool set_list_numbers(DocJournal& j, Doc& d, const Doc::Id& list, bool on);
+// s135: a new generated list of `kind`, named, placed on page `on` ("" none):
+// one step; its id ("" when `on` isn't a page and isn't ""). Built later.
+Doc::Id add_list(DocJournal& j, Doc& d, ListKind kind, const std::string& name, const Doc::Id& on);
 
 // The verb table the selftest walks: every verb, runnable on the sample.
 struct Verb {
@@ -1169,6 +1200,7 @@ inline constexpr const char* kMarkPrev    = "\xEE\x80\x83";   // U+E003: the pre
 inline constexpr const char* kMarkNote    = "\xEE\x80\x84";   // U+E004
 inline constexpr const char* kMarkRef     = "\xEE\x80\x85";   // U+E005: s128, a cross-reference (Para::refs)
 inline constexpr const char* kMarkAnchor  = "\xEE\x80\x86";   // U+E006: s128, a place references point at (Para::anchors)
+inline constexpr const char* kMarkIndex   = "\xEE\x80\x87";   // U+E007: s134, an index entry (Para::index)
 bool note_at(const std::string& text, std::size_t i);
 int  notes_in(const std::string& text, std::size_t from = 0, std::size_t to = std::string::npos);   // the marks in [from, to)
 // The number the k-th note of paragraph p takes (1-based, through the story).
@@ -1180,7 +1212,7 @@ int  note_number(const Doc& d, const Story& s, int p, int k);
 // The paragraph's notes made to match its marks (missing ones empty, extras dropped).
 void fit_notes(Para& p);
 // Which marker starts at text[i] (0 page, 1 section, 2 next, 3 previous;
-// s128: 5 a cross-reference, 6 an anchor; -1 none -- a footnote's mark is
+// s128: 5 a cross-reference, 6 an anchor; s134: 7 an index entry; -1 none -- a footnote's mark is
 // note_at's).
 int marker_at(const std::string& text, std::size_t i);
 // s128: how a marker shows where its value isn't filled in (the editors, a
@@ -1189,7 +1221,7 @@ int marker_at(const std::string& text, std::size_t i);
 const char* marker_sign(int k);
 // s128: how many of `mark` (a three-byte marker) are in text[from, to).
 int marks_in(const std::string& text, const char* mark, std::size_t from = 0, std::size_t to = std::string::npos);
-// s128: a paragraph's refs and anchors made to match its marks.
+// s128: a paragraph's refs and anchors (s134: and index marks) made to match its marks.
 void fit_marks(Para& p);
 bool has_markers(const Story& s);
 // s026: the width text is usually set at -- the trim less the first

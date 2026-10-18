@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <cctype>
 #include <set>
 
 namespace composix::layout {
@@ -329,6 +330,72 @@ std::vector<PdfLink> note_links(const core::Doc& d, FlowCache& flows) {   // s12
     return out;
 }
 
+namespace {
+// s134: a string's simple case fold (core::fold_char over its code points), for sorting.
+std::string folded(const std::string& t) {
+    std::string out;
+    for (std::size_t i = 0; i < t.size();) {
+        const auto c = static_cast<unsigned char>(t[i]);
+        const int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1;
+        if (i + static_cast<std::size_t>(n) > t.size()) { out += t.substr(i); break; }
+        char32_t cp = n == 1 ? c : n == 2 ? (c & 0x1F) : n == 3 ? (c & 0x0F) : (c & 0x07);
+        for (int q = 1; q < n; ++q) cp = (cp << 6) | (static_cast<unsigned char>(t[i + static_cast<std::size_t>(q)]) & 0x3F);
+        cp = core::doc::fold_char(cp);
+        if (cp < 0x80) out += static_cast<char>(cp);
+        else if (cp < 0x800) { out += static_cast<char>(0xC0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) { out += static_cast<char>(0xE0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); out += static_cast<char>(0x80 | (cp & 0x3F)); }
+        else { out += static_cast<char>(0xF0 | (cp >> 18)); out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); out += static_cast<char>(0x80 | (cp & 0x3F)); }
+        i += static_cast<std::size_t>(n);
+    }
+    return out;
+}
+}  // namespace
+
+std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   // s134
+    struct Key {
+        std::string ft, fs;   // folded
+        bool operator<(const Key& o) const { return ft != o.ft ? ft < o.ft : fs < o.fs; }
+    };
+    std::map<Key, IndexEntry> by;
+    for (const auto& sid : d.ids_of<core::Story>()) {
+        const auto& st = *d.as<core::Story>(sid);
+        if (std::none_of(st.paras.begin(), st.paras.end(), [](const core::Para& p) { return !p.index.empty(); })) continue;
+        const auto& flow = flows.get(d, sid);
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            const auto& para = st.paras[static_cast<std::size_t>(p)];
+            int k = 0;
+            for (std::size_t i = para.text.find(core::kMarkIndex); i != std::string::npos; i = para.text.find(core::kMarkIndex, i + 3), ++k) {
+                if (k >= static_cast<int>(para.index.size())) break;
+                const auto& m = para.index[static_cast<std::size_t>(k)];
+                if (m.term.empty()) continue;
+                std::string page;
+                for (const auto& ft : flow.frames) {
+                    for (const auto& l : ft.lines)
+                        if (l.para == p && static_cast<int>(i) >= l.start && static_cast<int>(i) <= std::max(l.end, l.start + 1))
+                            if (const auto* f = d.as<core::Frame>(ft.frame); f && d.as<core::Page>(f->owner)) { page = f->owner; break; }
+                    if (!page.empty()) break;
+                }
+                // A sub-entry's term heads it (a line of its own, perhaps with no pages).
+                if (!m.sub.empty()) {
+                    auto& head = by[{folded(m.term), {}}];
+                    if (head.term.empty()) head.term = m.term;
+                }
+                auto& e = by[{folded(m.term), folded(m.sub)}];
+                if (e.term.empty()) { e.term = m.term; e.sub = m.sub; }
+                ++e.marks;
+                if (!page.empty() && std::find(e.pages.begin(), e.pages.end(), page) == e.pages.end()) e.pages.push_back(page);
+            }
+        }
+    }
+    std::vector<IndexEntry> out;
+    for (auto& [key, e] : by) {
+        std::sort(e.pages.begin(), e.pages.end(), [&](const std::string& a, const std::string& b) { return d.page_index(a) < d.page_index(b); });
+        for (const auto& pg : e.pages) e.folios.push_back(d.folio(pg));
+        out.push_back(std::move(e));
+    }
+    return out;
+}
+
 std::vector<PdfLink> xref_links(const core::Doc& d, FlowCache& flows) {   // s131
     std::vector<PdfLink> out;
     // Where an anchor points: its page and how far down; page "" none.
@@ -469,6 +536,28 @@ SheetAt sheet_of(const std::vector<Sheet>& sheets, const std::string& page) {   
 std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& flows, const std::string& list) {   // s087
     std::vector<core::doc::ListEntry> out;
     const auto* l = d.as<core::GenList>(list);
+    if (l && l->kind == core::ListKind::Index) {   // s135: the index marks' entries, a letter heading each initial
+        std::string group;
+        for (const auto& e : index_entries(d, flows)) {
+            std::string folios;
+            for (const auto& f : e.folios) folios += (folios.empty() ? "" : ", ") + f;
+            if (e.sub.empty()) {
+                // The initial: its first character, folded; shown upper case (ASCII) or as written.
+                const auto c = static_cast<unsigned char>(e.term[0]);
+                const std::size_t n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
+                const auto first = e.term.substr(0, std::min(n, e.term.size()));
+                const auto key = folded(first);
+                if (key != group) {
+                    group = key;
+                    std::string shown = first;
+                    if (n == 1) shown = std::string(1, static_cast<char>(std::isalpha(c) ? std::toupper(c) : c));
+                    out.push_back({shown, "", 0});
+                }
+            }
+            out.push_back({e.sub.empty() ? e.term : e.sub, folios, e.sub.empty() ? 1 : 2});
+        }
+        return out;
+    }
     if (!l || l->from_styles.empty()) return out;
     for (const auto& m : list_marks(d, flows, *l, {})) out.push_back({trimmed(m.title), d.folio(m.page), m.level});
     return out;
@@ -536,6 +625,30 @@ std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows) {   // 
                     why = "Entries not in " + want->name;
             }
         }
+        if (!why.empty()) out.push_back({lid, why});
+    }
+    // s135: an index -- its written paragraphs against what the marks make now.
+    for (const auto& lid : d.ids_of<core::GenList>()) {
+        const auto& l = *d.as<core::GenList>(lid);
+        if (l.kind != core::ListKind::Index) continue;
+        const auto* st = l.story.empty() ? nullptr : d.as<core::Story>(l.story);
+        if (!st && l.placed_on.empty()) continue;
+        if (!st || l.built_entries < 0) { out.push_back({lid, "Not built yet"}); continue; }
+        const auto en = list_entries(d, flows, lid);
+        std::vector<std::string> want, had;
+        for (const auto& e : en) want.push_back(e.level == 0 || !l.numbers || e.folio.empty() ? e.text : e.text + ", " + e.folio);
+        for (auto k = static_cast<std::size_t>(core::doc::list_title_paras(*st, l.kind)); k < st->paras.size(); ++k) had.push_back(st->paras[k].text);
+        if (had.size() == 1 && had[0].empty()) had.clear();   // built with no entries
+        std::string why;
+        const auto name = [](const core::doc::ListEntry& e) { return "\u201c" + e.text + "\u201d"; };
+        for (std::size_t i = 0; i < std::min(want.size(), had.size()) && why.empty(); ++i) {
+            if (want[i] == had[i]) continue;
+            const auto& e = en[i];
+            if (e.level > 0 && had[i].rfind(e.text, 0) == 0) why = name(e) + ": pages now " + (e.folio.empty() ? "none" : e.folio);
+            else why = name(e) + " not listed yet";
+        }
+        if (why.empty() && want.size() > had.size()) why = name(en[had.size()]) + " not listed yet";
+        if (why.empty() && had.size() > want.size()) why = "\u201c" + had[want.size()] + "\u201d listed, no such entry";
         if (!why.empty()) out.push_back({lid, why});
     }
     return out;

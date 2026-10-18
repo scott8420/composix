@@ -1412,6 +1412,36 @@ bool set_list_numbers(DocJournal& j, Doc& d, const Doc::Id& list, bool on) {   /
     });
 }
 
+Doc::Id add_list(DocJournal& j, Doc& d, ListKind kind, const std::string& name, const Doc::Id& on) {   // s135
+    if (!on.empty() && !d.as<Page>(on)) return {};
+    double pos = 0;
+    for (const auto& id : d.ids_of<GenList>()) pos = std::max(pos, d.as<GenList>(id)->pos);
+    const Doc::Id id = d.fresh_id("list");
+    GenList l;
+    l.name = name;
+    l.kind = kind;
+    l.pos = pos + 1;
+    l.placed_on = on;
+    l.built_entries = -1;
+    j.run("New " + name, {}, [&]() -> std::vector<Doc::Id> { d.put(id, l); return {id}; });
+    return id;
+}
+
+namespace {
+bool letter_head(const std::string& w) {   // s135: one character -- an index's letter heading
+    if (w.empty()) return false;
+    const auto c = static_cast<unsigned char>(w[0]);
+    const std::size_t n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
+    return w.size() == n;
+}
+}  // namespace
+
+int list_title_paras(const Story& st, ListKind kind) {   // s135
+    const int t = list_title_paras(st);
+    if (kind != ListKind::Index || t == 0) return t;
+    return letter_head(st.paras.front().text) ? 0 : t;
+}
+
 bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<ListEntry>& entries) {   // s087
     const auto* l = d.as<GenList>(list);
     if (!l) return false;
@@ -1422,8 +1452,14 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
     Doc::Id entry_style;
     std::vector<Para> paras;
     if (st) {   // s090: the title by style (entries may have no tab)
-        const auto t = static_cast<std::size_t>(list_title_paras(*st));
+        const auto t = static_cast<std::size_t>(list_title_paras(*st, l->kind));   // s135: an index's letter isn't a title
         if (t < st->paras.size()) entry_style = st->paras[t].style;
+        if (l->kind == ListKind::Index)   // s135: level 1's style -- the first entry that isn't a letter heading
+            for (auto k = t; k < st->paras.size(); ++k)
+                if (!letter_head(st->paras[k].text)) {
+                    entry_style = st->paras[k].style;
+                    break;
+                }
         else if (!st->paras.empty()) entry_style = st->paras.front().style;
         if (t == 1) paras.push_back(st->paras.front());   // the title
     } else {
@@ -1455,18 +1491,51 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
         if (id.empty()) id = entry_style;   // no base to make one from: level 1's (made ones replace it below)
         lv_style[static_cast<std::size_t>(lv)] = id;
     }
+    // s135: an index's letter headings -- their style found by name, else made below.
+    Doc::Id head_style;
+    bool make_head = false;
+    if (std::any_of(entries.begin(), entries.end(), [](const ListEntry& e) { return e.level == 0; })) {
+        if (base) {
+            const std::string want = base->name + " Letter";
+            for (const auto& s : d.ids_of<Style>())
+                if (const auto* x = d.as<Style>(s); x->kind == StyleKind::Paragraph && x->name == want) { head_style = s; break; }
+            make_head = head_style.empty();
+        }
+        if (head_style.empty()) head_style = entry_style;
+    }
+    const std::string sep = l->kind == ListKind::Index ? ", " : "\t";   // s135: an index: "harbor, 1, 3"
     const std::size_t title = paras.size();
-    for (const auto& e : entries)
+    for (const auto& e : entries) {
+        if (e.level == 0) { paras.push_back({head_style, e.text}); continue; }
         paras.push_back({lv_style[static_cast<std::size_t>(std::clamp(e.level, 1, deepest))],
-                         l->numbers ? e.text + "\t" + e.folio : e.text});   // s090: or the words alone
+                         l->numbers && !(l->kind == ListKind::Index && e.folio.empty()) ? e.text + sep + e.folio
+                                                                                        : e.text});   // s090: or the words alone
+    }
     if (paras.empty()) paras.push_back({entry_style, ""});
     const int n = static_cast<int>(entries.size());
-    if (st && to_make.empty() && st->paras == paras && l->built_entries == n) return false;
+    if (st && to_make.empty() && !make_head && st->paras == paras && l->built_entries == n) return false;
     std::vector<Doc::Id> ids{list};
     if (st) ids.push_back(l->story);
     return j.run("Build " + l->name, ids, [&]() -> std::vector<Doc::Id> {
         std::vector<Doc::Id> made;
         GenList nl = *d.as<GenList>(list);
+        if (make_head) {   // s135: the letter headings' style
+            double pos = 0;
+            for (const auto& s : d.ids_of<Style>()) pos = std::max(pos, d.as<Style>(s)->pos);
+            Style ns = *d.as<Style>(entry_style);
+            ns.name = ns.name + " Letter";
+            ns.pos = pos + 1;
+            ns.based_on = entry_style;
+            ns.next.clear();
+            ns.bold = true;
+            ns.space_before += 6;
+            ns.own = {"bold", "space_before"};
+            const Doc::Id sid = d.fresh_id("style");
+            d.put(sid, ns);
+            made.push_back(sid);
+            for (std::size_t k = 0; k < entries.size(); ++k)
+                if (entries[k].level == 0) paras[title + k].style = sid;
+        }
         // s088: the deeper levels' styles, made on first need.
         if (!to_make.empty()) {
             double pos = 0;
@@ -1484,7 +1553,7 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
                 d.put(sid, ns);
                 made.push_back(sid);
                 for (std::size_t k = 0; k < entries.size(); ++k)
-                    if (std::clamp(entries[k].level, 1, deepest) == lv) paras[title + k].style = sid;
+                    if (entries[k].level > 0 && std::clamp(entries[k].level, 1, deepest) == lv) paras[title + k].style = sid;
                 if (nl.entry_styles.size() < static_cast<std::size_t>(lv)) nl.entry_styles.resize(static_cast<std::size_t>(lv));
                 nl.entry_styles[static_cast<std::size_t>(lv - 1)] = sid;
             }
@@ -1759,6 +1828,7 @@ Carried carried_between(const Story& s, TextPos a, TextPos b) {   // s132
         take(kMarkNote, para.notes, c.notes);
         take(kMarkRef, para.refs, c.refs);
         take(kMarkAnchor, para.anchors, c.anchors);
+        take(kMarkIndex, para.index, c.index);   // s134
     }
     return c;
 }
@@ -1823,6 +1893,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     // reference keeps its target, a pasted anchor gets no id (one place, one id).
     std::vector<XRef> refs;
     std::vector<std::string> anchors;
+    std::vector<IndexMark> index;   // s134
     std::size_t pasted_from = 0, pasted_to = 0;   // s132: anchors[from, to) came with the paste
     {
         Para fa = pa, fb = pb;
@@ -1840,6 +1911,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         pasted_from = static_cast<std::size_t>(marks_in(fa.text, kMarkAnchor, 0, static_cast<std::size_t>(a.byte)));
         pasted_to = pasted_from + static_cast<std::size_t>(marks_in(text, kMarkAnchor));
         carry(fa.anchors, fb.anchors, kMarkAnchor, anchors, std::string{}, with ? &with->anchors : nullptr);
+        carry(fa.index, fb.index, kMarkIndex, index, IndexMark{}, with ? &with->index : nullptr);   // s134
     }
 
     std::vector<Para> made;
@@ -1870,10 +1942,11 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     }
     std::vector<std::pair<int, int>> pasted;   // s132: (paragraph in made, anchor index) of each pasted anchor
     {   // s128: and its refs and anchors
-        std::size_t ar = 0, aa = 0;
+        std::size_t ar = 0, aa = 0, ai = 0;
         for (int mi = 0; mi < static_cast<int>(made.size()); ++mi) {
             auto& m = made[static_cast<std::size_t>(mi)];
             for (int k = 0; k < marks_in(m.text, kMarkRef); ++k) m.refs.push_back(ar < refs.size() ? refs[ar++] : XRef{});
+            for (int k = 0; k < marks_in(m.text, kMarkIndex); ++k) m.index.push_back(ai < index.size() ? index[ai++] : IndexMark{});   // s134
             for (int k = 0; k < marks_in(m.text, kMarkAnchor); ++k) {
                 if (aa >= pasted_from && aa < pasted_to) pasted.emplace_back(mi, k);
                 m.anchors.push_back(aa < anchors.size() ? anchors[aa++] : std::string{});
@@ -1947,6 +2020,7 @@ bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
         para.notes = std::move(was.notes);     // s113: and its footnotes (were dropped)
         para.refs = std::move(was.refs);       // s128
         para.anchors = std::move(was.anchors);
+        para.index = std::move(was.index);     // s134
     }
     if (s == *st) return false;
     return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
@@ -1978,6 +2052,7 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
         para.notes = std::move(was.notes);     // s113: and its footnotes (were dropped)
         para.refs = std::move(was.refs);       // s128
         para.anchors = std::move(was.anchors);
+        para.index = std::move(was.index);     // s134
     }
     if (s == *st) return false;
     return j.run(label, {story}, [&] { d.put(story, s); });
@@ -2580,6 +2655,58 @@ bool retarget_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, 
     return true;
 }
 
+namespace {
+std::string trim_ws(std::string t) {
+    const auto a = t.find_first_not_of(" \t\n\r");
+    if (a == std::string::npos) return {};
+    return t.substr(a, t.find_last_not_of(" \t\n\r") - a + 1);
+}
+}  // namespace
+
+TextPos insert_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& term,
+                          const std::string& sub) {   // s134
+    const auto* st = d.as<Story>(story);
+    const auto t = trim_ws(term);
+    if (!st || st->paras.empty() || t.empty()) return at;
+    Story s = *st;
+    at = clamp_pos(s, at);
+    auto& para = s.paras[static_cast<std::size_t>(at.para)];
+    fit_marks(para);
+    const int k = marks_in(para.text, kMarkIndex, 0, static_cast<std::size_t>(at.byte));
+    put_mark(s, at, kMarkIndex);
+    para.index.insert(para.index.begin() + k, IndexMark{t, trim_ws(sub)});
+    j.run("Index Entry", {story}, [&] { d.put(story, s); });
+    return {at.para, at.byte + 3};
+}
+
+IndexAt index_near(const Story& s, TextPos at) {   // s134
+    if (at.para < 0 || at.para >= static_cast<int>(s.paras.size())) return {};
+    const auto& para = s.paras[static_cast<std::size_t>(at.para)];
+    for (const int b : {at.byte, at.byte - 3}) {
+        if (b < 0 || static_cast<std::size_t>(b) + 3 > para.text.size()) continue;
+        if (para.text.compare(static_cast<std::size_t>(b), 3, kMarkIndex) != 0) continue;
+        const int k = marks_in(para.text, kMarkIndex, 0, static_cast<std::size_t>(b));
+        if (k < static_cast<int>(para.index.size())) return {at.para, k, b};
+    }
+    return {};
+}
+
+bool set_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const std::string& term,
+                    const std::string& sub) {   // s134
+    const auto* st = d.as<Story>(story);
+    const auto t = trim_ws(term);
+    if (!st || t.empty() || para < 0 || para >= static_cast<int>(st->paras.size()) || k < 0 ||
+        k >= static_cast<int>(st->paras[static_cast<std::size_t>(para)].index.size()))
+        return false;
+    Story s = *st;
+    auto& m = s.paras[static_cast<std::size_t>(para)].index[static_cast<std::size_t>(k)];
+    const IndexMark want{t, trim_ws(sub)};
+    if (m == want) return false;
+    m = want;
+    j.run("Index Entry", {story}, [&] { d.put(story, s); });
+    return true;
+}
+
 int note_mark_byte(const Story& s, int p, int k) {   // s113
     if (p < 0 || p >= static_cast<int>(s.paras.size()) || k < 0) return -1;
     const auto& t = s.paras[static_cast<std::size_t>(p)].text;
@@ -3158,6 +3285,11 @@ const std::vector<Verb>& verbs() {
         {"retarget_ref", [](DocJournal& j, Doc& d) {
             j.run("t", {"story.1"}, [&] { insert_ref(j, d, "story.1", {1, 4}, "", RefShow::Page); retarget_ref(j, d, "story.1", 1, 0, "story.1", 4, -1, RefShow::Text); });
         }},
+        {"insert_index_mark", [](DocJournal& j, Doc& d) { insert_index_mark(j, d, "story.1", {1, 4}, "Harbors", "smells"); }},   // s134
+        {"set_index_mark", [](DocJournal& j, Doc& d) {   // s134: the sample has none -- made and changed in one step
+            j.run("t", {"story.1"}, [&] { insert_index_mark(j, d, "story.1", {1, 4}, "Harbors"); set_index_mark(j, d, "story.1", 1, 0, "Ports", "fees"); });
+        }},
+        {"add_list", [](DocJournal& j, Doc& d) { add_list(j, d, ListKind::Index, "Index", d.pages().back()); }},   // s135
         {"insert_ref_to_note", [](DocJournal& j, Doc& d) { insert_ref_to_note(j, d, "story.1", {1, 4}, "story.1", 5, 0, RefShow::Custom, "note *"); }},   // s129: the sample's note
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
@@ -3456,7 +3588,7 @@ int marker_at(const std::string& t, std::size_t i) {
     if (i + 3 > t.size()) return -1;
     if (static_cast<unsigned char>(t[i]) != 0xEE || static_cast<unsigned char>(t[i + 1]) != 0x80) return -1;
     const int k = static_cast<unsigned char>(t[i + 2]) - 0x80;
-    return (k >= 0 && k <= 3) || k == 5 || k == 6 ? k : -1;   // s128: 5 a reference, 6 an anchor
+    return (k >= 0 && k <= 3) || k == 5 || k == 6 || k == 7 ? k : -1;   // s128: 5 a reference, 6 an anchor; s134: 7 an index entry
 }
 
 const char* marker_sign(int k) {   // s128 (the signs were s023's, in two places)
@@ -3467,6 +3599,7 @@ const char* marker_sign(int k) {   // s128 (the signs were s023's, in two places
     case 3: return "\xE3\x80\x8A";   // 《
     case 5: return "\xE2\x86\x92";   // → a cross-reference
     case 6: return "\xE2\x81\xA0";   // word joiner: an anchor, unseen
+    case 7: return "\xE2\x81\xA0";   // s134: and an index entry
     default: return "\xEF\xBF\xBD";
     }
 }
@@ -3481,6 +3614,7 @@ int marks_in(const std::string& t, const char* mark, std::size_t from, std::size
 void fit_marks(Para& p) {   // s128
     p.refs.resize(static_cast<std::size_t>(marks_in(p.text, kMarkRef)));
     p.anchors.resize(static_cast<std::size_t>(marks_in(p.text, kMarkAnchor)));
+    p.index.resize(static_cast<std::size_t>(marks_in(p.text, kMarkIndex)));   // s134
 }
 
 bool note_at(const std::string& t, std::size_t i) {   // s109
