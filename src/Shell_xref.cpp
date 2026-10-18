@@ -4,6 +4,7 @@
 
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
+#include <gtkmm/checkbutton.h>
 #include <gtkmm/dropdown.h>
 #include <gtkmm/entry.h>
 #include <gtkmm/label.h>
@@ -74,6 +75,7 @@ void Shell::open_xref(int edit_para, int edit_k) {
         cur = st->paras[static_cast<std::size_t>(edit_para)].refs[static_cast<std::size_t>(edit_k)];
         m_xref_show = static_cast<int>(cur.show);
         if (cur.show == core::RefShow::Custom) m_xref_pattern = cur.pattern;
+        if (cur.show == core::RefShow::Cite) m_xref_locator = cur.pattern;   // s143
         cur_at = core::doc::find_anchor(m_doc, cur.target);
         if (!cur_at.story.empty())
             cur_note = core::note_at(m_doc.as<core::Story>(cur_at.story)->paras[static_cast<std::size_t>(cur_at.at.para)].text,
@@ -175,11 +177,27 @@ void Shell::open_xref(int edit_para, int edit_k) {
     // s129: a pattern of its own -- # the page, % the words, * the note's number.
     auto pattern = Gtk::make_managed<Gtk::Entry>();
     pattern->set_name("xref.pattern");
-    pattern->set_text(m_xref_pattern.empty() ? std::string("see page #") : m_xref_pattern);
-    pattern->set_tooltip_text("# the page \u00b7 % its words \u00b7 * the note's number");
-    pattern->set_visible(m_xref_show == 4);
-    pattern->signal_changed().connect([this, pattern] { m_xref_pattern = pattern->get_text(); });
-    m_xref_pattern = pattern->get_text();
+    if (m_xref_pattern.empty()) m_xref_pattern = "see page #";
+    // s143: one entry, two uses -- Own...'s pattern, Cite's locator ("p. 14").
+    const auto pattern_for = [this, pattern](int show) {
+        m_xref_entry_fill = true;
+        if (show == 5) {
+            pattern->set_text(m_xref_locator);
+            pattern->set_placeholder_text("a locator, as p. 14 (optional)");
+            pattern->set_tooltip_text("Shown after the number: [2, p. 14]");
+        } else {
+            pattern->set_text(m_xref_pattern);
+            pattern->set_placeholder_text("");
+            pattern->set_tooltip_text("# the page \u00b7 % its words \u00b7 * the note's number \u00b7 ^ a source's number");
+        }
+        m_xref_entry_fill = false;
+        pattern->set_visible(show == 4 || show == 5);
+    };
+    pattern->signal_changed().connect([this, pattern] {
+        if (m_xref_entry_fill) return;
+        (m_xref_show == 5 ? m_xref_locator : m_xref_pattern) = pattern->get_text();
+    });
+    pattern_for(m_xref_show);
     static const char* names[] = {"Page", "Words", "Both", "Note", "Own\u2026", "Cite"};
     static const char* tips[] = {"Its page number", "Its words", "Its words and page", "Its note's number", "Words of my own",
                                  "A source's number in the bibliography: [3]"};   // s141
@@ -189,10 +207,10 @@ void Shell::open_xref(int edit_para, int edit_k) {
         t->set_tooltip_text(tips[i]);
         if (first) t->set_group(*first); else first = t;
         t->set_active(i == std::clamp(m_xref_show, 0, 5));
-        t->signal_toggled().connect([this, t, i, pattern] {
+        t->signal_toggled().connect([this, t, i, pattern_for] {
             if (!t->get_active()) return;
             m_xref_show = i;
-            pattern->set_visible(i == 4);
+            pattern_for(i);
         });
         shows->append(*t);
     }
@@ -207,13 +225,21 @@ void Shell::open_xref(int edit_para, int edit_k) {
         apply->set_halign(Gtk::Align::END);
         apply->signal_clicked().connect([this, story, edit_para, edit_k] {
             const bool did = core::doc::set_ref(m_journal, m_doc, story, edit_para, edit_k,
-                                                static_cast<core::RefShow>(std::clamp(m_xref_show, 0, 5)), m_xref_pattern);
+                                                static_cast<core::RefShow>(std::clamp(m_xref_show, 0, 5)),
+                                                m_xref_show == 5 ? m_xref_locator : m_xref_pattern);
             if (auto lg = log::get(log::Area::Shell)) lg->info("xref: edit {}:{} shows {} -> {}", edit_para, edit_k, m_xref_show, did ? "set" : "nothing");
             if (m_xref_pop) m_xref_pop->popdown();
             if (did) m_canvas_view.canvas().model_changed();
             Glib::signal_idle().connect_once([this] { m_canvas_view.canvas().grab_focus(); });
         });
         box->append(*apply);
+        m_xref_add = false;
+        if (cur.show == core::RefShow::Cite) {   // s143: several sources in one citation
+            auto add = Gtk::make_managed<Gtk::CheckButton>("Add the source I click (\u201c[1, 3]\u201d)");
+            add->set_name("xref.add");
+            add->signal_toggled().connect([this, add] { m_xref_add = add->get_active(); });
+            box->append(*add);
+        }
         auto to = Gtk::make_managed<Gtk::Label>(cur_at.story.empty() ? "Points nowhere now -- its place is gone. Choose another:" : "Or point it elsewhere:");
         to->set_xalign(0);
         to->add_css_class("dim-label");
@@ -240,8 +266,17 @@ void Shell::open_xref(int edit_para, int edit_k) {
         const int tp = t.para, tk = t.k;
         b->signal_clicked().connect([this, story, at, ts, tp, tk, edit, edit_para, edit_k] {
             const auto how = static_cast<core::RefShow>(std::clamp(m_xref_show, 0, 5));
+            const std::string& words = how == core::RefShow::Cite ? m_xref_locator : m_xref_pattern;   // s143
+            if (edit && m_xref_add && tk < 0) {   // s143: one more source in this citation
+                const bool did = core::doc::add_cite_source(m_journal, m_doc, story, edit_para, edit_k, ts, tp);
+                if (auto lg = log::get(log::Area::Shell)) lg->info("xref: cite {}:{} + {} para {} -> {}", edit_para, edit_k, ts, tp, did ? "set" : "nothing");
+                if (m_xref_pop) m_xref_pop->popdown();
+                if (did) m_canvas_view.canvas().model_changed();
+                Glib::signal_idle().connect_once([this] { m_canvas_view.canvas().grab_focus(); });
+                return;
+            }
             if (edit) {   // s130: the reference pointed here instead
-                const bool did = core::doc::retarget_ref(m_journal, m_doc, story, edit_para, edit_k, ts, tp, tk, how, m_xref_pattern);
+                const bool did = core::doc::retarget_ref(m_journal, m_doc, story, edit_para, edit_k, ts, tp, tk, how, words);
                 if (auto lg = log::get(log::Area::Shell)) lg->info("xref: edit {}:{} to {} para {} note {} -> {}", edit_para, edit_k, ts, tp, tk, did ? "set" : "nothing");
                 if (m_xref_pop) m_xref_pop->popdown();
                 if (did) {
@@ -262,8 +297,8 @@ void Shell::open_xref(int edit_para, int edit_k) {
             int mark = -1;
             if (tk >= 0)
                 if (const auto* tst = m_doc.as<core::Story>(ts)) mark = core::doc::note_mark_byte(*tst, tp, tk);
-            const bool did = tk >= 0 ? core::doc::insert_ref_to_note(m_journal, m_doc, story, at, ts, tp, tk, how, m_xref_pattern)
-                                     : core::doc::insert_ref_to(m_journal, m_doc, story, at, ts, tp, how, m_xref_pattern);
+            const bool did = tk >= 0 ? core::doc::insert_ref_to_note(m_journal, m_doc, story, at, ts, tp, tk, how, words)
+                                     : core::doc::insert_ref_to(m_journal, m_doc, story, at, ts, tp, how, words);
             if (auto lg = log::get(log::Area::Shell)) lg->info("xref: to {} para {} ({}) -> {}", ts, tp, m_xref_show, did ? "set" : "nothing");
             if (m_xref_pop) m_xref_pop->popdown();
             if (did) {

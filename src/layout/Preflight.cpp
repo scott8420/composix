@@ -85,7 +85,9 @@ std::vector<Issue> preflight_issues(const core::Doc& d, FlowCache& flows, const 
                                 if (const auto* f = d.as<core::Frame>(ft.frame)) pg = page_of(d, *f);
                             }
                     const auto at = core::doc::find_anchor(d, r.target);
-                    if (at.story.empty()) {
+                    // s143: a citation's other sources -- one gone breaks it as well.
+                    const bool more_gone = std::any_of(r.more.begin(), r.more.end(), [&](const std::string& id) { return core::doc::find_anchor(d, id).story.empty(); });
+                    if (at.story.empty() || more_gone) {
                         out.push_back({L::Warning, "xref", "A cross-reference points nowhere (its target is gone) in " + st.name + where(d, pg), pg, fr});
                         continue;
                     }

@@ -719,7 +719,10 @@ std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& fl
                                     if (const auto* f = d.as<core::Frame>(ft.frame); f && d.as<core::Page>(f->owner))
                                         page = std::min(page, d.page_index(f->owner));
                         const At at{page, sn, p, static_cast<int>(i)};
-                        if (const auto it = first.find(r.target); it == first.end() || at < it->second) first[r.target] = at;
+                        std::vector<std::string> ids{r.target};   // s143: and its other sources
+                        ids.insert(ids.end(), r.more.begin(), r.more.end());
+                        for (const auto& id : ids)
+                            if (const auto it = first.find(id); !id.empty() && (it == first.end() || at < it->second)) first[id] = at;
                     }
                 }
             }

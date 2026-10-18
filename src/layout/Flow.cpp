@@ -1881,9 +1881,29 @@ std::string ref_value_by(const core::Doc& d, const core::XRef& r, const std::fun
         if (c == '#') out += page();
         else if (c == '%') out += words();
         else if (c == '*') out += note();
-        else if (c == '^') {   // s141: the source's number
-            const int n = core::source_number(d, st, at.at.para);
-            out += n > 0 ? std::to_string(n) : std::string("??");
+        else if (c == '^') {   // s141: the source's number; s143: every source's, in order, runs of 3+ joined
+            std::vector<int> ns;
+            bool gone = false;
+            const auto add = [&](const std::string& id) {
+                const auto a = core::doc::find_anchor(d, id);
+                const int n = a.story.empty() ? 0 : core::source_number(d, *d.as<core::Story>(a.story), a.at.para);
+                if (n > 0) ns.push_back(n); else gone = true;
+            };
+            add(r.target);
+            for (const auto& id : r.more) add(id);
+            std::sort(ns.begin(), ns.end());
+            ns.erase(std::unique(ns.begin(), ns.end()), ns.end());
+            std::string t;
+            for (std::size_t a = 0; a < ns.size();) {
+                std::size_t b = a;
+                while (b + 1 < ns.size() && ns[b + 1] == ns[b] + 1) ++b;
+                if (!t.empty()) t += ", ";
+                if (b - a >= 2) t += std::to_string(ns[a]) + "\u2013" + std::to_string(ns[b]);
+                else for (std::size_t q = a; q <= b; ++q) t += (q > a ? ", " : "") + std::to_string(ns[q]);
+                a = b + 1;
+            }
+            if (gone) t += t.empty() ? "??" : ", ??";
+            out += t;
         }
         else out += c;
     }

@@ -2582,7 +2582,7 @@ TextPos insert_ref(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, cons
     fit_marks(para);
     const int k = marks_in(para.text, kMarkRef, 0, static_cast<std::size_t>(at.byte));
     put_mark(s, at, kMarkRef);
-    para.refs.insert(para.refs.begin() + k, XRef{target, show, show == RefShow::Custom ? pattern : std::string{}});
+    para.refs.insert(para.refs.begin() + k, XRef{target, show, keeps_pattern(show) ? pattern : std::string{}});
     j.run("Insert Cross-Reference", {story}, [&] { d.put(story, s); });
     return {at.para, at.byte + 3};
 }
@@ -2657,7 +2657,8 @@ bool set_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, RefSh
     auto& r = s.paras[static_cast<std::size_t>(para)].refs[static_cast<std::size_t>(k)];
     const XRef was = r;
     r.show = show;
-    r.pattern = show == RefShow::Custom ? pattern : std::string{};
+    r.pattern = keeps_pattern(show) ? pattern : std::string{};
+    if (show != RefShow::Cite) r.more.clear();   // s143: only a citation has others
     if (r == was) return false;
     j.run("Edit Cross-Reference", {story}, [&] { d.put(story, s); });
     return true;
@@ -2692,14 +2693,14 @@ bool retarget_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, 
     if (note_k >= 0 && (m = note_mark_byte(*ts, to_para, note_k)) < 0) return false;
     std::string id = anchor_for(*ts, to_para, note_k);
     {   // Already pointing there, showing that: nothing.
-        const XRef want{id, show, show == RefShow::Custom ? pattern : std::string{}};
+        const XRef want{id, show, keeps_pattern(show) ? pattern : std::string{}};
         if (!id.empty() && st->paras[static_cast<std::size_t>(para)].refs[static_cast<std::size_t>(k)] == want) return false;
     }
     j.run("Edit Cross-Reference", {story, to_story}, [&] {
         if (id.empty()) id = insert_anchor(j, d, to_story, {to_para, m});   // (refs are counted, not placed: k holds)
         Story s = *d.as<Story>(story);
         s.paras[static_cast<std::size_t>(para)].refs[static_cast<std::size_t>(k)] =
-            XRef{id, show, show == RefShow::Custom ? pattern : std::string{}};
+            XRef{id, show, keeps_pattern(show) ? pattern : std::string{}};
         d.put(story, s);
     });
     return true;
@@ -2809,9 +2810,60 @@ bool set_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k
 }
 
 bool insert_citation(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para) {   // s141
+    return insert_citation(j, d, story, at, std::vector<SourceAt>{{to_story, to_para}});
+}
+
+bool insert_citation(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::vector<SourceAt>& sources,
+                     const std::string& locator) {   // s143
+    std::vector<SourceAt> ok;
+    for (const auto& s : sources)
+        if (const auto* ts = d.as<Story>(s.story); ts && source_number(d, *ts, s.para) > 0 &&
+                                                   std::none_of(ok.begin(), ok.end(), [&](const SourceAt& o) { return o.story == s.story && o.para == s.para; }))
+            ok.push_back(s);
+    if (ok.empty() || !d.as<Story>(story)) return false;
+    std::vector<Doc::Id> ids{story};
+    for (const auto& s : ok) if (std::find(ids.begin(), ids.end(), s.story) == ids.end()) ids.push_back(s.story);
+    const auto loc = trim_ws(locator);
+    j.run("Insert Citation", ids, [&] {
+        // Each source's anchor (made at its start if none); the reference to the first, the others with it.
+        std::vector<std::string> anchors;
+        for (const auto& s : ok) {
+            std::string id = anchor_for(*d.as<Story>(s.story), s.para, -1);
+            if (id.empty()) {
+                id = insert_anchor(j, d, s.story, {s.para, 0});
+                if (s.story == story && at.para == s.para) at.byte += 3;   // it went in before the place
+            }
+            anchors.push_back(id);
+        }
+        insert_ref(j, d, story, at, anchors.front(), RefShow::Cite, loc);
+        if (anchors.size() > 1) {
+            Story st = *d.as<Story>(story);
+            auto& para = st.paras[static_cast<std::size_t>(at.para)];
+            const int k = marks_in(para.text, kMarkRef, 0, static_cast<std::size_t>(at.byte));
+            para.refs[static_cast<std::size_t>(k)].more.assign(anchors.begin() + 1, anchors.end());
+            d.put(story, st);
+        }
+    });
+    return true;
+}
+
+bool add_cite_source(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const Doc::Id& to_story, int to_para) {   // s143
+    const auto* st = d.as<Story>(story);
     const auto* ts = d.as<Story>(to_story);
-    if (!ts || source_number(d, *ts, to_para) == 0) return false;
-    return insert_ref_to(j, d, story, at, to_story, to_para, RefShow::Cite);
+    if (!st || !ts || para < 0 || para >= static_cast<int>(st->paras.size()) || k < 0 ||
+        k >= static_cast<int>(st->paras[static_cast<std::size_t>(para)].refs.size()) || source_number(d, *ts, to_para) == 0)
+        return false;
+    const auto& r = st->paras[static_cast<std::size_t>(para)].refs[static_cast<std::size_t>(k)];
+    if (r.show != RefShow::Cite) return false;
+    std::string id = anchor_for(*ts, to_para, -1);
+    if (!id.empty() && (id == r.target || std::find(r.more.begin(), r.more.end(), id) != r.more.end())) return false;
+    j.run("Add Source to Citation", {story, to_story}, [&] {
+        if (id.empty()) id = insert_anchor(j, d, to_story, {to_para, 0});   // (refs are counted: k holds)
+        Story s = *d.as<Story>(story);
+        s.paras[static_cast<std::size_t>(para)].refs[static_cast<std::size_t>(k)].more.push_back(id);
+        d.put(story, s);
+    });
+    return true;
 }
 
 int note_mark_byte(const Story& s, int p, int k) {   // s113
@@ -3398,6 +3450,12 @@ const std::vector<Verb>& verbs() {
         }},
         {"add_list", [](DocJournal& j, Doc& d) { add_list(j, d, ListKind::Index, "Index", d.pages().back()); }},   // s135
         {"set_list_cite_order", [](DocJournal& j, Doc& d) { set_list_cite_order(j, d, "list.2", true); }},   // s142
+        {"insert_citation_several", [](DocJournal& j, Doc& d) {   // s143
+            insert_citation(j, d, "story.1", {1, 4}, std::vector<SourceAt>{{"story.4", 0}, {"story.4", 2}}, "p. 14");
+        }},
+        {"add_cite_source", [](DocJournal& j, Doc& d) {   // s143: one made, then one added -- in one step
+            j.run("t", {"story.1", "story.4"}, [&] { insert_citation(j, d, "story.1", {1, 4}, "story.4", 0); add_cite_source(j, d, "story.1", 1, 0, "story.4", 2); });
+        }},
         {"insert_citation", [](DocJournal& j, Doc& d) { insert_citation(j, d, "story.1", {1, 4}, "story.4", 1); }},   // s141: the sample's Sources
         {"insert_ref_to_note", [](DocJournal& j, Doc& d) { insert_ref_to_note(j, d, "story.1", {1, 4}, "story.1", 5, 0, RefShow::Custom, "note *"); }},   // s129: the sample's note
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
@@ -4032,7 +4090,12 @@ std::string ref_pattern(const XRef& r) {   // s129
     case RefShow::TextPage: return "\u201c%\u201d on page #";
     case RefShow::Note:     return "*";
     case RefShow::Custom:   return r.pattern.empty() ? std::string("#") : r.pattern;
-    case RefShow::Cite:     return "[^]";   // s141
+    case RefShow::Cite: {   // s141; s143: a locator -- held to its number (no-break spaces: "[2, p. 14]" never splits)
+        if (r.pattern.empty()) return "[^]";
+        std::string loc;
+        for (const char c : r.pattern) loc += c == ' ' ? std::string("\u00a0") : std::string(1, c);
+        return "[^,\u00a0" + loc + "]";
+    }
     }
     return "#";
 }

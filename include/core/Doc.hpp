@@ -278,9 +278,13 @@ enum class RefShow { Page, Text, TextPage, Note, Custom, Cite };   // s129: Note
 struct XRef {
     std::string target;                  // an anchor's id ("" or gone: shows "??")
     RefShow     show = RefShow::Page;
-    std::string pattern;                 // s129: Custom -- # the page, % the words, * the note's number; s141: ^ the source's number
+    std::string pattern;                 // s129: Custom -- # the page, % the words, * the note's number; s141: ^ the source's number;
+                                         // s143: Cite -- its locator ("p. 14": "[2, p. 14]")
+    std::vector<std::string> more;       // s143: Cite -- other sources' anchors ("[1, 3]")
     bool operator==(const XRef&) const = default;
 };
+// s143: a reference shown this way keeps words of its own (Custom: its pattern; Cite: its locator).
+inline bool keeps_pattern(RefShow s) { return s == RefShow::Custom || s == RefShow::Cite; }
 // s134: an index entry marked in the text (kMarkIndex): its term, and a
 // sub-entry under it if any ("Harbors" / "fees"). Kept with its paragraph
 // as notes and references are (the k-th mark is index[k]).
@@ -891,6 +895,14 @@ bool insert_ref_to_note(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at,
 // s141: a citation of source paragraph to_para (an anchor at its start, made if
 // none) at `at`, shown "[n]". One step; false if it isn't a source.
 bool insert_citation(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para);
+// s143: a citation of several sources at once ("[1, 3]"), with a locator
+// ("p. 14"; "" none). One step; false if none of them is a source.
+struct SourceAt { Doc::Id story; int para = 0; };
+bool insert_citation(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::vector<SourceAt>& sources,
+                     const std::string& locator = {});
+// s143: one more source in the citation at (para, k) -- one step; false if it
+// isn't a citation, isn't a source, or has it already.
+bool add_cite_source(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const Doc::Id& to_story, int to_para);
 // s130: the reference whose mark is at `at` or ends there: its paragraph,
 // index in Para::refs and mark's byte; k -1 none.
 struct RefAt { int para = -1, k = -1, byte = -1; };

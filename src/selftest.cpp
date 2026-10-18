@@ -8227,6 +8227,50 @@ int main() {
         check("undo all", d.strays() == 0 && !d.as<core::GenList>("list.2")->cite_order);
     }
 
+    {
+        std::cout << "\n-- citations: locators, several sources (s143) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);   // Sources 1-3 in story.4
+        const auto shown = [&](int p) {
+            const auto r = L::resolve_story(d, "story.1", "");
+            return r.any ? r.text.paras[static_cast<std::size_t>(p)].text : std::string{};
+        };
+        check("a locator: \"[2, p. 14]\" (no-break spaces)", D::insert_citation(j, d, "story.1", {1, 0}, {{"story.4", 1}}, " p. 14 ") &&
+                                                         shown(1).rfind("[2,\u00a0p.\u00a014]", 0) == 0,
+              shown(1).substr(0, 12));
+        const auto n0 = j.size();
+        check("several, out of order: \"[1, 3]\" -- one step", D::insert_citation(j, d, "story.1", {2, 0}, {{"story.4", 2}, {"story.4", 0}}) &&
+                                                                   j.size() == n0 + 1 && shown(2).rfind("[1, 3]", 0) == 0, shown(2).substr(0, 10));
+        check("none a source: nothing", !D::insert_citation(j, d, "story.1", {3, 0}, {{"story.1", 2}}) && j.size() == n0 + 1);
+        check("one added to it: \"[1\u20133]\"", D::add_cite_source(j, d, "story.1", 2, 0, "story.4", 1) && shown(2).rfind("[1\u20133]", 0) == 0,
+              shown(2).substr(0, 10));
+        check("  the same again: nothing", !D::add_cite_source(j, d, "story.1", 2, 0, "story.4", 1));
+        check("  to what isn't a citation: nothing", [&] {
+            D::insert_ref_to(j, d, "story.1", {3, 0}, "story.1", 4, core::RefShow::Page);
+            return !D::add_cite_source(j, d, "story.1", 3, 0, "story.4", 1);
+        }());
+        check("the locator edited (Apply), its sources kept", D::set_ref(j, d, "story.1", 2, 0, core::RefShow::Cite, "ch. 3") &&
+                                                              shown(2).rfind("[1\u20133,\u00a0ch.\u00a03]", 0) == 0, shown(2).substr(0, 16));
+        {
+            core::Doc e;
+            std::string err;
+            check("json: locator and sources kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        }
+        // One of its sources gone: "??" with the rest, and a Preflight warning.
+        D::edit_text(j, d, "story.4", {1, 0}, {2, 0}, "", "Delete", "");   // Harbor Registers (2) gone; Letters is 2 now
+        L::FlowCache fl;
+        int xr = 0;
+        for (const auto& i : L::preflight_issues(d, fl, {})) xr += i.kind == "xref";
+        check("a source gone: the rest renumbered, ?? for it, a warning", shown(2).rfind("[1, 2, ??,\u00a0ch.\u00a03]", 0) == 0 && xr >= 2,
+              shown(2).substr(0, 20) + " / " + std::to_string(xr));
+        while (j.can_undo()) j.undo();
+        check("undo all", d.strays() == 0 && d.as<core::Story>("story.1")->paras[2].refs.empty());
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

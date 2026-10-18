@@ -302,6 +302,9 @@ private:
     int                               m_index_span = 0, m_index_count = 1;   // s139: what the mark in the popover covers
     int                               m_xref_show = 0;   // s128: what the last reference showed (page / words / both / note / own)
     std::string                       m_xref_pattern;    // s129: the last pattern of its own
+    std::string                       m_xref_locator;    // s143: the last citation's locator ("p. 14")
+    bool                              m_xref_entry_fill = false;   // s143: the entry being filled, not typed in
+    bool                              m_xref_add = false;          // s143: edit: a source clicked joins the citation
     std::unique_ptr<Gtk::Popover>     m_note_pop;   // s110: a footnote's words, edited at the caret
     views::Canvas::ContextHit         m_ctx;   // s070: kept, so the Edit section's rebuild keeps it
     Glib::RefPtr<Gio::SimpleAction> m_act_undo, m_act_redo;
