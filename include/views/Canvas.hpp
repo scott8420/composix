@@ -180,6 +180,7 @@ private:
     void on_key_up(guint keyval);
     bool on_scroll(double dx, double dy);
     void on_motion(double x, double y);
+    std::string ref_tip(double x, double y) const;   // s130: the tooltip over a cross-reference ("" none)
 
     void relayout();
     core::Rect selection_box() const;           // union of the picks, layout (doc) space

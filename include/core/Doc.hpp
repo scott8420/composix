@@ -274,12 +274,15 @@ struct Note {
 // an anchor (kMarkAnchor, by its id) is: its page's number, its paragraph's
 // words, or both. Kept with the paragraph its mark is in (the k-th mark is
 // refs[k]), as notes are.
-enum class RefShow { Page, Text, TextPage };
+enum class RefShow { Page, Text, TextPage, Note, Custom };   // s129: Note -- the note's number; Custom -- its own pattern
 struct XRef {
     std::string target;                  // an anchor's id ("" or gone: shows "??")
     RefShow     show = RefShow::Page;
+    std::string pattern;                 // s129: Custom -- # the page, % the words, * the note's number
     bool operator==(const XRef&) const = default;
 };
+// s129: the pattern a reference shows by (Custom: its own).
+std::string ref_pattern(const XRef& r);
 
 struct Para {
     std::string      style;              // a paragraph style id
@@ -841,8 +844,24 @@ int note_index_at(const Story& s, TextPos at);
 // The anchor at paragraph p's start (made there if it has none) and a
 // reference to it at `at` -- one step; false if nothing changed.
 std::string insert_anchor(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at);
-TextPos     insert_ref(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& target, RefShow show);
-bool        insert_ref_to(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para, RefShow show);
+TextPos     insert_ref(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& target, RefShow show,
+                       const std::string& pattern = {});
+bool        insert_ref_to(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para, RefShow show,
+                          const std::string& pattern = {});
+// s129: a reference to paragraph p's k-th note -- an anchor just before its
+// mark (made if none is there), the reference at `at` to it. One step.
+bool insert_ref_to_note(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para, int k,
+                        RefShow show, const std::string& pattern = {});
+// s130: the reference whose mark is at `at` or ends there: its paragraph,
+// index in Para::refs and mark's byte; k -1 none.
+struct RefAt { int para = -1, k = -1, byte = -1; };
+RefAt ref_near(const Story& s, TextPos at);
+// s130: change a reference -- what it shows (and its own words) -- one step;
+// false if nothing changed. Point it at paragraph to_para (note_k >= 0: that
+// paragraph's note) instead, the anchor made if none -- one step.
+bool set_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, RefShow show, const std::string& pattern = {});
+bool retarget_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const Doc::Id& to_story, int to_para,
+                  int note_k, RefShow show, const std::string& pattern = {});
 // Where an anchor is: its story, paragraph and byte; story "" when none.
 struct AnchorAt { Doc::Id story; TextPos at; };
 AnchorAt find_anchor(const Doc& d, const std::string& id);

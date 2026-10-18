@@ -2396,7 +2396,8 @@ std::string insert_anchor(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a
     return id;
 }
 
-TextPos insert_ref(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& target, RefShow show) {
+TextPos insert_ref(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& target, RefShow show,
+                   const std::string& pattern) {
     const auto* st = d.as<Story>(story);
     if (!st || st->paras.empty()) return at;
     Story s = *st;
@@ -2405,12 +2406,13 @@ TextPos insert_ref(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, cons
     fit_marks(para);
     const int k = marks_in(para.text, kMarkRef, 0, static_cast<std::size_t>(at.byte));
     put_mark(s, at, kMarkRef);
-    para.refs.insert(para.refs.begin() + k, XRef{target, show});
+    para.refs.insert(para.refs.begin() + k, XRef{target, show, show == RefShow::Custom ? pattern : std::string{}});
     j.run("Insert Cross-Reference", {story}, [&] { d.put(story, s); });
     return {at.para, at.byte + 3};
 }
 
-bool insert_ref_to(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para, RefShow show) {
+bool insert_ref_to(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para, RefShow show,
+                   const std::string& pattern) {
     const auto* ts = d.as<Story>(to_story);
     if (!ts || to_para < 0 || to_para >= static_cast<int>(ts->paras.size()) || !d.as<Story>(story)) return false;
     // The paragraph's anchor: the first in it, else one made at its start.
@@ -2426,10 +2428,105 @@ bool insert_ref_to(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, cons
             id = insert_anchor(j, d, to_story, {to_para, 0});
             if (story == to_story && at.para == to_para) at.byte += 3;   // the anchor went in before it
         }
-        insert_ref(j, d, story, at, id, show);
+        insert_ref(j, d, story, at, id, show, pattern);
         did = true;
     });
     return did;
+}
+
+bool insert_ref_to_note(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para, int k,
+                        RefShow show, const std::string& pattern) {   // s129
+    const auto* ts = d.as<Story>(to_story);
+    if (!ts || !d.as<Story>(story) || to_para < 0 || to_para >= static_cast<int>(ts->paras.size())) return false;
+    const int m = note_mark_byte(*ts, to_para, k);
+    if (m < 0) return false;
+    // An anchor right before the mark already: that one.
+    std::string id;
+    {
+        const auto& para = ts->paras[static_cast<std::size_t>(to_para)];
+        if (m >= 3 && para.text.compare(static_cast<std::size_t>(m - 3), 3, kMarkAnchor) == 0) {
+            const int ai = marks_in(para.text, kMarkAnchor, 0, static_cast<std::size_t>(m - 3));
+            if (ai < static_cast<int>(para.anchors.size())) id = para.anchors[static_cast<std::size_t>(ai)];
+        }
+    }
+    bool did = false;
+    j.run("Insert Cross-Reference", {story, to_story}, [&] {
+        if (id.empty()) {
+            id = insert_anchor(j, d, to_story, {to_para, m});
+            if (story == to_story && at.para == to_para && at.byte >= m) at.byte += 3;
+        }
+        insert_ref(j, d, story, at, id, show, pattern);
+        did = true;
+    });
+    return did;
+}
+
+RefAt ref_near(const Story& s, TextPos at) {   // s130
+    if (at.para < 0 || at.para >= static_cast<int>(s.paras.size())) return {};
+    const auto& para = s.paras[static_cast<std::size_t>(at.para)];
+    for (const int b : {at.byte, at.byte - 3}) {
+        if (b < 0 || static_cast<std::size_t>(b) + 3 > para.text.size()) continue;
+        if (para.text.compare(static_cast<std::size_t>(b), 3, kMarkRef) != 0) continue;
+        const int k = marks_in(para.text, kMarkRef, 0, static_cast<std::size_t>(b));
+        if (k < static_cast<int>(para.refs.size())) return {at.para, k, b};
+    }
+    return {};
+}
+
+bool set_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, RefShow show, const std::string& pattern) {   // s130
+    const auto* st = d.as<Story>(story);
+    if (!st || para < 0 || para >= static_cast<int>(st->paras.size()) || k < 0) return false;
+    if (k >= static_cast<int>(st->paras[static_cast<std::size_t>(para)].refs.size())) return false;
+    Story s = *st;
+    auto& r = s.paras[static_cast<std::size_t>(para)].refs[static_cast<std::size_t>(k)];
+    const XRef was = r;
+    r.show = show;
+    r.pattern = show == RefShow::Custom ? pattern : std::string{};
+    if (r == was) return false;
+    j.run("Edit Cross-Reference", {story}, [&] { d.put(story, s); });
+    return true;
+}
+
+namespace {
+// The anchor a reference to paragraph p (note k, or -1) would point at; "" none yet.
+std::string anchor_for(const Story& ts, int p, int note_k) {
+    const auto& para = ts.paras[static_cast<std::size_t>(p)];
+    if (note_k < 0) {
+        if (para.text.find(kMarkAnchor) != std::string::npos && !para.anchors.empty()) return para.anchors.front();
+        return {};
+    }
+    const int m = note_mark_byte(ts, p, note_k);
+    if (m >= 3 && para.text.compare(static_cast<std::size_t>(m - 3), 3, kMarkAnchor) == 0) {
+        const int ai = marks_in(para.text, kMarkAnchor, 0, static_cast<std::size_t>(m - 3));
+        if (ai < static_cast<int>(para.anchors.size())) return para.anchors[static_cast<std::size_t>(ai)];
+    }
+    return {};
+}
+}  // namespace
+
+bool retarget_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const Doc::Id& to_story, int to_para,
+                  int note_k, RefShow show, const std::string& pattern) {   // s130
+    const auto* st = d.as<Story>(story);
+    const auto* ts = d.as<Story>(to_story);
+    if (!st || !ts || to_para < 0 || to_para >= static_cast<int>(ts->paras.size())) return false;
+    if (para < 0 || para >= static_cast<int>(st->paras.size()) || k < 0 ||
+        k >= static_cast<int>(st->paras[static_cast<std::size_t>(para)].refs.size()))
+        return false;
+    int m = 0;
+    if (note_k >= 0 && (m = note_mark_byte(*ts, to_para, note_k)) < 0) return false;
+    std::string id = anchor_for(*ts, to_para, note_k);
+    {   // Already pointing there, showing that: nothing.
+        const XRef want{id, show, show == RefShow::Custom ? pattern : std::string{}};
+        if (!id.empty() && st->paras[static_cast<std::size_t>(para)].refs[static_cast<std::size_t>(k)] == want) return false;
+    }
+    j.run("Edit Cross-Reference", {story, to_story}, [&] {
+        if (id.empty()) id = insert_anchor(j, d, to_story, {to_para, m});   // (refs are counted, not placed: k holds)
+        Story s = *d.as<Story>(story);
+        s.paras[static_cast<std::size_t>(para)].refs[static_cast<std::size_t>(k)] =
+            XRef{id, show, show == RefShow::Custom ? pattern : std::string{}};
+        d.put(story, s);
+    });
+    return true;
 }
 
 int note_mark_byte(const Story& s, int p, int k) {   // s113
@@ -3003,6 +3100,14 @@ const std::vector<Verb>& verbs() {
         {"set_note_num", [](DocJournal& j, Doc& d) { set_note_num(j, d, Settings::NoteNum::Period); }},   // s126
         {"insert_anchor", [](DocJournal& j, Doc& d) { insert_anchor(j, d, "story.1", {4, 0}); }},   // s128
         {"insert_ref_to", [](DocJournal& j, Doc& d) { insert_ref_to(j, d, "story.1", {1, 4}, "story.1", 4, RefShow::TextPage); }},
+        // s130: the sample has no reference -- one made and changed, as one step (the gate checks the step).
+        {"set_ref", [](DocJournal& j, Doc& d) {
+            j.run("t", {"story.1"}, [&] { insert_ref(j, d, "story.1", {1, 4}, "", RefShow::Page); set_ref(j, d, "story.1", 1, 0, RefShow::Custom, "p. #"); });
+        }},
+        {"retarget_ref", [](DocJournal& j, Doc& d) {
+            j.run("t", {"story.1"}, [&] { insert_ref(j, d, "story.1", {1, 4}, "", RefShow::Page); retarget_ref(j, d, "story.1", 1, 0, "story.1", 4, -1, RefShow::Text); });
+        }},
+        {"insert_ref_to_note", [](DocJournal& j, Doc& d) { insert_ref_to_note(j, d, "story.1", {1, 4}, "story.1", 5, 0, RefShow::Custom, "note *"); }},   // s129: the sample's note
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
         {"delete_query", [](DocJournal& j, Doc& d) { delete_query(j, d, "Double spaces"); }},
@@ -3621,6 +3726,20 @@ SnapHit snap_any(const std::vector<double>& vs, const std::vector<double>& targe
             }
         }
     return best;
+}
+
+}  // namespace composix::core
+
+namespace composix::core {
+std::string ref_pattern(const XRef& r) {   // s129
+    switch (r.show) {
+    case RefShow::Page:     return "#";
+    case RefShow::Text:     return "%";
+    case RefShow::TextPage: return "\u201c%\u201d on page #";
+    case RefShow::Note:     return "*";
+    case RefShow::Custom:   return r.pattern.empty() ? std::string("#") : r.pattern;
+    }
+    return "#";
 }
 
 }  // namespace composix::core

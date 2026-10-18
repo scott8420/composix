@@ -146,6 +146,12 @@ Resolved resolve_story(const core::Doc& d, const std::string& story, const std::
 // paragraph's words, or both ("\u201cwords\u201d on page n"); "??" when the
 // anchor is gone or not set. `flows`: stories' flows, made as needed.
 std::string ref_value(const core::Doc& d, const core::XRef& r, std::map<std::string, StoryFlow>& flows);
+// s130: the same, the flows from a cache (the canvas's hover).
+class FlowCache;
+std::string ref_value(const core::Doc& d, const core::XRef& r, FlowCache& flows);
+// s130: where a reference points, in words for a tooltip -- "Points at
+// “Chapter Two”, page 3", "Points at note 1, page 3", or that its place is gone.
+std::string ref_where(const core::Doc& d, const core::XRef& r, FlowCache& flows, const std::string& from_story = {});   // (another story: its name too)
 // The value a marker takes on `page` (k as core::marker_at). `frame`: the
 // frame it sits in, for next / previous (its thread's neighbours).
 std::string marker_value(const core::Doc& d, int k, const std::string& page, const std::string& frame);

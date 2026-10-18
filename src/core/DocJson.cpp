@@ -148,7 +148,11 @@ json to(const Record& r) {
                 }
                 if (!p.refs.empty()) {   // s128
                     json rs = json::array();
-                    for (const auto& r : p.refs) rs.push_back({{"to", r.target}, {"show", static_cast<int>(r.show)}});
+                    for (const auto& r : p.refs) {
+                        json jr = {{"to", r.target}, {"show", static_cast<int>(r.show)}};
+                        if (!r.pattern.empty()) jr["pattern"] = r.pattern;   // s129
+                        rs.push_back(jr);
+                    }
                     jp["refs"] = rs;
                 }
                 if (!p.anchors.empty()) jp["anchors"] = p.anchors;   // s128
@@ -372,7 +376,8 @@ std::optional<Record> from(const json& j) {
                 fit_notes(para);   // a mark without its note (or the other way): made to match
                 if (p.contains("refs") && p.at("refs").is_array())   // s128
                     for (const auto& r : p.at("refs"))
-                        para.refs.push_back({val<std::string>(r, "to", ""), static_cast<RefShow>(std::clamp(val(r, "show", 0), 0, 2))});
+                        para.refs.push_back({val<std::string>(r, "to", ""), static_cast<RefShow>(std::clamp(val(r, "show", 0), 0, 4)),
+                                             val<std::string>(r, "pattern", "")});   // s129
                 if (p.contains("anchors") && p.at("anchors").is_array())
                     for (const auto& a : p.at("anchors")) para.anchors.push_back(a.is_string() ? a.get<std::string>() : std::string{});
                 fit_marks(para);

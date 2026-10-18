@@ -13,6 +13,7 @@
 #include <gtkmm/root.h>
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/eventcontrollermotion.h>
+#include <gtkmm/tooltip.h>
 #include <gtkmm/eventcontrollerscroll.h>
 #include <gtkmm/gesturedrag.h>
 #include <gtkmm/togglebutton.h>
@@ -114,6 +115,15 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
     motion->signal_motion().connect(sigc::mem_fun(*this, &Canvas::on_motion));
     motion->signal_leave().connect([this] { m_in = false; m_sig_view.emit(); });
     add_controller(motion);
+    // s130: a cross-reference under the pointer -- where it points.
+    set_has_tooltip(true);
+    signal_query_tooltip().connect([this](int x, int y, bool kbd, const Glib::RefPtr<Gtk::Tooltip>& tip) {
+        if (kbd || m_drag != Drag::None) return false;
+        const auto t = ref_tip(x, y);
+        if (t.empty()) return false;
+        tip->set_text(t);
+        return true;
+    }, false);
 
     // s009: image files dropped from the desktop.
     auto drop = Gtk::DropTarget::create(GDK_TYPE_FILE_LIST, Gdk::DragAction::COPY);
@@ -1262,6 +1272,21 @@ bool Canvas::on_scroll(double dx, double dy) {
     }
     queue_draw();
     return true;
+}
+
+std::string Canvas::ref_tip(double x, double y) const {   // s130
+    double dx, dy;
+    m_vp.to_doc(x, y, dx, dy);
+    const auto frame = core::hit_frame(m_doc, m_placed, dx, dy, 0);
+    const auto* f = frame.empty() ? nullptr : m_doc.as<core::Frame>(frame);
+    const auto* st = f && !f->story.empty() ? m_doc.as<core::Story>(f->story) : nullptr;
+    if (!st) return {};
+    if (std::none_of(st->paras.begin(), st->paras.end(), [](const core::Para& p) { return !p.refs.empty(); })) return {};
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
+    const auto pos = layout::hit_text(m_doc, f->story, flows().get(m_doc, f->story), frame, dx - lr.x, dy - lr.y);
+    const auto r = core::doc::ref_near(*st, pos);
+    if (r.k < 0) return {};
+    return layout::ref_where(m_doc, st->paras[static_cast<std::size_t>(r.para)].refs[static_cast<std::size_t>(r.k)], flows(), f->story);
 }
 
 void Canvas::on_motion(double x, double y) {

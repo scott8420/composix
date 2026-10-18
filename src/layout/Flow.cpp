@@ -1842,33 +1842,71 @@ std::string marker_value(const core::Doc& d, int k, const std::string& page, con
 // story's flow, from `flows` -- one each, made as needed): the page's number,
 // its paragraph's words (to the first tab, 60 bytes), or both. "??" when the
 // anchor is gone or not set.
-std::string ref_value(const core::Doc& d, const core::XRef& r, std::map<std::string, StoryFlow>& flows) {   // s128
+namespace {
+std::string ref_value_by(const core::Doc& d, const core::XRef& r, const std::function<const StoryFlow&(const std::string&)>& flow_of) {
     const auto at = core::doc::find_anchor(d, r.target);
     if (at.story.empty()) return "??";
     const auto& st = *d.as<core::Story>(at.story);
-    std::string words;
-    if (r.show != core::RefShow::Page) {
-        const auto& t = st.paras[static_cast<std::size_t>(at.at.para)].text;
-        for (std::size_t i = 0; i < t.size() && words.size() < 60 && t[i] != '\t';) {
-            if (static_cast<unsigned char>(t[i]) == 0xEE && i + 2 < t.size() && static_cast<unsigned char>(t[i + 1]) == 0x80) { i += 3; continue; }
-            words += t[i++];
+    const auto& text = st.paras[static_cast<std::size_t>(at.at.para)].text;
+    const auto flow = [&]() -> const StoryFlow& { return flow_of(at.story); };
+    // s129: the pattern's pieces, each worked out only when asked for.
+    const auto words = [&] {
+        std::string w;
+        for (std::size_t i = 0; i < text.size() && w.size() < 60 && text[i] != '\t';) {
+            if (static_cast<unsigned char>(text[i]) == 0xEE && i + 2 < text.size() && static_cast<unsigned char>(text[i + 1]) == 0x80) { i += 3; continue; }
+            w += text[i++];
         }
-        while (!words.empty() && (static_cast<unsigned char>(words.back()) & 0xC0) == 0x80) words.pop_back();
-        while (!words.empty() && words.back() == ' ') words.pop_back();
-        if (r.show == core::RefShow::Text) return words.empty() ? std::string("??") : words;
+        while (!w.empty() && (static_cast<unsigned char>(w.back()) & 0xC0) == 0x80) w.pop_back();
+        while (!w.empty() && w.back() == ' ') w.pop_back();
+        return w.empty() ? std::string("??") : w;
+    };
+    const auto page = [&] {
+        for (const auto& ft : flow().frames)
+            for (const auto& l : ft.lines)
+                if (l.para == at.at.para && at.at.byte >= l.start && at.at.byte <= std::max(l.end, l.start + 1))
+                    if (const auto* f = d.as<core::Frame>(ft.frame); f && d.as<core::Page>(f->owner)) return d.folio(f->owner);
+        return std::string("??");
+    };
+    const auto note = [&] {   // the note whose mark follows the anchor
+        const auto b = static_cast<std::size_t>(at.at.byte) + 3;
+        if (!core::note_at(text, b)) return std::string("??");
+        const int k = core::notes_in(text, 0, b);
+        int n = laid_note_number(flow(), at.at.para, k);
+        if (n <= 0) n = core::note_number(d, st, at.at.para, k);
+        return core::note_label(n, d.settings().note_style);
+    };
+    const auto pat = core::ref_pattern(r);
+    std::string out;
+    for (const char c : pat) {
+        if (c == '#') out += page();
+        else if (c == '%') out += words();
+        else if (c == '*') out += note();
+        else out += c;
     }
-    auto it = flows.find(at.story);
-    if (it == flows.end()) it = flows.emplace(at.story, flow_story(d, at.story)).first;
-    std::string page;
-    for (const auto& ft : it->second.frames)
-        for (const auto& l : ft.lines)
-            if (l.para == at.at.para && at.at.byte >= l.start && at.at.byte <= std::max(l.end, l.start + 1)) {
-                if (const auto* f = d.as<core::Frame>(ft.frame); f && d.as<core::Page>(f->owner)) page = f->owner;
-                break;
-            }
-    const std::string n = page.empty() ? std::string("??") : d.folio(page);
-    if (r.show == core::RefShow::Page) return n;
-    return "\u201c" + words + "\u201d on page " + n;
+    return out;
+}
+}  // namespace
+
+std::string ref_value(const core::Doc& d, const core::XRef& r, std::map<std::string, StoryFlow>& flows) {   // s128
+    return ref_value_by(d, r, [&](const std::string& story) -> const StoryFlow& {
+        auto it = flows.find(story);
+        if (it == flows.end()) it = flows.emplace(story, flow_story(d, story)).first;
+        return it->second;
+    });
+}
+
+std::string ref_value(const core::Doc& d, const core::XRef& r, FlowCache& flows) {   // s130
+    return ref_value_by(d, r, [&](const std::string& story) -> const StoryFlow& { return flows.get(d, story); });
+}
+
+std::string ref_where(const core::Doc& d, const core::XRef& r, FlowCache& flows, const std::string& from_story) {   // s130
+    const auto at = core::doc::find_anchor(d, r.target);
+    if (at.story.empty()) return "Cross-reference: its place is gone -- it shows question marks";
+    const auto& text = d.as<core::Story>(at.story)->paras[static_cast<std::size_t>(at.at.para)].text;
+    const bool note = core::note_at(text, static_cast<std::size_t>(at.at.byte) + 3);
+    std::string w = ref_value(d, core::XRef{r.target, core::RefShow::Custom, note ? "note *, page #" : "\u201c%\u201d, page #"}, flows);
+    if (const auto* st = d.as<core::Story>(at.story); st && at.story != from_story) w += " (" + st->name + ")";
+    return "Cross-reference: points at " + w;
 }
 
 Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page) {

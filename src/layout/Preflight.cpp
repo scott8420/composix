@@ -60,6 +60,43 @@ std::vector<Issue> preflight_issues(const core::Doc& d, FlowCache& flows, const 
         const std::string pg = f ? page_of(d, *f) : std::string{};
         out.push_back({L::Error, "overset", "Overset text: " + d.as<core::Story>(sid)->name + where(d, pg), pg, last});
     }
+    // s129: cross-references that point nowhere (their target deleted) or at
+    // a place no page shows (overset, a story not placed).
+    {
+        std::map<std::string, StoryFlow> ref_flows;
+        for (const auto& sid : d.ids_of<core::Story>()) {
+            const auto& st = *d.as<core::Story>(sid);
+            bool any = false;
+            for (const auto& para : st.paras) any = any || !para.refs.empty();
+            if (!any) continue;
+            const auto& fl = flows.get(d, sid);
+            for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+                const auto& para = st.paras[static_cast<std::size_t>(p)];
+                int k = 0;
+                for (std::size_t i = para.text.find(core::kMarkRef); i != std::string::npos; i = para.text.find(core::kMarkRef, i + 3), ++k) {
+                    if (k >= static_cast<int>(para.refs.size())) break;
+                    const auto& r = para.refs[static_cast<std::size_t>(k)];
+                    // Where the reference itself is.
+                    std::string pg, fr;
+                    for (const auto& ft : fl.frames)
+                        for (const auto& l : ft.lines)
+                            if (l.para == p && static_cast<int>(i) >= l.start && static_cast<int>(i) < std::max(l.end, l.start + 1)) {
+                                fr = ft.frame;
+                                if (const auto* f = d.as<core::Frame>(ft.frame)) pg = page_of(d, *f);
+                            }
+                    const auto at = core::doc::find_anchor(d, r.target);
+                    if (at.story.empty()) {
+                        out.push_back({L::Warning, "xref", "A cross-reference points nowhere (its target is gone) in " + st.name + where(d, pg), pg, fr});
+                        continue;
+                    }
+                    core::XRef page_only{r.target, core::RefShow::Page, {}};
+                    if (ref_value(d, page_only, ref_flows) == "??")
+                        out.push_back({L::Warning, "xref", "A cross-reference's target isn't on a page (overset or not placed) in " + st.name + where(d, pg),
+                                       pg, fr});
+                }
+            }
+        }
+    }
     // Pictures: links, resolution; empty frames; transparency.
     std::set<std::string> seen_link;
     for (const auto& fid : d.ids_of<core::Frame>()) {

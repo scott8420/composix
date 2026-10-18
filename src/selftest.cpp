@@ -7313,6 +7313,116 @@ int main() {
         check("the referring page's key moves when the heading's words do", !(L::page_key(d, flows, page_with_ref) == k1));
     }
 
+    {
+        std::cout << "\n-- cross-reference words; to notes (s129) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);   // its note: Chapter Two (paragraph 5)
+        check("patterns: page, words, both, note", core::ref_pattern({"", core::RefShow::Page, {}}) == "#" &&
+                                                   core::ref_pattern({"", core::RefShow::Text, {}}) == "%" &&
+                                                   core::ref_pattern({"", core::RefShow::Note, {}}) == "*" &&
+                                                   core::ref_pattern({"", core::RefShow::Custom, "see p. #"}) == "see p. #");
+        const auto P = [&](int p) -> const core::Para& { return d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(p)]; };
+        const auto shown = [&](int p) {
+            const auto r = L::resolve_story(d, "story.1", "");
+            return r.any ? r.text.paras[static_cast<std::size_t>(p)].text : std::string{};
+        };
+        check("a reference to a note: one step", D::insert_ref_to_note(j, d, "story.1", {1, 4}, "story.1", 5, 0, core::RefShow::Note) && j.size() == 1);
+        const int m = D::note_mark_byte(*d.as<core::Story>("story.1"), 5, 0);
+        check("the anchor right before the note's mark", m >= 3 && P(5).text.compare(static_cast<std::size_t>(m - 3), 3, core::kMarkAnchor) == 0 &&
+                                                           P(1).refs.size() == 1 && P(1).refs[0].target == P(5).anchors[0]);
+        check("shows the note's number", shown(1).substr(4, 1) == "1", shown(1).substr(0, 12));
+        D::insert_ref_to_note(j, d, "story.1", {2, 0}, "story.1", 5, 0, core::RefShow::Custom, "see note *, page #");
+        const auto folio3 = d.folio(d.as<core::Frame>(L::flow_story(d, "story.1").frames.back().frame)->owner);
+        check("words of its own: \"see note 1, page 3\"", P(5).anchors.size() == 1 && shown(2).rfind("see note 1, page " + folio3, 0) == 0,
+              shown(2).substr(0, 24));
+        D::insert_note(j, d, "story.1", {3, 0}, "Earlier.");   // a note before it: it becomes 2
+        check("the note renumbered: the reference follows", shown(1).substr(4, 1) == "2" && shown(2).rfind("see note 2", 0) == 0);
+        D::insert_ref_to(j, d, "story.1", {3, 0}, "story.1", 4, core::RefShow::Custom, "“%” (p. #)");
+        check("words of its own, a heading: “Chapter Two” (p. 3)", shown(3).rfind("“Chapter Two” (p. " + folio3 + ")", 0) == 0,
+              shown(3).substr(0, 30));
+        {
+            core::Doc e;
+            std::string err;
+            check("json: the pattern kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        }
+        // Preflight: all well -- nothing; the heading gone -- a warning.
+        L::FlowCache flows;
+        const auto xrefs = [&] {
+            int n = 0;
+            for (const auto& i : L::preflight_issues(d, flows, {})) n += i.kind == "xref";
+            return n;
+        };
+        check("preflight: references that resolve -- nothing", xrefs() == 0);
+        D::edit_text(j, d, "story.1", {4, 0}, {4, static_cast<int>(P(4).text.size())}, "", "Delete", "");
+        check("preflight: the target gone -- a warning", xrefs() == 1, std::to_string(xrefs()));
+        j.undo();
+        // A target in a story not placed: a warning.
+        const auto ded = D::insert_anchor(j, d, "story.4", {0, 0});
+        D::insert_ref(j, d, "story.1", {2, 0}, ded, core::RefShow::Page);
+        D::delete_frames(j, d, {[&] {
+            for (const auto& id : d.ids_of<core::Frame>()) if (d.as<core::Frame>(id)->story == "story.4") return id;
+            return std::string{};
+        }()});
+        check("preflight: the target not on a page -- a warning", xrefs() == 1, std::to_string(xrefs()));
+    }
+
+    {
+        std::cout << "\n-- editing a cross-reference (s130) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto S = [&]() -> const core::Story& { return *d.as<core::Story>("story.1"); };
+        const auto P = [&](int p) -> const core::Para& { return S().paras[static_cast<std::size_t>(p)]; };
+        const auto shown = [&](int p) {
+            const auto r = L::resolve_story(d, "story.1", "");
+            return r.any ? r.text.paras[static_cast<std::size_t>(p)].text : std::string{};
+        };
+        D::insert_ref_to(j, d, "story.1", {2, 0}, "story.1", 0, core::RefShow::Page);
+        D::insert_ref_to(j, d, "story.1", {2, 3}, "story.1", 4, core::RefShow::Text);   // after the first: k 1
+        check("found: the mark at the cursor", D::ref_near(S(), {2, 3}).k == 1 && D::ref_near(S(), {2, 3}).byte == 3);
+        check("found: the mark just before it", D::ref_near(S(), {2, 6}).k == 1 && D::ref_near(S(), {2, 0}).k == 0);
+        check("none away from a mark", D::ref_near(S(), {2, 9}).k < 0 && D::ref_near(S(), {1, 0}).k < 0);
+        const auto n0 = j.size();
+        check("what it shows changed: one step", D::set_ref(j, d, "story.1", 2, 1, core::RefShow::Custom, "see %") && j.size() == n0 + 1);
+        check("  its words: \"see Chapter Two\"", shown(2).find("see Chapter Two") != std::string::npos, shown(2).substr(0, 40));
+        check("the same again: nothing", !D::set_ref(j, d, "story.1", 2, 1, core::RefShow::Custom, "see %") && j.size() == n0 + 1);
+        check("the other reference untouched", P(2).refs[0].show == core::RefShow::Page && P(2).refs[0].target == P(0).anchors[0]);
+        j.undo();
+        check("undone: as it was", P(2).refs[1].show == core::RefShow::Text && P(2).refs[1].pattern.empty());
+        // Pointed elsewhere: at a heading with no anchor yet -- made, one step.
+        const auto anchors_before = P(3).anchors.size();
+        check("pointed elsewhere: one step", D::retarget_ref(j, d, "story.1", 2, 0, "story.1", 3, -1, core::RefShow::Text) && j.size() == n0 + 1);
+        check("  the anchor made there; the reference points at it", P(3).anchors.size() == anchors_before + 1 && P(2).refs[0].target == P(3).anchors[0]);
+        check("  the anchor where it was kept", !P(0).anchors.empty());
+        check("  its words now", shown(2).rfind("By noon", 0) == 0, shown(2).substr(0, 20));
+        check("the same target and showing: nothing", !D::retarget_ref(j, d, "story.1", 2, 0, "story.1", 3, -1, core::RefShow::Text));
+        // In the same paragraph, before the reference: the reference is still k 0.
+        check("pointed at its own paragraph", D::retarget_ref(j, d, "story.1", 2, 1, "story.1", 2, -1, core::RefShow::Page) &&
+                                              P(2).refs.size() == 2 && P(2).refs[1].target == P(2).anchors[0]);
+        check("pointed at the note", D::retarget_ref(j, d, "story.1", 2, 1, "story.1", 5, 0, core::RefShow::Note) &&
+                                     shown(2).find("1") != std::string::npos);
+        check("a note that isn't there: nothing", !D::retarget_ref(j, d, "story.1", 2, 1, "story.1", 5, 3, core::RefShow::Note));
+        check("no reference there: nothing", !D::set_ref(j, d, "story.1", 2, 5, core::RefShow::Page) &&
+                                             !D::retarget_ref(j, d, "story.1", 1, 0, "story.1", 4, -1, core::RefShow::Page));
+        {   // The hover's words.
+            L::FlowCache fc;
+            const auto w = L::ref_where(d, P(2).refs[1], fc, "story.1");
+            check("hover: \"points at note 1, page \u2026\"", w.find("points at note 1, page ") != std::string::npos && w.find("(Chapters)") == std::string::npos, w);
+            check("hover: from another story -- its name", L::ref_where(d, P(2).refs[1], fc, "story.2").find("(Chapters)") != std::string::npos);
+            check("hover: a heading's words", L::ref_where(d, P(2).refs[0], fc, "story.1").find("\u201cBy noon") != std::string::npos);
+            check("hover: gone", L::ref_where(d, core::XRef{"anchor.99", core::RefShow::Page, {}}, fc).find("gone") != std::string::npos);
+        }
+        while (j.can_undo()) j.undo();
+        check("undo all: no references, no anchors", P(2).refs.empty() && P(0).anchors.empty() && d.strays() == 0);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;
