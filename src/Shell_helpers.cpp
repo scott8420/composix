@@ -413,6 +413,10 @@ void Shell::load_export_prefs() {  // helper
 // Cancel. Save on a never-saved document opens Save As and stops there (do
 // it again once it's saved), as closing does.
 void Shell::confirm_discard(std::function<void()> then) {  // helper
+    if (m_inspector.has_pending()) {   // s165: a style's changes waiting -- settled first
+        m_inspector.settle_pending([this, then] { confirm_discard(then); });
+        return;
+    }
     if (!m_dirty) { then(); return; }
     auto dialog = Gtk::AlertDialog::create("Save changes to \u201c" + m_doc.settings().title + "\u201d?");
     dialog->set_detail("Your changes will be lost if you don\u2019t save them.");

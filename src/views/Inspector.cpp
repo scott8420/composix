@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <glibmm/main.h>
 
+#include <gtkmm/alertdialog.h>
+#include <gtkmm/window.h>
 #include <gtkmm/box.h>
 #include <gtkmm/button.h>
 #include <gtkmm/dropdown.h>
@@ -227,7 +229,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
         auto ids = m_stage_ids;
         auto pend = m_pending;
         m_pending.clear();
-        Glib::signal_idle().connect_once([this, ids, pend] { m_apply.emit(ids, pend); });
+        ask_pending(ids, pend, m_shown_title, {});   // s165: Accept / Cancel
         m_has_shown = false;
     }
     m_staged = m_staged_next;
@@ -586,6 +588,46 @@ void Inspector::send(const std::string& key, const std::string& value) {
     m_staged_sig.emit();   // s164: the specimen shows it now
 }
 
+// s165: the changes waiting, as the user leaves them -- Accept sets them (on
+// the styles they were made for), Cancel drops them.
+void Inspector::ask_pending(std::vector<std::string> ids, Pending pend, const std::string& name, std::function<void()> then) {
+    update_bar();
+    m_staged_sig.emit();
+    auto* win = dynamic_cast<Gtk::Window*>(get_root());
+    const auto n = pend.size();
+    if (!win) { m_apply.emit(ids, pend); if (then) then(); return; }
+    auto dialog = Gtk::AlertDialog::create("Accept the new settings for \u201c" + name + "\u201d?");
+    dialog->set_detail(std::to_string(n) + (n == 1 ? " change is" : " changes are") + " waiting. Cancel drops "
+                       + (n == 1 ? "it" : "them") + "; Accept sets " + (n == 1 ? "it" : "them") + " (one step).");
+    dialog->set_buttons({"Cancel", "Accept"});
+    dialog->set_cancel_button(0);
+    dialog->set_default_button(1);
+    dialog->choose(*win, [this, dialog, ids, pend, then](const Glib::RefPtr<Gio::AsyncResult>& result) {
+        int choice = 0;
+        try { choice = dialog->choose_finish(result); } catch (const Glib::Error&) { choice = 0; }
+        // On idle: the dialog is still transient for the window here (s004).
+        Glib::signal_idle().connect_once([this, choice, ids, pend, then] {
+            if (choice == 1) m_apply.emit(ids, pend);
+            if (then) then();
+        });
+    });
+}
+
+void Inspector::settle_pending(std::function<void()> then) {
+    if (m_pending.empty()) { if (then) then(); return; }
+    auto ids = m_stage_ids;
+    auto pend = m_pending;
+    m_pending.clear();
+    // The rows as they are in the document again.
+    m_has_shown = false;
+    const auto t = m_shown_title, sb = m_shown_sub;
+    const auto fs = m_shown;
+    m_staged_next = m_staged;
+    m_stage_ids_next = m_stage_ids;
+    fill(t, sb, fs);
+    ask_pending(ids, pend, t, std::move(then));
+}
+
 void Inspector::update_bar() {
     if (!m_bar) return;
     m_bar->set_visible(m_staged && !m_pending.empty());
@@ -611,11 +653,11 @@ void Inspector::show_section(const core::Outline& o, core::Segment s, const std:
 }
 
 void Inspector::clear() {
-    if (!m_pending.empty()) {   // s162: leaving with changes waiting -- set them
+    if (!m_pending.empty()) {   // s162 / s165: leaving with changes waiting -- ask
         auto ids = m_stage_ids;
         auto pend = m_pending;
         m_pending.clear();
-        Glib::signal_idle().connect_once([this, ids, pend] { m_apply.emit(ids, pend); });
+        ask_pending(ids, pend, m_shown_title, {});
     }
     m_staged = false;
     update_bar();

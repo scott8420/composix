@@ -592,6 +592,10 @@ void Shell::on_export_pdf() {  // handler
 // opens Save As and keeps the window; close again once it is saved.
 bool Shell::on_close_request() {  // handler
     save_window();   // s057: whether or not the close goes ahead -- it's how the window is now
+    if (m_inspector.has_pending()) {   // s165: a style's changes waiting -- Accept / Cancel first, then close as usual
+        m_inspector.settle_pending([this] { close(); });
+        return true;
+    }
     if (!m_dirty || m_closing_ok) return Gtk::ApplicationWindow::on_close_request();
     auto dialog = Gtk::AlertDialog::create("Save changes to \u201c" + m_doc.settings().title + "\u201d?");
     dialog->set_detail("Your changes will be lost if you don\u2019t save them.");

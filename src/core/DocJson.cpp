@@ -195,6 +195,7 @@ json to(const Record& r) {
                  {"hyph_limit", v.hyph_limit}, {"hyph_shortest", v.hyph_shortest}, {"hyph_last_word", v.hyph_last_word},
                  {"keep_next", v.keep_next}, {"keep_lines", v.keep_lines}, {"start", en(v.start)}};
             if (v.no_break) j["no_break"] = true;   // s075
+            if (v.span) j["span"] = true;           // s166
             if (!v.tabs.empty()) {
                 json tabs = json::array();
                 for (const auto& t : v.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
@@ -443,6 +444,7 @@ std::optional<Record> from(const json& j) {
         v.bold = val(j, "bold", false);
         v.italic = val(j, "italic", false);
         v.no_break = val(j, "no_break", false);   // s075
+        v.span = val(j, "span", false);           // s166
         v.align = de(j, "align", Align::Left);
         v.space_before = val(j, "space_before", 0.0);
         v.space_after = val(j, "space_after", 0.0);

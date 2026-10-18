@@ -3107,6 +3107,189 @@ int main() {
     }
 
     {
+        std::cout << "\n-- a sidebar's footnotes at the page's foot (s167) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const std::string page = d.as<core::Frame>("frame.1")->owner;
+        const core::Rect mr = core::margin_rect(d, page);
+        core::Doc::Id body;
+        for (const auto& id : d.ids_of<core::Style>()) if (d.as<core::Style>(id)->name == "Body") body = id;
+        {
+            core::Doc::Loading load(d);
+            core::Story side{"Sidebar", {}};
+            core::Para pp;
+            pp.style = body;
+            pp.text = "A sidebar's words, with a note of its own.";
+            side.paras.push_back(pp);
+            d.put("story.90", side);
+            core::Frame f;
+            f.owner = page;
+            f.kind = core::FrameKind::Text;
+            f.x = mr.x;
+            f.y = mr.y + 40;
+            f.w = mr.w * 0.4;
+            f.h = 120;
+            f.z = 50;
+            f.story = "story.90";
+            d.put("frame.90", f);
+        }
+        D::insert_note(j, d, "story.90", {0, 10}, "The sidebar's note -- at the page's foot, under the main text.");
+        L::FlowCache fl;
+        const auto& sf = fl.get(d, "story.90");
+        const auto* fr = d.as<core::Frame>("frame.90");
+        const L::NotePlace* np = nullptr;
+        for (const auto& ft : sf.frames) if (ft.frame == "frame.90" && !ft.notes.empty()) np = &ft.notes.front();
+        check("the sidebar's note is set", np != nullptr);
+        if (np) {
+            check("at the margins' width", std::abs(np->x - (mr.x - fr->x)) < 0.01 && std::abs(np->w - mr.w) < 0.01);
+            check("at the page's foot", std::abs(fr->y + np->y + np->h - mr.b()) < 0.5, std::to_string(fr->y + np->y + np->h) + " vs " + std::to_string(mr.b()));
+            const double top_of_notes = fr->y + np->y;
+            const auto& mf = fl.get(d, "story.1");
+            bool clear = true;
+            for (const auto& ft : mf.frames) {
+                const auto* f = d.as<core::Frame>(ft.frame);
+                if (f->owner != page) continue;
+                for (const auto& l : ft.lines) if (f->y + l.y + l.h > top_of_notes + 0.5) clear = false;
+                for (const auto& n : ft.notes) if (f->y + n.y + n.h > top_of_notes + 0.5) clear = false;
+            }
+            check("the main text (and its notes) stop above it", clear);
+            // the sidebar's words change (text only): the main story is flowed again around more notes
+            D::insert_note(j, d, "story.90", {0, 30}, "A second note, longer than the first, so the foot it takes grows by a line or two at least.");
+            const auto& sf2 = fl.get(d, "story.90");
+            double top2 = 1e9;
+            for (const auto& ft : sf2.frames) if (ft.frame == "frame.90") for (const auto& n : ft.notes) top2 = std::min(top2, fr->y + n.y);
+            const auto& mf2 = fl.get(d, "story.1");
+            bool clear2 = true;
+            for (const auto& ft : mf2.frames) {
+                const auto* f = d.as<core::Frame>(ft.frame);
+                if (f->owner != page) continue;
+                for (const auto& l : ft.lines) if (f->y + l.y + l.h > top2 + 0.5) clear2 = false;
+            }
+            check("a note added to the sidebar: the main text stops higher", top2 < top_of_notes && clear2);
+        }
+        check("a wide frame's notes stay its own (the main story's)", [&] {
+            const auto& mf = fl.get(d, "story.1");
+            for (const auto& ft : mf.frames) {
+                const auto* f = d.as<core::Frame>(ft.frame);
+                for (const auto& n : ft.notes) if (std::abs(n.w - core::column_width(*f, 0)) > 0.01 && core::column_count(*f) == 1) return false;
+            }
+            return true;
+        }());
+        {   // a sidebar reaching down to the foot: its own words stop above its notes
+            core::Doc::Loading load(d);
+            auto f = *d.as<core::Frame>("frame.90");
+            f.h = mr.b() - f.y;
+            d.put("frame.90", f);
+            auto st = *d.as<core::Story>("story.90");
+            std::string more;
+            for (int k = 0; k < 40; ++k) more += " More words of the sidebar, running down the page.";
+            st.paras.at(0).text += more;
+            d.put("story.90", st);
+        }
+        {
+            L::FlowCache f2;
+            const auto& sf3 = f2.get(d, "story.90");
+            const auto* f9 = d.as<core::Frame>("frame.90");
+            double ntop = 1e9, lbot = 0;
+            for (const auto& ft : sf3.frames) if (ft.frame == "frame.90") {
+                for (const auto& n : ft.notes) ntop = std::min(ntop, n.y);
+                for (const auto& l : ft.lines) lbot = std::max(lbot, l.y + l.h);
+            }
+            check("a sidebar down to the foot: its words stop above its notes", ntop < 1e9 && lbot <= ntop + 0.5,
+                  std::to_string(lbot) + " / " + std::to_string(ntop) + " (frame h " + std::to_string(f9->h) + ")");
+        }
+        check("foot neighbours: the main story waits on the sidebar's", [&] {
+            const auto nb = L::foot_neighbours(d, "story.90");
+            return std::find(nb.begin(), nb.end(), "story.1") != nb.end();
+        }());
+    }
+
+    {
+        std::cout << "\n-- a paragraph spanning the columns: bands (s166) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        {   // the chapters in two columns
+            core::Doc::Loading load(d);
+            for (const auto& fid : d.ids_of<core::Frame>()) {
+                auto f = *d.as<core::Frame>(fid);
+                if (f.story != "story.1") continue;
+                f.columns = 2;
+                d.put(fid, f);
+            }
+        }
+        core::Doc::Id head;
+        for (const auto& id : d.ids_of<core::Style>()) if (d.as<core::Style>(id)->name == "Heading 1") head = id;
+        const auto sp = D::duplicate_style(j, d, head);
+        check("Span columns: a style setting", D::style_edit_label("span") == "Span columns" &&
+              D::edit_styles(j, d, {sp}, "Span columns", [&](core::Style& st) { D::style_edit(d, st, "span", "1"); st.start = core::ParaStart::Anywhere; }) &&
+              d.as<core::Style>(sp)->span);
+        // a spanning head part way through the opening chapter
+        const int P = 3;
+        D::set_para_style(j, d, "story.1", {P, 0}, {P, 0}, sp);
+        L::FlowCache fl;
+        const auto& f = fl.get(d, "story.1");
+        const L::FrameText* ft = nullptr;
+        for (const auto& x : f.frames) for (const auto& l : x.lines) if (l.para == P) ft = &x;
+        check("the spanning paragraph is set", ft != nullptr);
+        if (ft) {
+            const auto* fr = d.as<core::Frame>(ft->frame);
+            const double x0 = core::column_x(*fr, 0), x1 = core::column_x(*fr, 1) + core::column_width(*fr, 1);
+            double s_top = 1e9, s_bot = -1;
+            bool wide = true;
+            for (const auto& l : ft->lines)
+                if (l.para == P) {
+                    s_top = std::min(s_top, l.y);
+                    s_bot = std::max(s_bot, l.y + l.h);
+                    wide = wide && std::abs(l.cw - (x1 - x0)) < 0.01 && l.x >= x0 - 0.01 && l.col == 0 && (l.w > 0 || std::abs(l.x - x0) < 0.01);
+                }
+            std::string dbg;
+            for (const auto& l : ft->lines) if (l.para == P) dbg += "[x" + std::to_string(l.x) + " cw" + std::to_string(l.cw) + " c" + std::to_string(l.col) + " b" + std::to_string(l.band) + " w" + std::to_string(l.w) + "]";
+            check("across both columns, its own width", wide, dbg + " x0 " + std::to_string(x0) + " x1 " + std::to_string(x1));
+            bool above_ok = true, below_ok = true, two_above = false, two_below = false;
+            std::set<int> cols_above, cols_below;
+            for (const auto& l : ft->lines) {
+                if (l.para < P) { above_ok = above_ok && l.y + l.h <= s_top + 0.01; cols_above.insert(l.col); }
+                if (l.para > P) { below_ok = below_ok && l.y >= s_bot - 0.01; cols_below.insert(l.col); }
+            }
+            two_above = cols_above.size() == 2 || cols_above.empty();
+            two_below = cols_below.size() == 2 || cols_below.size() <= 1;
+            check("the text before it: above it", above_ok);
+            check("the text before it: balanced over both columns", two_above);
+            check("the text after it: below it, in columns", below_ok && two_below);
+            int bands = 0;
+            for (const auto& l : ft->lines) bands = std::max(bands, l.band + 1);
+            check("bands: before, across, after", bands >= 1 + (cols_above.empty() ? 0 : 1) + (cols_below.empty() ? 0 : 1),
+                  std::to_string(bands));
+            // balanced: the two columns above end within a line or so of each other
+            double b0 = 0, b1 = 0;
+            for (const auto& l : ft->lines) if (l.para < P) (l.col == 0 ? b0 : b1) = std::max(l.col == 0 ? b0 : b1, l.y + l.h);
+            const double lead = 14;
+            check("balanced: the columns above end together", cols_above.size() < 2 || std::abs(b0 - b1) <= 2 * lead + 0.01,
+                  std::to_string(b0) + " / " + std::to_string(b1));
+        }
+        check("no spanning paragraph: as before (one band)", [&] {
+            core::Doc e;
+            core::load_sample(e);
+            L::FlowCache fe;
+            for (const auto& x : fe.get(e, "story.1").frames) for (const auto& l : x.lines) if (l.band != 0 || l.cw != 0) return false;
+            return true;
+        }());
+        {
+            core::Doc e;
+            check("json: span round-trips", core::from_json(e, core::to_json(d)) && e.as<core::Style>(sp)->span);
+        }
+        check("span: through the door", d.strays() == 0);
+    }
+
+    {
         std::cout << "\n-- a style's setting, one code path; the specimen shows what's waiting (s164) --\n";
         namespace D = core::doc;
         namespace L = composix::layout;

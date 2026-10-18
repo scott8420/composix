@@ -1373,6 +1373,8 @@ core::Doc style_specimen_doc(const core::Doc& d, const core::Doc::Id& style, boo
     f.w = w - 2 * m;
     f.h = h - 2 * m;
     f.story = "story.1";
+    // s166: a style spanning the columns shows it -- in use, two columns.
+    if (const auto* x = s.as<core::Style>(style); in_use && x && x->span) f.columns = 2;
     s.put("frame.1", f);
     return s;
 }

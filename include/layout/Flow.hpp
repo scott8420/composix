@@ -55,7 +55,18 @@ struct Line {
     // s038: the line ends inside a word, at a hyphenation point: a hyphen
     // is drawn after it (not in the text). Always a line set on its own.
     bool   hyphen = false;
+    // s166: a frame's text in BANDS -- columns, a paragraph spanning them,
+    // columns again. `band` tells the bands apart (a column is (band, col));
+    // `cw` the width the line was set in when it isn't its column's (a
+    // spanning paragraph: all the columns), 0 = the column's.
+    int    band = 0;
+    double cw   = 0;
 };
+// s167: the stories whose flow waits on `story`'s notes at a page's foot
+// (the other text frames on the pages of its narrow frames).
+std::vector<std::string> foot_neighbours(const core::Doc& d, const std::string& story);
+// s166: the width a line was set in -- its own (a spanning paragraph's), else its column's.
+double line_width_of(const core::Frame& fr, const Line& l);
 
 // s109: a footnote set at the foot of a column: the k-th note of paragraph
 // `para`, its number, and its box (frame coordinates).

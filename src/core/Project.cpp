@@ -142,7 +142,7 @@ std::string style_group(const Field& f) {
         {"color", "Text"}, {"color_tint", "Text"},
         {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
         {"findent", "Paragraph"}, {"indent_after", "Paragraph"}, {"tabs", "Paragraph"}, {"drop_lines", "Paragraph"},
-        {"drop_chars", "Paragraph"},
+        {"drop_chars", "Paragraph"}, {"span", "Paragraph"},
         {"align_grid", "Flow"}, {"hyphenate", "Flow"}, {"hyph_limit", "Flow"}, {"hyph_shortest", "Flow"}, {"hyph_last_word", "Flow"},
         {"keep_next", "Flow"}, {"keep_lines", "Flow"}, {"pstart", "Flow"},
         {"list_type", "List"}, {"list_bullet", "List"}, {"list_num", "List"}, {"list_cont", "List"}, {"list_level", "List"},
@@ -502,6 +502,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                              {{"0", "None"}, {"2", "2 lines"}, {"3", "3 lines"}, {"4", "4 lines"}, {"5", "5 lines"}}});
                 if (s.drop_lines >= 2)
                     f.push_back({"Drop letters", std::to_string(s.drop_chars), "drop_chars", {{"1", "1"}, {"2", "2"}, {"3", "3"}}});
+                // s166: across all the frame's columns.
+                f.push_back({"Span columns", s.span ? "All columns" : "Off", "span", {{"0", "Off"}, {"1", "All columns"}}});
                 // s036: lines on the page's baseline grid.
                 f.push_back({"Baseline grid", s.align_grid ? "Align to grid" : "Off", "align_grid",
                              {{"0", "Off"}, {"1", "Align to grid"}}});

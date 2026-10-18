@@ -448,6 +448,10 @@ struct Style {
     std::string next;
     std::vector<std::string> own;
     bool        no_break = false;        // s075: character style -- its words stay on one line
+    // s166 (Scott): a paragraph style across ALL the frame's columns -- the
+    // text before it balanced over the columns above it, the text after
+    // going on in columns below it.
+    bool        span = false;
     bool operator==(const Style&) const = default;
 };
 

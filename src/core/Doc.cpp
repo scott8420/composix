@@ -2475,7 +2475,7 @@ std::string style_edit_label(const std::string& key) {   // s164
         {"list_type", "List"}, {"list_bullet", "Bullet"}, {"list_num", "Numbers"}, {"list_hang", "Hang"},
         {"pstart", "Start"}, {"keep_next", "Keep with next"}, {"keep_lines", "Keep lines"},
         {"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"}, {"hyph_last_word", "Hyphenate last word"},
-        {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}};
+        {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}, {"span", "Span columns"}};
     if (const auto it = labels.find(key); it != labels.end()) return it->second;
     if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {
         static const std::map<char, std::string> rl{{'w', "Rule"}, {'c', "Rule colour"}, {'t', "Rule tint"}, {'o', "Rule offset"},
@@ -2533,6 +2533,7 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
     else if (key == "hyph_last_word") st.hyph_last_word = std::stoi(choice) != 0;
     else if (key == "hyphenate") st.hyphenate = choice == "1";
     else if (key == "align_grid") st.align_grid = choice == "1";
+    else if (key == "span") st.span = choice == "1";   // s166
     else if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {   // s044: paragraph rules
         const bool above = key[5] == 'a';
         const char what = key.back();
@@ -2581,7 +2582,7 @@ std::string style_key_of_edit(const std::string& e) {   // s092
         {"nobreak", "no_break"}, {"color", "color"}, {"color_tint", "color_tint"}, {"align", "align"},
         {"before", "space_before"}, {"after", "space_after"}, {"lindent", "left_indent"}, {"rindent", "right_indent"},
         {"findent", "first_indent"}, {"indent_after", "skip_after_heading"}, {"tabs", "tabs"}, {"drop_lines", "drop_lines"},
-        {"drop_chars", "drop_chars"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"hyph_limit", "hyph_limit"},
+        {"drop_chars", "drop_chars"}, {"span", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"hyph_limit", "hyph_limit"},
         {"hyph_shortest", "hyph_shortest"}, {"hyph_last_word", "hyph_last_word"}, {"keep_next", "keep_next"},
         {"keep_lines", "keep_lines"}, {"pstart", "start"}};
     if (const auto it = m.find(e); it != m.end()) return it->second;

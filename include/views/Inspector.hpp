@@ -48,6 +48,9 @@ public:
     const Pending& pending() const { return m_pending; }
     const std::vector<std::string>& pending_ids() const { return m_stage_ids; }
     sigc::signal<void()>& signal_staged() { return m_staged_sig; }
+    // s165 (Scott): leaving changes waiting -- a dialog: Accept sets them,
+    // Cancel drops them; then `then` (none waiting: `then` at once).
+    void settle_pending(std::function<void()> then);
     // s161: the groups shown open ("Text,Paragraph"), kept by the shell.
     void set_open_groups(const std::string& csv);
     sigc::signal<void(const std::string& csv)>& signal_groups() { return m_groups_sig; }
@@ -57,6 +60,7 @@ private:
     Gtk::MenuButton* presets_button(const std::string& key, const std::vector<core::Choice>& choices, Gtk::Entry* show_in = nullptr);
     void send(const std::string& key, const std::string& value);   // s162: an edit -- now, or staged
     void update_bar();
+    void ask_pending(std::vector<std::string> ids, Pending pend, const std::string& name, std::function<void()> then);
     Gtk::Entry* typed_entry(const std::string& name, const std::string& value, double unit, double lo, double hi,
                             std::function<void(const std::string&)> send, bool percent = false);
 
