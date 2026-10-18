@@ -214,6 +214,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     auto canvas = Gio::Menu::create();   // s006
     canvas->append("Rulers", "win.toggle-rulers");
     canvas->append("Guides", "win.toggle-guides");
+    canvas->append("Lock Guides", "win.toggle-guide-lock");   // s153
     canvas->append("Baseline Grid", "win.toggle-grid");   // s036
     canvas->append("Hidden Characters", "win.toggle-hidden");   // s059
     canvas->append("Proof Colours", "win.toggle-proof");        // s099

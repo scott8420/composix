@@ -64,6 +64,13 @@ public:
 
     // s006: rulers, guides, snapping.
     const core::Viewport& viewport() const { return m_vp; }
+    const std::vector<core::Placed>& placed() const { return m_placed; }   // s154: the rulers read the pages' zeros
+    // s154: the zero point dragged out of the ruler corner (canvas px):
+    // crosshairs while it moves; dropped -> one step. reset_zero: back to
+    // the origin (double-click the corner).
+    void preview_zero(double x, double y);
+    void drop_zero(double x, double y);
+    void reset_zero();
     void pointer(double& x, double& y) const { x = m_in ? m_mx : -1; y = m_in ? m_my : -1; }
     void preview_guide(bool vertical, double at);          // a guide being pulled from a ruler (screen)
     void drop_guide(bool vertical, double x, double y);     // released: on a page -> one step
@@ -72,6 +79,10 @@ public:
     Tool tool() const { return m_tool; }
     void delete_selection();
     void set_show_guides(bool on) { m_show_guides = on; queue_draw(); }
+    // s153: guides locked -- not picked, moved or pulled off (new ones still
+    // come from the rulers).
+    void set_guides_locked(bool on) { m_guides_locked = on; m_hover_guide.clear(); queue_draw(); }
+    bool guides_locked() const { return m_guides_locked; }
     void set_show_grid(bool on) { m_show_grid = on; queue_draw(); }   // s036: baseline grid
     bool show_grid() const { return m_show_grid; }
     void set_show_hidden(bool on) { m_show_hidden = on; queue_draw(); }   // s059: hidden characters
@@ -246,6 +257,7 @@ private:
     // s006
     bool              m_in = false;                // the pointer is over the canvas
     bool              m_snap = true, m_show_guides = true, m_show_grid = false;
+    bool              m_guides_locked = false;   // s153
     bool              m_show_hidden = false;   // s059
     std::shared_ptr<const plate::Proof> m_proof;   // s099
     std::uint64_t     m_proof_gen = 0;             // s104: a new proof, new page images
@@ -257,10 +269,14 @@ private:
     double            m_snap_x = NAN, m_snap_y = NAN;   // the lines snapped to (layout), drawn mid-drag
     std::string       m_guide;                     // the guide being dragged
     double            m_guide0 = 0;                // its position at press
+    double            m_guide_base = 0;            // s153: its page's left / top (layout), for snapping
     bool              m_guide_off = false;         // dragged off its page: it will go
     std::string       m_hover_guide;
     bool              m_preview = false, m_preview_v = false;
     double            m_preview_at = 0;
+    double            m_preview_doc = NAN;         // s153: where it would drop (layout, snapped)
+    bool              m_zero_preview = false;      // s154: the zero point being dragged
+    double            m_zero_x = 0, m_zero_y = 0;  // ... where (layout, snapped)
 
     // s007: text, recomputed when the document changes. s101: the shell's
     // cache (share_flows), so a change is flowed once for every view.

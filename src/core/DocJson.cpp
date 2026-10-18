@@ -54,6 +54,8 @@ json to(const Record& r) {
             if (v.note_at != NoteAt::Foot) j["note_at"] = static_cast<int>(v.note_at);   // s120
             if (v.note_title != "Notes") j["note_title"] = v.note_title;
             if (v.note_num != Settings::NoteNum::Plain) j["note_num"] = static_cast<int>(v.note_num);   // s126
+            if (v.ruler_origin != RulerOrigin::Spread) j["ruler_origin"] = static_cast<int>(v.ruler_origin);   // s154
+            if (v.zero_x != 0 || v.zero_y != 0) j["zero"] = {v.zero_x, v.zero_y};
             if (!v.exp.mark_lists.empty()) j["export"]["mark_lists"] = v.exp.mark_lists;   // s082
             if (v.exp.spreads) j["export"]["spreads"] = true;                              // s084
             if (v.exp.perceptual) j["export"]["perceptual"] = true;                        // s085
@@ -92,6 +94,7 @@ json to(const Record& r) {
                  {"wrap_off", {v.wrap_off.top, v.wrap_off.right, v.wrap_off.bottom, v.wrap_off.left}}};
             if (v.valign != VAlign::Top) j["valign"] = en(v.valign);   // s042
             if (v.autosize) j["autosize"] = true;                      // s048
+            if (v.across) j["across"] = true;                          // s155
             if (v.ignore_wrap) j["ignore_wrap"] = true;                // s069
             if (!(v.inset == Sides{})) j["inset"] = {v.inset.top, v.inset.right, v.inset.bottom, v.inset.left};   // s040
             if (!(v.col_rule == ColumnRule{}))   // s055
@@ -231,6 +234,11 @@ std::optional<Record> from(const json& j) {
         v.facing = val(j, "facing", v.facing);
         v.wrap_beneath = val(j, "wrap_beneath", false);   // s069
         v.units = static_cast<Units>(std::clamp(val(j, "units", 0), 0, 3));   // s073
+        v.ruler_origin = static_cast<RulerOrigin>(std::clamp(val(j, "ruler_origin", 0), 0, 2));   // s154
+        if (j.contains("zero") && j["zero"].is_array() && j["zero"].size() == 2 && j["zero"][0].is_number() && j["zero"][1].is_number()) {
+            v.zero_x = j["zero"][0].get<double>();
+            v.zero_y = j["zero"][1].get<double>();
+        }
         v.note_restart = static_cast<NoteRestart>(std::clamp(val(j, "note_restart", 0), 0, 3));   // s124: chapter   // s111
         v.note_style = static_cast<NoteStyle>(std::clamp(val(j, "note_style", 0), 0, 3));
         v.note_area = std::clamp(val(j, "note_area", 100), 10, 100);   // s117
@@ -334,6 +342,7 @@ std::optional<Record> from(const json& j) {
         v.valign = de(j, "valign", VAlign::Top);   // s042
         v.autosize = val(j, "autosize", false);    // s048
         v.ignore_wrap = val(j, "ignore_wrap", false);   // s069
+        v.across = val(j, "across", false);   // s155
         if (j.contains("wrap_off") && j["wrap_off"].is_array() && j["wrap_off"].size() == 4) {
             const auto& a = j["wrap_off"];
             v.wrap_off = {a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>()};

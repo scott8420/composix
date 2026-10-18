@@ -102,14 +102,27 @@ void paint_canvas_page(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook
 
     // Master items first (dimmed: they are not picked on a page), then the
     // page's own frames, back to front.
+    // s155: an item across the spine -- shifted for a right page, cut at the spine.
+    const core::Side sd = core::side_for(P.doc, p.id, p.side);
+    const auto across = [&](const core::Frame& f, bool from_master, const std::string& fid) {
+        const double dx = core::across_dx(P.doc, f, sd);
+        if (!f.across || sd == core::Side::Any) { paint_frame(cr, P, f, p.r.x, p.r.y, from_master, fid, p.id); return; }
+        const Rect page = P.to_screen(p.r);
+        cr->save();
+        if (sd == core::Side::Left) cr->rectangle(page.x - 1e5, page.y - 1e5, 1e5 + page.w, 2e5);
+        else                        cr->rectangle(page.x, page.y - 1e5, 1e5, 2e5);
+        cr->clip();
+        paint_frame(cr, P, f, p.r.x + dx, p.r.y, from_master, fid, p.id);
+        cr->restore();
+    };
     if (!p.master)
         for (const auto& m : core::master_chain(P.doc, p.id))
             for (const auto& fid : P.doc.frames_on(m))
                 if (core::master_item_on(P.doc, fid, p.id))   // s025: its side, not overridden here
-                    paint_frame(cr, P, *P.doc.as<core::Frame>(fid), p.r.x, p.r.y, true, fid, p.id);
+                    across(*P.doc.as<core::Frame>(fid), true, fid);
     for (const auto& fid : P.doc.frames_on(p.id))
         if (core::on_panel(P.doc, p, fid))   // s150: a master's panel -- its side's items and both sides'
-            paint_frame(cr, P, *P.doc.as<core::Frame>(fid), p.r.x, p.r.y, false, fid, p.id);
+            across(*P.doc.as<core::Frame>(fid), false, fid);
 
 }
 
@@ -388,10 +401,14 @@ PixBox canvas_page_box(const core::Doc& d, const core::Placed& p, const CanvasPa
     const double bleed = core::bleed_of(d, p.id);   // s147
     b = Rect{b.x - bleed, b.y - bleed, b.w + 2 * bleed, b.h + 2 * bleed};
     double stroke = 0;
+    const core::Side sd = core::side_for(d, p.id, p.side);   // s155
     const auto add = [&](const std::string& fid) {
         const auto* f = d.as<core::Frame>(fid);
         if (!f) return;
-        b = b.unite(Rect{p.r.x + f->x, p.r.y + f->y, f->w, f->h});
+        Rect fr{p.r.x + f->x + core::across_dx(d, *f, sd), p.r.y + f->y, f->w, f->h};
+        if (f->across && sd == core::Side::Left)  fr.w = std::max(0.0, std::min(fr.r(), p.r.r()) - fr.x);   // cut at the spine
+        if (f->across && sd == core::Side::Right) { const double r = fr.r(); fr.x = std::max(fr.x, p.r.x); fr.w = std::max(0.0, r - fr.x); }
+        b = b.unite(fr);
         stroke = std::max(stroke, f->stroke_w);
     };
     if (!p.master)

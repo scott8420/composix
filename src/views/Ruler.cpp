@@ -44,11 +44,25 @@ void Ruler::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     // This ruler's offset from the canvas (the corner box / the other ruler).
     double offx = 0, offy = 0;
     translate_coordinates(m_canvas, 0, 0, offx, offy);
-    const double origin = m_horizontal ? vp.ox() - offx : vp.oy() - offy;   // screen px of doc 0
+    const double origin0 = m_horizontal ? vp.ox() - offx : vp.oy() - offy;   // screen px of layout 0
+
+    // s154: the zero -- the origin (Spread / Page / Spine) and the dragged
+    // zero point. Across, in pieces: each page (or spread) from its own.
+    struct Piece { double a, b, origin; };
+    std::vector<Piece> pieces;
+    const auto& pl = m_canvas.placed();
+    const auto& doc = m_canvas.doc();
+    if (m_horizontal) {
+        for (const auto& sp : core::ruler_spans(doc, pl))
+            pieces.push_back({std::isinf(sp.lo) ? -1e9 : origin0 + sp.lo * s, std::isinf(sp.hi) ? 1e9 : origin0 + sp.hi * s, origin0 + sp.zero * s});
+    } else {
+        const double zy = pl.empty() ? doc.settings().zero_y : pl.front().r.y + core::ruler_zero(doc, pl.front().id, pl.front().side).y;
+        pieces.push_back({-1e9, 1e9, origin0 + zy * s});
+    }
 
     // Major step: the smallest of these (in the document's unit -- s073) at
     // least 56 px apart; each split into as many of its parts as fit.
-    const auto units = m_canvas.doc().settings().units;
+    const auto units = doc.settings().units;
     const double upt = core::unit_pt(units);
     std::vector<double> steps;
     std::vector<int> parts;
@@ -64,41 +78,54 @@ void Ruler::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     int subs = 1;
     for (int p : parts) if (px_major / p >= 5) { subs = p; break; }
 
-    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.55);
-    cr->set_line_width(1);
-    const double first = std::floor((0 - origin) / px_major) - 1;
-    for (double k = first; origin + k * px_major < len + px_major; k += 1) {
-        for (int i = 0; i < subs; ++i) {
-            const double at = std::round(origin + (k + static_cast<double>(i) / subs) * px_major) + 0.5;
-            if (at < 0 || at > len) continue;
-            const double tick = i == 0 ? 20 : (subs % 2 == 0 && i == subs / 2 ? 9 : (subs >= 4 && subs % 4 == 0 && i % (subs / 4) == 0 ? 6 : 3));
-            if (m_horizontal) { cr->move_to(at, 20); cr->line_to(at, 20 - tick); }
-            else              { cr->move_to(20, at); cr->line_to(20 - tick, at); }
+    for (const auto& pc : pieces) {
+        const double lo = std::max(0.0, pc.a), hi = std::min(len, pc.b);
+        if (hi <= lo) continue;
+        const double origin = pc.origin;
+        cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.55);
+        cr->set_line_width(1);
+        const double first = std::floor((lo - origin) / px_major) - 1;
+        for (double k = first; origin + k * px_major < hi + px_major; k += 1) {
+            for (int i = 0; i < subs; ++i) {
+                const double at = std::round(origin + (k + static_cast<double>(i) / subs) * px_major) + 0.5;
+                if (at < lo || at > hi) continue;
+                const double tick = i == 0 ? 20 : (subs % 2 == 0 && i == subs / 2 ? 9 : (subs >= 4 && subs % 4 == 0 && i % (subs / 4) == 0 ? 6 : 3));
+                if (m_horizontal) { cr->move_to(at, 20); cr->line_to(at, 20 - tick); }
+                else              { cr->move_to(20, at); cr->line_to(20 - tick, at); }
+            }
         }
-    }
-    cr->stroke();
+        cr->stroke();
 
-    // Labels at the majors.
-    cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.75);
-    for (double k = first; origin + k * px_major < len + px_major; k += 1) {
-        const double at = origin + k * px_major;
-        if (at < -40 || at > len) continue;
-        char buf[16];
-        const double v = k * major;
-        if (std::abs(v - std::round(v)) < 1e-9) std::snprintf(buf, sizeof buf, "%.0f", v);
-        else std::snprintf(buf, sizeof buf, "%g", v);
-        auto lay = create_pango_layout(buf);
-        lay->set_font_description(Pango::FontDescription("Sans 7"));
-        if (m_horizontal) {
-            cr->move_to(at + 3, 1);
-            lay->show_in_cairo_context(cr);
-        } else {
-            cr->save();
-            cr->move_to(1, at + 3);
-            cr->rotate(M_PI / 2);
-            cr->rel_move_to(0, -12);
-            lay->show_in_cairo_context(cr);
-            cr->restore();
+        // Labels at the majors (s154: inside the piece).
+        cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.75);
+        for (double k = first; origin + k * px_major < hi + px_major; k += 1) {
+            const double at = origin + k * px_major;
+            if (at < lo - 1 || at > hi - 12 || at < -40 || at > len) continue;
+            char buf[16];
+            const double v = k * major;
+            if (std::abs(v - std::round(v)) < 1e-9) std::snprintf(buf, sizeof buf, "%.0f", v);
+            else std::snprintf(buf, sizeof buf, "%g", v);
+            auto lay = create_pango_layout(buf);
+            lay->set_font_description(Pango::FontDescription("Sans 7"));
+            if (m_horizontal) {
+                cr->move_to(at + 3, 1);
+                lay->show_in_cairo_context(cr);
+            } else {
+                cr->save();
+                cr->move_to(1, at + 3);
+                cr->rotate(M_PI / 2);
+                cr->rel_move_to(0, -12);
+                lay->show_in_cairo_context(cr);
+                cr->restore();
+            }
+        }
+        // Where one piece meets the next: a faint mark.
+        if (pc.b < len && pc.b > 0) {
+            cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.3);
+            const double at = std::round(pc.b) + 0.5;
+            if (m_horizontal) { cr->move_to(at, 0); cr->line_to(at, 20); }
+            else              { cr->move_to(0, at); cr->line_to(20, at); }
+            cr->stroke();
         }
     }
 

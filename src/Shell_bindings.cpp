@@ -113,6 +113,15 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     toggle("toggle-rulers", [this](bool on) { m_canvas_view.set_rulers(on); });
     toggle("toggle-guides", [this](bool on) { m_canvas_view.canvas().set_show_guides(on); });
     toggle("toggle-snap",   [this](bool on) { m_canvas_view.canvas().set_snap(on); });
+    {   // s153: guides locked -- kept between runs.
+        const bool on = core::setting_int(m_settings, "view.guides_locked", 0, 0, 1) == 1;
+        m_canvas_view.canvas().set_guides_locked(on);
+        toggle("toggle-guide-lock", [this](bool v) {
+            m_canvas_view.canvas().set_guides_locked(v);
+            m_settings["view.guides_locked"] = v ? "1" : "0";
+            core::save_settings(m_settings_file, m_settings);
+        }, on);
+    }
     toggle("toggle-grid",   [this](bool on) { m_canvas_view.canvas().set_show_grid(on); }, false);   // s036
     {   // s059: hidden characters -- kept between runs.
         const bool on = core::setting_int(m_settings, "view.hidden", 0, 0, 1) == 1;

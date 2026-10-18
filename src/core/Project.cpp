@@ -189,6 +189,9 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                {"2", unit_label(Units::Picas)}, {"3", unit_label(Units::Points)}}},
                              {"Text wrap", st.wrap_beneath ? "Text beneath" : "All text", "dwrap",   // s069
                               {{"0", "All text"}, {"1", "Text beneath"}}},
+                             {"Ruler origin", st.ruler_origin == RulerOrigin::Page ? "Page"   // s154
+                                              : st.ruler_origin == RulerOrigin::Spine ? "Spine" : "Spread",
+                              "dorigin", {{"0", "Spread"}, {"1", "Page"}, {"2", "Spine"}}},
                              {"Footnotes", st.note_restart == NoteRestart::Page ? "Each page"   // s111
                                            : st.note_restart == NoteRestart::Section ? "Each section"
                                            : st.note_restart == NoteRestart::Chapter ? "Each chapter" : "Through the story",   // s124
@@ -816,7 +819,9 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         std::vector<Field> fields{{"Kind", kind}, {"On", on}};
         // One compact row (Scott): X Y W H over their values, inches.
         const auto U = d.settings().units;   // s073
-        Field box{"Bounds (" + unit_name(U) + ")", length_in(f->x, U) + "\t" + length_in(f->y, U) + "\t" + length_in(f->w, U) + "\t" +
+        // s154: X / Y from the rulers' zero (the origin and the dragged zero point).
+        const Zero z = ruler_zero(d, f->owner, f->side);
+        Field box{"Bounds (" + unit_name(U) + ")", length_in(f->x - z.x, U) + "\t" + length_in(f->y - z.y, U) + "\t" + length_in(f->w, U) + "\t" +
                                                        length_in(f->h, U)};
         box.cols = {"X", "Y", "W", "H"};
         box.edit = "bounds";   // s041: each typed
@@ -840,10 +845,11 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         fields.push_back({"Opacity", tint_text(f->opacity), "opacity", tint_choices(0)});   // s021
         // s025: a master's item shows on both sides, or one; a page's copy
         // of one says so and can go back.
-        if (d.as<Master>(f->owner)) {
+        if (const auto* m = d.as<Master>(f->owner)) {
             static const char* sides[] = {"Every page", "Right pages", "Left pages"};
-            fields.push_back({"Shows on", sides[static_cast<int>(f->side)], "side",
-                              {{"0", "Every page"}, {"1", "Right pages"}, {"2", "Left pages"}}});
+            std::vector<Choice> ch{{"0", "Every page"}, {"1", "Right pages"}, {"2", "Left pages"}};
+            if (m->facing && m->folds.empty()) ch.push_back({"3", "Across the spine"});   // s155
+            fields.push_back({"Shows on", f->across ? "Across the spine" : sides[static_cast<int>(f->side)], "side", ch});
         }
         {   // s018: text wrap -- how this frame pushes OTHER frames' text aside.
             static const char* names[] = {"None", "Around", "Jump"};

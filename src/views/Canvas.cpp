@@ -336,6 +336,18 @@ void Canvas::draw(const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
     }
     cr->stroke();
 
+    // s154: the zero point being dragged -- crosshairs.
+    if (m_zero_preview) {
+        std::vector<double> dash{6, 4};
+        cr->set_dash(dash, 0);
+        cr->set_source_rgba(0.0, 0.65, 0.8, 0.9);
+        double sx = 0, sy = 0;
+        m_vp.to_screen(m_zero_x, m_zero_y, sx, sy);
+        cr->move_to(std::round(sx) + 0.5, 0); cr->line_to(std::round(sx) + 0.5, h);
+        cr->move_to(0, std::round(sy) + 0.5); cr->line_to(w, std::round(sy) + 0.5);
+        cr->stroke();
+        cr->unset_dash();
+    }
     // A guide being pulled out of a ruler.
     if (m_preview) {
         std::vector<double> dash{6, 4};
@@ -416,19 +428,71 @@ void Canvas::draw_grid(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
 }
 
 void Canvas::preview_guide(bool vertical, double at) {
+    if (!m_preview) m_targets = core::snap_targets(m_doc, m_placed, {});   // s153: gathered as it comes out
     m_preview = true;
     m_preview_v = vertical;
     m_preview_at = at;
+    // s153: snapped as it goes, like a dragged one.
+    double dx = 0, dy = 0;
+    m_vp.to_doc(vertical ? at : 0, vertical ? 0 : at, dx, dy);
+    m_preview_doc = vertical ? dx : dy;
+    m_snap_x = m_snap_y = NAN;
+    if (m_snap) {
+        const auto h = core::snap_any({m_preview_doc}, vertical ? m_targets.xs : m_targets.ys, 6 / m_vp.scale());
+        if (h.hit()) {
+            m_preview_doc = h.line;
+            (vertical ? m_snap_x : m_snap_y) = h.line;
+            double sx = 0, sy = 0;
+            m_vp.to_screen(vertical ? h.line : 0, vertical ? 0 : h.line, sx, sy);
+            m_preview_at = vertical ? sx : sy;
+        }
+    }
     queue_draw();
+}
+
+// s154: the zero point, dragged from the ruler corner -- snapped like a
+// guide, crosshairs across the canvas; released over the canvas, one step.
+void Canvas::preview_zero(double x, double y) {
+    if (!m_zero_preview) m_targets = core::snap_targets(m_doc, m_placed, {});
+    m_zero_preview = true;
+    m_vp.to_doc(x, y, m_zero_x, m_zero_y);
+    m_snap_x = m_snap_y = NAN;
+    if (m_snap) {
+        const double tol = 6 / m_vp.scale();
+        const auto hx = core::snap_any({m_zero_x}, m_targets.xs, tol);
+        const auto hy = core::snap_any({m_zero_y}, m_targets.ys, tol);
+        if (hx.hit()) { m_zero_x = hx.line; m_snap_x = hx.line; }
+        if (hy.hit()) { m_zero_y = hy.line; m_snap_y = hy.line; }
+    }
+    queue_draw();
+}
+
+void Canvas::drop_zero(double x, double y) {
+    const bool was = m_zero_preview;
+    m_zero_preview = false;
+    m_snap_x = m_snap_y = NAN;
+    queue_draw();
+    if (!was || x < 0 || y < 0 || x > get_width() || y > get_height()) return;   // back on the rulers: nothing
+    const auto z = core::zero_at(m_doc, m_placed, m_zero_x, m_zero_y);
+    if (core::doc::set_ruler_zero(m_journal, m_doc, z.x, z.y)) m_sig_edited.emit();
+    m_sig_view.emit();
+}
+
+void Canvas::reset_zero() {
+    if (core::doc::set_ruler_zero(m_journal, m_doc, 0, 0)) m_sig_edited.emit();
+    m_sig_view.emit();
 }
 
 // Released from a ruler: over a page, a guide at that spot (one step);
 // over the pasteboard or back on the ruler, nothing.
 void Canvas::drop_guide(bool vertical, double x, double y) {
     m_preview = false;
+    m_snap_x = m_snap_y = NAN;
     queue_draw();
     double dx, dy;
     m_vp.to_doc(x, y, dx, dy);
+    if (!std::isnan(m_preview_doc)) (vertical ? dx : dy) = m_preview_doc;   // s153: where it snapped
+    m_preview_doc = NAN;
     front_panel(dx, dy);   // s150
     const auto page = core::page_at(m_placed, dx, dy);
     if (page.empty() || x < 0 || y < 0) return;
@@ -851,13 +915,19 @@ void Canvas::on_drag_begin(double x, double y) {
     double dx, dy;
     m_vp.to_doc(x, y, dx, dy);
     // A guide, before frames (it lies on top of them).
-    if (m_show_guides) {
+    if (m_show_guides && !m_guides_locked) {   // s153: a locked guide isn't picked
         const auto g = core::hit_guide(m_doc, m_placed, dx, dy, 4 / m_vp.scale());
         if (!g.empty()) {
             m_drag = Drag::Guide;
             m_guide = g;
-            m_guide0 = m_doc.as<core::Guide>(g)->pos;
+            const auto& gd = *m_doc.as<core::Guide>(g);
+            m_guide0 = gd.pos;
             m_guide_off = false;
+            // s153: it snaps as it goes -- to everything but itself.
+            m_guide_base = 0;
+            for (const auto& p : m_placed)
+                if (p.id == gd.owner) { m_guide_base = gd.vertical ? p.r.x : p.r.y; break; }
+            m_targets = core::snap_targets(m_doc, m_placed, {g});
             return;
         }
     }
@@ -1051,7 +1121,13 @@ void Canvas::on_drag_update(double ox, double oy) {
         }
         const auto* g = m_doc.as<core::Guide>(m_guide);
         if (!g) return;
-        core::doc::guide_set(m_journal, m_doc, m_guide, m_guide0 + (g->vertical ? ox : oy) / s);
+        double at = m_guide0 + (g->vertical ? ox : oy) / s;
+        m_snap_x = m_snap_y = NAN;
+        if (m_snap) {   // s153: to the edges, margins, columns, other guides, frames
+            const auto h = core::snap_any({m_guide_base + at}, g->vertical ? m_targets.xs : m_targets.ys, 6 / s);
+            if (h.hit()) { at += h.delta; (g->vertical ? m_snap_x : m_snap_y) = h.line; }
+        }
+        core::doc::guide_set(m_journal, m_doc, m_guide, at);
         // Off its page (into the pasteboard or another page): it will be removed.
         double dx, dy;
         m_vp.to_doc(m_px + ox, m_py + oy, dx, dy);
@@ -1172,13 +1248,22 @@ void Canvas::on_drag_end(double, double) {
                 if (p.id == m_draw_page) {
                     static const core::FrameKind kinds[] = {core::FrameKind::Text, core::FrameKind::Text,
                                                             core::FrameKind::Image, core::FrameKind::Shape};
+                    // s155: on a facing master's spread, drawn across the spine: one
+                    // item across it, placed from the left page.
+                    const core::Placed* left = nullptr;
+                    bool across = false;
+                    if (p.master && p.side != core::Side::Any)
+                        for (const auto& q : m_placed)
+                            if (q.id == p.id && q.side == core::Side::Left) left = &q;
+                    if (left) across = m_draw.x < left->r.r() - 0.5 && m_draw.r() > left->r.r() + 0.5;
+                    const core::Placed& at = across ? *left : p;
                     // s014: a text frame drawn across the margins takes the page's columns.
-                    const Rect own{m_draw.x - p.r.x, m_draw.y - p.r.y, m_draw.w, m_draw.h};
-                    const Rect mr = core::margin_rect(m_doc, p.id, p.side);
-                    auto [cols, gut] = core::page_column_setup(m_doc, p.id);
-                    if (!(mr.w > 0 && std::abs(own.x - mr.x) < 1 && std::abs(own.r() - mr.r()) < 1)) cols = 1;
-                    const auto id = core::doc::add_frame(m_journal, m_doc, p.id, kinds[static_cast<int>(m_tool)],
-                                                         own, cols, gut);
+                    const Rect own{m_draw.x - at.r.x, m_draw.y - at.r.y, m_draw.w, m_draw.h};
+                    const Rect mr = core::margin_rect(m_doc, at.id, at.side);
+                    auto [cols, gut] = core::page_column_setup(m_doc, at.id);
+                    if (across || !(mr.w > 0 && std::abs(own.x - mr.x) < 1 && std::abs(own.r() - mr.r()) < 1)) cols = 1;
+                    const auto id = core::doc::add_frame(m_journal, m_doc, at.id, kinds[static_cast<int>(m_tool)],
+                                                         own, cols, gut, across);
                     if (!id.empty()) {
                         relayout();
                         pick({id});
@@ -1186,6 +1271,7 @@ void Canvas::on_drag_end(double, double) {
                         // s010: a new text frame is ready to type in (as InDesign).
                         if (m_tool == Tool::Text) begin_edit(id, {0, 0});
                     }
+                    break;   // s155: one frame (a master's spread is two panels of one id)
                 }
         }
         m_draw = {};
@@ -1335,7 +1421,7 @@ void Canvas::on_motion(double x, double y) {
     if (m_drag != Drag::None) return;
     double dx, dy;
     m_vp.to_doc(x, y, dx, dy);
-    const auto hg = m_show_guides ? core::hit_guide(m_doc, m_placed, dx, dy, 4 / m_vp.scale()) : std::string{};
+    const auto hg = m_show_guides && !m_guides_locked ? core::hit_guide(m_doc, m_placed, dx, dy, 4 / m_vp.scale()) : std::string{};
     if (hg != m_hover_guide) { m_hover_guide = hg; queue_draw(); }
     const auto h = core::hit_frame(m_doc, m_placed, dx, dy, 3 / m_vp.scale());
     if (h != m_hover) { m_hover = h; queue_draw(); }
@@ -2001,6 +2087,29 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     corner->set_name("canvas_view.ruler_corner");
     corner->add_css_class("cx-ruler");
     corner->set_size_request(20, 20);
+    // s154: the zero point -- dragged out of the corner onto the canvas;
+    // double-click puts it back. Spine: fixed.
+    corner->set_tooltip_text("Drag onto the page to move the rulers' zero point; double-click to put it back");
+    {
+        auto drag = Gtk::GestureDrag::create();
+        auto x0 = std::make_shared<double>(0), y0 = std::make_shared<double>(0);
+        drag->signal_drag_begin().connect([x0, y0](double x, double y) { *x0 = x; *y0 = y; });
+        drag->signal_drag_update().connect([this, corner, x0, y0](double dx, double dy) {
+            if (m_canvas.doc().settings().ruler_origin == core::RulerOrigin::Spine) return;
+            double cx = 0, cy = 0;
+            corner->translate_coordinates(m_canvas, *x0 + dx, *y0 + dy, cx, cy);
+            m_canvas.preview_zero(cx, cy);
+        });
+        drag->signal_drag_end().connect([this, corner, x0, y0](double dx, double dy) {
+            double cx = 0, cy = 0;
+            corner->translate_coordinates(m_canvas, *x0 + dx, *y0 + dy, cx, cy);
+            m_canvas.drop_zero(cx, cy);
+        });
+        corner->add_controller(drag);
+        auto click = Gtk::GestureClick::create();
+        click->signal_pressed().connect([this](int n, double, double) { if (n == 2) m_canvas.reset_zero(); });
+        corner->add_controller(click);
+    }
     m_grid.attach(m_tools, 0, 0, 1, 2);   // the tool strip, the full height
     m_grid.attach(*corner, 1, 0);
     m_grid.attach(*m_top, 2, 0);

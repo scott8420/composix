@@ -50,6 +50,10 @@ inline constexpr double kPt = 72.0;   // points per inch
 
 enum class Numbering { Arabic, RomanLower, RomanUpper, AlphaLower, AlphaUpper };
 enum class Side      { Any, Right, Left };
+// s154 (Scott: as InDesign / Affinity): where the rulers' zero is -- the
+// spread's top-left (each spread its own), each page's top-left, or the
+// spine (left of it negative; fixed -- not dragged).
+enum class RulerOrigin { Spread, Page, Spine };
 enum class FrameKind { Text, Image, Shape };
 enum class StyleKind { Paragraph, Character };
 enum class Align     { Left, Center, Right, Justify };
@@ -139,6 +143,10 @@ struct Settings {
     enum class NoteNum { Plain, Period, Paren, Raised };
     NoteNum     note_num   = NoteNum::Plain;
     std::string note_title = "Notes";        // s120: over the endnotes ("" none)
+    // s154: the rulers' origin, and the zero point dragged from it (points,
+    // from where the origin puts it; Spine: unused).
+    RulerOrigin ruler_origin = RulerOrigin::Spread;
+    double      zero_x = 0, zero_y = 0;
     bool operator==(const Settings&) const = default;
 };
 
@@ -229,6 +237,10 @@ struct Frame {
                                          // last frame of its thread, one column)
     ColumnRule  col_rule;                // s055: text -- a rule between its columns
     bool        ignore_wrap = false;     // s069: text -- other frames' wrap doesn't push this text
+    // s155 (Scott): a facing master's item ACROSS THE SPINE -- one item, its
+    // x from the left page's left edge; shown on both pages, each its part
+    // (cut at the spine). `side` stays Any.
+    bool        across = false;
     bool operator==(const Frame&) const = default;
 };
 
@@ -731,6 +743,11 @@ bool set_note_place(DocJournal& j, Doc& d, NoteAt at, const std::string& title);
 bool set_note_num(DocJournal& j, Doc& d, Settings::NoteNum how);
 // s073: the document's display unit. One step.
 bool set_units(DocJournal& j, Doc& d, Units u);
+// s154: the rulers' origin (the zero point back to it) -- one step; the
+// zero point dragged (points from the origin's own) -- one step. Spine
+// keeps it fixed: set_ruler_zero does nothing.
+bool set_ruler_origin(DocJournal& j, Doc& d, RulerOrigin o);
+bool set_ruler_zero(DocJournal& j, Doc& d, double x, double y);
 // s078: keep a query under its name (trimmed, not empty; the same name is
 // replaced, else it's added, the list kept by name); delete one. One step.
 bool save_query(DocJournal& j, Doc& d, SavedQuery q);
@@ -779,7 +796,12 @@ void frames_cancel(DocJournal& j);
 // s014: `columns` / `gutter` for a text frame (one drawn across the margins
 // takes the page's columns).
 Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r,
-                  int columns = 1, double gutter = 12);
+                  int columns = 1, double gutter = 12, bool across = false);
+// s155: where master items show -- 0 every page, 1 right pages, 2 left
+// pages, 3 across the spine (a facing master's only). Each item keeps its
+// place on the spread: into Across a right-side item's x gains the page
+// width; out of it to Right, loses it. One step.
+bool set_shows_on(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, int choice);
 // Delete frames. A text frame leaving a thread is spliced out (the frame
 // before it points past it) so the story reflows through what is left. A
 // story whose LAST frame goes goes with it, and so does an image whose last
@@ -1138,6 +1160,12 @@ bool    delete_swatch(DocJournal& j, Doc& d, const Doc::Id& id);
 // Latin-1, Latin Extended-A / B / Additional, Greek (final sigma as sigma),
 // Cyrillic, Armenian, fullwidth A-Z. Anything else is itself.
 char32_t fold_char(char32_t c);
+// s152: full case folding -- a whole string as fold_char, and the letters
+// whose fold is more than one: sharp s (both cases) "ss", the ligatures
+// ff fi fl ffi ffl st as their letters, n-apostrophe, the Armenian
+// ligatures. Find and Change match through it ("STRASSE" finds "Straße"),
+// a hit never starting or ending inside one character.
+std::string fold_text(const std::string& utf8);
 
 struct FindOpts {
     std::string what;
@@ -1345,6 +1373,13 @@ Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double 
 // s025: does master item `fid` show on `page`? (Its side matches the page's,
 // and the page hasn't overridden it.) Any non-page: true.
 bool master_item_on(const Doc& d, const Doc::Id& fid, const Doc::Id& page);
+// s155: an item across the spine on a page / panel of side `side`: how far
+// it sits from its own x (a right page: minus the master's width), and the
+// spine it is cut at -- Left: its right edge, Right: its left (`cut_left`
+// true). 0 / false for anything else.
+double across_dx(const Doc& d, const Frame& f, Side side);
+// The side an item is drawn for on a page (its side) or a master panel.
+Side side_for(const Doc& d, const Doc::Id& page_or_master, Side panel);
 // The topmost master item showing on a placed PAGE under (x, y) -- what
 // Ctrl+Shift+click overrides. "" if none.
 Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, double y, double tol, Doc::Id* page);
@@ -1362,6 +1397,7 @@ Doc::Id page_at(const std::vector<Placed>& pl, double x, double y);
 // Candidate lines (layout coords), gathered ONCE at press (Curvz's
 // gather-at-drag-start): page edges + centres, folds, guides (own and
 // master's), and the edges + centres of every frame not being dragged.
+// s153: `exclude` leaves out guides too (a dragged guide snaps to the rest).
 struct SnapTargets {
     std::vector<double> xs, ys;
 };
@@ -1374,6 +1410,22 @@ struct SnapHit {
     bool   hit() const { return !std::isnan(line); }
 };
 SnapHit snap_any(const std::vector<double>& vs, const std::vector<double>& targets, double tol);
+
+// ── the rulers' zero (s154) ─────────────────────────────────────────────────
+// Where the zero is, from a page's (or a master panel's) top-left, points:
+// the origin (Spread: the spread's first page; Page: the page; Spine: the
+// spine -- a left page's right edge, a right page's left edge) plus the
+// dragged zero point. The inspector's X / Y and the rulers read from it.
+struct Zero { double x = 0, y = 0; };
+Zero ruler_zero(const Doc& d, const Doc::Id& owner, Side side = Side::Any);
+// A horizontal ruler in pieces: each placed page measures from its zero
+// (layout x); neighbours sharing a zero (a spread) are one piece. `lo` /
+// `hi` tile the line (the first from -inf, the last to +inf, a boundary
+// halfway across a gap).
+struct RulerSpan { double lo, hi, zero; };
+std::vector<RulerSpan> ruler_spans(const Doc& d, const std::vector<Placed>& pl);
+// The zero point a press at (x, y) (layout) would set -- for set_ruler_zero.
+Zero zero_at(const Doc& d, const std::vector<Placed>& pl, double x, double y);
 
 // A thread's position: (1-based index, length); (0, 0) for non-text frames.
 std::pair<int, int> thread_place(const Doc& d, const Doc::Id& frame);

@@ -972,6 +972,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::set_bleed(m_journal, m_doc, std::stod(choice));
         } else if (key == "dunits") {   // s073
             did = core::doc::set_units(m_journal, m_doc, static_cast<core::Units>(std::clamp(std::stoi(choice), 0, 3)));
+        } else if (key == "dorigin") {   // s154
+            did = core::doc::set_ruler_origin(m_journal, m_doc, static_cast<core::RulerOrigin>(std::clamp(std::stoi(choice), 0, 2)));
         } else if (key == "dwrap") {   // s069
             did = core::doc::set_wrap_beneath(m_journal, m_doc, choice == "1");
         } else if (key == "ignore_wrap") {   // s069
@@ -1103,8 +1105,9 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             static const char* labels[] = {"Move", "Move", "Resize", "Resize"};
             if (k >= 0 && k < 4)
                 did = core::doc::edit_frames(m_journal, m_doc, m_inspected, labels[k], [&](core::Frame& f) {
-                    if (k == 0) f.x = v;
-                    else if (k == 1) f.y = v;
+                    const core::Zero z = core::ruler_zero(m_doc, f.owner, f.side);   // s154: typed from the rulers' zero
+                    if (k == 0) f.x = v + z.x;
+                    else if (k == 1) f.y = v + z.y;
                     else if (k == 2) f.w = std::max(1.0, v);
                     else f.h = std::max(1.0, v);
                 });
@@ -1333,10 +1336,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 else f.stroke_w = std::stod(choice);
             });
         } else if (key == "side") {   // s025: which pages a master item shows on
-            const auto side = static_cast<core::Side>(std::stoi(choice));
-            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Shows on", [&](core::Frame& f) {
-                if (m_doc.as<core::Master>(f.owner)) f.side = side;
-            });
+            did = core::doc::set_shows_on(m_journal, m_doc, m_inspected, std::stoi(choice));   // s155: keeps each in place
         } else if (key == "override") {   // s025: back to the master's
             did = core::doc::remove_overrides(m_journal, m_doc, m_inspected);
         } else if (key == "autosize") {   // s048 (the journal's settle fits the height in the same step)

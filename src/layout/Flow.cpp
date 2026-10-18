@@ -647,12 +647,28 @@ struct ColNotes {
     int  sp = 0, sk = 0, scut = 0;   // the note cut: paragraph, index, where in its words
 };
 
+// s156 (Scott: footnotes are always page width): a frame of several
+// columns sets its notes in ONE foot under all of them, the width of its
+// text. The columns all stop above it; filled again with the room it took
+// until that holds (fill_frame). `reserve`: the room kept in every column;
+// `used`: the notes so far (each column's added as it ends); `pending`:
+// them, stacked at the frame's end; a note cut short runs on to the next
+// frame (`carry_out`) and nothing new comes after it here (`split`).
+struct FootShare {
+    double x = 0, w = 0;
+    double reserve = 0, used = 0;
+    std::vector<NotePlace> pending;
+    std::vector<NoteRun>   carry_out;
+    bool split = false;
+};
+
 // s109 / s117: the column's notes at its foot -- the run-on pieces first,
 // then those its lines (as kept) refer to, in order; a note cut short sends
 // its rest on (c.carry). Stacked up from `hmax`.
 void place_notes(const core::Doc& d, const core::Story& st, const core::Frame& fr, int col, double cx, double cw,
-                 double hmax, FrameText& ft, NoteCount* nc, const ColNotes& cn, Cursor& c) {
+                 double hmax, FrameText& ft, NoteCount* nc, const ColNotes& cn, Cursor& c, FootShare* fs = nullptr) {
     (void)fr;
+    if (fs) { cx = fs->x; cw = fs->w; }   // s156: under all the columns
     std::vector<NotePlace> here = cn.cont;
     for (auto& x : here) { x.col = col; x.x = cx; x.w = cw; }
     std::vector<NoteRun> out = cn.left;
@@ -674,6 +690,17 @@ void place_notes(const core::Doc& d, const core::Story& st, const core::Frame& f
             here.push_back(np);
         }
     }
+    if (fs) {   // s156: kept for the frame's end; a cut note runs on from the frame, not the column
+        if (!out.empty()) fs->split = true;
+        if (!c.ending) { fs->carry_out.insert(fs->carry_out.end(), out.begin(), out.end()); c.carry.clear(); }
+        fs->pending.insert(fs->pending.end(), here.begin(), here.end());
+        const double space = std::max(0.0, d.settings().note_space);
+        double used = 0;
+        for (const auto& n : fs->pending) used += n.h;
+        if (!fs->pending.empty()) used += note_gap(d, st, fs->pending.front().para) + space * static_cast<double>(fs->pending.size() - 1);
+        fs->used = used;
+        return;
+    }
     if (!c.ending) c.carry = std::move(out);   // s122: an endnotes carry isn't the foot's to change
     if (here.empty()) return;
     const double space = std::max(0.0, d.settings().note_space);   // s118: between notes
@@ -687,23 +714,23 @@ void place_notes(const core::Doc& d, const core::Story& st, const core::Frame& f
     }
 }
 
-// Fill one frame's columns from `c`, each column at most `hmax` tall. True
-// when the story ended inside this frame.
-// s117: `notes_only` -- the frame takes the notes running on and no text
-// (the next paragraph starts on a later page).
-bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr, const std::vector<core::WrapRect>& wraps,
-                Cursor& c, double hmax, FrameText& ft, NoteCount* nc = nullptr, bool notes_only = false) {
+// s156: one frame's columns (fill_frame, below); `fs` -- one foot under all
+// of them, else each column's own.
+bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr, const std::vector<core::WrapRect>& wraps,
+               Cursor& c, double hmax, FrameText& ft, NoteCount* nc, bool notes_only, FootShare* fs) {
     const int n = core::column_count(fr);
     const int paras = static_cast<int>(st.paras.size());
     // s036: the baseline grid of the page (or master) the frame is on.
     const core::BaselineGrid grid = fr.rot == 0 ? core::baseline_grid(d, fr.owner) : core::BaselineGrid{};
     for (int col = 0; col < n; ++col) {
         const double cw = core::column_width(fr, col), cx = core::column_x(fr, col);
+        const double nx = fs ? fs->x : cx, nw = fs ? fs->w : cw;   // s156: where its notes go -- under all the columns
         const bool wrapped = touches(wraps, cx, cx + cw);
         const double top = std::max(0.0, fr.inset.top);   // s040: the text starts below the top inset
         double y = top;
         // s109: footnotes -- the room the column's notes take from its foot.
-        double notes_h = 0;
+        // s156: under all the columns -- what the columns before took too.
+        double notes_h = fs ? fs->used : 0;
         int in_col = 0;     // lines set in this column
         int col_marks = 0;  // s111: footnote marks in them (numbers by page / section count on from these)
         // s117: the most the notes may take (the document's footnote area).
@@ -719,18 +746,18 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 if (r.para < 0 || r.para >= static_cast<int>(st.paras.size())) continue;
                 const double gap = notes_h <= 0 ? note_gap(d, st, r.para) : 0;
                 const double sp = cn.cont.empty() ? 0 : space;   // s118
-                const auto cuts = note_cuts(d, st, r.para, r.k, r.number, cw, r.from);
-                const double extra = cont_extra(d, st, r.para, cw);
+                const auto cuts = note_cuts(d, st, r.para, r.k, r.number, nw, r.from);
+                const double extra = cont_extra(d, st, r.para, nw);
                 const double room = area - notes_h - gap - sp;
                 std::size_t take = 0;
                 while (take < cuts.size() && cuts[take].h + (take + 1 < cuts.size() ? extra : 0) <= room + 0.01) ++take;
                 if (take == 0 && cn.cont.empty()) take = 1;
                 if (take == 0 || cuts.empty()) { cn.left.assign(runs.begin() + static_cast<std::ptrdiff_t>(i), runs.end()); break; }
-                NotePlace np{r.para, r.k, r.number, col, cx, 0, cw, 0};
+                NotePlace np{r.para, r.k, r.number, col, nx, 0, nw, 0};
                 np.from = r.from;
                 np.cont = true;
                 if (take < cuts.size()) np.to = cuts[take - 1].at;
-                np.h = note_height(d, st, r.para, r.k, r.number, cw, np.from, np.to);
+                np.h = note_height(d, st, r.para, r.k, r.number, nw, np.from, np.to);
                 notes_h += gap + sp + np.h;
                 ++col_notes;
                 if (take < cuts.size()) {
@@ -757,10 +784,10 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                  i = t.find(core::kMarkNote, i + 3), ++j) {
                 const int k = core::notes_in(t, 0, i);
                 const int num = nc ? nc->next + col_marks + j + 1 : core::note_number(d, st, p, k);
-                ms.push_back({k, num, note_height(d, st, p, k, num, cw)});
+                ms.push_back({k, num, note_height(d, st, p, k, num, nw)});
             }
             if (ms.empty()) return true;
-            if (!cn.left.empty() || cn.split) return false;
+            if (!cn.left.empty() || cn.split || (fs && fs->split)) return false;
             const double gap = notes_h <= 0 ? note_gap(d, st, p) : 0;
             const double room = std::min(area, hmax - bottom) - notes_h - gap;
             const int n_m = static_cast<int>(ms.size());
@@ -769,8 +796,8 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             for (const auto& m : ms) sum += m.h;
             if (sum <= room + 0.01) { notes_h += gap + sum; col_notes += n_m; return true; }
             const double others = sum - ms.back().h;
-            const auto cuts = note_cuts(d, st, p, ms.back().k, ms.back().num, cw, 0);
-            const double extra = cont_extra(d, st, p, cw);
+            const auto cuts = note_cuts(d, st, p, ms.back().k, ms.back().num, nw, 0);
+            const double extra = cont_extra(d, st, p, nw);
             std::size_t take = 0;
             while (take < cuts.size() && cuts[take].h + (take + 1 < cuts.size() ? extra : 0) <= room - others + 0.01) ++take;
             // Cut only with two of its lines on each side -- else, as before, the
@@ -791,7 +818,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             notes_h += gap + others + cuts[take - 1].h + extra;
             return true;
         };
-        const auto lim = [&] { return hmax - notes_h; };
+        const auto lim = [&] { return hmax - std::max(notes_h, fs ? fs->reserve : 0.0); };   // s156: the shared foot's room
         // s111: the number the next mark a layout meets will take.
         const auto next_num = [&] { return nc ? nc->next + col_marks + 1 : -1; };
         const auto marks_in = [&](int p, int a, int b) {
@@ -893,7 +920,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             if (const auto sa = c.start == 0 ? core::doc::start_of(d, para) : core::ParaStart::Anywhere; sa != core::ParaStart::Anywhere) {
                 if (sa == core::ParaStart::NextColumn && y > top) break;
                 if (sa != core::ParaStart::NextColumn && (!ft.lines.empty() || col_has_end())) {   // flow_text finds the frame (s122: endnotes count)
-                    place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c);   // s109
+                    place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c, fs);   // s109
                     return false;
                 }
             }
@@ -1038,15 +1065,60 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             return true;
         }
         if (c.p >= paras || notes_only) {
-            place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c);   // s109
+            place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c, fs);   // s109
             if (notes_only) { if (c.carry.empty()) return false; continue; }
             if (c.carry.empty()) return true;
             continue;   // s117: the text has ended, a note runs on
         }
         if (!col_has_end()) apply_keeps(d, st, fr, col, c, ft);   // s039 (not under endnotes set after the lines)
-        place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c);
+        place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c, fs);
     }
     return false;
+}
+
+// Fill one frame's columns from `c`, each column at most `hmax` tall. True
+// when the story ended inside this frame.
+// s117: `notes_only` -- the frame takes the notes running on and no text
+// (the next paragraph starts on a later page).
+// s156: several columns, footnotes at the foot: one foot under them all --
+// filled, then again with the room the notes took kept in every column,
+// until it holds (a few times at most; the last keeps the most it needed).
+bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr, const std::vector<core::WrapRect>& wraps,
+                Cursor& c, double hmax, FrameText& ft, NoteCount* nc = nullptr, bool notes_only = false) {
+    const int n = core::column_count(fr);
+    if (n < 2 || d.settings().note_at != core::NoteAt::Foot) return fill_cols(d, st, fr, wraps, c, hmax, ft, nc, notes_only, nullptr);
+    const Cursor c0 = c;
+    const FrameText ft0 = ft;
+    const NoteCount nc0 = nc ? *nc : NoteCount{};
+    const double x0 = core::column_x(fr, 0);
+    const double x1 = core::column_x(fr, n - 1) + core::column_width(fr, n - 1);
+    double reserve = 0;
+    for (int pass = 0;; ++pass) {
+        FootShare fs;
+        fs.x = x0;
+        fs.w = std::max(1.0, x1 - x0);
+        fs.reserve = reserve;
+        const bool done = fill_cols(d, st, fr, wraps, c, hmax, ft, nc, notes_only, &fs);
+        if (fs.used <= reserve + 0.01 || pass >= 4) {
+            // Stacked up from the foot, in order.
+            const double space = std::max(0.0, d.settings().note_space);
+            double total = space * static_cast<double>(fs.pending.empty() ? 0 : fs.pending.size() - 1);
+            for (const auto& x : fs.pending) total += x.h;
+            double y = hmax - total;
+            for (auto& x : fs.pending) {
+                x.col = 0;   // one foot (one rule over it)
+                x.y = y;
+                y += x.h + space;
+                ft.notes.push_back(x);
+            }
+            if (!fs.carry_out.empty() && !c.ending) c.carry = fs.carry_out;
+            return done && c.carry.empty();
+        }
+        reserve = std::max(reserve, fs.used);   // again, with that room kept
+        c = c0;
+        ft = ft0;
+        if (nc) *nc = nc0;
+    }
 }
 }  // namespace
 

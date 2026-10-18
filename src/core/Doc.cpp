@@ -1107,7 +1107,7 @@ int frames_rehome(DocJournal& j, Doc& d, const std::vector<Placed>& pl, const st
 }
 
 Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r,
-                  int columns, double gutter) {
+                  int columns, double gutter, bool across) {
     if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
     if (r.w < 1 || r.h < 1) return {};
     static const char* what[] = {"text frame", "image frame", "shape"};
@@ -1118,6 +1118,7 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
         f.owner = owner;
         f.kind = kind;
         f.x = r.x; f.y = r.y; f.w = r.w; f.h = r.h;
+        if (const auto* m = d.as<Master>(owner)) f.across = across && m->facing && m->folds.empty();   // s155
         if (kind == FrameKind::Text) { f.columns = std::max(1, columns); f.gutter = gutter; }
         if (kind == FrameKind::Shape)   // s016: a new shape is outlined in black, so it prints
             for (const auto& sw : d.ids_of<Swatch>())
@@ -1140,6 +1141,31 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
         return ids;
     });
     return made;
+}
+
+bool set_shows_on(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, int choice) {   // s155
+    if (choice < 0 || choice > 3) return false;
+    std::vector<std::pair<Doc::Id, Frame>> plan;
+    for (const auto& id : frames) {
+        const auto* f = d.as<Frame>(id);
+        const auto* m = f ? d.as<Master>(f->owner) : nullptr;
+        if (!m) continue;
+        const bool spread = m->facing && m->folds.empty();
+        Frame g = *f;
+        const bool to_across = choice == 3 && spread;
+        if (choice == 3 && !spread) continue;   // no spine to cross
+        if (to_across && !g.across && g.side == Side::Right) g.x += m->w;
+        if (!to_across && g.across && choice == 1) g.x -= m->w;
+        g.across = to_across;
+        g.side = to_across ? Side::Any : static_cast<Side>(choice);
+        if (!(g == *f)) plan.emplace_back(id, g);
+    }
+    if (plan.empty()) return false;
+    std::vector<Doc::Id> ids;
+    for (const auto& pr : plan) ids.push_back(pr.first);
+    return j.run("Shows on", ids, [&] {
+        for (const auto& [id, g] : plan) d.put(id, g);
+    });
 }
 
 namespace {
@@ -1416,6 +1442,29 @@ bool set_units(DocJournal& j, Doc& d, Units u) {   // s073
     return j.run("Units", {"doc"}, [&] {
         Settings s = d.settings();
         s.units = u;
+        d.put("doc", s);
+    });
+}
+
+bool set_ruler_origin(DocJournal& j, Doc& d, RulerOrigin o) {   // s154
+    const auto& st = d.settings();
+    if (st.ruler_origin == o && st.zero_x == 0 && st.zero_y == 0) return false;
+    return j.run("Ruler origin", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.ruler_origin = o;
+        s.zero_x = s.zero_y = 0;   // the zero point back to the origin
+        d.put("doc", s);
+    });
+}
+
+bool set_ruler_zero(DocJournal& j, Doc& d, double x, double y) {   // s154
+    const auto& st = d.settings();
+    if (st.ruler_origin == RulerOrigin::Spine) return false;
+    if (std::abs(st.zero_x - x) < 1e-9 && std::abs(st.zero_y - y) < 1e-9) return false;
+    return j.run("Zero point", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.zero_x = x;
+        s.zero_y = y;
         d.put("doc", s);
     });
 }
@@ -1713,6 +1762,8 @@ namespace {
 // its records (the frame, a text frame's story) go on `ids`.
 Doc::Id copy_master_item(Doc& d, const Doc::Id& page, const Doc::Id& mf, std::vector<Doc::Id>& ids) {
     Frame c = *d.as<Frame>(mf);
+    c.x += across_dx(d, c, d.side_of(page));   // s155: across the spine -- where it sits on this page
+    c.across = false;
     c.owner = page;
     c.overrides = mf;
     c.side = Side::Any;
@@ -3533,6 +3584,12 @@ const std::vector<Verb>& verbs() {
         {"insert_citation", [](DocJournal& j, Doc& d) { insert_citation(j, d, "story.1", {1, 4}, "story.4", 1); }},   // s141: the sample's Sources
         {"insert_ref_to_note", [](DocJournal& j, Doc& d) { insert_ref_to_note(j, d, "story.1", {1, 4}, "story.1", 5, 0, RefShow::Custom, "note *"); }},   // s129: the sample's note
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
+        {"set_ruler_origin", [](DocJournal& j, Doc& d) { set_ruler_origin(j, d, RulerOrigin::Page); }},   // s154
+        {"set_ruler_zero", [](DocJournal& j, Doc& d) { set_ruler_zero(j, d, 36, 18); }},
+        {"set_shows_on", [](DocJournal& j, Doc& d) {   // s155
+            for (const auto& m : d.ids_of<Master>())
+                if (d.as<Master>(m)->facing && !d.frames_on(m).empty()) { set_shows_on(j, d, {d.frames_on(m).front()}, 3); return; }
+        }},
         {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
         {"delete_query", [](DocJournal& j, Doc& d) { delete_query(j, d, "Double spaces"); }},
         {"set_picture_offset", [](DocJournal& j, Doc& d) { set_picture_offset(j, d, {"frame.11"}, 0, -6); }},   // s076
@@ -3955,8 +4012,9 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
             if (!f || f->wrap == Wrap::None) continue;
             if (beneath && !above) continue;   // below the text: it doesn't push
             if (o != t->owner && !master_item_on(d, fid, t->owner)) continue;   // s025: not shown on this page
-            WrapRect r{f->x - f->wrap_off.left - t->x, f->y - f->wrap_off.top - t->y,
-                       f->x + f->w + f->wrap_off.right - t->x, f->y + f->h + f->wrap_off.bottom - t->y,
+            const double fx = f->x + (o != t->owner ? across_dx(d, *f, d.side_of(t->owner)) : 0.0);   // s155
+            WrapRect r{fx - f->wrap_off.left - t->x, f->y - f->wrap_off.top - t->y,
+                       fx + f->w + f->wrap_off.right - t->x, f->y + f->h + f->wrap_off.bottom - t->y,
                        f->wrap == Wrap::Jump};
             // Only what overlaps the text frame matters.
             if (r.x1 <= 0 || r.y1 <= 0 || r.x0 >= t->w || r.y0 >= t->h) continue;
@@ -3968,7 +4026,18 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
 bool on_panel(const Doc& d, const Placed& p, const Doc::Id& fid) {
     const auto* f = d.as<Frame>(fid);
     if (!f || f->owner != p.id) return false;
-    return p.side == Side::Any || f->side == Side::Any || f->side == p.side;
+    return p.side == Side::Any || f->side == Side::Any || f->side == p.side;   // s155: across: Any, both
+}
+
+double across_dx(const Doc& d, const Frame& f, Side side) {   // s155
+    if (!f.across || side != Side::Right) return 0;
+    const auto* m = d.as<Master>(f.owner);
+    return m ? -m->w : 0;
+}
+
+Side side_for(const Doc& d, const Doc::Id& id, Side panel) {   // s155
+    if (d.as<Page>(id)) return d.side_of(id);
+    return panel;
 }
 
 const Placed* panel_at(const std::vector<Placed>& pl, double x, double y) {
@@ -3983,7 +4052,7 @@ Rect frame_in_layout(const Doc& d, const std::vector<Placed>& pl, const Doc::Id&
     const auto* f = d.as<Frame>(id);
     if (!f) return {};
     for (const auto& p : pl)
-        if (on_panel(d, p, id)) return {p.r.x + f->x, p.r.y + f->y, f->w, f->h};
+        if (on_panel(d, p, id)) return {p.r.x + f->x + across_dx(d, *f, p.side), p.r.y + f->y, f->w, f->h};
     return {};
 }
 
@@ -4020,7 +4089,10 @@ Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, d
             for (auto it = items.rbegin(); it != items.rend(); ++it) {
                 if (!master_item_on(d, *it, p.id)) continue;
                 const auto& f = *d.as<Frame>(*it);
-                const Rect r{p.r.x + f.x, p.r.y + f.y, f.w, f.h};
+                const Side sd = d.side_of(p.id);
+                const Rect r{p.r.x + f.x + across_dx(d, f, sd), p.r.y + f.y, f.w, f.h};
+                // s155: an item across the spine is this page's only on its side of it
+                if (f.across && (sd == Side::Left ? x > p.r.r() : sd == Side::Right ? x < p.r.x : false)) continue;
                 if (Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) {
                     if (page) *page = p.id;
                     return *it;
@@ -4167,6 +4239,7 @@ SnapTargets snap_targets(const Doc& d, const std::vector<Placed>& pl, const std:
         owners.push_back(p.id);
         for (const auto& o : owners) {
             for (const auto& g : guides_on(d, o)) {
+                if (skip(g)) continue;   // s153: a guide being dragged isn't its own target
                 const auto& gd = *d.as<Guide>(g);
                 (gd.vertical ? t.xs : t.ys).push_back((gd.vertical ? p.r.x : p.r.y) + gd.pos);
             }
@@ -4174,7 +4247,7 @@ SnapTargets snap_targets(const Doc& d, const std::vector<Placed>& pl, const std:
                 if (skip(f)) continue;
                 if (o == p.id ? !on_panel(d, p, f) : !master_item_on(d, f, p.id)) continue;   // s150: what shows here
                 const auto& fr = *d.as<Frame>(f);
-                const Rect r{p.r.x + fr.x, p.r.y + fr.y, fr.w, fr.h};
+                const Rect r{p.r.x + fr.x + across_dx(d, fr, side_for(d, p.id, p.side)), p.r.y + fr.y, fr.w, fr.h};   // s155
                 t.xs.insert(t.xs.end(), {r.x, r.cx(), r.r()});
                 t.ys.insert(t.ys.end(), {r.y, r.cy(), r.b()});
             }
@@ -4196,6 +4269,73 @@ SnapHit snap_any(const std::vector<double>& vs, const std::vector<double>& targe
             }
         }
     return best;
+}
+
+// ── the rulers' zero (s154) ─────────────────────────────────────────────────
+namespace {
+// The origin alone (no dragged zero point), from the owner's top-left.
+Zero origin_of(const Doc& d, const Doc::Id& owner, Side side) {
+    const auto o = d.settings().ruler_origin;
+    if (o == RulerOrigin::Page) return {};
+    if (const auto* m = d.as<Master>(owner)) {
+        const bool spread = m->facing && m->folds.empty();
+        const bool right = spread && side == Side::Right;
+        if (o == RulerOrigin::Spread) return {right ? -m->w : 0.0, 0};
+        return {spread && !right ? m->w : 0.0, 0};   // Spine: a both-sides item reads as on the left
+    }
+    const auto* pg = d.as<Page>(owner);
+    if (!pg) return {};
+    if (o == RulerOrigin::Spine) return {d.side_of(owner) == Side::Left ? pg->w : 0.0, 0};
+    double before = 0;   // Spread: the pages before it in its spread
+    for (const auto& id : spread_of(d, owner)) {
+        if (id == owner) break;
+        if (const auto* q = d.as<Page>(id)) before += q->w;
+    }
+    return {-before, 0};
+}
+}  // namespace
+
+Zero ruler_zero(const Doc& d, const Doc::Id& owner, Side side) {
+    Zero z = origin_of(d, owner, side);
+    if (d.settings().ruler_origin != RulerOrigin::Spine) { z.x += d.settings().zero_x; z.y += d.settings().zero_y; }
+    return z;
+}
+
+std::vector<RulerSpan> ruler_spans(const Doc& d, const std::vector<Placed>& pl) {
+    std::vector<RulerSpan> out;
+    const double inf = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < pl.size(); ++i) {
+        const auto& p = pl[i];
+        const double z = p.r.x + ruler_zero(d, p.id, p.side).x;
+        if (!out.empty() && std::abs(pl[i - 1].r.r() - p.r.x) < 1e-6 && std::abs(out.back().zero - z) < 1e-6) {
+            out.back().hi = p.r.r();
+            continue;
+        }
+        if (!out.empty()) {
+            const double cut = (pl[i - 1].r.r() + p.r.x) / 2;
+            out.back().hi = cut;
+            out.push_back({cut, p.r.r(), z});
+        } else {
+            out.push_back({-inf, p.r.r(), z});
+        }
+    }
+    if (!out.empty()) out.back().hi = inf;
+    else out.push_back({-inf, inf, d.settings().zero_x});
+    return out;
+}
+
+Zero zero_at(const Doc& d, const std::vector<Placed>& pl, double x, double y) {
+    const Placed* p = panel_at(pl, x, y);
+    if (!p) {   // over the pasteboard: the page nearest across
+        double best = std::numeric_limits<double>::infinity();
+        for (const auto& q : pl) {
+            const double gap = x < q.r.x ? q.r.x - x : (x > q.r.r() ? x - q.r.r() : 0);
+            if (gap < best) { best = gap; p = &q; }
+        }
+    }
+    if (!p) return {x, y};
+    const Zero o = origin_of(d, p->id, p->side);
+    return {x - p->r.x - o.x, y - p->r.y - o.y};
 }
 
 }  // namespace composix::core

@@ -13,9 +13,65 @@
 #include <gtkmm/grid.h>
 #include <gtkmm/label.h>
 #include <gtkmm/stringlist.h>
+#include <gtkmm/stringobject.h>
+#include <gtkmm/signallistitemfactory.h>
+#include <gtkmm/listitem.h>
+#include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/separator.h>
 
 namespace composix::views {
+
+namespace {
+// s152: Ctrl+Z in a typed field. The field took the window's Ctrl+Z for
+// itself (a text box keeps its own), so after Enter the next Ctrl+Z undid
+// nothing the user could see. Now: a field with an edit not yet sent puts
+// back what it showed; one that matches what it shows hands Ctrl+Z (and
+// Ctrl+Shift+Z / Ctrl+Y) to the document. Heard in the CAPTURE phase,
+// before the entry's own text undo.
+void undo_goes_to_document(Gtk::Entry* en, std::shared_ptr<std::string> shown) {
+    auto keys = Gtk::EventControllerKey::create();
+    keys->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+    keys->signal_key_pressed().connect([en, shown](guint kv, guint, Gdk::ModifierType state) {
+        const auto mods = state & (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK | Gdk::ModifierType::ALT_MASK);
+        const auto CTRL = Gdk::ModifierType::CONTROL_MASK, SHIFT = Gdk::ModifierType::SHIFT_MASK;
+        const bool z = kv == GDK_KEY_z || kv == GDK_KEY_Z, y = kv == GDK_KEY_y || kv == GDK_KEY_Y;
+        const bool undo = z && mods == CTRL;
+        const bool redo = (z && mods == (CTRL | SHIFT)) || (y && mods == CTRL);
+        if (!undo && !redo) return false;
+        const std::string text = en->get_text();
+        const bool edited = text != *shown;
+        if (edited) {
+            if (!undo) return false;           // redo inside an edit: the box's own
+            en->set_text(*shown);              // the edit dropped, the value back
+            en->remove_css_class("error");
+            en->set_position(-1);
+            return true;
+        }
+        en->activate_action(undo ? "win.undo" : "win.redo");
+        return true;
+    }, false);
+    en->add_controller(keys);
+}
+
+// s152: a dropdown's labels. On the button, ellipsized at the end, so a long
+// one (a foldout's Size) no longer widens the panel -- its whole text is the
+// tooltip; in the list, whole.
+Glib::RefPtr<Gtk::SignalListItemFactory> label_factory(bool ellipsize) {
+    auto f = Gtk::SignalListItemFactory::create();
+    f->signal_setup().connect([ellipsize](const Glib::RefPtr<Gtk::ListItem>& li) {
+        auto l = Gtk::make_managed<Gtk::Label>();
+        l->set_xalign(0.0f);
+        if (ellipsize) { l->set_ellipsize(Pango::EllipsizeMode::END); l->set_width_chars(1); }
+        li->set_child(*l);
+    });
+    f->signal_bind().connect([](const Glib::RefPtr<Gtk::ListItem>& li) {
+        auto* l = dynamic_cast<Gtk::Label*>(li->get_child());
+        auto so = std::dynamic_pointer_cast<Gtk::StringObject>(li->get_item());
+        if (l && so) l->set_text(so->get_string());
+    });
+    return f;
+}
+}  // namespace
 
 // s041: an entry for a typed value. Enter (or leaving it) sends what was
 // typed, in points, through `send`; what doesn't read as a length in
@@ -50,6 +106,7 @@ Gtk::Entry* Inspector::typed_entry(const std::string& name, const std::string& v
     auto focus = Gtk::EventControllerFocus::create();
     focus->signal_leave().connect(commit);
     en->add_controller(focus);
+    undo_goes_to_document(en, shown);   // s152
     return en;
 }
 
@@ -279,6 +336,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             auto focus = Gtk::EventControllerFocus::create();
             focus->signal_leave().connect(commit);
             en->add_controller(focus);
+            undo_goes_to_document(en, shown);   // s152
             m_fields.attach(*en, 1, row);
             ++row;
             continue;
@@ -316,7 +374,10 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             dd->set_name("inspector.edit." + f.edit);
             dd->add_css_class("cx-field-edit");
             dd->set_hexpand(true);
+            dd->set_factory(label_factory(true));        // s152: the button's label ellipsized
+            dd->set_list_factory(label_factory(false));  // ... the list's whole
             dd->set_selected(at);
+            if (at < labels.size()) dd->set_tooltip_text(labels[at]);
             // A long list (s011: the installed fonts) can be searched by typing.
             if (labels.size() > 24) {
                 GtkExpression* ex = gtk_property_expression_new(GTK_TYPE_STRING_OBJECT, nullptr, "string");

@@ -58,7 +58,19 @@ void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
                  const core::Doc::Id& on_page) {
     for (const auto& fid : d.frames_on(owner)) {
         if (owner != on_page && !core::master_item_on(d, fid, on_page)) continue;   // s025
-        const auto& f = *d.as<core::Frame>(fid);
+        // s155: a copy -- an item across the spine sits shifted on a right
+        // page, and each page shows only its side of the spine.
+        core::Frame f = *d.as<core::Frame>(fid);
+        const core::Side sd = d.as<core::Page>(on_page) ? d.side_of(on_page) : core::Side::Any;
+        const bool cut = f.across && owner != on_page && sd != core::Side::Any;
+        if (cut) {
+            f.x += core::across_dx(d, f, sd);
+            const double pw = d.as<core::Page>(on_page)->w;
+            cairo_save(cr);
+            if (sd == core::Side::Left) cairo_rectangle(cr, -1e5, -1e5, 1e5 + pw, 2e5);
+            else                        cairo_rectangle(cr, 0, -1e5, 1e5, 2e5);
+            cairo_clip(cr);
+        }
         // s021: the swatch at its tint; the frame's opacity on each part.
         const double op = std::clamp(f.opacity, 0.0, 1.0);
         const auto paint = [&](const std::string& sw, double tint) {
@@ -94,6 +106,7 @@ void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
             cairo_rectangle(cr, f.x, f.y, f.w, f.h);
             cairo_stroke(cr);
         }
+        if (cut) cairo_restore(cr);   // s155
     }
 }
 
@@ -208,7 +221,7 @@ void draw_master_mockup(cairo_t* cr, const core::Doc& d, const core::Doc::Id& ma
                     words += para.text[i] == '\t' ? ' ' : para.text[i];
                     ++i;
                 }
-                const core::Rect r{px + f.x * s, oy + f.y * s, f.w * s, f.h * s};
+                const core::Rect r{px + (f.x + core::across_dx(dd, f, dd.side_of(sample[k]))) * s, oy + f.y * s, f.w * s, f.h * s};   // s155
                 cairo_set_source_rgba(cr, 0.93, 0.47, 0.05, 0.75);   // the item: orange, dashed
                 cairo_set_line_width(cr, 1);
                 const double dash[] = {3, 2};
@@ -498,22 +511,8 @@ std::vector<PdfLink> note_links(const core::Doc& d, FlowCache& flows) {   // s12
 
 namespace {
 // s134: a string's simple case fold (core::fold_char over its code points), for sorting.
-std::string folded(const std::string& t) {
-    std::string out;
-    for (std::size_t i = 0; i < t.size();) {
-        const auto c = static_cast<unsigned char>(t[i]);
-        const int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1;
-        if (i + static_cast<std::size_t>(n) > t.size()) { out += t.substr(i); break; }
-        char32_t cp = n == 1 ? c : n == 2 ? (c & 0x1F) : n == 3 ? (c & 0x0F) : (c & 0x07);
-        for (int q = 1; q < n; ++q) cp = (cp << 6) | (static_cast<unsigned char>(t[i + static_cast<std::size_t>(q)]) & 0x3F);
-        cp = core::doc::fold_char(cp);
-        if (cp < 0x80) out += static_cast<char>(cp);
-        else if (cp < 0x800) { out += static_cast<char>(0xC0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 0x3F)); }
-        else if (cp < 0x10000) { out += static_cast<char>(0xE0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); out += static_cast<char>(0x80 | (cp & 0x3F)); }
-        else { out += static_cast<char>(0xF0 | (cp >> 18)); out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F)); out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); out += static_cast<char>(0x80 | (cp & 0x3F)); }
-        i += static_cast<std::size_t>(n);
-    }
-    return out;
+std::string folded(const std::string& t) {   // s152: fully (a sharp s sorts as "ss")
+    return core::doc::fold_text(t);
 }
 }  // namespace
 

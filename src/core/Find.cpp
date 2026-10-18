@@ -93,17 +93,80 @@ char32_t fold_char(char32_t c) {   // s091
 }
 
 namespace {
-// s091: a wide string folded, char for char (indices unchanged).
-std::wstring folded(std::wstring w) {
-    for (auto& c : w) c = static_cast<wchar_t>(fold_char(static_cast<char32_t>(c)));
-    return w;
+// s152: the characters whose full case fold is more than one letter
+// (Unicode CaseFolding, status F): sharp s, the Latin and Armenian
+// ligatures, n-apostrophe. nullptr: one for one (fold_char).
+const wchar_t* fold_expansion(char32_t c) {
+    switch (c) {
+        case 0xDF:   case 0x1E9E: return L"ss";
+        case 0x149:  return L"\u02BCn";
+        case 0x587:  return L"\u0565\u0582";
+        case 0xFB00: return L"ff";
+        case 0xFB01: return L"fi";
+        case 0xFB02: return L"fl";
+        case 0xFB03: return L"ffi";
+        case 0xFB04: return L"ffl";
+        case 0xFB05: case 0xFB06: return L"st";
+        case 0xFB13: return L"\u0574\u0576";
+        case 0xFB14: return L"\u0574\u0565";
+        case 0xFB15: return L"\u0574\u056B";
+        case 0xFB16: return L"\u057E\u0576";
+        case 0xFB17: return L"\u0574\u056D";
+        default: return nullptr;
+    }
 }
+
+// s152: a wide string fully folded, and where each folded character came
+// from: src[i] is the index in the input of folded character i, src[size]
+// the input's length. Folding off: the text as it is, indices one for one.
+struct Folded {
+    std::wstring w;
+    std::vector<std::size_t> src;
+    // A match [a, b) in the folded text, in the input -- or false when it
+    // starts or ends inside one character's expansion ("s" in a sharp s).
+    bool back(std::size_t a, std::size_t b, std::size_t& ia, std::size_t& ib) const {
+        if (a > 0 && a < w.size() && src[a] == src[a - 1]) return false;
+        if (b > 0 && b < w.size() && src[b] == src[b - 1]) return false;
+        ia = src[a];
+        ib = b < w.size() ? src[b] : src.back();
+        return true;
+    }
+};
+Folded fold_map(const std::wstring& in, bool fold = true) {
+    Folded f;
+    f.w.reserve(in.size());
+    f.src.reserve(in.size() + 1);
+    for (std::size_t i = 0; i < in.size(); ++i) {
+        const auto c = static_cast<char32_t>(in[i]);
+        if (const wchar_t* x = fold ? fold_expansion(c) : nullptr) {
+            for (; *x; ++x) { f.w.push_back(*x); f.src.push_back(i); }
+        } else {
+            f.w.push_back(fold ? static_cast<wchar_t>(fold_char(c)) : in[i]);
+            f.src.push_back(i);
+        }
+    }
+    f.src.push_back(in.size());
+    return f;
+}
+// s091: a wide string folded (s152: fully -- a sharp s is "ss").
+std::wstring folded(const std::wstring& w) { return fold_map(w).w; }
 // ... a pattern folded, leaving what follows an escape (\D, \W, \S mean
-// something else in upper case) -- `esc`: the escape character.
-std::wstring folded_pattern(const std::wstring& w, wchar_t esc) {
+// something else in upper case) -- `esc`: the escape character. s152: an
+// expansion is wrapped as a group, so "ß+" stays one thing repeated.
+// In a regex's [class] an expansion can't be a group -- there it folds one
+// for one; in Wildcards (`regex` false) it is plain letters.
+std::wstring folded_pattern(const std::wstring& w, wchar_t esc, bool regex) {
     std::wstring r;
+    bool in_class = false;
     for (std::size_t i = 0; i < w.size(); ++i) {
-        r += (i > 0 && w[i - 1] == esc && (i < 2 || w[i - 2] != esc)) ? w[i] : static_cast<wchar_t>(fold_char(static_cast<char32_t>(w[i])));
+        if (i > 0 && w[i - 1] == esc && (i < 2 || w[i - 2] != esc)) { r += w[i]; continue; }
+        if (regex && w[i] == L'[') in_class = true;
+        else if (regex && w[i] == L']') in_class = false;
+        const auto c = static_cast<char32_t>(w[i]);
+        const wchar_t* x = in_class ? nullptr : fold_expansion(c);
+        if (x && regex) { r += L"(?:"; r += x; r += L")"; }
+        else if (x) r += x;
+        else r += static_cast<wchar_t>(fold_char(c));
     }
     return r;
 }
@@ -171,7 +234,7 @@ bool make_regex(const FindOpts& f, std::wregex& re, std::string* err) {
     try {
         const auto flags = std::regex::ECMAScript;   // s091: case by folding both sides, not icase (ASCII only)
         auto w = widen(f.what);
-        if (!f.match_case) w = folded_pattern(w, f.mode == FindOpts::Mode::Regex ? L'\\' : L'^');
+        if (!f.match_case) w = folded_pattern(w, f.mode == FindOpts::Mode::Regex ? L'\\' : L'^', f.mode == FindOpts::Mode::Regex);
         re = std::wregex(f.mode == FindOpts::Mode::Regex ? w : wild_to_regex(w), flags);
         return true;
     } catch (const std::regex_error& e) {
@@ -260,21 +323,28 @@ std::vector<Hit> find_across(const Doc& d, const FindOpts& f, const std::vector<
         }
         struct M { std::size_t a, b; std::vector<std::string> g; };
         const auto matches = [&](const std::wstring& all) {
-        const auto look = f.match_case ? all : folded(all);
+        const Folded fm = fold_map(all, !f.match_case);   // s152: fully folded, mapped back
+        const auto& look = fm.w;
         std::vector<M> ms;
         if (pattern) {
             for (auto it = std::wsregex_iterator(look.begin(), look.end(), re); it != std::wsregex_iterator(); ++it) {
                 const auto& m = *it;
                 if (m.length(0) == 0) continue;
-                M x{static_cast<std::size_t>(m.position(0)), static_cast<std::size_t>(m.position(0) + m.length(0)), {}};
+                std::size_t a = 0, b = 0;
+                if (!fm.back(static_cast<std::size_t>(m.position(0)), static_cast<std::size_t>(m.position(0) + m.length(0)), a, b)) continue;
+                M x{a, b, {}};
                 for (std::size_t k = 0; k < m.size(); ++k)
-                    x.g.push_back(m[k].matched ? narrow(all.substr(static_cast<std::size_t>(m.position(k)), static_cast<std::size_t>(m.length(k))))
+                    x.g.push_back(m[k].matched ? narrow(all.substr(fm.src[static_cast<std::size_t>(m.position(k))],
+                                                                   fm.src[static_cast<std::size_t>(m.position(k) + m.length(k))] -
+                                                                   fm.src[static_cast<std::size_t>(m.position(k))]))
                                                : std::string{});
                 ms.push_back(std::move(x));
             }
         } else if (!what.empty()) {
             for (std::size_t at = look.find(what); at != std::wstring::npos; at = look.find(what, at + 1)) {
-                ms.push_back({at, at + what.size(), {}});
+                std::size_t a = 0, b = 0;
+                if (!fm.back(at, at + what.size(), a, b)) continue;
+                ms.push_back({a, b, {}});
                 at += what.size() - 1;
             }
         }
@@ -373,26 +443,31 @@ std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
         if (pattern) {
             std::vector<int> at;
             const auto wide = widen(para.text, &at);
-            const auto look = f.match_case ? wide : folded(wide);   // s091: same indices
+            const Folded fm = fold_map(wide, !f.match_case);   // s152: fully folded, mapped back
+            const auto& look = fm.w;
             for (auto it = std::wsregex_iterator(look.begin(), look.end(), re); it != std::wsregex_iterator(); ++it) {
                 const auto& m = *it;
                 if (m.length(0) == 0) continue;   // an empty match finds nothing
-                const auto p0 = static_cast<std::size_t>(m.position(0)), p1 = p0 + static_cast<std::size_t>(m.length(0));
+                std::size_t p0 = 0, p1 = 0;
+                if (!fm.back(static_cast<std::size_t>(m.position(0)), static_cast<std::size_t>(m.position(0) + m.length(0)), p0, p1)) continue;
                 M x{at[p0], at[p1], {}};
-                for (std::size_t k = 0; k < m.size(); ++k)   // the groups as written, not folded
-                    x.g.push_back(m[k].matched ? narrow(wide.substr(static_cast<std::size_t>(m.position(k)),
-                                                                    static_cast<std::size_t>(m.length(k))))
-                                               : std::string{});
+                for (std::size_t k = 0; k < m.size(); ++k) {   // the groups as written, not folded
+                    const std::size_t g0 = fm.src[static_cast<std::size_t>(m.position(k))];
+                    const std::size_t g1 = fm.src[static_cast<std::size_t>(m.position(k) + m.length(k))];
+                    x.g.push_back(m[k].matched ? narrow(wide.substr(g0, g1 - g0)) : std::string{});
+                }
                 ms.push_back(std::move(x));
             }
         } else {
             // s091: by characters, folded both sides; the byte offsets mapped back.
             std::vector<int> bat;
-            auto wh = widen(hay, &bat);
-            if (!f.match_case) wh = folded(wh);
+            const Folded fm = fold_map(widen(hay, &bat), !f.match_case);   // s152: fully
+            const auto& wh = fm.w;
             const std::size_t w = what.size();
             for (std::size_t at = wh.find(what); at != std::wstring::npos; at = wh.find(what, at + 1)) {
-                const int a = bat[at], b = bat[at + w];
+                std::size_t c0 = 0, c1 = 0;
+                if (!fm.back(at, at + w, c0, c1)) continue;
+                const int a = bat[c0], b = bat[c1];
                 if (f.whole_word && ((a > 0 && word_byte(static_cast<unsigned char>(hay[static_cast<std::size_t>(a - 1)]))) ||
                                      (b < n && word_byte(static_cast<unsigned char>(hay[static_cast<std::size_t>(b)])))))
                     continue;
@@ -534,5 +609,9 @@ int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& 
     if (!did) return 0;
     return n;
 }
+
+// s152: a string's full case fold (fold_char, a sharp s "ss", the ligatures
+// as their letters) -- for Find and the index's sorting.
+std::string fold_text(const std::string& utf8) { return narrow(folded(widen(utf8))); }
 
 }  // namespace composix::core::doc

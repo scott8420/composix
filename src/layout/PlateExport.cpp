@@ -163,8 +163,17 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
 void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core::Doc::Id& on_page) {
     for (const auto& fid : c.d.frames_on(owner)) {
         if (owner != on_page && !core::master_item_on(c.d, fid, on_page)) continue;   // s025
-        const auto& f = *c.d.as<core::Frame>(fid);
+        // s155: a copy -- an item across the spine shifted on a right page,
+        // cut at the spine.
+        core::Frame f = *c.d.as<core::Frame>(fid);
+        const auto* page = c.d.as<core::Page>(on_page);
+        const core::Side sd = page ? c.d.side_of(on_page) : core::Side::Any;
         pg.save();
+        if (f.across && owner != on_page && sd != core::Side::Any) {
+            f.x += core::across_dx(c.d, f, sd);
+            if (sd == core::Side::Left) pg.clip_rect({-1e4, -1e4, 1e4 + page->w, 2e4});
+            else                        pg.clip_rect({0, -1e4, 1e4, 2e4});
+        }
         if (f.opacity < 1) pg.set_alpha(f.opacity, f.opacity);   // s021: fill, content and stroke alike
         if (c.d.as<core::Swatch>(f.fill)) {   // s016: the frame's background
             pg.set_fill(ink_of(c.d, f.fill, f.fill_tint));

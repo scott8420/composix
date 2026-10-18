@@ -609,6 +609,12 @@ int main() {
         check("thread: middle of three", core::thread_place(d, "frame.2") == std::make_pair(2, 3));
         check("thread: not text", core::thread_place(d, "frame.4") == std::make_pair(0, 0));
 
+        {   // s154: X / Y read from each page's own corner here (Page origin)
+            core::Doc::Loading load(d);
+            auto st = d.settings();
+            st.ruler_origin = core::RulerOrigin::Page;
+            d.put("doc", st);
+        }
         const auto items = core::frame_items(d, {"frame.2", "frame.3"});
         const auto shared = core::shared_fields({&items[0], &items[1]});
         const auto val = [&](const std::string& l) {
@@ -705,6 +711,17 @@ int main() {
         check("undo brings it back where it started", d.as<core::Guide>(g) && d.as<core::Guide>(g)->pos == 300);
         check("guides: through the door", d.strays() == 0);
         check("add_guide: not on the pasteboard", core::doc::add_guide(j, d, "", true, 5).empty());
+        {   // s153: a dragged guide snaps to everything but itself
+            const auto pl3 = core::layout_pages(d, {"page.6"});
+            check("s153 targets: a guide is a target", has(core::snap_targets(d, pl3, {}).ys, 300));
+            check("s153 targets: not the dragged guide", !has(core::snap_targets(d, pl3, {g}).ys, 300));
+            const auto g2 = core::doc::add_guide(j, d, "page.6", true, 100);
+            const auto t3 = core::snap_targets(d, pl3, {g2});
+            const auto h3 = core::snap_any({57}, t3.xs, 6);
+            check("s153 snap: a dragged guide meets the margin", h3.hit() && std::abs(h3.line - 54) < 1e-9);
+            const auto h4 = core::snap_any({303}, t3.ys, 6);
+            check("s153 snap: ... and another guide", h4.hit() && std::abs(h4.line - 300) < 1e-9);
+        }
     }
 
     // ── s007: text flow ──────────────────────────────────────────────────────
@@ -3090,6 +3107,260 @@ int main() {
     }
 
     {
+        std::cout << "\n-- footnotes page width: one foot under all the columns (s156) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        {   // the chapters in two columns
+            core::Doc::Loading load(d);
+            for (const auto& fid : d.ids_of<core::Frame>()) {
+                auto f = *d.as<core::Frame>(fid);
+                if (f.story != "story.1") continue;
+                f.columns = 2;
+                d.put(fid, f);
+            }
+        }
+        const int np = static_cast<int>(d.as<core::Story>("story.1")->paras.size());
+        for (int p = 1; p < std::min(np, 7); ++p)
+            core::doc::insert_note(j, d, "story.1", {p, 2}, "A note for paragraph " + std::to_string(p) + ", a line or two long in the note size.");
+        L::FlowCache flows;
+        const auto& f = flows.get(d, "story.1");
+        int placed = 0, last = 0;
+        bool wide = true, clear = true, ordered = true, inside = true;
+        std::string why;
+        for (const auto& ft : f.frames) {
+            const auto* fr = d.as<core::Frame>(ft.frame);
+            const int n = core::column_count(*fr);
+            const double x0 = core::column_x(*fr, 0), x1 = core::column_x(*fr, n - 1) + core::column_width(*fr, n - 1);
+            double top = 1e9, prev_y = -1;
+            for (const auto& note : ft.notes) {
+                ++placed;
+                ordered = ordered && note.number > last && note.y > prev_y;
+                last = note.number;
+                prev_y = note.y;
+                top = std::min(top, note.y);
+                if (n > 1 && (std::abs(note.x - x0) > 0.01 || std::abs(note.w - (x1 - x0)) > 0.01)) { wide = false; why = ft.frame; }
+                inside = inside && note.y + note.h <= fr->h - std::max(0.0, fr->inset.bottom) + 0.01;
+            }
+            for (const auto& l : ft.lines)   // no line in ANY column runs into the foot
+                if (l.y + l.h > top + 0.01) {
+                    bool first = true;
+                    for (const auto& m : ft.lines) if (m.col == l.col && m.y < l.y) first = false;
+                    if (!first) { clear = false; why = ft.frame + " col " + std::to_string(l.col); }
+                }
+        }
+        check("notes placed, numbered in order, stacked in order", placed >= 6 && ordered, std::to_string(placed));
+        check("each note the width of all the columns", wide, why);
+        check("no line in any column runs into the foot", clear, why);
+        check("the foot inside its frame", inside);
+        {   // one rule over the foot, across the first note's width share
+            int rules = 0;
+            for (const auto& ft : f.frames) {
+                const auto* fr = d.as<core::Frame>(ft.frame);
+                if (ft.notes.empty() || core::column_count(*fr) < 2) continue;
+                std::set<int> cols;
+                for (const auto& note : ft.notes) cols.insert(note.col);
+                rules += static_cast<int>(cols.size());
+                check("one foot: one rule over it (" + ft.frame + ")", cols.size() == 1);
+            }
+            check("a frame with notes in two columns", rules >= 1);
+        }
+        {   // one column: as before -- the column's width
+            core::Doc e;
+            core::DocJournal je{e};
+            e.set_door([&je] { return je.open(); });
+            core::load_sample(e);
+            core::doc::insert_note(je, e, "story.1", {1, 4}, "One note.");
+            L::FlowCache fe;
+            bool same = false;
+            for (const auto& ft : fe.get(e, "story.1").frames)
+                for (const auto& note : ft.notes) {
+                    const auto* fr = e.as<core::Frame>(ft.frame);
+                    if (core::column_count(*fr) == 1) same = std::abs(note.w - core::column_width(*fr, 0)) < 0.01;
+                }
+            check("one column: the note its width", same);
+        }
+    }
+
+    {
+        std::cout << "\n-- master items across the spine (s155) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // a facing master, a spread of pages using it
+        std::string M, Lp, Rp;
+        for (const auto& sp : core::spreads(d)) {
+            if (sp.size() != 2) continue;
+            const auto* a = d.as<core::Page>(sp[0]);
+            const auto* b = d.as<core::Page>(sp[1]);
+            if (!a || !b || a->master.empty() || a->master != b->master) continue;
+            const auto* m = d.as<core::Master>(a->master);
+            if (m && m->facing && m->folds.empty() && a->w == m->w && b->w == m->w) { M = a->master; Lp = sp[0]; Rp = sp[1]; break; }
+        }
+        check("fixture: a facing master's spread", !M.empty());
+        const double w = d.as<core::Master>(M)->w;
+        const auto id = core::doc::add_frame(j, d, M, core::FrameKind::Shape, {w - 100, 100, 160, 50}, 1, 12, true);
+        const auto& f = *d.as<core::Frame>(id);
+        check("drawn across: one item, across, both sides", !id.empty() && f.across && f.side == core::Side::Any && j.size() == 1);
+        check("dx: none on the left, a page width back on the right",
+              core::across_dx(d, f, core::Side::Left) == 0 && core::across_dx(d, f, core::Side::Right) == -w);
+        check("shows on both pages", core::master_item_on(d, id, Lp) && core::master_item_on(d, id, Rp));
+        const auto mpl = core::layout_pages(d, {M});
+        check("master spread: on both panels, one place", mpl.size() == 2 && core::on_panel(d, mpl[0], id) && core::on_panel(d, mpl[1], id) &&
+                                                          core::frame_in_layout(d, mpl, id).x == mpl[0].r.x + w - 100);
+        const auto pl = core::layout_pages(d, {Lp, Rp});
+        core::Doc::Id on;
+        check("hit: its right part on the right page", core::hit_master_item(d, pl, pl[1].r.x + 30, 120, 0, &on) == id && on == Rp);
+        check("hit: its left part on the left page", core::hit_master_item(d, pl, pl[0].r.x + w - 50, 120, 0, &on) == id && on == Lp);
+        const auto t = core::snap_targets(d, pl, {});
+        check("snap: its right edge on the right page", std::any_of(t.xs.begin(), t.xs.end(), [&](double x) { return std::abs(x - (pl[1].r.x + 60)) < 1e-6; }));
+        {   // drawn: each page its part, cut at the spine
+            core::Doc::Loading load(d);
+            auto g = f;
+            for (const auto& sw : d.ids_of<core::Swatch>()) if (d.as<core::Swatch>(sw)->name == "Black") g.fill = sw;
+            d.put(id, g);
+        }
+        L::FlowCache flows;
+        const auto ink_at = [&](const std::string& page, int x, int y) {
+            const auto* pg = d.as<core::Page>(page);
+            auto* surf = cairo_image_surface_create(CAIRO_FORMAT_RGB24, static_cast<int>(pg->w), static_cast<int>(pg->h));
+            cairo_t* cr = cairo_create(surf);
+            cairo_set_source_rgb(cr, 1, 1, 1);
+            cairo_paint(cr);
+            L::draw_page(cr, d, page, flows, {}, nullptr, {});
+            cairo_destroy(cr);
+            cairo_surface_flush(surf);
+            const auto* row = cairo_image_surface_get_data(surf) + y * cairo_image_surface_get_stride(surf);
+            const bool ink = (reinterpret_cast<const std::uint32_t*>(row)[x] & 0xffffff) != 0xffffff;
+            cairo_surface_destroy(surf);
+            return ink;
+        };
+        check("drawn: the left page its left part", ink_at(Lp, static_cast<int>(w) - 50, 120) && !ink_at(Lp, static_cast<int>(w) - 120, 120));
+        check("drawn: the right page its right part", ink_at(Rp, 30, 120) && !ink_at(Rp, 80, 120));
+        check("json: across round-trips", [&] { core::Doc e; return core::from_json(e, core::to_json(d)) && e.as<core::Frame>(id)->across; }());
+        check("shows on Right pages: off the spine, its place kept", core::doc::set_shows_on(j, d, {id}, 1) && !d.as<core::Frame>(id)->across &&
+                                                                    d.as<core::Frame>(id)->side == core::Side::Right && d.as<core::Frame>(id)->x == -100);
+        check("...and back across", core::doc::set_shows_on(j, d, {id}, 3) && d.as<core::Frame>(id)->across && d.as<core::Frame>(id)->x == w - 100);
+        j.undo();
+        check("undo: Right again", !d.as<core::Frame>(id)->across && d.as<core::Frame>(id)->side == core::Side::Right);
+        j.redo();
+        const auto copy = core::doc::override_master_item(j, d, Rp, id);
+        check("override on the right page: its copy where it showed", !copy.empty() && !d.as<core::Frame>(copy)->across &&
+                                                                       d.as<core::Frame>(copy)->x == -100);
+        // a single (not facing) master has no spine
+        std::string single;
+        for (const auto& m : d.ids_of<core::Master>()) if (!d.as<core::Master>(m)->facing && !d.frames_on(m).empty()) single = m;
+        if (!single.empty()) check("single master: no across", !core::doc::set_shows_on(j, d, {d.frames_on(single).front()}, 3));
+        check("across: through the door", d.strays() == 0);
+    }
+
+    {
+        std::cout << "\n-- ruler origin (s154) --\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        std::vector<std::string> sp;
+        for (const auto& x : core::spreads(d)) if (x.size() == 2) { sp = x; break; }
+        const std::string L = sp.at(0), R = sp.at(1);
+        const double wl = d.as<core::Page>(L)->w;
+        using O = core::RulerOrigin;
+        const auto near = [](double a, double b) { return std::abs(a - b) < 1e-6; };
+        check("origin: Spread by default -- the right page's zero its left page's corner",
+              d.settings().ruler_origin == O::Spread && near(core::ruler_zero(d, L).x, 0) && near(core::ruler_zero(d, R).x, -wl));
+        const auto pl = core::layout_pages(d, {L, R});
+        const auto s1 = core::ruler_spans(d, pl);
+        check("spans: a spread is one piece from its corner", s1.size() == 1 && near(s1[0].zero, 0));
+        // a frame on the right page: X from the spread's corner
+        std::string fr;
+        for (const auto& f : d.frames_on(R)) { fr = f; break; }
+        if (fr.empty()) {
+            core::Doc::Loading load(d);
+            d.put("frame.95", core::Frame{R, core::FrameKind::Shape, 54, 54, 72, 72, 0, 9});
+            fr = "frame.95";
+        }
+        const auto bx = [&]() -> std::string {
+            const auto items = core::frame_items(d, {fr});
+            for (const auto& f : items.at(0).fields) if (f.edit == "bounds") return f.value.substr(0, f.value.find('\t'));
+            return "";
+        };
+        const double fx = d.as<core::Frame>(fr)->x;
+        check("inspector: X from the spread's corner", bx() == core::length_in(fx + wl, d.settings().units), bx());
+        check("origin: one step, the zero point back", core::doc::set_ruler_origin(j, d, O::Page) && d.settings().ruler_origin == O::Page &&
+                                                     j.undo_label() == "Ruler origin" && !core::doc::set_ruler_origin(j, d, O::Page));
+        check("Page: each page its own zero", near(core::ruler_zero(d, R).x, 0) && bx() == core::length_in(fx, d.settings().units));
+        const auto s2 = core::ruler_spans(d, pl);
+        check("spans: Page -- two pieces, cut at the spine", s2.size() == 2 && near(s2[0].hi, wl) && near(s2[1].lo, wl) && near(s2[1].zero, wl));
+        core::doc::set_ruler_origin(j, d, O::Spine);
+        check("Spine: the left page's right edge, the right page's left", near(core::ruler_zero(d, L).x, wl) && near(core::ruler_zero(d, R).x, 0));
+        const auto s3 = core::ruler_spans(d, pl);
+        check("spans: Spine -- one piece, zero at the spine", s3.size() == 1 && near(s3[0].zero, wl));
+        check("Spine: the zero point can't move", !core::doc::set_ruler_zero(j, d, 10, 10));
+        core::doc::set_ruler_origin(j, d, O::Spread);
+        const auto z = core::zero_at(d, pl, wl + 10, 20);
+        check("zero_at: from the spread's corner", near(z.x, wl + 10) && near(z.y, 20));
+        check("zero point: one step", core::doc::set_ruler_zero(j, d, z.x, z.y) && j.undo_label() == "Zero point");
+        check("zero point: both pages read from it", near(core::ruler_zero(d, R).x, 10) && near(core::ruler_zero(d, L).x, wl + 10) &&
+                                                    near(core::ruler_zero(d, R).y, 20));
+        check("inspector: X / Y from the zero point", bx() == core::length_in(fx - 10, d.settings().units), bx() + " vs " + core::length_in(fx - 10, d.settings().units));
+        {
+            core::Doc e;
+            check("json: origin and zero point round-trip", core::from_json(e, core::to_json(d)) && e.settings().ruler_origin == O::Spread &&
+                                                            near(e.settings().zero_x, wl + 10) && near(e.settings().zero_y, 20));
+        }
+        check("origin again: the zero point back", core::doc::set_ruler_origin(j, d, O::Spread) && d.settings().zero_x == 0);
+        j.undo();
+        check("undo: the zero point returns", near(d.settings().zero_x, wl + 10));
+        check("ruler origin: through the door", d.strays() == 0);
+    }
+
+    {
+        std::cout << "\n-- find: full case folding (s152) --\n";
+        namespace D = core::doc;
+        check("fold_text: sharp s (both cases) ss, ligatures their letters",
+              D::fold_text("Straße") == "strasse" && D::fold_text("STRAẞE") == "strasse" &&
+              D::fold_text("\uFB01ne \uFB04") == "fine ffl" && D::fold_text("ÉTÉ") == "été");
+        core::Doc d;
+        core::load_sample(d);
+        {
+            core::Doc::Loading load(d);
+            auto st = *d.as<core::Story>("story.3");
+            st.paras.at(0).text = "Die Straße, the STRASSE; a \uFB01ne line; ß alone";
+            d.put("story.3", st);
+        }
+        const auto hits = [&](const std::string& what, D::FindOpts::Mode m = D::FindOpts::Mode::Text, bool mc = false, bool ww = false) {
+            D::FindOpts f;
+            f.what = what;
+            f.mode = m;
+            f.match_case = mc;
+            f.whole_word = ww;
+            f.story = "story.3";
+            return D::find_all(d, f);
+        };
+        const auto& txt = d.as<core::Story>("story.3")->paras.at(0).text;
+        const auto word = [&](const D::Hit& h) { return txt.substr(static_cast<std::size_t>(h.a.byte), static_cast<std::size_t>(h.b.byte - h.a.byte)); };
+        const auto h1 = hits("strasse");
+        check("text: strasse finds Straße and STRASSE, their bytes", h1.size() == 2 && word(h1[0]) == "Straße" && word(h1[1]) == "STRASSE");
+        const auto h2 = hits("STRAẞE");
+        check("text: capital sharp s finds both", h2.size() == 2);
+        const auto h3 = hits("fine");
+        check("text: a ligature found by its letters", h3.size() == 1 && word(h3[0]) == "\uFB01ne");
+        check("text: never half a sharp s", hits("s alone").empty() && hits("ss alone").size() == 1 && hits("ss").size() == 3);
+        check("text: match case does not fold", hits("strasse", D::FindOpts::Mode::Text, true).empty() &&
+                                               hits("Straße", D::FindOpts::Mode::Text, true).size() == 1);
+        check("text: whole word through the fold", hits("strasse", D::FindOpts::Mode::Text, false, true).size() == 2);
+        const auto h4 = hits("stra(ss)e", D::FindOpts::Mode::Regex);
+        check("regex: folded, the groups as written", h4.size() == 2 && h4[0].groups.size() == 2 && h4[0].groups[1] == "ß" && h4[1].groups[1] == "SS");
+        check("regex: sharp s in the pattern; in a class one for one", hits("straße", D::FindOpts::Mode::Regex).size() == 2 &&
+                                                                     hits("ß+ alone", D::FindOpts::Mode::Regex).size() == 1);
+        check("wildcards: sharp s in the pattern", hits("^$traße", D::FindOpts::Mode::Wildcards).size() == 2);
+    }
+
+    {
         std::cout << "\n-- level styles, page numbers (s090) --\n";
         namespace L = composix::layout;
         core::Doc d;
@@ -3917,6 +4188,12 @@ int main() {
         core::load_sample(d);
         check("units: one step; Millimetres", core::doc::set_units(j, d, U::Millimetres) && d.settings().units == U::Millimetres &&
                                               !core::doc::set_units(j, d, U::Millimetres));
+        {   // s154: X / Y from the page's own corner here (Page origin)
+            core::Doc::Loading load(d);
+            auto st = d.settings();
+            st.ruler_origin = core::RulerOrigin::Page;
+            d.put("doc", st);
+        }
         const auto items = core::frame_items(d, {"frame.1"});
         const core::Field* b = nullptr;
         for (const auto& f : items.at(0).fields) if (f.edit == "bounds") b = &f;
