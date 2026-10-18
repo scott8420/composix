@@ -8041,6 +8041,75 @@ int main() {
         check("undo all", d.strays() == 0 && d.as<core::Story>("story.1")->paras[1].index.empty());
     }
 
+    {
+        std::cout << "\n-- the bibliography, built (s140) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);   // list.2: Bibliography from style.4 (the Sources story), on the last page
+        L::FlowCache fl;
+        const auto stale_of = [&] {
+            L::FlowCache f;
+            for (const auto& x : L::stale_lists(d, f)) if (x.list == "list.2") return x.why;
+            return std::string{};
+        };
+        check("never written: not out of date", stale_of().empty());
+        // A source elsewhere too, one repeated, and one with "The".
+        D::edit_text(j, d, "story.4", {2, static_cast<int>(d.as<core::Story>("story.4")->paras[2].text.size())},
+                     {2, static_cast<int>(d.as<core::Story>("story.4")->paras[2].text.size())},
+                     "\nThe Book of Tides.\nAlmanac of the Outer Ports, 3rd ed.\nBaltic Pilot.");
+        auto en = L::list_entries(d, fl, "list.2");
+        std::vector<std::string> w;
+        for (const auto& e : en) w.push_back(e.text);
+        check("the sources: sorted (\"The\" set aside), each once, no page numbers",
+              w == (std::vector<std::string>{"Almanac of the Outer Ports, 3rd ed.", "Baltic Pilot.", "The Book of Tides.", "Harbor Registers, vols. II\u2013IV.",
+                                             "Letters of the Surveyor General."}) &&
+                  std::all_of(en.begin(), en.end(), [](const auto& e) { return e.folio.empty(); }),
+              [&] { std::string x; for (const auto& t : w) x += t + " | "; return x; }());
+        const auto frames_before = d.frames_on(d.as<core::GenList>("list.2")->placed_on).size();
+        check("built: one step", L::build_list(j, d, "list.2"));
+        const auto* l = d.as<core::GenList>("list.2");
+        const auto* st = d.as<core::Story>(l->story);
+        check("the Sources typed on its page: that story is it -- sorted in place, no frame on top",
+              l->story == "story.4" && d.frames_on(l->placed_on).size() == frames_before);
+        check("  sorted, each once, the words alone", st && st->paras.size() == 5 && st->paras[0].text == "Almanac of the Outer Ports, 3rd ed." &&
+                                                     st->paras[2].text == "The Book of Tides.");
+        check("  its italics kept (the Almanac's title in Emphasis)", st && !st->paras.empty() && !st->paras[0].runs.empty() &&
+                                                                       st->paras[0].runs[0].style == "style.5");
+        check("  in the sources' own style", st && std::all_of(st->paras.begin(), st->paras.end(), [](const core::Para& p) { return p.style == "style.4"; }));
+        check("built: current", stale_of().empty(), stale_of());
+        check("again: nothing", !L::build_list(j, d, "list.2"));
+        D::edit_text(j, d, "story.4", {0, 0}, {0, 0}, "Zed's Charts.\n");
+        check("one typed at the top: out of date", !stale_of().empty(), stale_of());
+        L::build_list(j, d, "list.2");
+        check("rebuilt: sorted to its place", d.as<core::Story>("story.4")->paras.back().text == "Zed's Charts." && stale_of().empty());
+        {   // The inspector offers Build for it.
+            const auto o = core::project(d, "", nullptr, nullptr, nullptr);
+            bool build = false;
+            for (const auto& it : o.items())
+                if (it.id == "list.2") for (const auto& f : it.fields) build = build || (f.edit == "genlist" && !f.choices.empty());
+            check("the inspector: Rebuild offered", build);
+        }
+        {   // One on a page without its sources: a frame of its own, gathering them from where they are.
+            const auto other = d.pages()[d.pages().size() - 2];
+            const auto bl = D::add_list(j, d, core::ListKind::Bibliography, "Works Cited", other);
+            {
+                core::GenList g = *d.as<core::GenList>(bl);
+                g.from_styles = {"style.4"};
+                j.run("styles", {bl}, [&] { d.put(bl, g); });
+            }
+            check("elsewhere: built into a frame of its own", L::build_list(j, d, bl) && !d.as<core::GenList>(bl)->story.empty() &&
+                                                            d.as<core::GenList>(bl)->story != "story.4");
+            const auto& w2 = d.as<core::Story>(d.as<core::GenList>(bl)->story)->paras;
+            check("  the same sources, each once (its own copies not doubled)", w2.size() == 6 && w2[0].text == "Almanac of the Outer Ports, 3rd ed.");
+            check("  built again: nothing", !L::build_list(j, d, bl));
+        }
+        while (j.can_undo()) j.undo();
+        check("undo all", d.strays() == 0 && d.as<core::GenList>("list.2")->story.empty());
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

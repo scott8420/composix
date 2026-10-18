@@ -1038,6 +1038,7 @@ bool    remove_guide(DocJournal& j, Doc& d, const Doc::Id& guide);
 struct ListEntry {
     std::string text, folio;
     int         level = 1;
+    std::optional<Para> para;   // s140: a bibliography's source, whole -- its italics, notes, marks kept (its style: the entry style)
     bool operator==(const ListEntry&) const = default;
 };
 bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<ListEntry>& entries);

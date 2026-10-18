@@ -1446,6 +1446,18 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
     const auto* l = d.as<GenList>(list);
     if (!l) return false;
     const auto* st = l->story.empty() ? nullptr : d.as<Story>(l->story);
+    // s140: a bibliography with no story yet, its page already holding a story all of
+    // sources (typed there by hand): that one is it -- sorted where it is, no frame on top.
+    Doc::Id adopt;
+    if (!st && l->kind == ListKind::Bibliography && d.as<Page>(l->placed_on))
+        for (const auto& fid : d.frames_on(l->placed_on)) {
+            const auto* f = d.as<Frame>(fid);
+            const auto* fs = f && !f->story.empty() ? d.as<Story>(f->story) : nullptr;
+            if (!fs || fs->paras.empty()) continue;
+            if (std::all_of(fs->paras.begin(), fs->paras.end(), [&](const Para& p) {
+                    return std::find(l->from_styles.begin(), l->from_styles.end(), p.style) != l->from_styles.end();
+                })) { adopt = f->story; st = fs; break; }
+        }
     const auto* pg = l->placed_on.empty() ? nullptr : d.as<Page>(l->placed_on);
     if (!st && !pg) return false;
     // Level 1's style, and the title.
@@ -1453,14 +1465,19 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
     std::vector<Para> paras;
     if (st) {   // s090: the title by style (entries may have no tab)
         const auto t = static_cast<std::size_t>(list_title_paras(*st, l->kind));   // s135: an index's letter isn't a title
-        if (t < st->paras.size()) entry_style = st->paras[t].style;
-        if (l->kind == ListKind::Index)   // s135: level 1's style -- the first entry that isn't a letter heading
+        if (t < st->paras.size()) {
+            entry_style = st->paras[t].style;
+        } else if (!st->paras.empty()) {
+            entry_style = st->paras.front().style;
+        }
+        // s135: an index's level 1 -- the first entry that isn't a letter heading.
+        // (s140: braces -- the else above had bound to this loop's if since s135.)
+        if (l->kind == ListKind::Index)
             for (auto k = t; k < st->paras.size(); ++k)
                 if (!letter_head(st->paras[k].text)) {
                     entry_style = st->paras[k].style;
                     break;
                 }
-        else if (!st->paras.empty()) entry_style = st->paras.front().style;
         if (t == 1) paras.push_back(st->paras.front());   // the title
     } else {
         for (const auto& s : d.ids_of<Style>())
@@ -1472,6 +1489,10 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
         const auto* s = d.as<Style>(id);
         return s && s->kind == StyleKind::Paragraph ? id : std::string{};
     };
+    // s140: a bibliography's entries, unless picked, in the style it gathers -- its own story is
+    // one of its sources (built again, the same), so they keep it.
+    if (l->kind == ListKind::Bibliography && !l->from_styles.empty())
+        if (const auto* g = d.as<Style>(l->from_styles.front()); g && g->kind == StyleKind::Paragraph) entry_style = l->from_styles.front();
     if (const auto own = set_style(1); !own.empty()) entry_style = own;
     // s088: each deeper level's style -- the list's, else by name, else to be made.
     int deepest = 1;
@@ -1507,18 +1528,25 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
     const std::size_t title = paras.size();
     for (const auto& e : entries) {
         if (e.level == 0) { paras.push_back({head_style, e.text}); continue; }
+        if (e.para) {   // s140: the source itself, in the entry style
+            Para p = *e.para;
+            p.style = lv_style[static_cast<std::size_t>(std::clamp(e.level, 1, deepest))];
+            paras.push_back(std::move(p));
+            continue;
+        }
         paras.push_back({lv_style[static_cast<std::size_t>(std::clamp(e.level, 1, deepest))],
-                         l->numbers && !(l->kind == ListKind::Index && e.folio.empty()) ? e.text + sep + e.folio
-                                                                                        : e.text});   // s090: or the words alone
+                         l->numbers && !e.folio.empty() ? e.text + sep + e.folio
+                                                        : e.text});   // s090: or the words alone; s140: none to write, the words alone
     }
     if (paras.empty()) paras.push_back({entry_style, ""});
     const int n = static_cast<int>(entries.size());
     if (st && to_make.empty() && !make_head && st->paras == paras && l->built_entries == n) return false;
     std::vector<Doc::Id> ids{list};
-    if (st) ids.push_back(l->story);
+    if (st) ids.push_back(adopt.empty() ? l->story : adopt);
     return j.run("Build " + l->name, ids, [&]() -> std::vector<Doc::Id> {
         std::vector<Doc::Id> made;
         GenList nl = *d.as<GenList>(list);
+        if (!adopt.empty()) nl.story = adopt;   // s140
         if (make_head) {   // s135: the letter headings' style
             double pos = 0;
             for (const auto& s : d.ids_of<Style>()) pos = std::max(pos, d.as<Style>(s)->pos);

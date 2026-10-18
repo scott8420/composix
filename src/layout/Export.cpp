@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <cstring>
 #include <tuple>
 #include <cctype>
 #include <set>
@@ -666,6 +667,30 @@ SheetAt sheet_of(const std::vector<Sheet>& sheets, const std::string& page) {   
 std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& flows, const std::string& list) {   // s087
     std::vector<core::doc::ListEntry> out;
     const auto* l = d.as<core::GenList>(list);
+    if (l && l->kind == core::ListKind::Bibliography) {   // s140: the sources -- each paragraph in its styles (its own story's too), once, sorted
+        std::map<std::string, core::doc::ListEntry> by;   // the sort key -> the entry
+        for (const auto& sid : d.ids_of<core::Story>()) {
+            for (const auto& para : d.as<core::Story>(sid)->paras) {
+                if (std::find(l->from_styles.begin(), l->from_styles.end(), para.style) == l->from_styles.end()) continue;
+                std::string w;
+                for (std::size_t i = 0; i < para.text.size();) {
+                    if (static_cast<unsigned char>(para.text[i]) == 0xEE && i + 2 < para.text.size() &&
+                        static_cast<unsigned char>(para.text[i + 1]) == 0x80) { i += 3; continue; }
+                    w += para.text[i] == '\t' ? ' ' : para.text[i];
+                    ++i;
+                }
+                w = trimmed(w);
+                if (w.empty()) continue;
+                // Sorted as a reader looks one up: an opening "The", "A" or "An" set aside.
+                std::string k = collated(w);
+                for (const char* art : {"the ", "a ", "an "})
+                    if (k.rfind(art, 0) == 0 && k.size() > std::strlen(art)) { k = k.substr(std::strlen(art)); break; }
+                by.emplace(k + '\x01' + folded(w), core::doc::ListEntry{w, "", 1, para});   // the same words twice: once (the first, whole)
+            }
+        }
+        for (auto& [k, e] : by) out.push_back(std::move(e));
+        return out;
+    }
     if (l && l->kind == core::ListKind::Index) {   // s135: the index marks' entries, a letter heading each initial
         std::string group;
         const auto joined = [](const std::vector<std::string>& v) {
@@ -775,9 +800,11 @@ std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows) {   // 
     // s135: an index -- its written paragraphs against what the marks make now.
     for (const auto& lid : d.ids_of<core::GenList>()) {
         const auto& l = *d.as<core::GenList>(lid);
-        if (l.kind != core::ListKind::Index) continue;
+        if (l.kind != core::ListKind::Index && l.kind != core::ListKind::Bibliography) continue;   // s140: a bibliography too
         const auto* st = l.story.empty() ? nullptr : d.as<core::Story>(l.story);
         if (!st && l.placed_on.empty()) continue;
+        // s140: a bibliography never built is not out of date (the inspector says Never) -- typed by hand till then.
+        if (l.kind == core::ListKind::Bibliography && (!st || l.built_entries < 0)) continue;
         if (!st || l.built_entries < 0) { out.push_back({lid, "Not built yet"}); continue; }
         const auto en = list_entries(d, flows, lid);
         std::vector<std::string> want, had;

@@ -692,10 +692,10 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 for (const auto& p : d.as<Story>(sid)->paras) now += static_cast<int>(p.index.size());
         }
         const bool never = l.built_entries < 0;
-        bool stale = !never && l.kind != ListKind::Index && l.built_entries != now;   // s138: an index counts entries, not marks -- its staleness is stale_lists' alone
+        bool stale = !never && l.kind == ListKind::Contents && l.built_entries != now;   // s140: a bibliography's lines aren't its paragraphs either   // s138: an index counts entries, not marks -- its staleness is stale_lists' alone
         std::string built = never ? "Never" : stale ? "Stale — built with " + std::to_string(l.built_entries)
                                                     : "Current";
-        if (stale_lists && (l.kind == ListKind::Contents || l.kind == ListKind::Index) && !never) {   // s135: an index too   // s089: what Build would change
+        if (stale_lists && !never) {   // s135: an index too; s140: and a bibliography   // s089: what Build would change
             const auto it = stale_lists->find(lid);
             stale = it != stale_lists->end();
             built = stale ? "Out of date — " + it->second : "Current";
@@ -710,7 +710,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             if (d.as<Style>(s)->kind == StyleKind::Paragraph &&
                 std::find(l.from_styles.begin(), l.from_styles.end(), s) == l.from_styles.end())
                 add_ch.push_back({s, d.as<Style>(s)->name});
-        Field add{"Add level", "Choose a style…", "list_add", add_ch};
+        Field add{l.kind == ListKind::Bibliography ? "Add style" : "Add level", "Choose a style…", "list_add", add_ch};   // s140: a bibliography gathers styles, not levels
         Field drop{"", "", "list_remove", {}};
         drop.buttons = true;
         for (const auto& s : l.from_styles) drop.choices.push_back({s, "− " + style_name(d, s)});
@@ -750,7 +750,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 drop,
                 [&] {   // s087: Build -- writes the entries, with their folios, into the list's story
                     Field act{"", "", "genlist", {}};
-                    if ((l.kind == ListKind::Contents || l.kind == ListKind::Index) && (!l.story.empty() || !l.placed_on.empty()))
+                    if (!l.story.empty() || !l.placed_on.empty())   // s140: every kind builds
                         act.choices.push_back({"build", never ? "Build" : "Rebuild"});
                     act.buttons = true;
                     return act;
