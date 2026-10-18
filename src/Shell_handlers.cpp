@@ -877,6 +877,12 @@ void Shell::update_screen_colours() {  // helper
 // them: the desktop's Trash, so a mistake can be fetched back.
 std::vector<core::Field> Shell::section_fields(core::Segment s) const {  // helper
     std::vector<core::Field> out;
+    if (s == core::Segment::Notes) {   // s121: the settings, in their panel
+        core::Field act{"", "", "notes_panel", {{"open", "Footnotes & Endnotes\u2026"}}};
+        act.buttons = true;
+        out.push_back(act);
+        return out;
+    }
     if (s != core::Segment::Assets || m_project_dir.empty()) return out;
     std::vector<std::string> held;
     m_journal.each_value([&](const core::Record& r) {
@@ -920,6 +926,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         on_tiles_selection(m_inspected);
         return;
     }
+    if (key == "notes_panel") { open_notes_panel(); return; }   // s121
     if (m_inspected.empty()) return;
     if (key == "note" || key == "note_words") {   // s115: a footnote picked in Footnotes
         std::string story;

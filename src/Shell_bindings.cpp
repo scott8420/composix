@@ -74,6 +74,7 @@ void Shell::bind_actions() {  // bindings: actions + recents group
         }
         edit_note(c.edit_story_id(), p, k);
     });
+    add_action("notes-panel", [this] { open_notes_panel(); });   // s121
     add_action("edit-footnote", [this] {
         int p = 0, k = 0;
         auto& c = m_canvas_view.canvas();

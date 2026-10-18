@@ -167,6 +167,9 @@ private:
     void poll_work();
     void edit_note(const std::string& story, int p, int k, int sel_a = -1, int sel_b = -1, bool take_focus = true);   // s113: a Find hit's words selected, the keyboard left where it is
     void go_to_note(const std::string& id);    // category: helper: s115 -- a footnote's page, its words open
+    void open_notes_panel();                     // category: helper: s121 -- Footnotes & Endnotes, one panel
+    void notes_panel_sync();                     // category: helper: s121 -- the panel from the document
+    void draw_notes_preview(const Cairo::RefPtr<Cairo::Context>& cr, int cw, int ch);   // category: helper: s121
     void close_find_note();                     // category: helper: s113 -- the note Find opened, closed   // category: helper: s110 -- a footnote's words, in a popover at the caret                             // category: helper: s108 -- the header's "working" pill                          // category: helper: s106 -- a provisional flow's whole, on a worker
     void go_to_issue(const layout::Issue& i);     // category: helper: s024 -- its page, its frame picked
     void find_refresh();                          // category: helper: s022 -- the hits again, from the bar's settings
@@ -296,6 +299,20 @@ private:
     Gtk::Label*                      m_start_empty = nullptr;
     std::map<const Gtk::FlowBoxChild*, std::string> m_start_paths;
     std::unique_ptr<Gtk::Window>     m_swed;
+    // s121: the Footnotes & Endnotes panel.
+    std::unique_ptr<Gtk::Window>     m_np;
+    Gtk::DrawingArea*                m_np_preview = nullptr;
+    Gtk::DropDown*                   m_np_at = nullptr;
+    Gtk::DropDown*                   m_np_restart = nullptr;
+    Gtk::DropDown*                   m_np_style = nullptr;
+    Gtk::SpinButton*                 m_np_area = nullptr;
+    Gtk::SpinButton*                 m_np_rule = nullptr;
+    Gtk::SpinButton*                 m_np_rule_w = nullptr;
+    Gtk::SpinButton*                 m_np_space = nullptr;
+    Gtk::Entry*                      m_np_cont = nullptr;
+    Gtk::Entry*                      m_np_title = nullptr;
+    Gtk::Label*                      m_np_note = nullptr;
+    bool                             m_np_syncing = false;
     core::Swatch                     m_sw;
     std::string                      m_sw_id;                 // "" = new
     bool                             m_sw_quiet = false;
