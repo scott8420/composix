@@ -33,6 +33,12 @@ Glib::RefPtr<Gio::Menu> Shell::special_menu() {  // zone
     notes->append("Edit Cross-Reference\u2026", "win.edit-xref");   // s130
     notes->append("All Cross-References\u2026", "win.xrefs-panel");   // s133
     m->append_section(notes);
+    auto index = Gio::Menu::create();   // s138
+    index->append("Index Entry\u2026", "win.index-mark");
+    index->append("Edit Index Entry\u2026", "win.edit-index");
+    index->append("New Index on This Page", "win.new-index");
+    notes = index;
+    m->append_section(notes);
     auto breaks = Gio::Menu::create();   // s055
     breaks->append("Column Break", "win.insert-column-break");
     breaks->append("Frame Break", "win.insert-frame-break");

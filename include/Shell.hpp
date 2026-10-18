@@ -172,6 +172,10 @@ private:
     void on_edit_xref();                        // category: handler: s130 -- the one beside the cursor, changed
     void open_xref(int edit_para, int edit_k);  // s130: the picker (edit_k >= 0: changing that reference)
     void open_xrefs_panel();                    // category: helper: s133 -- every cross-reference, one panel
+    void on_index_mark();                       // category: handler: s138 -- Index Entry... at the selection
+    void on_edit_index();                       // category: handler: s138 -- the mark beside the cursor
+    void open_index_pop(int edit_para, int edit_k);   // category: helper: s138 -- the index entry popover
+    void on_new_index();                        // category: handler: s138 -- an Index on the page on show, built
     void xrefs_panel_sync();                    // category: helper: s133 -- the panel from the document
     void go_to_ref(const std::string& story, int para, int k, bool edit);   // category: helper: s133 -- a reference selected (and its picker)
     void open_notes_panel();                     // category: helper: s121 -- Footnotes & Endnotes, one panel
@@ -294,6 +298,8 @@ private:
     std::unique_ptr<Gtk::PopoverMenu> m_ctx_menu;
     bool                              m_note_pop_find = false;   // s113: the popover is Find's (shows a hit)
     std::unique_ptr<Gtk::Popover>     m_xref_pop;   // s128: the cross-reference picker
+    std::unique_ptr<Gtk::Popover>     m_index_pop;  // s138: the index entry popover
+    int                               m_index_span = 0, m_index_count = 1;   // s139: what the mark in the popover covers
     int                               m_xref_show = 0;   // s128: what the last reference showed (page / words / both / note / own)
     std::string                       m_xref_pattern;    // s129: the last pattern of its own
     std::unique_ptr<Gtk::Popover>     m_note_pop;   // s110: a footnote's words, edited at the caret

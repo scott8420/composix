@@ -287,11 +287,19 @@ struct XRef {
 // s136: `see` -- the entry sends the reader to another ("Charts. See
 // Maps"): the mark adds no page. With `also`, after the entry's pages
 // ("Harbor, 1, 3. See also Ports").
+// s139: what stretch of text a mark covers -- its own place (the page it
+// is on), the rest of its paragraph, on to the next heading (a paragraph a
+// Contents list gathers, or in a style named Heading...), `count`
+// paragraphs from its own, or to the story's end. Every page the stretch
+// is set on is the entry's; a stretch over pages in a row is a range.
+enum class IndexSpan { Point, Paragraph, NextHeading, Paragraphs, StoryEnd };
 struct IndexMark {
     std::string term;
     std::string sub;
     std::string see;                     // s136
     bool        also = false;            // s136
+    IndexSpan   span = IndexSpan::Point; // s139
+    int         count = 1;               // s139: Paragraphs -- how many (its own the first)
     bool operator==(const IndexMark&) const = default;
 };
 // s129: the pattern a reference shows by (Custom: its own).
@@ -889,6 +897,12 @@ RefAt ref_near(const Story& s, TextPos at);
 bool set_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, RefShow show, const std::string& pattern = {});
 bool retarget_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const Doc::Id& to_story, int to_para,
                   int note_k, RefShow show, const std::string& pattern = {});
+// s139: the last paragraph a mark in paragraph p covers (p itself for a
+// point or its paragraph).
+int index_span_end(const Doc& d, const Story& s, int p, const IndexMark& m);
+// s139: a heading, as the index and cross-references see one: a paragraph a
+// Contents list gathers, or in a style whose name starts "Heading".
+bool heading_para(const Doc& d, const Para& p);
 // s134: an index entry at `at` -- its mark in the text, its term (trimmed;
 // empty: nothing) and sub-entry. One step; the place after the mark
 // (`at` when nothing changed).

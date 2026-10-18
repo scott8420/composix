@@ -378,6 +378,7 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
     };
     std::map<Key, IndexEntry> by;
     std::map<Key, std::map<std::string, double>> top;   // s137: an entry's highest mark on each page
+    std::map<Key, std::set<std::pair<std::string, std::string>>> linked;   // s139: page pairs one stretch runs across
     for (const auto& sid : d.ids_of<core::Story>()) {
         const auto& st = *d.as<core::Story>(sid);
         if (std::none_of(st.paras.begin(), st.paras.end(), [](const core::Para& p) { return !p.index.empty(); })) continue;
@@ -401,6 +402,23 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
                             }
                     if (!page.empty()) break;
                 }
+                // s139: a stretch -- every page its lines are set on, from the mark on.
+                std::vector<std::string> span_pages;
+                std::map<std::string, double> span_top;
+                if (m.span != core::IndexSpan::Point && m.see.empty()) {
+                    const int last = core::doc::index_span_end(d, st, p, m);
+                    for (const auto& ft : flow.frames) {
+                        const auto* f = d.as<core::Frame>(ft.frame);
+                        if (!f || !d.as<core::Page>(f->owner)) continue;
+                        for (const auto& l : ft.lines) {
+                            if (l.para < p || l.para > last || (l.para == p && l.end < static_cast<int>(i))) continue;   // from the mark's line on
+                            if (std::find(span_pages.begin(), span_pages.end(), f->owner) == span_pages.end()) span_pages.push_back(f->owner);
+                            const double ly = f->y + l.y;
+                            if (const auto it = span_top.find(f->owner); it == span_top.end() || ly < it->second) span_top[f->owner] = ly;
+                        }
+                    }
+                    std::sort(span_pages.begin(), span_pages.end(), [&](const std::string& a, const std::string& b) { return d.page_index(a) < d.page_index(b); });
+                }
                 // A sub-entry's term heads it (a line of its own, perhaps with no pages).
                 if (!m.sub.empty()) {
                     auto& head = by[key(m.term, {})];
@@ -414,6 +432,18 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
                     if (std::find(to.begin(), to.end(), m.see) == to.end()) to.push_back(m.see);
                     continue;
                 }
+                if (!span_pages.empty()) {   // s139: the stretch's pages, linked in a row
+                    auto& t = top[key(m.term, m.sub)];
+                    for (std::size_t q = 0; q < span_pages.size(); ++q) {
+                        const auto& pg = span_pages[q];
+                        if (std::find(e.pages.begin(), e.pages.end(), pg) == e.pages.end()) e.pages.push_back(pg);
+                        const double ty = pg == page ? y : span_top[pg];
+                        if (const auto it = t.find(pg); it == t.end() || ty < it->second) t[pg] = ty;
+                        if (q > 0 && d.page_index(pg) == d.page_index(span_pages[q - 1]) + 1)
+                            linked[key(m.term, m.sub)].insert({span_pages[q - 1], pg});
+                    }
+                    continue;
+                }
                 if (!page.empty() && std::find(e.pages.begin(), e.pages.end(), page) == e.pages.end()) e.pages.push_back(page);
                 if (!page.empty()) {   // s137
                     auto& t = top[key(m.term, m.sub)];
@@ -425,6 +455,7 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
     std::vector<IndexEntry> out;
     for (auto& [kk, e] : by) {
         const auto& tops = top[kk];
+        const auto& links = linked[kk];   // s139
         std::sort(e.pages.begin(), e.pages.end(), [&](const std::string& a, const std::string& b) { return d.page_index(a) < d.page_index(b); });
         for (const auto& pg : e.pages) e.folios.push_back(d.folio(pg));
         // s136: runs of three or more pages in a row as a range ("3\u20135"): the
@@ -442,7 +473,9 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
                 const auto it = tops.find(e.pages[q]);
                 e.runs.push_back({std::move(text), e.pages[q], it == tops.end() ? 0.0 : it->second});
             };
-            if (b - a >= 2) run(a, e.folios[a] + "\u2013" + e.folios[b]);
+            // s139: two pages one stretch runs over are a range too ("4\u20135").
+            const bool joined = b - a == 1 && links.count({e.pages[a], e.pages[b]}) > 0;
+            if (b - a >= 2 || joined) run(a, e.folios[a] + "\u2013" + e.folios[b]);
             else for (std::size_t q = a; q <= b; ++q) run(q, e.folios[q]);
             a = b + 1;
         }
@@ -761,6 +794,16 @@ std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows) {   // 
         }
         if (why.empty() && want.size() > had.size()) why = name(en[had.size()]) + " not listed yet";
         if (why.empty() && had.size() > want.size()) why = "\u201c" + had[want.size()] + "\u201d listed, no such entry";
+        if (why.empty()) {   // s138: a level whose style was picked -- written in it?
+            const auto t0 = static_cast<std::size_t>(core::doc::list_title_paras(*st, l.kind));
+            for (std::size_t i = 0; i < en.size() && why.empty(); ++i) {
+                const auto lv = static_cast<std::size_t>(en[i].level);
+                if (lv == 0 || lv > l.entry_styles.size() || l.entry_styles[lv - 1].empty()) continue;
+                const auto* want_style = d.as<core::Style>(l.entry_styles[lv - 1]);
+                if (want_style && t0 + i < st->paras.size() && st->paras[t0 + i].style != l.entry_styles[lv - 1])
+                    why = (lv == 1 ? "Entries not in " : "Sub-entries not in ") + want_style->name;
+            }
+        }
         if (!why.empty()) out.push_back({lid, why});
     }
     return out;

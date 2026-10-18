@@ -7927,6 +7927,120 @@ int main() {
         if (!std::getenv("KEEP_PDF")) fs::remove_all(base, ec);
     }
 
+    {
+        std::cout << "\n-- the index's styles (s138) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::insert_index_mark(j, d, "story.1", {1, 4}, "harbor", "smells");
+        D::insert_index_mark(j, d, "story.1", {2, 0}, "guild");
+        const auto ix = D::add_list(j, d, core::ListKind::Index, "Index", d.pages().back());
+        L::build_list(j, d, ix);
+        const auto rows = [&] {
+            std::map<std::string, std::string> m;
+            const auto o = core::project(d, "", nullptr, nullptr, nullptr);   // (kept: items() is a reference into it)
+            for (const auto& it : o.items())
+                if (it.id == ix) for (const auto& f : it.fields) m[f.label] = f.value;
+            return m;
+        };
+        auto r = rows();
+        std::string seen;
+        for (const auto& [k, v] : r) seen += k + "=" + v + "; ";
+        check("the inspector: entries, sub-entries (the one Build made), page numbers; built current", r["Entries in"] == "Automatic" && r["Sub-entries in"] == "Body 2" &&
+                                                                  r["Page numbers"] == "Yes" && r["Built"] == "Current", seen);
+        const auto stale_of = [&] {
+            L::FlowCache f;
+            for (const auto& x : L::stale_lists(d, f)) if (x.list == ix) return x.why;
+            return std::string{};
+        };
+        check("built: current", stale_of().empty(), stale_of());
+        D::set_list_entry_style(j, d, ix, 1, "style.4");   // the Sources' style for entries
+        check("a style picked: out of date, saying which", stale_of() == "Entries not in " + d.as<core::Style>("style.4")->name, stale_of());
+        L::build_list(j, d, ix);
+        const auto& w = d.as<core::Story>(d.as<core::GenList>(ix)->story)->paras;
+        bool in4 = false, letter_from4 = false;
+        for (const auto& p : w) {
+            in4 = in4 || (p.text.rfind("guild", 0) == 0 && p.style == "style.4");
+            const auto* st = d.as<core::Style>(p.style);
+            letter_from4 = letter_from4 || (p.text == "G" && st && st->based_on == "style.4");
+        }
+        check("rebuilt: the entries in it, the letters made from it", in4 && letter_from4 && stale_of().empty(), stale_of());
+        D::set_list_numbers(j, d, ix, false);
+        L::build_list(j, d, ix);
+        bool bare = false;
+        for (const auto& p : d.as<core::Story>(d.as<core::GenList>(ix)->story)->paras) bare = bare || p.text == "guild";
+        check("page numbers off: the words alone", bare && stale_of().empty());
+        L::FlowCache f;
+        check("page numbers off: no index links", L::index_links(d, f).empty());
+    }
+
+    {
+        std::cout << "\n-- index marks that cover a stretch (s139) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto& st = *d.as<core::Story>("story.1");   // 0 Chapter One, 1-3 body, 4 Chapter Two, 5 map
+        check("a heading: a Contents list's style", D::heading_para(d, st.paras[4]) && !D::heading_para(d, st.paras[2]));
+        check("span ends: point, paragraph, to heading, 2 paragraphs, story end",
+              D::index_span_end(d, st, 1, {"x"}) == 1 && D::index_span_end(d, st, 1, {"x", "", "", false, core::IndexSpan::Paragraph}) == 1 &&
+                  D::index_span_end(d, st, 1, {"x", "", "", false, core::IndexSpan::NextHeading}) == 3 &&
+                  D::index_span_end(d, st, 1, {"x", "", "", false, core::IndexSpan::Paragraphs, 2}) == 2 &&
+                  D::index_span_end(d, st, 1, {"x", "", "", false, core::IndexSpan::Paragraphs, 99}) == 5 &&
+                  D::index_span_end(d, st, 5, {"x", "", "", false, core::IndexSpan::NextHeading}) == 5 &&
+                  D::index_span_end(d, st, 1, {"x", "", "", false, core::IndexSpan::StoryEnd}) == 5);
+        // Two frames threaded on pages 4 and 5, the text long enough to run over both.
+        const auto page_numbered = [&](const std::string& f) {
+            for (const auto& pg : d.pages()) if (d.folio(pg) == f) return pg;
+            return std::string{};
+        };
+        const auto f4 = D::add_frame(j, d, page_numbered("4"), core::FrameKind::Text, {72, 72, 200, 80});
+        const auto f5 = D::add_frame(j, d, page_numbered("5"), core::FrameKind::Text, {72, 72, 200, 300});
+        const auto f6 = D::add_frame(j, d, page_numbered("6"), core::FrameKind::Text, {72, 72, 200, 300});
+        D::thread_frames(j, d, f4, f5);
+        const auto run = d.as<core::Frame>(f4)->story;
+        std::string body;
+        for (int k = 0; k < 40; ++k) body += "Words enough to run on past the first frame and into the next one. ";
+        D::edit_text(j, d, run, {0, 0}, {0, 0}, "Harbors\n" + body);
+        D::edit_text(j, d, d.as<core::Frame>(f6)->story, {0, 0}, {0, 0}, "Six");
+        L::FlowCache fl;
+        const auto pages_of = [&](const std::string& term) {
+            for (const auto& e : L::index_entries(d, fl)) if (e.term == term) return e.pages_text;
+            return std::string{"(none)"};
+        };
+        D::insert_index_mark(j, d, run, {1, 0}, core::IndexMark{"Ports"});
+        check("a point: its page only", pages_of("Ports") == "4", pages_of("Ports"));
+        D::insert_index_mark(j, d, run, {1, 0}, core::IndexMark{"Harbors", "", "", false, core::IndexSpan::Paragraph});
+        check("its paragraph over two pages in a row: \"4\u20135\"", pages_of("Harbors") == "4\u20135", pages_of("Harbors"));
+        D::insert_index_mark(j, d, d.as<core::Frame>(f6)->story, {0, 0}, "Ports");
+        D::insert_index_mark(j, d, run, {0, 0}, core::IndexMark{"Ports", "", "", false, core::IndexSpan::Point});
+        check("points on 4 and 6: \"4, 6\"", pages_of("Ports") == "4, 6", pages_of("Ports"));
+        {   // In the sample's own story: to the story end -- pages 1 and 3, not in a row.
+            D::insert_index_mark(j, d, "story.1", {1, 0}, core::IndexMark{"Voyage", "", "", false, core::IndexSpan::StoryEnd});
+            std::set<std::string> want;
+            for (const auto& ft : L::flow_story(d, "story.1").frames)
+                if (!ft.lines.empty()) want.insert(d.folio(d.as<core::Frame>(ft.frame)->owner));
+            check("to the story's end: every page its text is on", pages_of("Voyage").find(*want.begin()) != std::string::npos &&
+                                                                   pages_of("Voyage").find(", ") != std::string::npos, pages_of("Voyage"));
+        }
+        check("a See covers nothing (its span dropped)",
+              D::insert_index_mark(j, d, "story.1", {2, 0}, core::IndexMark{"Charts", "", "Maps", false, core::IndexSpan::StoryEnd}) == core::TextPos{2, 3} &&
+                  d.as<core::Story>("story.1")->paras[2].index[0].span == core::IndexSpan::Point);
+        D::insert_index_mark(j, d, "story.1", {3, 0}, core::IndexMark{"Guild", "", "", false, core::IndexSpan::Paragraphs, 2});
+        {
+            core::Doc e;
+            std::string err;
+            check("json: span and count kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        }
+        while (j.can_undo()) j.undo();
+        check("undo all", d.strays() == 0 && d.as<core::Story>("story.1")->paras[1].index.empty());
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

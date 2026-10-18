@@ -2669,9 +2669,36 @@ IndexMark tidy(IndexMark m) {   // s136: each part trimmed
     m.sub = trim_ws(m.sub);
     m.see = trim_ws(m.see);
     if (m.see.empty()) m.also = false;
+    if (!m.see.empty() && !m.also) m.span = IndexSpan::Point;   // s139: a See has no pages to cover
+    m.count = m.span == IndexSpan::Paragraphs ? std::clamp(m.count, 1, 9999) : 1;
     return m;
 }
 }  // namespace
+
+bool heading_para(const Doc& d, const Para& p) {   // s139
+    for (const auto& lid : d.ids_of<GenList>()) {
+        const auto& l = *d.as<GenList>(lid);
+        if (l.kind == ListKind::Contents && std::find(l.from_styles.begin(), l.from_styles.end(), p.style) != l.from_styles.end())
+            return true;
+    }
+    const auto* s = d.as<Style>(p.style);
+    return s && s->name.rfind("Heading", 0) == 0;
+}
+
+int index_span_end(const Doc& d, const Story& s, int p, const IndexMark& m) {   // s139
+    const int last = static_cast<int>(s.paras.size()) - 1;
+    switch (m.span) {
+    case IndexSpan::Point:
+    case IndexSpan::Paragraph: return p;
+    case IndexSpan::Paragraphs: return std::min(last, p + std::max(1, m.count) - 1);
+    case IndexSpan::StoryEnd: return last;
+    case IndexSpan::NextHeading:
+        for (int q = p + 1; q <= last; ++q)
+            if (heading_para(d, s.paras[static_cast<std::size_t>(q)])) return q - 1;
+        return last;
+    }
+    return p;
+}
 
 TextPos insert_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& term,
                           const std::string& sub) {   // s134

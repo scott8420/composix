@@ -78,6 +78,9 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     add_action("insert-xref", [this] { on_insert_xref(); });   // s128
     add_action("edit-xref", [this] { on_edit_xref(); });       // s130
     add_action("xrefs-panel", [this] { open_xrefs_panel(); }); // s133
+    add_action("index-mark", [this] { on_index_mark(); });     // s138
+    add_action("edit-index", [this] { on_edit_index(); });
+    add_action("new-index", [this] { on_new_index(); });
     add_action("edit-footnote", [this] {
         int p = 0, k = 0;
         auto& c = m_canvas_view.canvas();

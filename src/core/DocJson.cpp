@@ -163,6 +163,8 @@ json to(const Record& r) {
                         if (!m.sub.empty()) jm["sub"] = m.sub;
                         if (!m.see.empty()) jm["see"] = m.see;   // s136
                         if (m.also) jm["also"] = true;
+                        if (m.span != IndexSpan::Point) jm["span"] = static_cast<int>(m.span);   // s139
+                        if (m.span == IndexSpan::Paragraphs) jm["count"] = m.count;
                         xs.push_back(jm);
                     }
                     jp["index"] = xs;
@@ -393,7 +395,8 @@ std::optional<Record> from(const json& j) {
                     for (const auto& a : p.at("anchors")) para.anchors.push_back(a.is_string() ? a.get<std::string>() : std::string{});
                 if (p.contains("index") && p.at("index").is_array())   // s134
                     for (const auto& m : p.at("index")) para.index.push_back({val<std::string>(m, "term", ""), val<std::string>(m, "sub", ""),
-                                             val<std::string>(m, "see", ""), val(m, "also", false)});   // s136
+                                             val<std::string>(m, "see", ""), val(m, "also", false),
+                                             static_cast<IndexSpan>(std::clamp(val(m, "span", 0), 0, 4)), val(m, "count", 1)});   // s136, s139
                 fit_marks(para);
                 v.paras.push_back(std::move(para));
             }

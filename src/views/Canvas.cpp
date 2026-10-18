@@ -1281,9 +1281,22 @@ std::string Canvas::ref_tip(double x, double y) const {   // s130
     const auto* f = frame.empty() ? nullptr : m_doc.as<core::Frame>(frame);
     const auto* st = f && !f->story.empty() ? m_doc.as<core::Story>(f->story) : nullptr;
     if (!st) return {};
-    if (std::none_of(st->paras.begin(), st->paras.end(), [](const core::Para& p) { return !p.refs.empty(); })) return {};
+    if (std::none_of(st->paras.begin(), st->paras.end(), [](const core::Para& p) { return !p.refs.empty() || !p.index.empty(); })) return {};
     const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
     const auto pos = layout::hit_text(m_doc, f->story, flows().get(m_doc, f->story), frame, dx - lr.x, dy - lr.y);
+    if (const auto ix = core::doc::index_near(*st, pos); ix.k >= 0) {   // s138: an index mark
+        const auto& m = st->paras[static_cast<std::size_t>(ix.para)].index[static_cast<std::size_t>(ix.k)];
+        std::string t = "Index: " + m.term + (m.sub.empty() ? "" : " \u203a " + m.sub);
+        if (!m.see.empty()) t += (m.also ? ". See also " : ". See ") + m.see;
+        switch (m.span) {   // s139
+        case core::IndexSpan::Point: break;
+        case core::IndexSpan::Paragraph: t += " (its paragraph)"; break;
+        case core::IndexSpan::NextHeading: t += " (to the next heading)"; break;
+        case core::IndexSpan::Paragraphs: t += " (" + std::to_string(m.count) + " paragraphs)"; break;
+        case core::IndexSpan::StoryEnd: t += " (to the story's end)"; break;
+        }
+        return t;
+    }
     const auto r = core::doc::ref_near(*st, pos);
     if (r.k < 0) return {};
     return layout::ref_where(m_doc, st->paras[static_cast<std::size_t>(r.para)].refs[static_cast<std::size_t>(r.k)], flows(), f->story);
@@ -1733,6 +1746,29 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
             cr->fill();
         }
     }
+    // s138: index marks -- unseen on the page, shown while typing: a small
+    // orange flag at each (its words in the tooltip).
+    if (const auto* st = edit_story())
+        for (int p = 0; p < static_cast<int>(st->paras.size()); ++p) {
+            const auto& t = st->paras[static_cast<std::size_t>(p)].text;
+            for (auto i = t.find(core::kMarkIndex); i != std::string::npos; i = t.find(core::kMarkIndex, i + 3)) {
+                const auto c = layout::caret_at(m_doc, m_edit_story, flow, {p, static_cast<int>(i)});
+                const Rect lr = c.ok ? core::frame_in_layout(m_doc, m_placed, c.frame) : Rect{};
+                if (!c.ok || lr.w <= 0) continue;
+                const Rect sr = m_vp.to_screen(Rect{lr.x + c.x, lr.y + c.y, 0, c.h});
+                const double x = std::round(sr.x) + 0.5, s = std::clamp(sr.h * 0.22, 2.5, 6.0);
+                cr->set_source_rgba(0.93, 0.47, 0.05, 0.95);
+                cr->set_line_width(1);
+                cr->move_to(x, sr.y + sr.h * 0.15);
+                cr->line_to(x, sr.b());
+                cr->stroke();
+                cr->move_to(x, sr.y + sr.h * 0.15);
+                cr->line_to(x + s * 1.4, sr.y + sr.h * 0.15 + s * 0.6);
+                cr->line_to(x, sr.y + sr.h * 0.15 + s * 1.2);
+                cr->close_path();
+                cr->fill();
+            }
+        }
     if (m_caret_on && lo == hi) {
         const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
         const Rect lr = c.ok ? core::frame_in_layout(m_doc, m_placed, c.frame) : Rect{};

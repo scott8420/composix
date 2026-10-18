@@ -692,7 +692,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 for (const auto& p : d.as<Story>(sid)->paras) now += static_cast<int>(p.index.size());
         }
         const bool never = l.built_entries < 0;
-        bool stale = !never && l.built_entries != now;
+        bool stale = !never && l.kind != ListKind::Index && l.built_entries != now;   // s138: an index counts entries, not marks -- its staleness is stale_lists' alone
         std::string built = never ? "Never" : stale ? "Stale — built with " + std::to_string(l.built_entries)
                                                     : "Current";
         if (stale_lists && (l.kind == ListKind::Contents || l.kind == ListKind::Index) && !never) {   // s135: an index too   // s089: what Build would change
@@ -726,6 +726,18 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 const auto* cs = d.as<Style>(cur);
                 entry_rows.push_back({l.from_styles.size() > 1 ? "Level " + lv + " in" : "Entries in", cs ? cs->name : "Automatic",
                                       "list_entry", ch});
+            }
+            entry_rows.push_back({"Page numbers", l.numbers ? "Yes" : "No", "list_numbers", {{"1", "Yes"}, {"0", "No"}}});
+        }
+        if (l.kind == ListKind::Index) {   // s138: an index's two levels -- entries and the sub-entries under them
+            for (int k = 0; k < 2; ++k) {
+                const std::string lv = std::to_string(k + 1);
+                std::vector<Choice> ch{{lv + ":", "Automatic"}};
+                for (const auto& s2 : d.ids_of<Style>())
+                    if (d.as<Style>(s2)->kind == StyleKind::Paragraph) ch.push_back({lv + ":" + s2, d.as<Style>(s2)->name});
+                const std::string cur = static_cast<std::size_t>(k) < l.entry_styles.size() ? l.entry_styles[static_cast<std::size_t>(k)] : std::string{};
+                const auto* cs = d.as<Style>(cur);
+                entry_rows.push_back({k == 0 ? "Entries in" : "Sub-entries in", cs ? cs->name : "Automatic", "list_entry", ch});
             }
             entry_rows.push_back({"Page numbers", l.numbers ? "Yes" : "No", "list_numbers", {{"1", "Yes"}, {"0", "No"}}});
         }
