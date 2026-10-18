@@ -7754,6 +7754,93 @@ int main() {
         check("undo all: no index", !d.as<core::GenList>(ix) && d.strays() == 0);
     }
 
+    {
+        std::cout << "\n-- the index: ranges, see, sorting (s136) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // A frame with a story on pages 4, 5, 6 and 8 (numbered so): "x" with marks.
+        const auto page_numbered = [&](const std::string& f) {
+            for (const auto& pg : d.pages()) if (d.folio(pg) == f) return pg;
+            return std::string{};
+        };
+        std::map<std::string, std::string> story_on;
+        for (const char* f : {"4", "5", "6", "8"}) {
+            const auto pg = page_numbered(f);
+            const auto fr = D::add_frame(j, d, pg, core::FrameKind::Text, {72, 72, 200, 100});
+            story_on[f] = d.as<core::Frame>(fr)->story;
+            D::edit_text(j, d, story_on[f], {0, 0}, {0, 0}, "x");
+        }
+        for (const char* f : {"4", "5", "6", "8"}) D::insert_index_mark(j, d, story_on[f], {0, 1}, "Ships");
+        for (const char* f : {"4", "5"}) D::insert_index_mark(j, d, story_on[f], {0, 1}, "Sails");
+        L::FlowCache fl;
+        const auto find = [&](const std::string& term, const std::string& sub = {}) {
+            for (const auto& e : L::index_entries(d, fl)) if (e.term == term && e.sub == sub) return e;
+            return L::IndexEntry{};
+        };
+        check("three pages in a row and more: \"4\u20136, 8\"", find("Ships").pages_text == "4\u20136, 8", find("Ships").pages_text);
+        check("two in a row stay apart: \"4, 5\"", find("Sails").pages_text == "4, 5", find("Sails").pages_text);
+        // See and see also.
+        D::insert_index_mark(j, d, "story.1", {1, 0}, core::IndexMark{"Charts", "", "Maps"});
+        D::insert_index_mark(j, d, "story.1", {1, 0}, core::IndexMark{"Ships", "", "Boats", true});
+        D::insert_index_mark(j, d, "story.1", {1, 0}, core::IndexMark{"Ships", "", "Anchors", true});
+        check("a see: no page of its own", find("Charts").pages.empty() && find("Charts").see == std::vector<std::string>{"Maps"});
+        check("see also: sorted, the pages kept", find("Ships").also == (std::vector<std::string>{"Anchors", "Boats"}) &&
+                                                  find("Ships").pages.size() == 4);
+        const auto ix = D::add_list(j, d, core::ListKind::Index, "Index", d.pages().back());
+        const auto en = L::list_entries(d, fl, ix);
+        std::map<std::string, std::string> line;
+        for (const auto& e : en) line[e.text] = e.folio;
+        check("written: \"Charts. See Maps\"", line.count("Charts. See Maps") && line["Charts. See Maps"].empty());
+        check("written: \"Ships, 4\u20136, 8. See also Anchors; Boats\"", line["Ships"] == "4\u20136, 8. See also Anchors; Boats", line["Ships"]);
+        L::build_list(j, d, ix);
+        {
+            const auto& w = d.as<core::Story>(d.as<core::GenList>(ix)->story)->paras;
+            bool ok = false;
+            for (const auto& p : w) ok = ok || p.text == "Ships, 4\u20136, 8. See also Anchors; Boats";
+            check("built: the line as written", ok);
+            L::FlowCache f2;
+            bool stale = false;
+            for (const auto& x : L::stale_lists(d, f2)) stale = stale || x.list == ix;
+            check("built: current", !stale);
+        }
+        // Sorting: an accented initial with its letter, after the plain word.
+        D::insert_index_mark(j, d, "story.1", {2, 0}, "\u00c9clair");
+        D::insert_index_mark(j, d, "story.1", {2, 0}, "eagle");
+        D::insert_index_mark(j, d, "story.1", {2, 0}, "echo");
+        D::insert_index_mark(j, d, "story.1", {2, 0}, "eclair");
+        std::vector<std::string> order;
+        for (const auto& e : L::index_entries(d, fl)) if (e.sub.empty()) order.push_back(e.term);
+        const auto at = [&](const std::string& t) { return std::find(order.begin(), order.end(), t) - order.begin(); };
+        std::string ord;
+        for (const auto& o : order) ord += o + " ";
+        check("\u00c9clair with the e's: just after eclair, before Sails (not after z)",
+              at("eagle") < at("echo") && at("echo") < at("eclair") && at("eclair") + 1 == at("\u00c9clair") && at("\u00c9clair") < at("Sails"), ord);
+        bool e_head = false, accented_head = false;
+        for (const auto& e : L::list_entries(d, fl, ix)) {
+            e_head = e_head || (e.level == 0 && e.text == "E");
+            accented_head = accented_head || (e.level == 0 && e.text == "\u00c9");
+        }
+        check("one letter heading E for both", e_head && !accented_head);
+        // Kept: the see in the file; changed keeps it unless changed.
+        {
+            core::Doc e;
+            std::string err;
+            check("json: see and also kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        }
+        int k0 = 0;
+        while (d.as<core::Story>("story.1")->paras[1].index[static_cast<std::size_t>(k0)].term != "Charts") ++k0;
+        check("renamed by term: its see kept", D::set_index_mark(j, d, "story.1", 1, k0, "Charts and plans") &&
+                                               d.as<core::Story>("story.1")->paras[1].index[static_cast<std::size_t>(k0)].see == "Maps");
+        check("a see emptied: also off", D::set_index_mark(j, d, "story.1", 1, k0, core::IndexMark{"Charts", "", " ", true}) &&
+                                         !d.as<core::Story>("story.1")->paras[1].index[static_cast<std::size_t>(k0)].also);
+        while (j.can_undo()) j.undo();
+        check("undo all", d.strays() == 0 && d.as<core::Story>("story.1")->paras[1].index.empty());
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

@@ -2663,18 +2663,32 @@ std::string trim_ws(std::string t) {
 }
 }  // namespace
 
+namespace {
+IndexMark tidy(IndexMark m) {   // s136: each part trimmed
+    m.term = trim_ws(m.term);
+    m.sub = trim_ws(m.sub);
+    m.see = trim_ws(m.see);
+    if (m.see.empty()) m.also = false;
+    return m;
+}
+}  // namespace
+
 TextPos insert_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& term,
                           const std::string& sub) {   // s134
+    return insert_index_mark(j, d, story, at, IndexMark{term, sub});
+}
+
+TextPos insert_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const IndexMark& mark) {   // s136
     const auto* st = d.as<Story>(story);
-    const auto t = trim_ws(term);
-    if (!st || st->paras.empty() || t.empty()) return at;
+    const auto m = tidy(mark);
+    if (!st || st->paras.empty() || m.term.empty()) return at;
     Story s = *st;
     at = clamp_pos(s, at);
     auto& para = s.paras[static_cast<std::size_t>(at.para)];
     fit_marks(para);
     const int k = marks_in(para.text, kMarkIndex, 0, static_cast<std::size_t>(at.byte));
     put_mark(s, at, kMarkIndex);
-    para.index.insert(para.index.begin() + k, IndexMark{t, trim_ws(sub)});
+    para.index.insert(para.index.begin() + k, m);
     j.run("Index Entry", {story}, [&] { d.put(story, s); });
     return {at.para, at.byte + 3};
 }
@@ -2694,13 +2708,23 @@ IndexAt index_near(const Story& s, TextPos at) {   // s134
 bool set_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const std::string& term,
                     const std::string& sub) {   // s134
     const auto* st = d.as<Story>(story);
-    const auto t = trim_ws(term);
-    if (!st || t.empty() || para < 0 || para >= static_cast<int>(st->paras.size()) || k < 0 ||
+    if (!st || para < 0 || para >= static_cast<int>(st->paras.size()) || k < 0 ||
+        k >= static_cast<int>(st->paras[static_cast<std::size_t>(para)].index.size()))
+        return false;
+    IndexMark m = st->paras[static_cast<std::size_t>(para)].index[static_cast<std::size_t>(k)];   // its see kept
+    m.term = term;
+    m.sub = sub;
+    return set_index_mark(j, d, story, para, k, m);
+}
+
+bool set_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const IndexMark& mark) {   // s136
+    const auto* st = d.as<Story>(story);
+    const auto want = tidy(mark);
+    if (!st || want.term.empty() || para < 0 || para >= static_cast<int>(st->paras.size()) || k < 0 ||
         k >= static_cast<int>(st->paras[static_cast<std::size_t>(para)].index.size()))
         return false;
     Story s = *st;
     auto& m = s.paras[static_cast<std::size_t>(para)].index[static_cast<std::size_t>(k)];
-    const IndexMark want{t, trim_ws(sub)};
     if (m == want) return false;
     m = want;
     j.run("Index Entry", {story}, [&] { d.put(story, s); });

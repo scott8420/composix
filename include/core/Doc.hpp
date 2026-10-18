@@ -284,9 +284,14 @@ struct XRef {
 // s134: an index entry marked in the text (kMarkIndex): its term, and a
 // sub-entry under it if any ("Harbors" / "fees"). Kept with its paragraph
 // as notes and references are (the k-th mark is index[k]).
+// s136: `see` -- the entry sends the reader to another ("Charts. See
+// Maps"): the mark adds no page. With `also`, after the entry's pages
+// ("Harbor, 1, 3. See also Ports").
 struct IndexMark {
     std::string term;
     std::string sub;
+    std::string see;                     // s136
+    bool        also = false;            // s136
     bool operator==(const IndexMark&) const = default;
 };
 // s129: the pattern a reference shows by (Custom: its own).
@@ -889,6 +894,7 @@ bool retarget_ref(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, 
 // (`at` when nothing changed).
 TextPos insert_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& term,
                           const std::string& sub = {});
+TextPos insert_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const IndexMark& m);   // s136
 // s134: the index mark at `at` or ending there: its paragraph and index; k -1 none.
 struct IndexAt { int para = -1, k = -1, byte = -1; };
 IndexAt index_near(const Story& s, TextPos at);
@@ -896,6 +902,7 @@ IndexAt index_near(const Story& s, TextPos at);
 // false if nothing changed.
 bool set_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const std::string& term,
                     const std::string& sub = {});
+bool set_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k, const IndexMark& m);   // s136
 // Where an anchor is: its story, paragraph and byte; story "" when none.
 struct AnchorAt { Doc::Id story; TextPos at; };
 AnchorAt find_anchor(const Doc& d, const std::string& id);

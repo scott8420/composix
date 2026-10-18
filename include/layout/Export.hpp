@@ -124,6 +124,8 @@ struct IndexEntry {
     std::string term, sub;                 // sub "": the term's own line
     std::vector<std::string> pages;        // page ids
     std::vector<std::string> folios;       // ... as numbered
+    std::string pages_text;                // s136: the folios, runs of 3+ joined ("1, 3\u20135")
+    std::vector<std::string> see, also;    // s136: where else to look (sorted)
     int marks = 0;
     bool operator==(const IndexEntry&) const = default;
 };

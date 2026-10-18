@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <tuple>
 #include <cctype>
 #include <set>
 
@@ -351,10 +352,29 @@ std::string folded(const std::string& t) {
 }
 }  // namespace
 
+// s136: how an index sorts a word -- folded, with Latin accents set aside
+// (\u00e9 with e, \u00f8 with o, \u00df with s): "\u00c9clair" between "eagle" and "echo".
+std::string collated(const std::string& t) {
+    static constexpr const char* base = "aaaaaaaceeeeiiiidnooooo0ouuuuytsaaaaaaaceeeeiiiidnooooo0ouuuuytyaaaaaaccccccccddddeeeeeeeeeegggggggghhhhiiiiiiiiii00jjkkkllllllllllnnnnnnnnnoooooooorrrrrrssssssssttttttuuuuuuuuuuuuwwyyyzzzzzzs";   // U+00C0..U+017F, '0' none
+    std::string f = folded(t), out;
+    for (std::size_t i = 0; i < f.size();) {
+        const auto c = static_cast<unsigned char>(f[i]);
+        if ((c >> 5) == 6 && i + 1 < f.size()) {
+            const char32_t cp = ((c & 0x1F) << 6) | (static_cast<unsigned char>(f[i + 1]) & 0x3F);
+            if (cp >= 0xC0 && cp < 0x180 && base[cp - 0xC0] != '0') { out += base[cp - 0xC0]; i += 2; continue; }
+        }
+        out += f[i++];
+    }
+    return out;
+}
+
 std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   // s134
     struct Key {
-        std::string ft, fs;   // folded
-        bool operator<(const Key& o) const { return ft != o.ft ? ft < o.ft : fs < o.fs; }
+        std::string ct, cs, ft, fs;   // s136: collated first, then folded (a tie: \u00e9clair after eclair)
+        bool operator<(const Key& o) const { return std::tie(ct, cs, ft, fs) < std::tie(o.ct, o.cs, o.ft, o.fs); }
+    };
+    const auto key = [](const std::string& term, const std::string& sub) {
+        return Key{collated(term), collated(sub), folded(term), folded(sub)};
     };
     std::map<Key, IndexEntry> by;
     for (const auto& sid : d.ids_of<core::Story>()) {
@@ -377,12 +397,17 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
                 }
                 // A sub-entry's term heads it (a line of its own, perhaps with no pages).
                 if (!m.sub.empty()) {
-                    auto& head = by[{folded(m.term), {}}];
+                    auto& head = by[key(m.term, {})];
                     if (head.term.empty()) head.term = m.term;
                 }
-                auto& e = by[{folded(m.term), folded(m.sub)}];
+                auto& e = by[key(m.term, m.sub)];
                 if (e.term.empty()) { e.term = m.term; e.sub = m.sub; }
                 ++e.marks;
+                if (!m.see.empty()) {   // s136: sends the reader on -- no page of its own
+                    auto& to = m.also ? e.also : e.see;
+                    if (std::find(to.begin(), to.end(), m.see) == to.end()) to.push_back(m.see);
+                    continue;
+                }
                 if (!page.empty() && std::find(e.pages.begin(), e.pages.end(), page) == e.pages.end()) e.pages.push_back(page);
             }
         }
@@ -391,6 +416,24 @@ std::vector<IndexEntry> index_entries(const core::Doc& d, FlowCache& flows) {   
     for (auto& [key, e] : by) {
         std::sort(e.pages.begin(), e.pages.end(), [&](const std::string& a, const std::string& b) { return d.page_index(a) < d.page_index(b); });
         for (const auto& pg : e.pages) e.folios.push_back(d.folio(pg));
+        // s136: runs of three or more pages in a row as a range ("3\u20135"): the
+        // pages next in the book and their numbers next too.
+        const auto num = [](const std::string& f) {
+            if (f.empty() || f.size() > 6 || !std::all_of(f.begin(), f.end(), [](char c) { return c >= '0' && c <= '9'; })) return -1;
+            return std::stoi(f);
+        };
+        for (std::size_t a = 0; a < e.pages.size();) {
+            std::size_t b = a;
+            while (b + 1 < e.pages.size() && d.page_index(e.pages[b + 1]) == d.page_index(e.pages[b]) + 1 && num(e.folios[b]) >= 0 &&
+                   num(e.folios[b + 1]) == num(e.folios[b]) + 1)
+                ++b;
+            if (!e.pages_text.empty()) e.pages_text += ", ";
+            if (b - a >= 2) e.pages_text += e.folios[a] + "\u2013" + e.folios[b];
+            else for (std::size_t q = a; q <= b; ++q) e.pages_text += (q > a ? ", " : "") + e.folios[q];
+            a = b + 1;
+        }
+        std::sort(e.see.begin(), e.see.end(), [](const std::string& x, const std::string& y) { return collated(x) < collated(y); });
+        std::sort(e.also.begin(), e.also.end(), [](const std::string& x, const std::string& y) { return collated(x) < collated(y); });
         out.push_back(std::move(e));
     }
     return out;
@@ -538,23 +581,38 @@ std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& fl
     const auto* l = d.as<core::GenList>(list);
     if (l && l->kind == core::ListKind::Index) {   // s135: the index marks' entries, a letter heading each initial
         std::string group;
+        const auto joined = [](const std::vector<std::string>& v) {
+            std::string t;
+            for (const auto& x : v) t += (t.empty() ? "" : "; ") + x;
+            return t;
+        };
         for (const auto& e : index_entries(d, flows)) {
-            std::string folios;
-            for (const auto& f : e.folios) folios += (folios.empty() ? "" : ", ") + f;
+            // s136: its pages (runs joined), then where else to look.
+            std::string folios = e.pages_text;
+            std::string words = e.sub.empty() ? e.term : e.sub;
+            if (!e.see.empty()) {
+                if (folios.empty()) words += ". See " + joined(e.see);   // sent on, nothing here
+                else folios += ". See also " + joined(e.see);
+            }
+            if (!e.also.empty()) {
+                if (folios.empty()) words += ". See also " + joined(e.also);
+                else folios += ". See also " + joined(e.also);
+            }
             if (e.sub.empty()) {
                 // The initial: its first character, folded; shown upper case (ASCII) or as written.
                 const auto c = static_cast<unsigned char>(e.term[0]);
                 const std::size_t n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
                 const auto first = e.term.substr(0, std::min(n, e.term.size()));
-                const auto key = folded(first);
+                const auto key = collated(first);   // s136: \u00c9 with E
                 if (key != group) {
                     group = key;
                     std::string shown = first;
-                    if (n == 1) shown = std::string(1, static_cast<char>(std::isalpha(c) ? std::toupper(c) : c));
+                    if (key.size() == 1 && std::isalpha(static_cast<unsigned char>(key[0])))
+                        shown = std::string(1, static_cast<char>(std::toupper(static_cast<unsigned char>(key[0]))));
                     out.push_back({shown, "", 0});
                 }
             }
-            out.push_back({e.sub.empty() ? e.term : e.sub, folios, e.sub.empty() ? 1 : 2});
+            out.push_back({words, folios, e.sub.empty() ? 1 : 2});
         }
         return out;
     }

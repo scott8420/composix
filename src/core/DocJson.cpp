@@ -161,6 +161,8 @@ json to(const Record& r) {
                     for (const auto& m : p.index) {
                         json jm = {{"term", m.term}};
                         if (!m.sub.empty()) jm["sub"] = m.sub;
+                        if (!m.see.empty()) jm["see"] = m.see;   // s136
+                        if (m.also) jm["also"] = true;
                         xs.push_back(jm);
                     }
                     jp["index"] = xs;
@@ -390,7 +392,8 @@ std::optional<Record> from(const json& j) {
                 if (p.contains("anchors") && p.at("anchors").is_array())
                     for (const auto& a : p.at("anchors")) para.anchors.push_back(a.is_string() ? a.get<std::string>() : std::string{});
                 if (p.contains("index") && p.at("index").is_array())   // s134
-                    for (const auto& m : p.at("index")) para.index.push_back({val<std::string>(m, "term", ""), val<std::string>(m, "sub", "")});
+                    for (const auto& m : p.at("index")) para.index.push_back({val<std::string>(m, "term", ""), val<std::string>(m, "sub", ""),
+                                             val<std::string>(m, "see", ""), val(m, "also", false)});   // s136
                 fit_marks(para);
                 v.paras.push_back(std::move(para));
             }
