@@ -6926,6 +6926,90 @@ int main() {
         check("no notes: no endnotes title", none);
     }
 
+    {
+        std::cout << "\n-- chapter endnotes (s122) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::insert_note(j, d, "story.1", {1, 4}, "Chapter One's note.");   // the sample's own is in Chapter Two
+        check("notes at: End of each chapter, one step", D::set_note_place(j, d, core::NoteAt::ChapterEnd, "Notes"));
+        {
+            core::Doc e;
+            std::string err;
+            check("json: chapters kept", core::from_json(e, core::to_json(d), &err) && e.settings().note_at == core::NoteAt::ChapterEnd, err);
+        }
+        // Where each piece is: the frame index; and where each paragraph's lines are.
+        struct At { std::size_t fi; const L::NotePlace* np; };
+        const auto places = [&](const L::StoryFlow& f) {
+            std::vector<At> out;
+            for (std::size_t i = 0; i < f.frames.size(); ++i)
+                for (const auto& np : f.frames[i].notes) out.push_back({i, &np});
+            return out;
+        };
+        const auto frame_of_para = [&](const L::StoryFlow& f, int p) {
+            for (std::size_t i = 0; i < f.frames.size(); ++i)
+                for (const auto& l : f.frames[i].lines) if (l.para == p) return static_cast<int>(i);
+            return -1;
+        };
+        L::FlowCache flows;
+        {
+            const auto& f = flows.get(d, "story.1");
+            const auto ps = places(f);
+            const int ch2 = frame_of_para(f, 4), ch1end = frame_of_para(f, 3);
+            bool ok = ps.size() == 4 && ps[0].np->k == -1 && ps[1].np->para == 1 && ps[1].np->number == 1 && ps[2].np->k == -1 &&
+                      ps[3].np->para == 5 && ps[3].np->number == 2;
+            check("each chapter: its title and notes; numbered through the story", ok, std::to_string(ps.size()));
+            if (ok) {
+                check("Chapter One's notes before Chapter Two, after its text",
+                      static_cast<int>(ps[1].fi) >= ch1end && static_cast<int>(ps[1].fi) < ch2);
+                check("Chapter Two's at the story's end", static_cast<int>(ps[3].fi) >= frame_of_para(f, 5));
+                bool clear = true;
+                for (const auto& a : ps)
+                    for (const auto& l : f.frames[a.fi].lines)
+                        if (l.col == a.np->col && l.y + l.h > a.np->y + 0.01 && l.y < a.np->y + a.np->h - 0.01) clear = false;
+                check("chapter endnotes clear of the text", clear);
+            }
+        }
+        // A long note in Chapter One: runs on into the page the chapter break passes (page 2), Chapter Two still on its right page.
+        std::string longw;
+        for (int i = 1; i <= 45; ++i) longw += "Clause " + std::to_string(i) + " of the harbour ordinance applies to every vessel. ";
+        D::set_note_text(j, d, "story.1", 1, 0, longw);
+        {
+            const auto& f = flows.get(d, "story.1");
+            std::vector<std::size_t> fis;
+            for (const auto& a : places(f)) if (a.np->para == 1 && a.np->k == 0) fis.push_back(a.fi);
+            const int ch2 = frame_of_para(f, 4);
+            bool before = !fis.empty();
+            for (auto fi : fis) before = before && static_cast<int>(fi) < ch2;
+            const auto* p4 = ch2 >= 0 ? d.as<core::Frame>(f.frames[static_cast<std::size_t>(ch2)].frame) : nullptr;
+            check("a long chapter note runs on, all of it before Chapter Two", fis.size() >= 2 && before, std::to_string(fis.size()) + " pieces");
+            check("Chapter Two still opens a right-hand page", p4 && d.side_of(p4->owner) == core::Side::Right);
+        }
+        // Re-flow after an edit in Chapter One == whole.
+        {
+            const core::Story before = *d.as<core::Story>("story.1");
+            const auto old = L::flow_story(d, "story.1");
+            D::edit_text(j, d, "story.1", {2, 0}, {2, 0}, "Even so, ", "Typing", "");
+            const auto re = L::reflow_story(d, "story.1", before, old);
+            const auto wf = L::flow_story(d, "story.1");
+            bool same = re.frames.size() == wf.frames.size() && re.overset == wf.overset;
+            for (std::size_t i = 0; same && i < re.frames.size(); ++i) {
+                same = re.frames[i].notes.size() == wf.frames[i].notes.size() && re.frames[i].lines.size() == wf.frames[i].lines.size() &&
+                       re.frames[i].end_from_in == wf.frames[i].end_from_in;
+                for (std::size_t k = 0; same && k < re.frames[i].notes.size(); ++k)
+                    same = re.frames[i].notes[k].from == wf.frames[i].notes[k].from && std::abs(re.frames[i].notes[k].y - wf.frames[i].notes[k].y) < 1e-9;
+            }
+            check("re-flow with chapter endnotes == whole flow", same);
+        }
+        D::set_note_place(j, d, core::NoteAt::Foot, "Notes");
+        bool any = false;
+        for (const auto& ft : flows.get(d, "story.1").frames) for (const auto& np : ft.notes) any = any || np.end;
+        check("back to the foot: no endnotes", !any);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

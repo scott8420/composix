@@ -90,6 +90,7 @@ struct FrameText {
     int               note_from = 0;   // s111: notes numbered on its page (section) before it, when numbering restarts
     std::vector<NoteRun> carry_in;     // s117: notes running on into this frame
     bool              ending_in = false;   // s120: ... as endnotes (the story's text ended before it)
+    int               end_from_in = 0;     // s122: notes from this paragraph on not yet set as endnotes
 };
 
 struct StoryFlow {

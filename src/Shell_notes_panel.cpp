@@ -85,7 +85,7 @@ void Shell::open_notes_panel() {  // helper
         grid->attach(*title, 0, r++, 2);
 
         grid->attach(*group_label("Where"), 0, r++, 2);
-        m_np_at = drop("notes.at", {"Foot of the column", "End of the story"});
+        m_np_at = drop("notes.at", {"Foot of the column", "End of the story", "End of each chapter"});   // s122
         add("Notes at", *m_np_at);
         m_np_area = spin("notes.area", 10, 100, 5, 0);
         add("Footnote area (%)", *m_np_area);
@@ -128,8 +128,7 @@ void Shell::open_notes_panel() {  // helper
         };
         const auto place = [this] {
             if (m_np_syncing) return;
-            core::doc::set_note_place(m_journal, m_doc, m_np_at->get_selected() == 1 ? core::NoteAt::StoryEnd : core::NoteAt::Foot,
-                                      m_np_title->get_text());
+            core::doc::set_note_place(m_journal, m_doc, static_cast<core::NoteAt>(std::min(2u, m_np_at->get_selected())), m_np_title->get_text());
         };
         m_np_at->property_selected().signal_changed().connect(place);
         m_np_area->signal_value_changed().connect([this] {
@@ -165,8 +164,8 @@ void Shell::notes_panel_sync() {  // helper
     if (!m_np) return;
     const auto& s = m_doc.settings();
     m_np_syncing = true;
-    const bool end = s.note_at == core::NoteAt::StoryEnd;
-    m_np_at->set_selected(end ? 1 : 0);
+    const bool end = s.note_at != core::NoteAt::Foot;
+    m_np_at->set_selected(static_cast<guint>(s.note_at));
     m_np_area->set_value(s.note_area);
     if (!m_np_title->has_focus()) m_np_title->set_text(s.note_title);
     m_np_restart->set_selected(static_cast<guint>(s.note_restart));
@@ -186,7 +185,8 @@ void Shell::notes_panel_sync() {  // helper
     for (const auto& id : m_doc.ids_of<core::Story>())
         for (const auto& p : m_doc.as<core::Story>(id)->paras) notes += static_cast<int>(p.notes.size());
     m_np_note->set_text(std::to_string(notes) + (notes == 1 ? " note" : " notes") + " in the document." +
-                        (end ? " Endnotes follow each story's last paragraph, numbered through the story."
+                        (s.note_at == core::NoteAt::ChapterEnd ? " Each chapter's notes come before the next paragraph that starts a new page (and at the story's end), numbered through the story."
+                         : end ? " Endnotes follow each story's last paragraph, numbered through the story."
                              : " A note that doesn't fit in the area runs on to the next column."));
     m_np_syncing = false;
     m_np_preview->queue_draw();
@@ -220,7 +220,7 @@ void Shell::draw_notes_preview(const Cairo::RefPtr<Cairo::Context>& cr, int cw, 
     };
     const double lead = 9, nlead = 7;
     const auto label = [&](int n) { return core::note_label(n, s.note_style); };
-    if (s.note_at == core::NoteAt::StoryEnd) {
+    if (s.note_at != core::NoteAt::Foot) {
         double y = top;
         for (int i = 0; i < 9; ++i, y += lead) bar(y, i == 8 ? w * 0.55 : w, 4, 0.22);
         y += 12;

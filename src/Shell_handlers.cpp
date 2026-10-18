@@ -990,7 +990,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "dnote_at" || key == "dnote_title") {   // s120
             auto at = m_doc.settings().note_at;
             auto title = m_doc.settings().note_title;
-            if (key == "dnote_at") at = choice == "1" ? core::NoteAt::StoryEnd : core::NoteAt::Foot;
+            if (key == "dnote_at") at = static_cast<core::NoteAt>(std::clamp(std::stoi(choice), 0, 2));   // s122: chapters
             else title = choice;
             did = core::doc::set_note_place(m_journal, m_doc, at, title);
         } else if (key == "dnote_area") {   // s117

@@ -229,8 +229,9 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                  c.text = true;
                                  return c;
                              }(),
-                             {"Notes at", st.note_at == NoteAt::StoryEnd ? "End of the story" : "Foot of the column",   // s120
-                              "dnote_at", {{"0", "Foot of the column"}, {"1", "End of the story"}}},
+                             {"Notes at", st.note_at == NoteAt::StoryEnd ? "End of the story"   // s120
+                                          : st.note_at == NoteAt::ChapterEnd ? "End of each chapter" : "Foot of the column",   // s122
+                              "dnote_at", {{"0", "Foot of the column"}, {"1", "End of the story"}, {"2", "End of each chapter"}}},
                              [&] {
                                  Field t{"Endnotes title", st.note_title, "dnote_title", {}};
                                  t.text = true;

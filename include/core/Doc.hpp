@@ -109,7 +109,7 @@ enum class NoteRestart { Story, Page, Section };
 enum class NoteStyle   { Arabic, RomanLower, AlphaLower, Symbols };
 // s120: where notes are set -- each column's foot, or all of them after the
 // story's last paragraph (endnotes, numbered through the story).
-enum class NoteAt { Foot, StoryEnd };
+enum class NoteAt { Foot, StoryEnd, ChapterEnd };   // s122: ChapterEnd -- before each paragraph that starts a new page, and at the story's end
 
 struct Settings {
     std::string title  = "Untitled";

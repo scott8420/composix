@@ -212,7 +212,7 @@ std::optional<Record> from(const json& j) {
         v.note_rule_w = std::clamp(val(j, "note_rule_w", 0.5), 0.1, 6.0);
         v.note_space = std::clamp(val(j, "note_space", 0.0), 0.0, 36.0);
         v.note_cont = val(j, "note_cont", std::string{});
-        v.note_at = static_cast<NoteAt>(std::clamp(val(j, "note_at", 0), 0, 1));   // s120
+        v.note_at = static_cast<NoteAt>(std::clamp(val(j, "note_at", 0), 0, 2));   // s120
         v.note_title = val(j, "note_title", std::string("Notes"));
         if (j.contains("export")) {   // s032
             const auto& e = j.at("export");

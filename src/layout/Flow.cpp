@@ -280,6 +280,7 @@ struct Cursor {
     int start = 0;
     std::vector<NoteRun> carry;   // s117: notes running on into what comes next
     bool ending = false;          // s120: the carry is the endnotes (set in the column, not the foot)
+    int  end_from = 0;            // s122: the first paragraph whose notes aren't set as endnotes yet
 };
 
 // s018: the free spans of [x0, x1) across the band [y0, y1) -- what the
@@ -602,7 +603,7 @@ void place_notes(const core::Doc& d, const core::Story& st, const core::Frame& f
     std::vector<NotePlace> here = cn.cont;
     for (auto& x : here) { x.col = col; x.x = cx; x.w = cw; }
     std::vector<NoteRun> out = cn.left;
-    const bool endnotes = d.settings().note_at == core::NoteAt::StoryEnd;   // s120: none at the foot
+    const bool endnotes = d.settings().note_at != core::NoteAt::Foot;   // s120 / s122: none at the foot
     for (const auto& l : ft.lines) {
         if (endnotes) break;
         if (l.col != col || l.para < 0 || l.para >= static_cast<int>(st.paras.size())) continue;
@@ -620,7 +621,7 @@ void place_notes(const core::Doc& d, const core::Story& st, const core::Frame& f
             here.push_back(np);
         }
     }
-    c.carry = std::move(out);
+    if (!c.ending) c.carry = std::move(out);   // s122: an endnotes carry isn't the foot's to change
     if (here.empty()) return;
     const double space = std::max(0.0, d.settings().note_space);   // s118: between notes
     double total = space * static_cast<double>(here.size() - 1);
@@ -695,7 +696,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
         const auto take_notes = [&](int p, int a, int b, double bottom) {
             const auto& t = st.paras[static_cast<std::size_t>(p)].text;
             if (t.find(core::kMarkNote, static_cast<std::size_t>(a)) == std::string::npos) return true;
-            if (d.settings().note_at == core::NoteAt::StoryEnd) return true;   // s120: endnotes -- nothing at the foot
+            if (d.settings().note_at != core::NoteAt::Foot) return true;   // s120 / s122: endnotes -- nothing at the foot
             struct M { int k, num; double h; };
             std::vector<M> ms;
             int j = 0;
@@ -743,15 +744,84 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
         const auto marks_in = [&](int p, int a, int b) {
             return core::notes_in(st.paras[static_cast<std::size_t>(p)].text, static_cast<std::size_t>(a), static_cast<std::size_t>(b));
         };
+        // s120 / s122: endnotes -- the notes of paragraphs [c.end_from, upto) as
+        // a carry (the title first), to be set in the column.
+        const auto build_end = [&](int upto) {
+            std::vector<NoteRun> runs;
+            for (int p = std::max(0, c.end_from); p < upto && p < paras; ++p)
+                for (int k = 0; k < static_cast<int>(st.paras[static_cast<std::size_t>(p)].notes.size()); ++k)
+                    runs.push_back({p, k, core::note_number(st, p, k), 0});
+            c.end_from = upto;
+            if (runs.empty()) return false;
+            c.carry.clear();
+            if (!d.settings().note_title.empty()) c.carry.push_back({runs.front().para, -1, 0, 0});
+            c.carry.insert(c.carry.end(), runs.begin(), runs.end());
+            c.ending = true;
+            return true;
+        };
+        // Set the endnotes carry from y down; true when all are set.
+        const auto set_endnotes = [&] {
+            const double space = std::max(0.0, d.settings().note_space);
+            std::size_t i = 0;
+            for (; i < c.carry.size(); ++i) {
+                auto& r = c.carry[i];
+                const auto cuts = note_cuts(d, st, r.para, r.k, r.number, cw, r.from);
+                if (cuts.empty()) continue;
+                const double room = hmax - y;
+                std::size_t take = 0;
+                while (take < cuts.size() && cuts[take].h <= room + 0.01) ++take;
+                // The title goes with the first note's first lines.
+                if (r.k == -1 && take == cuts.size() && i + 1 < c.carry.size()) {
+                    const auto& nx = c.carry[i + 1];
+                    const auto nc2 = note_cuts(d, st, nx.para, nx.k, nx.number, cw, nx.from);
+                    const double first = nc2.empty() ? 0 : nc2[std::min<std::size_t>(1, nc2.size() - 1)].h;
+                    if (cuts.back().h + space + first > room + 0.01 && y > top + 0.01) take = 0;
+                }
+                if (take < cuts.size() && take > 0 && take < 2 && cuts.size() > 2) take = 0;   // two lines here, or the next column
+                if (take == 0 && y <= top + 0.01) take = 1;                                     // a line at least: on it goes
+                if (take == 0) break;
+                NotePlace np{r.para, r.k, r.number, col, cx, y, cw, 0};
+                np.from = r.from;
+                np.cont = r.from > 0;
+                np.end = true;
+                if (take < cuts.size()) np.to = cuts[take - 1].at;
+                np.h = cuts[take - 1].h;
+                ft.notes.push_back(np);
+                y += np.h + space;
+                if (take < cuts.size()) { r.from = np.to; break; }
+            }
+            c.carry.erase(c.carry.begin(), c.carry.begin() + static_cast<std::ptrdiff_t>(i));
+            if (!c.carry.empty()) return false;
+            c.ending = false;
+            return true;
+        };
+        const auto col_has_end = [&] {
+            return std::any_of(ft.notes.begin(), ft.notes.end(), [&](const NotePlace& n) { return n.end && n.col == col; });
+        };
+        // s122: endnotes running on from the column before: first.
+        if (c.ending && !c.carry.empty()) {
+            if (!set_endnotes()) continue;
+            if (c.p >= paras) return true;
+        }
+        const auto chapters = d.settings().note_at == core::NoteAt::ChapterEnd;
         while (c.p < paras && !notes_only) {
             const auto& para = st.paras[static_cast<std::size_t>(c.p)];
             const auto style = style_of(d, para);
             const double lead = leading_of(style);
+            // s122: a paragraph that starts a new page ends a chapter -- its
+            // notes first, set here.
+            if (chapters && c.start == 0 && !c.ending) {
+                const auto sa0 = core::doc::start_of(d, para);
+                if ((sa0 == core::ParaStart::NextPage || sa0 == core::ParaStart::NextRightPage) && build_end(c.p)) {
+                    if (y > top) y += 2 * note_gap(d, st, c.p - 1);
+                    if (!set_endnotes()) break;   // on in the next column
+                }
+            }
             // s043: a paragraph that starts afresh -- not where something is set already.
             // s055: or a break typed before it (its own, over the style's).
             if (const auto sa = c.start == 0 ? core::doc::start_of(d, para) : core::ParaStart::Anywhere; sa != core::ParaStart::Anywhere) {
                 if (sa == core::ParaStart::NextColumn && y > top) break;
-                if (sa != core::ParaStart::NextColumn && !ft.lines.empty()) {   // flow_text finds the frame
+                if (sa != core::ParaStart::NextColumn && (!ft.lines.empty() || col_has_end())) {   // flow_text finds the frame (s122: endnotes count)
                     place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c);   // s109
                     return false;
                 }
@@ -891,49 +961,10 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             c.start += pango_layout_get_line_readonly(lay.get(), placed)->start_index;
             break;
         }
-        if (c.p >= paras && !notes_only && d.settings().note_at == core::NoteAt::StoryEnd) {   // s120: endnotes
-            if (!c.ending) {
-                c.ending = true;
-                c.carry.clear();
-                if (paras > 0 && !d.settings().note_title.empty()) c.carry.push_back({paras - 1, -1, 0, 0});
-                for (int p = 0; p < paras; ++p)
-                    for (int k = 0; k < static_cast<int>(st.paras[static_cast<std::size_t>(p)].notes.size()); ++k)
-                        c.carry.push_back({p, k, core::note_number(st, p, k), 0});
-                if (c.carry.size() == 1 && c.carry.front().k == -1) c.carry.clear();   // no notes: no title
-                if (!c.carry.empty() && y > top) y += 2 * note_gap(d, st, paras - 1);  // room above them
-            }
-            const double space = std::max(0.0, d.settings().note_space);
-            std::size_t i = 0;
-            for (; i < c.carry.size(); ++i) {
-                auto& r = c.carry[i];
-                const auto cuts = note_cuts(d, st, r.para, r.k, r.number, cw, r.from);
-                if (cuts.empty()) continue;
-                const double room = hmax - y;
-                std::size_t take = 0;
-                while (take < cuts.size() && cuts[take].h <= room + 0.01) ++take;
-                // The title goes with the first note's first lines.
-                if (r.k == -1 && take == cuts.size() && i + 1 < c.carry.size()) {
-                    const auto& nx = c.carry[i + 1];
-                    const auto nc2 = note_cuts(d, st, nx.para, nx.k, nx.number, cw, nx.from);
-                    const double first = nc2.empty() ? 0 : nc2[std::min<std::size_t>(1, nc2.size() - 1)].h;
-                    if (cuts.back().h + space + first > room + 0.01 && y > top + 0.01) take = 0;
-                }
-                if (take < cuts.size() && take > 0 && take < 2 && cuts.size() > 2) take = 0;   // two lines here, or the next column
-                if (take == 0 && y <= top + 0.01) take = 1;                                     // a line at least: on it goes
-                if (take == 0) break;
-                NotePlace np{r.para, r.k, r.number, col, cx, y, cw, 0};
-                np.from = r.from;
-                np.cont = r.from > 0;
-                np.end = true;
-                if (take < cuts.size()) np.to = cuts[take - 1].at;
-                np.h = cuts[take - 1].h;
-                ft.notes.push_back(np);
-                y += np.h + space;
-                if (take < cuts.size()) { r.from = np.to; break; }
-            }
-            c.carry.erase(c.carry.begin(), c.carry.begin() + static_cast<std::ptrdiff_t>(i));
-            if (c.carry.empty()) return true;
-            continue;   // the rest in the next column
+        if (c.p >= paras && !notes_only && d.settings().note_at != core::NoteAt::Foot) {   // s120: endnotes at the story's end
+            if (!c.ending && build_end(paras) && y > top) y += 2 * note_gap(d, st, paras - 1);   // room above them
+            if (c.ending && !set_endnotes()) continue;   // the rest in the next column
+            return true;
         }
         if (c.p >= paras || notes_only) {
             place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c);   // s109
@@ -941,7 +972,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             if (c.carry.empty()) return true;
             continue;   // s117: the text has ended, a note runs on
         }
-        apply_keeps(d, st, fr, col, c, ft);   // s039
+        if (!col_has_end()) apply_keeps(d, st, fr, col, c, ft);   // s039 (not under endnotes set after the lines)
         place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c);
     }
     return false;
@@ -1103,7 +1134,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
             if (found) {
                 for (std::size_t i = 0; i < fi0; ++i) out.frames[i] = prev->flow->frames[i];
                 const auto& at = prev->flow->frames[fi0];
-                c = Cursor{at.from_p, at.from_b, at.carry_in, at.ending_in};   // s117 / s120: and what ran on into it
+                c = Cursor{at.from_p, at.from_b, at.carry_in, at.ending_in, at.end_from_in};   // s117 / s120 / s122: and what ran on into it
                 last_page = at.page_before;
                 first = fi0;
                 resume = true;
@@ -1117,10 +1148,11 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         out.frames[fi].from_b = c.start;
         out.frames[fi].carry_in = c.carry;   // s117
         out.frames[fi].ending_in = c.ending;   // s120
+        out.frames[fi].end_from_in = c.end_from;   // s122
         out.frames[fi].page_before = last_page;
         // s111: numbering by page / section -- the notes before this frame on the same one.
         // s120: endnotes count through the story.
-        const auto restart = d.settings().note_at == core::NoteAt::StoryEnd ? core::NoteRestart::Story : d.settings().note_restart;
+        const auto restart = d.settings().note_at != core::NoteAt::Foot ? core::NoteRestart::Story : d.settings().note_restart;
         const auto key_of = [&](const std::string& fid) -> std::string {
             const auto* f = d.as<core::Frame>(fid);
             if (!f) return {};
@@ -1141,12 +1173,14 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
             const auto& old = prev->flow->frames[fi];
             const auto moved = [&](std::vector<NoteRun> v) { for (auto& r : v) r.para += delta; return v; };   // s117
             if (old.from_p >= 0 && old.from_p + delta == c.p && old.from_b == c.start && old.page_before == last_page &&
-                old.note_from == note_from && moved(old.carry_in) == c.carry && old.ending_in == c.ending) {
+                old.note_from == note_from && moved(old.carry_in) == c.carry && old.ending_in == c.ending &&
+                (old.end_from_in >= k1 - delta ? old.end_from_in + delta : old.end_from_in) == c.end_from) {
                 for (std::size_t i = fi; i < chain.size(); ++i) {
                     FrameText ft = prev->flow->frames[i];
                     for (auto& l : ft.lines) l.para += delta;
                     for (auto& nt : ft.notes) nt.para += delta;   // s109 (numbers: the same notes come before)
                     for (auto& r : ft.carry_in) r.para += delta;   // s117
+                    if (ft.end_from_in >= k1 - delta) ft.end_from_in += delta;   // s122
                     if (ft.from_p >= 0) ft.from_p += delta;
                     out.frames[i] = std::move(ft);
                 }
@@ -1232,7 +1266,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
             fill_frame(d, *st, fr, wraps, c, hi, out.frames[fi], nc);
         }
         if (!measuring) vertical_justify(d, *st, fr, wraps, out.frames[fi]);   // s042
-        if (!out.frames[fi].lines.empty()) last_page = fr.owner;
+        if (!out.frames[fi].lines.empty() || !out.frames[fi].notes.empty()) last_page = fr.owner;   // s122: endnotes take the page too
         if (tick) (*tick)(static_cast<int>(fi + 1), static_cast<int>(chain.size()));   // s102
     }
     // Frames the story never came to (it ended before them): as a whole flow leaves them.
