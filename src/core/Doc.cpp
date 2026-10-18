@@ -1740,8 +1740,31 @@ bool set_column_width(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames,
 }
 
 // ── text (s010) ─────────────────────────────────────────────────────────────
+Carried carried_between(const Story& s, TextPos a, TextPos b) {   // s132
+    Carried c;
+    if (s.paras.empty()) return c;
+    a = clamp_pos(s, a);
+    b = clamp_pos(s, b);
+    if (b < a) std::swap(a, b);
+    for (int p = a.para; p <= b.para; ++p) {
+        Para para = s.paras[static_cast<std::size_t>(p)];
+        fit_notes(para);
+        fit_marks(para);
+        const auto from = static_cast<std::size_t>(p == a.para ? a.byte : 0);
+        const auto to = p == b.para ? static_cast<std::size_t>(b.byte) : para.text.size();
+        const auto take = [&](const char* mark, const auto& all, auto& out) {
+            const int h = marks_in(para.text, mark, 0, from), n = marks_in(para.text, mark, from, to);
+            out.insert(out.end(), all.begin() + h, all.begin() + h + n);
+        };
+        take(kMarkNote, para.notes, c.notes);
+        take(kMarkRef, para.refs, c.refs);
+        take(kMarkAnchor, para.anchors, c.anchors);
+    }
+    return c;
+}
+
 TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& text,
-                  const std::string& label, const std::string& merge_key) {
+                  const std::string& label, const std::string& merge_key, const Carried* with) {
     const auto* st = d.as<Story>(story);
     if (!st) return a;
     Story s = *st;
@@ -1790,7 +1813,8 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         fit_notes(fb);
         const int nh = notes_in(fa.text, 0, static_cast<std::size_t>(a.byte));
         notes.assign(fa.notes.begin(), fa.notes.begin() + nh);
-        for (int i = 0; i < notes_in(text); ++i) notes.emplace_back();
+        for (int i = 0; i < notes_in(text); ++i)   // s132: a paste's, their words
+            notes.push_back(with && i < static_cast<int>(with->notes.size()) ? with->notes[static_cast<std::size_t>(i)] : Note{});
         const int nt = notes_in(fb.text, static_cast<std::size_t>(b.byte));
         notes.insert(notes.end(), fb.notes.end() - nt, fb.notes.end());
     }
@@ -1799,19 +1823,23 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     // reference keeps its target, a pasted anchor gets no id (one place, one id).
     std::vector<XRef> refs;
     std::vector<std::string> anchors;
+    std::size_t pasted_from = 0, pasted_to = 0;   // s132: anchors[from, to) came with the paste
     {
         Para fa = pa, fb = pb;
         fit_marks(fa);
         fit_marks(fb);
-        const auto carry = [&](const auto& ha, const auto& tb, const char* mark, auto& out, auto blank) {
+        const auto carry = [&](const auto& ha, const auto& tb, const char* mark, auto& out, auto blank, const auto* given) {
             const int nh = marks_in(fa.text, mark, 0, static_cast<std::size_t>(a.byte));
             out.assign(ha.begin(), ha.begin() + nh);
-            for (int i = 0; i < marks_in(text, mark); ++i) out.push_back(blank);
+            for (int i = 0; i < marks_in(text, mark); ++i)
+                out.push_back(given && i < static_cast<int>(given->size()) ? (*given)[static_cast<std::size_t>(i)] : blank);
             const int nt = marks_in(fb.text, mark, static_cast<std::size_t>(b.byte));
             out.insert(out.end(), tb.end() - nt, tb.end());
         };
-        carry(fa.refs, fb.refs, kMarkRef, refs, XRef{});
-        carry(fa.anchors, fb.anchors, kMarkAnchor, anchors, std::string{});
+        carry(fa.refs, fb.refs, kMarkRef, refs, XRef{}, with ? &with->refs : nullptr);
+        pasted_from = static_cast<std::size_t>(marks_in(fa.text, kMarkAnchor, 0, static_cast<std::size_t>(a.byte)));
+        pasted_to = pasted_from + static_cast<std::size_t>(marks_in(text, kMarkAnchor));
+        carry(fa.anchors, fb.anchors, kMarkAnchor, anchors, std::string{}, with ? &with->anchors : nullptr);
     }
 
     std::vector<Para> made;
@@ -1840,15 +1868,38 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
             for (std::size_t k = 0; k < n; ++k) m.notes.push_back(at < notes.size() ? notes[at++] : Note{});
         }
     }
+    std::vector<std::pair<int, int>> pasted;   // s132: (paragraph in made, anchor index) of each pasted anchor
     {   // s128: and its refs and anchors
         std::size_t ar = 0, aa = 0;
-        for (auto& m : made) {
+        for (int mi = 0; mi < static_cast<int>(made.size()); ++mi) {
+            auto& m = made[static_cast<std::size_t>(mi)];
             for (int k = 0; k < marks_in(m.text, kMarkRef); ++k) m.refs.push_back(ar < refs.size() ? refs[ar++] : XRef{});
-            for (int k = 0; k < marks_in(m.text, kMarkAnchor); ++k) m.anchors.push_back(aa < anchors.size() ? anchors[aa++] : std::string{});
+            for (int k = 0; k < marks_in(m.text, kMarkAnchor); ++k) {
+                if (aa >= pasted_from && aa < pasted_to) pasted.emplace_back(mi, k);
+                m.anchors.push_back(aa < anchors.size() ? anchors[aa++] : std::string{});
+            }
         }
     }
     s.paras.erase(s.paras.begin() + a.para, s.paras.begin() + b.para + 1);
     s.paras.insert(s.paras.begin() + a.para, made.begin(), made.end());
+    // s132: a pasted anchor whose id is had elsewhere (this story, another): a fresh one.
+    if (with && !pasted.empty()) {
+        const auto uses = [&](const std::string& id) {
+            int n = 0;
+            for (const auto& para : s.paras) n += static_cast<int>(std::count(para.anchors.begin(), para.anchors.end(), id));
+            for (const auto& sid : d.ids_of<Story>())
+                if (sid != story)
+                    for (const auto& para : d.as<Story>(sid)->paras) n += static_cast<int>(std::count(para.anchors.begin(), para.anchors.end(), id));
+            return n;
+        };
+        int fresh = 1;
+        for (const auto& [mi, k] : pasted) {
+            auto& id = s.paras[static_cast<std::size_t>(a.para + mi)].anchors[static_cast<std::size_t>(k)];
+            if (id.empty() || uses(id) <= 1) continue;
+            while (uses("anchor." + std::to_string(fresh)) > 0) ++fresh;
+            id = "anchor." + std::to_string(fresh);
+        }
+    }
 
     TextPos caret{a.para + static_cast<int>(pieces.size()) - 1,
                   static_cast<int>((pieces.size() == 1 ? head_len : 0) + pieces.back().size())};

@@ -281,6 +281,7 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         FlowCache& flows = c.flows;   // s102: the pages' own flows (was a fresh layout of the book)
         auto links = contents_links(d, flows);
         for (auto& l : note_links(d, flows)) links.push_back(std::move(l));   // s123: and the notes'
+        for (auto& l : xref_links(d, flows)) links.push_back(std::move(l));   // s131: and the cross-references'
         for (const auto& l : links) {
             const auto at = sheet_of(sheets, l.page), to = sheet_of(sheets, l.to);   // s084: by sheet
             if (at.sheet >= 0 && to.sheet >= 0)

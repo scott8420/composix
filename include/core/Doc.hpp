@@ -826,8 +826,20 @@ bool set_column_width(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames,
 // Backspace, Delete, Enter, paste, cut -- all this one verb. A merge key folds
 // a burst of keystrokes into ONE step. Returns where the caret goes (just
 // after the inserted text); `a` (clamped) when nothing changed.
+// s132: what a stretch of text's marks carry -- its notes' words, its
+// references' targets, its anchors' ids -- in mark order: copied with the
+// text, given back to the marks of a paste (`with`). A pasted anchor keeps
+// its id while nothing else has it (a cut, then a paste: what points at it
+// still does); else it gets a fresh one (a copy: one place, one id).
+struct Carried {
+    std::vector<Note> notes;
+    std::vector<XRef> refs;
+    std::vector<std::string> anchors;
+    bool operator==(const Carried&) const = default;
+};
+Carried carried_between(const Story& s, TextPos a, TextPos b);
 TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& text,
-                  const std::string& label = "Typing", const std::string& merge_key = {});
+                  const std::string& label = "Typing", const std::string& merge_key = {}, const Carried* with = nullptr);
 // s109: a footnote at `at` -- its mark in the text, its words `text`. One
 // step. Returns the place just after the mark.
 TextPos insert_note(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const std::string& text);

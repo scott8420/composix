@@ -110,6 +110,10 @@ std::vector<PdfLink> contents_links(const core::Doc& d, FlowCache& flows);
 // to where its note is set (foot or endnote), and the note's number back to
 // the mark. Frames turned (rot) are left out.
 std::vector<PdfLink> note_links(const core::Doc& d, FlowCache& flows);
+// s131: each cross-reference's words (a box round them, on each line they
+// take) to the place it points at -- the anchor's line; a note's, the note
+// where it is set. Gone or not on a page: no link. Frames turned left out.
+std::vector<PdfLink> xref_links(const core::Doc& d, FlowCache& flows);
 
 // s087: a generated list's entries -- each paragraph it gathers, in reading
 // order: its text (tabs as spaces, trimmed) and the folio of the page it
@@ -137,6 +141,7 @@ std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows);
 struct ExportSummary {
     int pages = 0, sheets = 0, bookmarks = 0, links = 0;
     int note_links = 0;   // s123
+    int xref_links = 0;   // s131
     std::string size;     // "16 pages \u2192 9 sheets \u00b7 6 \u00d7 9 in + 0.125 in bleed"
     std::string colour;   // "CMYK for FOGRA39 \u2014 RGB converted, perceptual"
     std::string nav;      // "5 bookmarks \u00b7 2 contents links"

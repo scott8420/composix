@@ -1943,6 +1943,7 @@ Resolved resolve_story(const core::Doc& d, const std::string& story, const std::
                 const auto& refs = st->paras[static_cast<std::size_t>(p)].refs;
                 const int idx = core::marks_in(src, core::kMarkRef, 0, i);
                 v = idx < static_cast<int>(refs.size()) ? ref_value(d, refs[static_cast<std::size_t>(idx)], targets) : std::string("??");
+                r.refs.push_back({p, idx, static_cast<int>(out.size()), static_cast<int>(out.size() + v.size())});   // s131
             } else if (k == 6) {
                 v.clear();   // an anchor: nothing to see
             } else {
@@ -2107,11 +2108,11 @@ core::TextPos line_edge(const core::Doc& d, const std::string& story, const Stor
 }
 
 std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& story, const StoryFlow& flow,
-                                        const std::string& frame, core::TextPos a, core::TextPos b) {
+                                        const std::string& frame, core::TextPos a, core::TextPos b, const core::Story* text) {
     std::vector<core::Rect> out;
     if (b < a) std::swap(a, b);
     if (a == b) return out;
-    const auto* st = d.as<core::Story>(story);
+    const auto* st = text ? text : d.as<core::Story>(story);
     if (!st) return out;
     walk_frame(d, story, flow, frame, [&](const Placed& pl) {
         const Line& l = *pl.line;
@@ -2125,7 +2126,7 @@ std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& s
         if (x1 < x0) std::swap(x0, x1);
         if (para_end_selected) x1 += 4;   // the paragraph break, shown as a sliver
         out.push_back({x0, l.y, x1 - x0, l.h});
-    });
+    }, text);
     return out;
 }
 

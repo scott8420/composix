@@ -1522,11 +1522,12 @@ void Canvas::follow_caret() {
     if (m_vp.reveal({fr.x + c.x - 2, fr.y + c.y, 4, c.h}, 48)) queue_draw();
 }
 
-void Canvas::edit_insert(const std::string& text, const std::string& kind, const std::string& label) {
+void Canvas::edit_insert(const std::string& text, const std::string& kind, const std::string& label,
+                         const core::doc::Carried* with) {
     if (!edit_story()) return;
     if (kind.empty() || kind != m_burst_kind) { ++m_burst; m_burst_kind = kind; }
     const std::string key = kind.empty() ? std::string{} : kind + ":" + m_edit_story + ":" + std::to_string(m_burst);
-    m_caret = core::doc::edit_text(m_journal, m_doc, m_edit_story, m_anchor, m_caret, text, label, key);
+    m_caret = core::doc::edit_text(m_journal, m_doc, m_edit_story, m_anchor, m_caret, text, label, key, with);
     m_anchor = m_caret;
     m_goal_x = NAN;
     if (kind.empty()) m_burst_kind.clear();
@@ -1602,14 +1603,17 @@ bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {
             return true;
         case GDK_KEY_c: case GDK_KEY_C: case GDK_KEY_x: case GDK_KEY_X:
             if (!sel) return true;
-            get_clipboard()->set_text(core::text_between(*story, lo, hi));
+            m_clip_text = core::text_between(*story, lo, hi);
+            m_clip = core::doc::carried_between(*story, lo, hi);   // s132
+            get_clipboard()->set_text(m_clip_text);
             if (kv == GDK_KEY_x || kv == GDK_KEY_X) edit_insert("", "", "Cut");
             return true;
         case GDK_KEY_v: case GDK_KEY_V:
             get_clipboard()->read_text_async([this](const Glib::RefPtr<Gio::AsyncResult>& r) {
                 try {
                     const auto t = get_clipboard()->read_text_finish(r);
-                    if (editing() && !t.empty()) edit_insert(t.raw(), "", "Paste");
+                    // s132: our own copy: its notes, references and anchors with it.
+                    if (editing() && !t.empty()) edit_insert(t.raw(), "", "Paste", t.raw() == m_clip_text ? &m_clip : nullptr);
                 } catch (const Glib::Error&) {}
             });
             return true;

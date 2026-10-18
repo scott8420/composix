@@ -180,7 +180,11 @@ private:
     void on_key_up(guint keyval);
     bool on_scroll(double dx, double dy);
     void on_motion(double x, double y);
-    std::string ref_tip(double x, double y) const;   // s130: the tooltip over a cross-reference ("" none)
+    std::string ref_tip(double x, double y) const;
+    // s132: the last copy / cut -- its text and what its marks carried; a
+    // paste of the same text gives them back.
+    std::string           m_clip_text;
+    core::doc::Carried    m_clip;   // s130: the tooltip over a cross-reference ("" none)
 
     void relayout();
     core::Rect selection_box() const;           // union of the picks, layout (doc) space
@@ -193,7 +197,8 @@ private:
     void begin_edit(const std::string& frame, core::TextPos at);
     bool edit_key(guint kv, Gdk::ModifierType st);
     // kind: "type" / "erase" merge into a burst; "" is a step of its own.
-    void edit_insert(const std::string& text, const std::string& kind, const std::string& label);
+    void edit_insert(const std::string& text, const std::string& kind, const std::string& label,
+                     const core::doc::Carried* with = nullptr);
     void set_caret(core::TextPos p, bool extend, bool keep_goal = false);
     bool note_click(const std::string& frame, double px, double py);   // s114: a double-click on a note at the foot
     core::TextPos hit_story(const std::string& frame, double lx, double ly);   // layout coords

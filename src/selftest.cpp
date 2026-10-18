@@ -7423,6 +7423,153 @@ int main() {
         check("undo all: no references, no anchors", P(2).refs.empty() && P(0).anchors.empty() && d.strays() == 0);
     }
 
+    {
+        std::cout << "\n-- cross-reference links in the PDF (s131) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        L::FlowCache flows;
+        check("no references: no links", L::xref_links(d, flows).empty());
+        const auto P = [&](int p) -> const core::Para& { return d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(p)]; };
+        // On page 1 (Chapter One's paragraph 1), to Chapter Two's heading.
+        D::insert_ref_to(j, d, "story.1", {1, 4}, "story.1", 4, core::RefShow::TextPage);
+        const auto& flow = flows.get(d, "story.1");
+        const auto page_of = [&](int p, int b) -> std::string {
+            const auto c = L::caret_at(d, "story.1", flow, {p, b});
+            return c.ok ? d.as<core::Frame>(c.frame)->owner : std::string{};
+        };
+        const auto from_page = page_of(1, 4), head_page = page_of(4, 0);
+        auto links = L::xref_links(d, flows);
+        bool ok = !links.empty();
+        for (const auto& l : links) {
+            const auto* pg = d.as<core::Page>(l.page);
+            ok = ok && pg && l.page == from_page && l.to == head_page && l.box.w > 0 && l.box.h > 0 && l.box.x >= 0 &&
+                 l.box.r() <= pg->w + 0.5 && l.box.y >= 0 && l.box.b() <= pg->h;
+        }
+        check("a reference: a box on its page, to the heading's page", ok && from_page != head_page, std::to_string(links.size()));
+        {   // The box is as wide as the words shown ("Chapter Two" on page 3 is wider than a bare number).
+            double w = 0;
+            for (const auto& l : links) w += l.box.w;
+            D::set_ref(j, d, "story.1", 1, 0, core::RefShow::Page);
+            double w2 = 0;
+            for (const auto& l : L::xref_links(d, flows)) w2 += l.box.w;
+            check("the box: the words it shows (page alone: narrower)", w2 > 0 && w2 < w, std::to_string(w) + " / " + std::to_string(w2));
+        }
+        // To a note: where the note is set.
+        D::insert_ref_to_note(j, d, "story.1", {2, 0}, "story.1", 5, 0, core::RefShow::Note);
+        std::string note_page;
+        double note_y = 0;
+        for (const auto& ft : flows.get(d, "story.1").frames)
+            for (const auto& np : ft.notes)
+                if (np.para == 5 && !np.cont && note_page.empty()) {
+                    note_page = d.as<core::Frame>(ft.frame)->owner;
+                    note_y = d.as<core::Frame>(ft.frame)->y + np.y;
+                }
+        links = L::xref_links(d, flows);
+        bool to_note = false;
+        for (const auto& l : links) to_note = to_note || (l.to == note_page && std::abs(l.to_y - (note_y - 4)) < 0.5);
+        check("to a note: where the note is set", to_note && !note_page.empty());
+        // Gone: no link.
+        const auto n = links.size();
+        D::edit_text(j, d, "story.1", {4, 0}, {4, static_cast<int>(P(4).text.size())}, "", "Delete", "");
+        check("its place gone: its link gone", L::xref_links(d, flows).size() < n);
+        j.undo();
+        // Written: in both PDFs, and counted on the Export sheet.
+        const auto base = fs::temp_directory_path() / "composix_s131";
+        fs::create_directories(base);
+        const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+        L::PdfOptions o;
+        o.compress = false;
+        L::PdfReport rep;
+        std::string err;
+        const auto count = [](const std::string& f) {
+            std::ifstream in(f, std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            const auto hay = ss.str();
+            int k = 0;
+            for (auto at = hay.find("/Subtype /Link"); at != std::string::npos; at = hay.find("/Subtype /Link", at + 1)) ++k;
+            return k;
+        };
+        const int want = static_cast<int>(L::contents_links(d, flows).size() + L::note_links(d, flows).size() + L::xref_links(d, flows).size());
+        const auto pout = (base / "print.pdf").string(), sout = (base / "screen.pdf").string();
+        check("print PDF: the cross-reference links written", L::export_print_pdf(d, pout, o, src, &rep, &err) && count(pout) == want, err);
+        check("screen PDF: the cross-reference links written", L::export_pdf(d, sout, o, src, &rep, &err) && count(sout) == want, err);
+        const auto sum = L::export_summary(d, flows, o, false, "");
+        check("an anchored heading keeps its contents link", L::contents_links(d, flows).size() == 2 &&
+                                                              L::bookmarks(d, flows).size() == 2 &&
+                                                              L::bookmarks(d, flows)[1].title == "Chapter Two");
+        check("the Export sheet counts them", sum.xref_links == static_cast<int>(L::xref_links(d, flows).size()) &&
+                                              sum.nav.find("cross-reference link") != std::string::npos, sum.nav);
+        std::error_code ec;
+        if (!std::getenv("KEEP_PDF")) fs::remove_all(base, ec);
+    }
+
+    {
+        std::cout << "\n-- copy and paste: notes, references, anchors (s132) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto S = [&]() -> const core::Story& { return *d.as<core::Story>("story.1"); };
+        const auto P = [&](int p) -> const core::Para& { return S().paras[static_cast<std::size_t>(p)]; };
+        const auto shown = [&](int p) {
+            const auto r = L::resolve_story(d, "story.1", "");
+            return r.any ? r.text.paras[static_cast<std::size_t>(p)].text : std::string{};
+        };
+        // Paragraph 1: "The" + a reference to Chapter Two, a note, an anchor + the rest.
+        D::insert_ref_to(j, d, "story.1", {1, 3}, "story.1", 4, core::RefShow::Text);
+        D::insert_note(j, d, "story.1", {1, 6}, "A note.");
+        const auto aid = D::insert_anchor(j, d, "story.1", {1, 9});
+        D::insert_ref(j, d, "story.1", {3, 0}, aid, core::RefShow::Page);   // something points at that anchor
+        const core::TextPos a{1, 0}, b{1, 12};
+        const auto text = core::text_between(S(), a, b);
+        const auto c = D::carried_between(S(), a, b);
+        check("carried: the note's words, the reference, the anchor", c.notes.size() == 1 && c.notes[0].text == "A note." &&
+                                                                       c.refs.size() == 1 && c.refs[0].target == P(4).anchors[0] &&
+                                                                       c.anchors == std::vector<std::string>{aid});
+        check("carried: none outside", D::carried_between(S(), {0, 0}, {0, 5}) == D::Carried{});
+        // Copy, paste into paragraph 2: the note's words, the reference's target; the anchor a new id.
+        const auto n0 = j.size();
+        D::edit_text(j, d, "story.1", {2, 0}, {2, 0}, text, "Paste", "", &c);
+        check("paste: one step", j.size() == n0 + 1);
+        check("paste: the note keeps its words", P(2).notes.size() == 1 && P(2).notes[0].text == "A note.");
+        check("paste: the reference points where it did", P(2).refs.size() == 1 && P(2).refs[0] == P(1).refs[0] &&
+                                                         shown(2).find("Chapter Two") != std::string::npos);
+        check("paste of a copy: the anchor a fresh id", P(2).anchors.size() == 1 && !P(2).anchors[0].empty() &&
+                                                        P(2).anchors[0] != aid && P(1).anchors[0] == aid);
+        check("  the reference to the first still finds it", D::find_anchor(d, aid).at.para == 1);
+        // Without what it carried (another app's text): blanks, as before.
+        D::edit_text(j, d, "story.1", {2, 0}, {2, 0}, text, "Paste");
+        check("a plain paste: an empty note, a reference to nothing, no id",
+              P(2).notes.size() == 2 && P(2).notes[0].text.empty() && P(2).refs[0].target.empty() && P(2).anchors[0].empty());
+        j.undo();
+        j.undo();
+        // Cut, then paste elsewhere: the anchor keeps its id; what pointed at it still does.
+        D::edit_text(j, d, "story.1", a, b, "", "Cut");
+        check("cut: the anchor gone", D::find_anchor(d, aid).story.empty());
+        D::edit_text(j, d, "story.1", {2, 0}, {2, 0}, text, "Paste", "", &c);
+        check("paste after a cut: the anchor keeps its id", D::find_anchor(d, aid).at.para == 2);
+        check("  the reference to it still resolves", shown(3).rfind("??", 0) != 0, shown(3).substr(0, 10));
+        // Pasted twice: the second a fresh id.
+        D::edit_text(j, d, "story.1", {3, 0}, {3, 0}, text, "Paste", "", &c);
+        int with_aid = 0;
+        for (const auto& p : S().paras) with_aid += static_cast<int>(std::count(p.anchors.begin(), p.anchors.end(), aid));
+        check("pasted twice: one place has the id", with_aid == 1);
+        // In another story: the id taken there too.
+        D::edit_text(j, d, "story.2", {0, 0}, {0, 0}, text, "Paste", "", &c);
+        const auto& cap = d.as<core::Story>("story.2")->paras[0];
+        check("into another story: a fresh id there", cap.anchors.size() == 1 && cap.anchors[0] != aid && cap.notes.size() == 1);
+        while (j.can_undo()) j.undo();
+        check("undo all: as loaded", P(1).anchors.empty() && P(2).notes.empty() && d.strays() == 0);
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

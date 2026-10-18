@@ -140,6 +140,10 @@ struct Resolved {
     bool        any = false;
     core::Story text;
     StoryFlow   flow;
+    // s131: where each cross-reference's words are in `text`: paragraph, its
+    // index in Para::refs, bytes [from, to).
+    struct RefSpan { int para = 0, k = 0, from = 0, to = 0; };
+    std::vector<RefSpan> refs;
 };
 Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page);
 // s128: what a cross-reference shows -- its anchor's page number, its
@@ -236,7 +240,8 @@ core::TextPos line_edge(const core::Doc& d, const std::string& story, const Stor
                         core::TextPos p, bool end);
 // The selection [a, b) as rectangles in one frame.
 std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& story, const StoryFlow& flow,
-                                        const std::string& frame, core::TextPos a, core::TextPos b);
+                                        const std::string& frame, core::TextPos a, core::TextPos b,
+                                        const core::Story* text = nullptr);   // s131: text -- a resolved story's
 
 // The installed font families (Pango / fontconfig), sorted, with the generic
 // Serif / Sans / Monospace first. Read once.

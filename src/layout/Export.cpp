@@ -230,8 +230,15 @@ std::vector<Bookmark> list_marks(const core::Doc& d, FlowCache& flows, const cor
             const auto& para = st.paras[static_cast<std::size_t>(p)];
             const auto lv = std::find(toc.from_styles.begin(), toc.from_styles.end(), para.style);
             if (lv == toc.from_styles.end()) continue;
-            std::string title = para.text;
-            for (auto& c : title) if (c == '\t') c = ' ';
+            // s131: without its marks (an anchor a reference points at, a note's
+            // number) -- a heading anchored no longer lost its contents link.
+            std::string title;
+            for (std::size_t i = 0; i < para.text.size();) {
+                if (static_cast<unsigned char>(para.text[i]) == 0xEE && i + 2 < para.text.size() &&
+                    static_cast<unsigned char>(para.text[i + 1]) == 0x80) { i += 3; continue; }
+                title += para.text[i] == '\t' ? ' ' : para.text[i];
+                ++i;
+            }
             if (title.find_first_not_of(' ') == std::string::npos) continue;
             const auto c = caret_line(d, sid, flow, {p, 0});   // s105: (was caret_at: a frame laid out a heading)
             if (!c.ok) continue;
@@ -316,6 +323,61 @@ std::vector<PdfLink> note_links(const core::Doc& d, FlowCache& flows) {   // s12
                 const double back_w = std::min(np.w, 14.0), back_h = std::min(np.h, 12.0);
                 out.push_back({nf->owner, {nf->x + np.x - pad, note_top - pad, back_w + 2 * pad, back_h + 2 * pad}, mf->owner,
                                std::max(0.0, mf->y + r.y - 24)});
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<PdfLink> xref_links(const core::Doc& d, FlowCache& flows) {   // s131
+    std::vector<PdfLink> out;
+    // Where an anchor points: its page and how far down; page "" none.
+    struct Dest { std::string page; double y = 0; };
+    std::map<std::string, Dest> dests;
+    const auto dest_of = [&](const std::string& id) -> Dest {
+        if (const auto it = dests.find(id); it != dests.end()) return it->second;
+        Dest dst;
+        const auto at = core::doc::find_anchor(d, id);
+        if (!at.story.empty()) {
+            const auto& st = *d.as<core::Story>(at.story);
+            const auto& flow = flows.get(d, at.story);
+            const auto& text = st.paras[static_cast<std::size_t>(at.at.para)].text;
+            if (core::note_at(text, static_cast<std::size_t>(at.at.byte) + 3)) {   // a note: where it is set
+                const int k = core::notes_in(text, 0, static_cast<std::size_t>(at.at.byte) + 3);
+                for (const auto& ft : flow.frames)
+                    for (const auto& np : ft.notes)
+                        if (np.para == at.at.para && np.k == k && !np.cont && dst.page.empty())
+                            if (const auto* nf = d.as<core::Frame>(ft.frame); nf && d.as<core::Page>(nf->owner))
+                                dst = {nf->owner, std::max(0.0, nf->y + np.y - 4)};
+            }
+            if (dst.page.empty()) {
+                const auto c = caret_at(d, at.story, flow, at.at);
+                if (const auto* f = c.ok ? d.as<core::Frame>(c.frame) : nullptr; f && d.as<core::Page>(f->owner))
+                    dst = {f->owner, std::max(0.0, f->y + c.y - 4)};
+            }
+        }
+        dests.emplace(id, dst);
+        return dst;
+    };
+    for (const auto& sid : d.ids_of<core::Story>()) {
+        const auto& st = *d.as<core::Story>(sid);
+        if (std::none_of(st.paras.begin(), st.paras.end(), [](const core::Para& p) { return !p.refs.empty(); })) continue;
+        const auto& rs = flows.resolved(d, sid, {});
+        if (!rs.any) continue;
+        for (const auto& span : rs.refs) {
+            const auto& refs = st.paras[static_cast<std::size_t>(span.para)].refs;
+            if (span.k >= static_cast<int>(refs.size()) || span.to <= span.from) continue;
+            const auto dst = dest_of(refs[static_cast<std::size_t>(span.k)].target);
+            if (dst.page.empty()) continue;
+            for (const auto& ft : rs.flow.frames) {
+                const auto* f = d.as<core::Frame>(ft.frame);
+                if (!f || f->rot != 0 || !d.as<core::Page>(f->owner)) continue;
+                const bool here = std::any_of(ft.lines.begin(), ft.lines.end(), [&](const Line& l) {
+                    return l.para == span.para && l.start < span.to && l.end > span.from;
+                });
+                if (!here) continue;
+                for (const auto& r : selection_rects(d, sid, rs.flow, ft.frame, {span.para, span.from}, {span.para, span.to}, &rs.text))
+                    out.push_back({f->owner, {f->x + r.x, f->y + r.y, r.w, r.h}, dst.page, dst.y});
             }
         }
     }
@@ -514,6 +576,8 @@ ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOpti
             if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.links;
         for (const auto& l : note_links(d, flows))   // s123
             if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.note_links;
+        for (const auto& l : xref_links(d, flows))   // s131
+            if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.xref_links;
     }
     const auto n = [](int k, const char* one, const char* many) {
         return (k == 0 ? std::string("No") : std::to_string(k)) + " " + (k == 1 ? one : many);
@@ -521,6 +585,7 @@ ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOpti
     s.nav = n(s.bookmarks, "bookmark", "bookmarks") + " \u00b7 " +
             (x ? std::string("contents links left out (PDF/X)") : n(s.links, "contents link", "contents links"));
     if (!x && s.note_links > 0) s.nav += " \u00b7 " + n(s.note_links, "note link", "note links");   // s123
+    if (!x && s.xref_links > 0) s.nav += " \u00b7 " + n(s.xref_links, "cross-reference link", "cross-reference links");   // s131
     return s;
 }
 
@@ -566,6 +631,7 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
     if (opt.progress) flow_all(d, flows, report_layout);
     auto links = contents_links(d, flows);   // s083
     for (auto& l : note_links(d, flows)) links.push_back(std::move(l));   // s123: and the notes'
+    for (auto& l : xref_links(d, flows)) links.push_back(std::move(l));   // s131: and the cross-references'
     std::set<std::string> missing;
     int n = 0;
     for (const auto& sh : sheets) {
