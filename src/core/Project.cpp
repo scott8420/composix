@@ -197,8 +197,9 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                              {"Text wrap", st.wrap_beneath ? "Text beneath" : "All text", "dwrap",   // s069
                               {{"0", "All text"}, {"1", "Text beneath"}}},
                              {"Footnotes", st.note_restart == NoteRestart::Page ? "Each page"   // s111
-                                           : st.note_restart == NoteRestart::Section ? "Each section" : "Through the story",
-                              "dnote_restart", {{"0", "Through the story"}, {"1", "Each page"}, {"2", "Each section"}}},
+                                           : st.note_restart == NoteRestart::Section ? "Each section"
+                                           : st.note_restart == NoteRestart::Chapter ? "Each chapter" : "Through the story",   // s124
+                              "dnote_restart", {{"0", "Through the story"}, {"1", "Each page"}, {"2", "Each section"}, {"3", "Each chapter"}}},
                              {"Numbers", st.note_style == NoteStyle::RomanLower ? "i ii iii"
                                          : st.note_style == NoteStyle::AlphaLower ? "a b c"
                                          : st.note_style == NoteStyle::Symbols ? "* \u2020 \u2021" : "1 2 3",

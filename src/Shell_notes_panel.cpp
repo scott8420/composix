@@ -95,7 +95,7 @@ void Shell::open_notes_panel() {  // helper
         add("Endnotes title", *m_np_title);
 
         grid->attach(*group_label("Numbers"), 0, r++, 2);
-        m_np_restart = drop("notes.restart", {"Through the story", "Each page", "Each section"});
+        m_np_restart = drop("notes.restart", {"Through the story", "Each page", "Each section", "Each chapter"});   // s124
         add("Count", *m_np_restart);
         m_np_style = drop("notes.style", {"1 2 3", "i ii iii", "a b c", "* † ‡"});
         add("Numbers", *m_np_style);
@@ -136,7 +136,7 @@ void Shell::open_notes_panel() {  // helper
         });
         const auto numbering = [this] {
             if (m_np_syncing) return;
-            core::doc::set_note_numbering(m_journal, m_doc, static_cast<core::NoteRestart>(std::min(2u, m_np_restart->get_selected())),
+            core::doc::set_note_numbering(m_journal, m_doc, static_cast<core::NoteRestart>(std::min(3u, m_np_restart->get_selected())),
                                           static_cast<core::NoteStyle>(std::min(3u, m_np_style->get_selected())));
         };
         m_np_restart->property_selected().signal_changed().connect(numbering);
@@ -176,7 +176,7 @@ void Shell::notes_panel_sync() {  // helper
     if (!m_np_cont->has_focus()) m_np_cont->set_text(s.note_cont);
     // What doesn't apply, greyed: endnotes have no area, no rule, no restart.
     m_np_area->set_sensitive(!end);
-    m_np_restart->set_sensitive(!end);
+    m_np_restart->set_sensitive(true);   // s124: endnotes count through the story or by chapter (page / section read as the story)
     m_np_rule->set_sensitive(!end);
     m_np_rule_w->set_sensitive(!end);
     m_np_cont->set_sensitive(!end);

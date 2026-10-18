@@ -3193,6 +3193,18 @@ int note_number(const Story& s, int p, int k) {
     return n + k + 1;
 }
 
+int note_number(const Doc& d, const Story& s, int p, int k) {   // s124
+    if (d.settings().note_restart != NoteRestart::Chapter) return note_number(s, p, k);
+    int from = 0;   // the chapter's first paragraph: the last at or before p that starts a page
+    for (int i = std::min(p, static_cast<int>(s.paras.size()) - 1); i > 0; --i) {
+        const auto sa = doc::start_of(d, s.paras[static_cast<std::size_t>(i)]);
+        if (sa == ParaStart::NextPage || sa == ParaStart::NextRightPage) { from = i; break; }
+    }
+    int n = 0;
+    for (int i = from; i < p && i < static_cast<int>(s.paras.size()); ++i) n += static_cast<int>(s.paras[static_cast<std::size_t>(i)].notes.size());
+    return n + k + 1;
+}
+
 void fit_notes(Para& p) {
     const auto n = static_cast<std::size_t>(notes_in(p.text));
     if (p.notes.size() != n) p.notes.resize(n);

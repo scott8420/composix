@@ -279,7 +279,9 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
     }
     {   // s083: the contents page's entries, clickable (Plate leaves them out under PDF/X)
         FlowCache& flows = c.flows;   // s102: the pages' own flows (was a fresh layout of the book)
-        for (const auto& l : contents_links(d, flows)) {
+        auto links = contents_links(d, flows);
+        for (auto& l : note_links(d, flows)) links.push_back(std::move(l));   // s123: and the notes'
+        for (const auto& l : links) {
             const auto at = sheet_of(sheets, l.page), to = sheet_of(sheets, l.to);   // s084: by sheet
             if (at.sheet >= 0 && to.sheet >= 0)
                 doc.add_link(static_cast<std::size_t>(at.sheet), off + at.x + l.box.x, off + l.box.y, l.box.w, l.box.h,

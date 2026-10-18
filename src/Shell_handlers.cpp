@@ -974,7 +974,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             const int v = std::clamp(std::stoi(choice), 0, 3);
             auto r = m_doc.settings().note_restart;
             auto st = m_doc.settings().note_style;
-            if (key == "dnote_restart") r = static_cast<core::NoteRestart>(std::min(v, 2));
+            if (key == "dnote_restart") r = static_cast<core::NoteRestart>(std::min(v, 3));   // s124: chapter
             else st = static_cast<core::NoteStyle>(v);
             did = core::doc::set_note_numbering(m_journal, m_doc, r, st);
         } else if (key == "dnote_rule" || key == "dnote_rule_w" || key == "dnote_space" || key == "dnote_cont") {   // s118

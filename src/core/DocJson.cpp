@@ -205,7 +205,7 @@ std::optional<Record> from(const json& j) {
         v.facing = val(j, "facing", v.facing);
         v.wrap_beneath = val(j, "wrap_beneath", false);   // s069
         v.units = static_cast<Units>(std::clamp(val(j, "units", 0), 0, 3));   // s073
-        v.note_restart = static_cast<NoteRestart>(std::clamp(val(j, "note_restart", 0), 0, 2));   // s111
+        v.note_restart = static_cast<NoteRestart>(std::clamp(val(j, "note_restart", 0), 0, 3));   // s124: chapter   // s111
         v.note_style = static_cast<NoteStyle>(std::clamp(val(j, "note_style", 0), 0, 3));
         v.note_area = std::clamp(val(j, "note_area", 100), 10, 100);   // s117
         v.note_rule = std::clamp(val(j, "note_rule", 33), 0, 100);   // s118

@@ -163,7 +163,7 @@ StoryEditor::~StoryEditor() {
 int StoryEditor::note_shown(const core::Story& st, int p, int k) {
     if (m_doc.settings().note_restart != core::NoteRestart::Story && m_flowp)
         if (const int n = layout::laid_note_number(m_flowp->get(m_doc, m_story), p, k); n > 0) return n;
-    return core::note_number(st, p, k);
+    return core::note_number(m_doc, st, p, k);   // s124: by chapter too
 }
 
 // s112: each footnote mark as a chip -- its number; its words on hover;

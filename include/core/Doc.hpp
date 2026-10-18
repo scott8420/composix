@@ -105,7 +105,7 @@ struct SavedQuery {
 
 // s111: how footnotes are numbered -- counting on through the story, or
 // starting again on each page / in each section; and how a number looks.
-enum class NoteRestart { Story, Page, Section };
+enum class NoteRestart { Story, Page, Section, Chapter };   // s124: Chapter -- again after each paragraph that starts a new page
 enum class NoteStyle   { Arabic, RomanLower, AlphaLower, Symbols };
 // s120: where notes are set -- each column's foot, or all of them after the
 // story's last paragraph (endnotes, numbered through the story).
@@ -1112,6 +1112,10 @@ bool note_at(const std::string& text, std::size_t i);
 int  notes_in(const std::string& text, std::size_t from = 0, std::size_t to = std::string::npos);   // the marks in [from, to)
 // The number the k-th note of paragraph p takes (1-based, through the story).
 int  note_number(const Story& s, int p, int k);
+// s124: the same, as the document numbers it -- counting again from each
+// chapter's start (a paragraph that starts a new page) when the footnotes
+// count by chapter; else through the story.
+int  note_number(const Doc& d, const Story& s, int p, int k);
 // The paragraph's notes made to match its marks (missing ones empty, extras dropped).
 void fit_notes(Para& p);
 // Which marker starts at text[i] (0 page, 1 section, 2 next, 3 previous;

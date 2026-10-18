@@ -3337,7 +3337,8 @@ int main() {
         check("summary: every page, its size and bleed", s.pages == 16 && s.sheets == 16 && has(s.size, "16 pages · ") &&
                                                          !has(s.size, "sheet") && has(s.size, "bleed"));
         check("summary: no profile -- device CMYK", has(s.colour, "Device CMYK"));
-        check("summary: the bookmarks and links counted", s.bookmarks == 2 && s.links == 2 && s.nav == "2 bookmarks · 2 contents links");
+        check("summary: the bookmarks and links counted (s123: and the sample's note's two)",
+              s.bookmarks == 2 && s.links == 2 && s.note_links == 2 && s.nav == "2 bookmarks · 2 contents links · 2 note links", s.nav);
         o.spreads = true;
         s = L::export_summary(d, flows, o, true, "");
         check("summary: spreads -- pages to sheets", s.sheets == 9 && has(s.size, "16 pages → 9 sheets"));
@@ -3486,7 +3487,8 @@ int main() {
         const auto iii = L::sheet_of(sp, lk.empty() ? std::string() : lk[0].page);
         char rect[48];
         std::snprintf(rect, sizeof rect, "/Rect [%g ", b + iii.x + (lk.empty() ? 0 : lk[0].box.x));
-        check("print: the contents links moved with their page", !lk.empty() && iii.x > 0 && count(pdf, "/Subtype /Link") == 2 &&
+        check("print: the contents links moved with their page", !lk.empty() && iii.x > 0 &&
+                                                                count(pdf, "/Subtype /Link") == 2 + static_cast<int>(L::note_links(d, flows).size()) &&
                                                                 pdf.find(rect) != std::string::npos);
         check("print: the outline still there", pdf.find("(Chapter One)") != std::string::npos);
         L::PdfOptions so;
@@ -3580,7 +3582,10 @@ int main() {
         std::string err;
         const auto out = (base / "toc.pdf").string();
         check("print: the contents page's two links", L::export_print_pdf(d, out, opt, src, &rep, &err) &&
-                                                      count(slurp(out), "/Subtype /Link") == 2, err);
+                                                      count(slurp(out), "/Subtype /Link") == 2 + [&] {   // s123: and the notes'
+                                                          L::FlowCache nf;
+                                                          return static_cast<int>(L::note_links(d, nf).size());
+                                                      }(), err);
         opt.only = core::pages_in_range(d, "iii");
         check("print: the targets not written -- no links", L::export_print_pdf(d, out, opt, src, &rep, &err) &&
                                                             count(slurp(out), "/Subtype /Link") == 0, err);
@@ -7008,6 +7013,137 @@ int main() {
         bool any = false;
         for (const auto& ft : flows.get(d, "story.1").frames) for (const auto& np : ft.notes) any = any || np.end;
         check("back to the foot: no endnotes", !any);
+    }
+
+    {
+        std::cout << "\n-- note links in the PDF (s123) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::insert_note(j, d, "story.1", {1, 4}, "On page 1.");
+        const auto slurp = [](const std::string& f) {
+            std::ifstream in(f, std::ios::binary);
+            std::stringstream ss;
+            ss << in.rdbuf();
+            return ss.str();
+        };
+        const auto count = [](const std::string& hay, const std::string& n) {
+            int k = 0;
+            for (auto at = hay.find(n); at != std::string::npos; at = hay.find(n, at + 1)) ++k;
+            return k;
+        };
+        L::FlowCache flows;
+        auto links = L::note_links(d, flows);
+        const auto page_of_note = [&](int p) -> std::string {
+            for (const auto& ft : flows.get(d, "story.1").frames)
+                for (const auto& np : ft.notes)
+                    if (np.para == p && !np.cont) return d.as<core::Frame>(ft.frame)->owner;
+            return {};
+        };
+        check("two links a note: to it, and back", links.size() == 4, std::to_string(links.size()));
+        bool ok = links.size() == 4;
+        for (std::size_t i = 0; ok && i < links.size(); i += 2) {
+            const auto& to = links[i];
+            const auto& back = links[i + 1];
+            const auto* pg = d.as<core::Page>(to.page);
+            ok = ok && pg && to.box.w > 0 && to.box.h > 0 && to.box.x >= 0 && to.box.r() <= pg->w && to.box.y >= 0 && to.box.b() <= pg->h &&
+                 back.page == to.to && back.to == to.page;
+        }
+        check("each box on its page; back goes where the mark is", ok);
+        check("the first note's mark on page 1 links to its own page's foot", !links.empty() && links[0].to == page_of_note(1) &&
+                                                                              links[0].page == links[0].to);
+        // As endnotes: the first note's link crosses to where the endnotes are.
+        D::set_note_place(j, d, core::NoteAt::StoryEnd, "Notes");
+        links = L::note_links(d, flows);
+        check("endnotes: the mark on page 1 links to the endnote's page", links.size() == 4 && links[0].to == page_of_note(1) &&
+                                                                          links[0].to != links[0].page);
+        // Written: the screen PDF and the print PDF carry them (plus the contents' two).
+        const auto base = fs::temp_directory_path() / "composix_s123";
+        fs::create_directories(base);
+        const L::ImageSource src = [](const core::Asset&, double, double) -> cairo_surface_t* { return nullptr; };
+        L::PdfOptions o;
+        o.compress = false;
+        L::PdfReport rep;
+        std::string err;
+        const auto contents = static_cast<int>(L::contents_links(d, flows).size());
+        const auto pout = (base / "print.pdf").string();
+        check("print PDF: the note links written", L::export_print_pdf(d, pout, o, src, &rep, &err) &&
+                                                   count(slurp(pout), "/Subtype /Link") == contents + 4, err);
+        const auto sout = (base / "screen.pdf").string();
+        check("screen PDF: the note links written", L::export_pdf(d, sout, o, src, &rep, &err) &&
+                                                    count(slurp(sout), "/Subtype /Link") == contents + 4, err);
+        std::error_code ec;
+        if (!std::getenv("KEEP_PDF")) fs::remove_all(base, ec);
+    }
+
+    {
+        std::cout << "\n-- numbers by chapter (s124) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::insert_note(j, d, "story.1", {1, 4}, "One.");     // Chapter One
+        D::insert_note(j, d, "story.1", {2, 6}, "Two.");     // Chapter One
+        const auto* st = d.as<core::Story>("story.1");       // the sample's own: Chapter Two (paragraph 5)
+        check("through the story: 1 2 3", core::note_number(d, *st, 1, 0) == 1 && core::note_number(d, *st, 2, 0) == 2 &&
+                                          core::note_number(d, *st, 5, 0) == 3);
+        D::set_note_numbering(j, d, core::NoteRestart::Chapter, core::NoteStyle::Arabic);
+        st = d.as<core::Story>("story.1");
+        check("by chapter: 1 2, then 1 again", core::note_number(d, *st, 1, 0) == 1 && core::note_number(d, *st, 2, 0) == 2 &&
+                                               core::note_number(d, *st, 5, 0) == 1);
+        {
+            core::Doc e;
+            std::string err;
+            check("json: by chapter kept", core::from_json(e, core::to_json(d), &err) && e.settings().note_restart == core::NoteRestart::Chapter, err);
+        }
+        L::FlowCache flows;
+        const auto nums = [&] {
+            std::vector<int> v;
+            for (const auto& ft : flows.get(d, "story.1").frames)
+                for (const auto& np : ft.notes) if (np.k >= 0 && !np.cont) v.push_back(np.number);
+            return v;
+        };
+        check("at the foot: 1 2 / 1", nums() == std::vector<int>{1, 2, 1});
+        check("the marks: as set", L::laid_note_number(flows.get(d, "story.1"), 5, 0) == 1 && L::laid_note_number(flows.get(d, "story.1"), 2, 0) == 2);
+        D::set_note_place(j, d, core::NoteAt::ChapterEnd, "Notes");
+        check("chapter endnotes: 1 2 / 1", nums() == std::vector<int>{1, 2, 1});
+        D::set_note_place(j, d, core::NoteAt::StoryEnd, "Notes");
+        check("story endnotes, by chapter: still each chapter's own", nums() == std::vector<int>{1, 2, 1});
+        D::set_note_place(j, d, core::NoteAt::Foot, "Notes");
+        {   // An edit -- re-flow == whole.
+            const core::Story before = *d.as<core::Story>("story.1");
+            const auto old = L::flow_story(d, "story.1");
+            D::edit_text(j, d, "story.1", {3, 0}, {3, 0}, "Late that night ", "Typing", "");
+            const auto re = L::reflow_story(d, "story.1", before, old);
+            const auto wf = L::flow_story(d, "story.1");
+            bool same = re.frames.size() == wf.frames.size();
+            for (std::size_t i = 0; same && i < re.frames.size(); ++i) {
+                same = re.frames[i].notes.size() == wf.frames[i].notes.size();
+                for (std::size_t k = 0; same && k < re.frames[i].notes.size(); ++k) same = re.frames[i].notes[k].number == wf.frames[i].notes[k].number;
+            }
+            check("re-flow by chapter == whole", same);
+        }
+        {   // A new chapter start (Heading 1 starts a right page) before the second note: re-flow == whole, renumbered.
+            const core::Story before = *d.as<core::Story>("story.1");
+            const auto old = L::flow_story(d, "story.1");
+            D::set_para_style(j, d, "story.1", {2, 0}, {2, 0}, "style.2");
+            const auto re = L::reflow_story(d, "story.1", before, old);
+            const auto wf = L::flow_story(d, "story.1");
+            bool same = re.frames.size() == wf.frames.size();
+            std::vector<int> a, b;
+            for (std::size_t i = 0; same && i < re.frames.size(); ++i) {
+                for (const auto& np : re.frames[i].notes) if (!np.cont) a.push_back(np.number);
+                for (const auto& np : wf.frames[i].notes) if (!np.cont) b.push_back(np.number);
+            }
+            check("a chapter start added: re-flow == whole, the notes after it from 1", same && a == b && !b.empty() && std::all_of(b.begin(), b.end(), [](int n) { return n == 1; }),
+                  std::to_string(b.size()));
+        }
     }
 
     std::cout << "-----------------------------------------------\n";

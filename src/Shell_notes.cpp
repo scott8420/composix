@@ -27,7 +27,7 @@ void Shell::edit_note(const std::string& story, int p, int k, int sel_a, int sel
     const auto& para = st->paras[static_cast<std::size_t>(p)];
     const std::string words = k >= 0 && k < static_cast<int>(para.notes.size()) ? para.notes[static_cast<std::size_t>(k)].text
                                                                                 : std::string{};
-    const int number = core::note_number(*st, p, k);
+    const int number = core::note_number(m_doc, *st, p, k);   // s124
     auto& canvas = m_canvas_view.canvas();
     if (m_note_pop) {
         m_note_pop->popdown();

@@ -151,7 +151,7 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
                     // s109: a footnote mark's number (it moves when one is added before).
                     for (std::size_t i = p.text.find(core::kMarkNote, static_cast<std::size_t>(l.start));
                          i != std::string::npos && static_cast<int>(i) < l.end; i = p.text.find(core::kMarkNote, i + 3))
-                        line += "#" + std::to_string(core::note_number(*st, l.para, core::notes_in(p.text, 0, i)));
+                        line += "#" + std::to_string(core::note_number(d, *st, l.para, core::notes_in(p.text, 0, i)));
                     k.lines.push_back(std::move(line));
                 }
                 for (const auto& np : ft.notes) {   // s109: the notes at the foot
@@ -271,6 +271,43 @@ std::string trimmed(std::string t) {
     return t.substr(a, t.find_last_not_of(' ') - a + 1);
 }
 }  // namespace
+
+std::vector<PdfLink> note_links(const core::Doc& d, FlowCache& flows) {   // s123
+    std::vector<PdfLink> out;
+    for (const auto& sid : d.ids_of<core::Story>()) {
+        const auto& st = *d.as<core::Story>(sid);
+        bool any = false;
+        for (const auto& p : st.paras) any = any || !p.notes.empty();
+        if (!any) continue;
+        const auto& flow = flows.get(d, sid);
+        for (const auto& ft : flow.frames) {
+            const auto* nf = d.as<core::Frame>(ft.frame);
+            if (!nf || nf->rot != 0) continue;
+            for (const auto& np : ft.notes) {
+                if (np.cont || np.k < 0) continue;   // the note's first piece (where its number is)
+                const int m = core::doc::note_mark_byte(st, np.para, np.k);
+                if (m < 0) continue;
+                const auto c = caret_at(d, sid, flow, {np.para, m});
+                if (!c.ok) continue;
+                const auto* mf = d.as<core::Frame>(c.frame);
+                if (!mf || mf->rot != 0) continue;
+                const auto rs = selection_rects(d, sid, flow, c.frame, {np.para, m}, {np.para, m + 3});
+                if (rs.empty()) continue;
+                const auto& r = rs.front();
+                // The mark: a little room round a small number, so it can be hit.
+                const double pad = 1.5;
+                const core::Rect mark{mf->x + r.x - pad, mf->y + r.y - pad, std::max(4.0, r.w) + 2 * pad, r.h + 2 * pad};
+                const double note_top = nf->y + np.y;
+                out.push_back({mf->owner, mark, nf->owner, std::max(0.0, note_top - 4)});
+                // Back: the note's number (its first line's start).
+                const double back_w = std::min(np.w, 14.0), back_h = std::min(np.h, 12.0);
+                out.push_back({nf->owner, {nf->x + np.x - pad, note_top - pad, back_w + 2 * pad, back_h + 2 * pad}, mf->owner,
+                               std::max(0.0, mf->y + r.y - 24)});
+            }
+        }
+    }
+    return out;
+}
 
 std::vector<PdfLink> contents_links(const core::Doc& d, FlowCache& flows) {   // s083
     std::vector<PdfLink> out;
@@ -459,14 +496,18 @@ ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOpti
                          : std::string("RGB kept, tagged"));
     }
     if (opt.bookmarks && !pages.empty()) s.bookmarks = static_cast<int>(bookmarks(d, flows, opt.mark_lists, pages).size());
-    if (!x)
+    if (!x) {
         for (const auto& l : contents_links(d, flows))
             if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.links;
+        for (const auto& l : note_links(d, flows))   // s123
+            if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.note_links;
+    }
     const auto n = [](int k, const char* one, const char* many) {
         return (k == 0 ? std::string("No") : std::to_string(k)) + " " + (k == 1 ? one : many);
     };
     s.nav = n(s.bookmarks, "bookmark", "bookmarks") + " \u00b7 " +
             (x ? std::string("contents links left out (PDF/X)") : n(s.links, "contents link", "contents links"));
+    if (!x && s.note_links > 0) s.nav += " \u00b7 " + n(s.note_links, "note link", "note links");   // s123
     return s;
 }
 
@@ -510,7 +551,8 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
                                                  " of " + std::to_string(npages) + "\u2026");
     };
     if (opt.progress) flow_all(d, flows, report_layout);
-    const auto links = contents_links(d, flows);   // s083
+    auto links = contents_links(d, flows);   // s083
+    for (auto& l : note_links(d, flows)) links.push_back(std::move(l));   // s123: and the notes'
     std::set<std::string> missing;
     int n = 0;
     for (const auto& sh : sheets) {

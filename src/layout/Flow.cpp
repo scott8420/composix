@@ -42,15 +42,18 @@ using LayoutPtr = std::unique_ptr<PangoLayout, LayoutDel>;
 // s109: the story being flowed or drawn on this thread, so a paragraph's
 // footnote marks know their numbers (counted through the story).
 thread_local const core::Story* tl_story = nullptr;
+thread_local const core::Doc* tl_doc = nullptr;   // s124: chapter numbering reads its starts
 struct StoryScope {
     const core::Story* prev;
-    explicit StoryScope(const core::Story* s) : prev(tl_story) { tl_story = s; }
-    ~StoryScope() { tl_story = prev; }
+    const core::Doc* prev_d;
+    StoryScope(const core::Doc& d, const core::Story* s) : prev(tl_story), prev_d(tl_doc) { tl_story = s; tl_doc = &d; }
+    ~StoryScope() { tl_story = prev; tl_doc = prev_d; }
 };
 int first_note_of(const core::Para& p) {
     if (tl_story && !tl_story->paras.empty() && &p >= tl_story->paras.data() &&
         &p < tl_story->paras.data() + tl_story->paras.size())
-        return core::note_number(*tl_story, static_cast<int>(&p - tl_story->paras.data()), 0);
+        return tl_doc ? core::note_number(*tl_doc, *tl_story, static_cast<int>(&p - tl_story->paras.data()), 0)
+                      : core::note_number(*tl_story, static_cast<int>(&p - tl_story->paras.data()), 0);
     return 1;
 }
 // s111: the number of the next footnote mark a layout meets, when the
@@ -611,7 +614,7 @@ void place_notes(const core::Doc& d, const core::Story& st, const core::Frame& f
         for (std::size_t i = t.find(core::kMarkNote, static_cast<std::size_t>(l.start)); i != std::string::npos &&
              static_cast<int>(i) < l.end; i = t.find(core::kMarkNote, i + 3)) {
             const int k = core::notes_in(t, 0, i);
-            const int num = nc ? ++nc->next : core::note_number(st, l.para, k);
+            const int num = nc ? ++nc->next : core::note_number(d, st, l.para, k);
             NotePlace np{l.para, k, num, col, cx, 0, cw, 0};
             if (cn.split && l.para == cn.sp && k == cn.sk) {
                 np.to = cn.scut;
@@ -703,7 +706,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             for (std::size_t i = t.find(core::kMarkNote, static_cast<std::size_t>(a)); i != std::string::npos && static_cast<int>(i) < b;
                  i = t.find(core::kMarkNote, i + 3), ++j) {
                 const int k = core::notes_in(t, 0, i);
-                const int num = nc ? nc->next + col_marks + j + 1 : core::note_number(st, p, k);
+                const int num = nc ? nc->next + col_marks + j + 1 : core::note_number(d, st, p, k);
                 ms.push_back({k, num, note_height(d, st, p, k, num, cw)});
             }
             if (ms.empty()) return true;
@@ -750,7 +753,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
             std::vector<NoteRun> runs;
             for (int p = std::max(0, c.end_from); p < upto && p < paras; ++p)
                 for (int k = 0; k < static_cast<int>(st.paras[static_cast<std::size_t>(p)].notes.size()); ++k)
-                    runs.push_back({p, k, core::note_number(st, p, k), 0});
+                    runs.push_back({p, k, core::note_number(d, st, p, k), 0});
             c.end_from = upto;
             if (runs.empty()) return false;
             c.carry.clear();
@@ -1088,7 +1091,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
                     const std::map<std::string, double>* heights, const FlowTick* tick, const Prev* prev) {
     StoryFlow out;
     const auto* st = &text;
-    const StoryScope scope(st);   // s109: notes numbered through this text
+    const StoryScope scope(d, st);   // s109: notes numbered through this text
     const auto chain = thread_frames(d, story);
     for (const auto& f : chain) out.frames.push_back({f, {}});
     if (chain.empty()) return out;   // not placed: nothing flows, nothing is "over"
@@ -1121,6 +1124,18 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
             // the room a number takes in its line, may differ).
             for (std::size_t i = k0; i < np.size() - suf; ++i) note_delta += static_cast<int>(np[i].notes.size());
             for (std::size_t i = k0; i < op.size() - suf; ++i) note_delta -= static_cast<int>(op[i].notes.size());
+            // s124: numbered by chapter -- a chapter start added, taken away or
+            // changed renumbers the notes after it: nothing after is taken as it was.
+            if (d.settings().note_restart == core::NoteRestart::Chapter) {
+                const auto starts = [&](const core::Para& pa) {
+                    const auto sa = core::doc::start_of(d, pa);
+                    return sa == core::ParaStart::NextPage || sa == core::ParaStart::NextRightPage;
+                };
+                bool brk = false;
+                for (std::size_t i = k0; i < np.size() - suf; ++i) brk = brk || starts(np[i]);
+                for (std::size_t i = k0; i < op.size() - suf; ++i) brk = brk || starts(op[i]);
+                if (brk) note_delta += 1 << 20;
+            }
             const int back = k0 > 0 ? static_cast<int>(k0) - 1 : 0;
             // The last frame the old flow came to at or before paragraph `back`'s start.
             std::size_t fi0 = 0;
@@ -1152,7 +1167,8 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         out.frames[fi].page_before = last_page;
         // s111: numbering by page / section -- the notes before this frame on the same one.
         // s120: endnotes count through the story.
-        const auto restart = d.settings().note_at != core::NoteAt::Foot ? core::NoteRestart::Story : d.settings().note_restart;
+        const auto restart = (d.settings().note_at != core::NoteAt::Foot || d.settings().note_restart == core::NoteRestart::Chapter)
+                                 ? core::NoteRestart::Story : d.settings().note_restart;   // s124: by chapter -- the text's count
         const auto key_of = [&](const std::string& fid) -> std::string {
             const auto* f = d.as<core::Frame>(fid);
             if (!f) return {};
@@ -1357,7 +1373,7 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
     const auto* fr = d.as<core::Frame>(frame);
     const FrameText* ft = frame_text(flow, frame);
     if (!st || !fr || !ft || ft->lines.empty()) return;
-    const StoryScope scope(st);   // s109
+    const StoryScope scope(d, st);   // s109
     std::size_t i = 0;
     while (i < ft->lines.size()) {
         const int p = ft->lines[i].para;
@@ -1438,7 +1454,7 @@ void each_ref(const core::Doc& d, const core::Story& st, const FrameText* ft, co
         PangoRectangle r;
         pango_layout_index_to_pos(pl.lay, static_cast<int>(i) - pl.from, &r);
         const int k = core::notes_in(t, 0, i);
-        int n = core::note_number(st, ln.para, k);
+        int n = core::note_number(d, st, ln.para, k);
         if (ft)   // s111: as the flow numbered it (by page / section)
             for (const auto& np : ft->notes)
                 if (np.para == ln.para && np.k == k) { n = np.number; break; }
