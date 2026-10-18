@@ -678,6 +678,10 @@ void Shell::on_nav_pick(const views::Pick& p) {  // handler
 
 // s068: up a level -- the open items' section, as tiles, with them picked.
 void Shell::on_go_up() {  // handler
+    if (m_inspector.has_pending()) {   // s165 fix (Scott): Back leaves the style -- ask first
+        m_inspector.settle_pending([this] { on_go_up(); });
+        return;
+    }
     if (m_pick.segment || m_pick.items.empty()) return;
     const auto parent = core::parent_of(m_outline, m_pick.items);
     if (!parent) return;

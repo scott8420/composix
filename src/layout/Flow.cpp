@@ -1937,7 +1937,7 @@ double line_width_of(const core::Frame& fr, const Line& l) {   // s166
     return l.cw > 0 ? l.cw : core::column_width(fr, l.col);
 }
 
-std::vector<RuleMark> column_rules(const core::Frame& f) {
+std::vector<RuleMark> column_rules(const core::Frame& f, const FrameText* ft) {
     std::vector<RuleMark> out;
     const int n = core::column_count(f);
     const auto& r = f.col_rule;
@@ -1945,9 +1945,27 @@ std::vector<RuleMark> column_rules(const core::Frame& f) {
     const double y0 = std::max(0.0, f.inset.top) + std::max(0.0, r.inset);
     const double y1 = f.h - std::max(0.0, f.inset.bottom) - std::max(0.0, r.inset);
     if (y1 <= y0) return out;
+    // s168: the stretches a spanning paragraph takes (its lines, with a
+    // rule's inset round them) -- the rules leave them out.
+    struct Gap { double a, b; };
+    std::vector<Gap> gaps;
+    if (ft)
+        for (const auto& l : ft->lines) {
+            if (l.cw <= 0) continue;
+            const double a = l.y - std::max(0.0, r.inset), b = l.y + l.h + std::max(0.0, r.inset);
+            if (!gaps.empty() && a <= gaps.back().b + 0.01) gaps.back().b = std::max(gaps.back().b, b);
+            else gaps.push_back({a, b});
+        }
     for (int c = 1; c < n; ++c) {
         const double x = (core::column_x(f, c - 1) + core::column_width(f, c - 1) + core::column_x(f, c)) / 2;
-        out.push_back({{x - r.weight / 2, y0, r.weight, y1 - y0}, r.color, r.tint});
+        double from = y0;
+        for (const auto& g : gaps) {
+            if (g.b <= from) continue;
+            if (g.a > from && g.a < y1) out.push_back({{x - r.weight / 2, from, r.weight, std::min(g.a, y1) - from}, r.color, r.tint});
+            from = std::max(from, g.b);
+            if (from >= y1) break;
+        }
+        if (from < y1) out.push_back({{x - r.weight / 2, from, r.weight, y1 - from}, r.color, r.tint});
     }
     return out;
 }
@@ -2008,7 +2026,7 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
     // s044: paragraph rules, under the words; s055: column rules with them.
     auto marks = paragraph_rules(d, story, flow, frame, text);
     if (const auto* fr = d.as<core::Frame>(frame))
-        for (auto& m : column_rules(*fr)) marks.push_back(std::move(m));
+        for (auto& m : column_rules(*fr, frame_text(flow, frame))) marks.push_back(std::move(m));   // s168: not through a spanning paragraph
     for (const auto& m : marks) {
         if (const auto* sw = d.as<core::Swatch>(m.color)) {
             const auto c = core::tint_rgb(core::doc::screen_rgb(*sw), m.tint);

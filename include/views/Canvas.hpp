@@ -259,6 +259,8 @@ private:
     bool        m_space = false;
     bool        m_mods_shift = false, m_mods_alt = false;   // read from the drag's events
     bool        m_mods_ctrl = false;                       // s025: Ctrl+Shift+click overrides a master item
+    bool        m_override_marquee = false;                // s169: Ctrl+Shift+drag -- overrides what it touches
+    std::vector<core::MasterItemOn> m_override_hits;       //  ... what it touches now
     Glib::RefPtr<Gtk::GestureDrag> m_gdrag;
     Glib::RefPtr<Gtk::EventControllerScroll> m_gscroll;
     double      m_mx = 0, m_my = 0;            // the pointer, screen

@@ -1004,6 +1004,23 @@ std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows) {   // 
                 if (want && t0 + i < st->paras.size() && st->paras[t0 + i].style != l.entry_styles[lv - 1])
                     why = "Entries not in " + want->name;
             }
+            // s170: an AUTOMATIC deeper level -- build_list sets it in the style
+            // named for level 1's ("Contents Entry 2"), found by name, else made.
+            // Written in another, or none of that name yet: out of date.
+            const core::Style* base = nullptr;
+            for (std::size_t i = 0; i < en.size() && !base; ++i)
+                if (en[i].level <= 1 && t0 + i < st->paras.size()) base = d.as<core::Style>(st->paras[t0 + i].style);
+            for (std::size_t i = 0; i < en.size() && why.empty() && base; ++i) {
+                const int lv = en[i].level;
+                if (lv < 2 || t0 + i >= st->paras.size()) continue;
+                if (static_cast<std::size_t>(lv) <= l.entry_styles.size() && !l.entry_styles[static_cast<std::size_t>(lv - 1)].empty()) continue;
+                const std::string name = base->name + " " + std::to_string(lv);
+                core::Doc::Id found;
+                for (const auto& sid : d.ids_of<core::Style>())
+                    if (const auto* x = d.as<core::Style>(sid); x->kind == core::StyleKind::Paragraph && x->name == name) { found = sid; break; }
+                if (found.empty()) why = "No " + name + " style yet";
+                else if (st->paras[t0 + i].style != found) why = "Entries not in " + name;
+            }
         }
         if (!why.empty()) out.push_back({lid, why});
     }

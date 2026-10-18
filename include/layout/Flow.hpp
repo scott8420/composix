@@ -215,7 +215,9 @@ std::vector<RuleMark> paragraph_rules(const core::Doc& d, const std::string& sto
                                       const std::string& frame, const core::Story* text = nullptr);
 // s055: a text frame's column rules -- one down the middle of each gutter,
 // the text area's height less the rule's inset (frame coordinates).
-std::vector<RuleMark> column_rules(const core::Frame& f);
+// s168: `ft` -- what the flow set in it: a rule stops at a paragraph
+// spanning the columns (Line.cw) and starts again under it.
+std::vector<RuleMark> column_rules(const core::Frame& f, const FrameText* ft = nullptr);
 
 // s059: hidden characters -- where the marks that steer the text sit on a
 // frame's lines (frame coordinates): spaces, tabs, paragraph ends, a break

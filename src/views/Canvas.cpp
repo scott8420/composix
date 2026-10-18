@@ -778,6 +778,20 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->fill_preserve();
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.8);
         cr->stroke();
+        // s169: the master items it would override -- outlined in orange.
+        if (m_override_marquee) {
+            cr->set_source_rgba(0.93, 0.47, 0.05, 0.95);
+            cr->set_line_width(1.5);
+            for (const auto& h : m_override_hits)
+                for (const auto& p : m_placed) {
+                    if (p.id != h.page) continue;
+                    const auto* f = m_doc.as<core::Frame>(h.item);
+                    if (!f) continue;
+                    const Rect r = m_vp.to_screen(Rect{p.r.x + f->x + core::across_dx(m_doc, *f, m_doc.side_of(p.id)), p.r.y + f->y, f->w, f->h});
+                    cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
+                }
+            cr->stroke();
+        }
     }
 }
 
@@ -1013,9 +1027,11 @@ void Canvas::on_drag_begin(double x, double y) {
         return;
     }
     m_drag = Drag::Marquee;
-    m_sel0 = adding ? m_sel : std::vector<std::string>{};
+    // s169: Ctrl+Shift+drag -- the master items it touches overridden, at once.
+    m_override_marquee = m_mods_ctrl && m_mods_shift;
+    m_sel0 = adding && !m_override_marquee ? m_sel : std::vector<std::string>{};
     m_marquee = {x, y, 0, 0};
-    if (!adding) pick({});
+    if (!adding || m_override_marquee) pick({});
 }
 
 // Shift / Alt from the gesture's own event, at press and on every update. Not
@@ -1086,6 +1102,11 @@ void Canvas::on_drag_update(double ox, double oy) {
         double x0, y0, x1, y1;
         m_vp.to_doc(m_marquee.x, m_marquee.y, x0, y0);
         m_vp.to_doc(m_marquee.r(), m_marquee.b(), x1, y1);
+        if (m_override_marquee) {   // s169: what it would override, outlined (draw_overlays)
+            m_override_hits = core::master_items_in(m_doc, m_placed, Rect::from_corners(x0, y0, x1, y1));
+            queue_draw();
+            return;
+        }
         auto s2 = m_sel0;
         for (const auto& id : core::frames_in(m_doc, m_placed, Rect::from_corners(x0, y0, x1, y1)))
             if (std::find(s2.begin(), s2.end(), id) == s2.end()) s2.push_back(id);
@@ -1205,6 +1226,21 @@ void Canvas::on_drag_update(double ox, double oy) {
 void Canvas::on_drag_end(double, double) {
     const Drag was = m_drag;
     m_drag = Drag::None;
+    if (was == Drag::Marquee && m_override_marquee) {   // s169: one step, the copies picked
+        m_override_marquee = false;
+        const auto hits = std::move(m_override_hits);
+        m_override_hits.clear();
+        m_marquee = {};
+        const auto made = core::doc::override_master_items(m_journal, m_doc, hits);
+        if (!made.empty()) {
+            relayout();
+            pick(made);
+            m_sig_edited.emit();
+            if (auto lg = log::get(log::Area::View)) lg->info("override {} master item(s) by marquee", made.size());
+        }
+        queue_draw();
+        return;
+    }
     if (was == Drag::Text) { queue_draw(); return; }
     if (was == Drag::Picture) {   // s035: the move, one step
         m_begun = false;

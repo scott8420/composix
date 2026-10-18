@@ -3107,6 +3107,94 @@ int main() {
     }
 
     {
+        std::cout << "\n-- contents out of date by an automatic level's style (s170) --\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        core::doc::set_list_styles(j, d, "list.1", {"style.2", "style.3"});
+        L::FlowCache flows;
+        L::build_list(j, d, "list.1");
+        const auto made = d.as<core::GenList>("list.1")->entry_styles.at(1);
+        const auto stale = [&]() -> std::string {
+            L::FlowCache f;
+            for (const auto& x : L::stale_lists(d, f)) if (x.list == "list.1") return x.why;
+            return "current";
+        };
+        check("built: current", stale() == "current", stale());
+        check("level 2 automatic again: found by name -- current", core::doc::set_list_entry_style(j, d, "list.1", 2, "") && stale() == "current", stale());
+        const auto name = d.as<core::Style>(made)->name;
+        core::doc::edit_styles(j, d, {made}, "Name", [](core::Style& st) { st.name = "Figure Entry"; });
+        check("its style renamed: none of the name -- out of date", stale() == "No " + name + " style yet", stale());
+        j.undo();
+        check("named again: current", stale() == "current", stale());
+        {   // another style takes the name; the entries are still in the old one
+            core::doc::edit_styles(j, d, {made}, "Name", [](core::Style& st) { st.name = "Old Entry"; });
+            const auto other = core::doc::duplicate_style(j, d, made);
+            core::doc::edit_styles(j, d, {other}, "Name", [&](core::Style& st) { st.name = name; });
+            check("another style of the name: entries not in it", stale() == "Entries not in " + name, stale());
+        }
+    }
+
+    {
+        std::cout << "\n-- override several master items with a marquee (s169) --\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        std::vector<std::string> sp;
+        for (const auto& x : core::spreads(d)) if (x.size() == 2 && !D::overridable_items(d, x[0]).empty() && !D::overridable_items(d, x[1]).empty()) { sp = x; break; }
+        check("fixture: a spread whose pages show master items", !sp.empty());
+        const auto pl = core::layout_pages(d, sp);
+        const auto all = core::master_items_in(d, pl, {-1e4, -1e4, 2e4, 2e4});
+        check("all of both pages: each page's items", all.size() == D::overridable_items(d, sp[0]).size() + D::overridable_items(d, sp[1]).size());
+        const auto right = core::master_items_in(d, pl, {pl[1].r.x + 1, -1e4, 1e4, 2e4});
+        check("the right page alone", !right.empty() && std::all_of(right.begin(), right.end(), [&](const core::MasterItemOn& m) { return m.page == sp[1]; }));
+        const auto made = D::override_master_items(j, d, all);
+        check("overridden: one step, a copy each", made.size() == all.size() && j.size() == 1 &&
+              std::all_of(made.begin(), made.end(), [&](const auto& id) { return d.as<core::Frame>(id) && !d.as<core::Frame>(id)->overrides.empty(); }));
+        check("now none to touch there", core::master_items_in(d, pl, {-1e4, -1e4, 2e4, 2e4}).empty());
+        check("again: nothing, no step", D::override_master_items(j, d, all).empty() && j.size() == 1);
+        j.undo();
+        check("undo: the master's again", core::master_items_in(d, pl, {-1e4, -1e4, 2e4, 2e4}).size() == all.size());
+        check("marquee overrides: through the door", d.strays() == 0);
+    }
+
+    {
+        std::cout << "\n-- column rules stop at a spanning paragraph (s168) --\n";
+        namespace L = composix::layout;
+        core::Frame f;
+        f.kind = core::FrameKind::Text;
+        f.w = 300;
+        f.h = 400;
+        f.columns = 2;
+        f.col_rule.weight = 1;
+        f.col_rule.inset = 4;
+        check("no flow: one rule down the gutter", L::column_rules(f).size() == 1);
+        L::FrameText ft;
+        L::Line a{0, 0, 10, 20, 14, 0, 0};
+        L::Line s1{1, 0, 10, 100, 28, 0, 0};
+        s1.cw = 300;
+        s1.band = 1;
+        L::Line s2 = s1;
+        s2.y = 128;
+        L::Line b{2, 0, 10, 170, 14, 0, 0};
+        b.band = 2;
+        ft.lines = {a, s1, s2, b};
+        const auto r = L::column_rules(f, &ft);
+        check("a spanning paragraph: the rule above it and under it", r.size() == 2 &&
+              std::abs((r[0].r.y + r[0].r.h) - (100 - 4)) < 0.01 && std::abs(r[1].r.y - (156 + 4)) < 0.01 &&
+              std::abs(r[1].r.y + r[1].r.h - (400 - 4)) < 0.01);
+        L::Line top = s1;
+        top.y = 0;
+        ft.lines = {top, b};
+        const auto r2 = L::column_rules(f, &ft);
+        check("at the top: only under it", r2.size() == 1 && r2[0].r.y > 28);
+    }
+
+    {
         std::cout << "\n-- a sidebar's footnotes at the page's foot (s167) --\n";
         namespace D = core::doc;
         namespace L = composix::layout;

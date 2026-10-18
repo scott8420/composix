@@ -97,7 +97,9 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
     const auto& flow = rs.any ? rs.flow : c.flows.get(c.d, f.story);
     // s044: paragraph rules, under the words -- each in its swatch's ink.
     auto marks = paragraph_rules(c.d, f.story, flow, fid, rs.any ? &rs.text : nullptr);
-    for (auto& m : column_rules(f)) marks.push_back(std::move(m));   // s055
+    const FrameText* ftx = nullptr;   // s168: rules not through a spanning paragraph
+    for (const auto& x : flow.frames) if (x.frame == fid) ftx = &x;
+    for (auto& m : column_rules(f, ftx)) marks.push_back(std::move(m));   // s055
     for (const auto& m : marks) {
         pg.set_fill(ink_of(c.d, m.color, m.tint));
         pg.rect({f.x + m.r.x, f.y + m.r.y, m.r.w, m.r.h});

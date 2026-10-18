@@ -1823,6 +1823,26 @@ std::vector<Doc::Id> override_all(DocJournal& j, Doc& d, const std::vector<Doc::
     return made;
 }
 
+std::vector<Doc::Id> override_master_items(DocJournal& j, Doc& d, const std::vector<MasterItemOn>& items) {   // s169
+    std::vector<MasterItemOn> plan;
+    for (const auto& it : items) {
+        const auto* f = d.as<Frame>(it.item);
+        if (!f || !d.as<Page>(it.page) || !d.as<Master>(f->owner)) continue;
+        const auto chain = master_chain(d, it.page);
+        if (std::find(chain.begin(), chain.end(), f->owner) == chain.end() || !master_item_on(d, it.item, it.page)) continue;
+        if (std::any_of(plan.begin(), plan.end(), [&](const MasterItemOn& p) { return p.page == it.page && p.item == it.item; })) continue;
+        plan.push_back(it);
+    }
+    std::vector<Doc::Id> made;
+    if (plan.empty()) return made;
+    j.run(plan.size() == 1 ? "Override master item" : "Override " + std::to_string(plan.size()) + " master items", {}, [&] {
+        std::vector<Doc::Id> ids;
+        for (const auto& p : plan) made.push_back(copy_master_item(d, p.page, p.item, ids));
+        return ids;
+    });
+    return made;
+}
+
 bool remove_all_overrides(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages) {
     std::vector<Doc::Id> copies;
     for (const auto& p : pages)
@@ -3701,6 +3721,10 @@ const std::vector<Verb>& verbs() {
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"set_ruler_origin", [](DocJournal& j, Doc& d) { set_ruler_origin(j, d, RulerOrigin::Page); }},   // s154
         {"set_ruler_zero", [](DocJournal& j, Doc& d) { set_ruler_zero(j, d, 36, 18); }},
+        {"override_master_items", [](DocJournal& j, Doc& d) {   // s169
+            const auto pl = layout_pages(d, d.pages());
+            override_master_items(j, d, master_items_in(d, pl, {-1e5, -1e5, 2e5, 2e5}));
+        }},
         {"styles_as_one", [](DocJournal& j, Doc& d) {   // s162
             const auto st = d.ids_of<Style>();
             styles_as_one(j, d, "Style settings", [&] {
@@ -4226,6 +4250,25 @@ Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, d
         }
     }
     return {};
+}
+
+std::vector<MasterItemOn> master_items_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r) {   // s169
+    std::vector<MasterItemOn> out;
+    for (const auto& p : pl) {
+        if (!d.as<Page>(p.id)) continue;
+        const Side sd = d.side_of(p.id);
+        for (const auto& m : master_chain(d, p.id))
+            for (const auto& fid : d.frames_on(m)) {
+                if (!master_item_on(d, fid, p.id)) continue;
+                const auto& f = *d.as<Frame>(fid);
+                Rect fr{p.r.x + f.x + across_dx(d, f, sd), p.r.y + f.y, f.w, f.h};
+                if (f.across && sd == Side::Left) fr.w = std::max(0.0, std::min(fr.r(), p.r.r()) - fr.x);
+                if (f.across && sd == Side::Right) { const double rr = fr.r(); fr.x = std::max(fr.x, p.r.x); fr.w = std::max(0.0, rr - fr.x); }
+                const bool touch = fr.x <= r.r() && fr.r() >= r.x && fr.y <= r.b() && fr.b() >= r.y;
+                if (touch && fr.w > 0) out.push_back({p.id, fid});
+            }
+    }
+    return out;
 }
 
 std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r) {

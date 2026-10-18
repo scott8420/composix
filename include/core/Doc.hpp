@@ -707,6 +707,7 @@ Size2 picture_natural(const Asset& a);
 // ── the verbs: every user choice on the document ───────────────────────────
 // Each goes through the journal; the UI calls these and nothing else writes.
 struct Placed;   // s027: frames_rehome takes the canvas layout (below)
+struct MasterItemOn { Doc::Id page, item; };   // s169: a master's item as it shows on a page
 
 namespace doc {
 
@@ -825,6 +826,9 @@ Doc::Id override_master_item(DocJournal& j, Doc& d, const Doc::Id& page, const D
 // s072: every master item showing on each of `pages` (not yet overridden)
 // overridden at once -- ONE step; the copies made, in order.
 std::vector<Doc::Id> override_all(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages);
+// s169: these master items overridden on their pages (Ctrl+Shift+drag) --
+// each page's own copy; one step. The copies made.
+std::vector<Doc::Id> override_master_items(DocJournal& j, Doc& d, const std::vector<MasterItemOn>& items);
 // s072: every override on each of `pages` back to the master's -- one step.
 bool remove_all_overrides(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages);
 // s072: the master items showing on `page` that it could override (its
@@ -1411,6 +1415,9 @@ Side side_for(const Doc& d, const Doc::Id& page_or_master, Side panel);
 // The topmost master item showing on a placed PAGE under (x, y) -- what
 // Ctrl+Shift+click overrides. "" if none.
 Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, double y, double tol, Doc::Id* page);
+// s169: the master items showing on placed pages that `r` touches (an item
+// across the spine: on each page its part), each with its page.
+std::vector<MasterItemOn> master_items_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r);
 // Every own frame touched by `r` (touching selects -- Curvz's marquee rule).
 std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r);
 // Guides on a page or master (its own; master_chain gives the inherited).
