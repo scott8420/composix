@@ -97,6 +97,7 @@ void Shell::open_xref(int edit_para, int edit_k) {
             for (auto i = para.text.find(core::kMarkAnchor); i != std::string::npos && !anchored; i = para.text.find(core::kMarkAnchor, i + 3))
                 anchored = !core::note_at(para.text, i + 3);
             if (!anchored && !heading_style(m_doc, para.style, listed)) continue;
+            if (core::source_number(m_doc, st, p) > 0) continue;   // s141: a source -- listed with the sources
             // Its words and where it is now (as a reference would show them).
             std::string words, page;
             {
@@ -116,6 +117,22 @@ void Shell::open_xref(int edit_para, int edit_k) {
                             if (const auto* f = m_doc.as<core::Frame>(ft.frame); f && m_doc.as<core::Page>(f->owner)) page = m_doc.folio(f->owner);
             }
             targets.push_back({sid, p, words + (page.empty() ? std::string("  — not placed") : "  — page " + page)});
+        }
+    }
+    // s141: the bibliography's sources, each by its number and first words.
+    for (const auto& sid : m_doc.ids_of<core::Story>()) {
+        const auto& st = *m_doc.as<core::Story>(sid);
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            const int n = core::source_number(m_doc, st, p);
+            if (n == 0) continue;
+            std::string w;
+            const auto& t = st.paras[static_cast<std::size_t>(p)].text;
+            for (std::size_t i = 0; i < t.size() && w.size() < 48;) {
+                if (static_cast<unsigned char>(t[i]) == 0xEE && i + 2 < t.size()) { i += 3; continue; }
+                w += t[i++];
+            }
+            while (!w.empty() && (static_cast<unsigned char>(w.back()) & 0xC0) == 0x80) w.pop_back();
+            targets.push_back({sid, p, "Source " + std::to_string(n) + ": " + w});
         }
     }
     // s129: the footnotes, each by its number and first words.
@@ -163,14 +180,15 @@ void Shell::open_xref(int edit_para, int edit_k) {
     pattern->set_visible(m_xref_show == 4);
     pattern->signal_changed().connect([this, pattern] { m_xref_pattern = pattern->get_text(); });
     m_xref_pattern = pattern->get_text();
-    static const char* names[] = {"Page", "Words", "Both", "Note", "Own\u2026"};
-    static const char* tips[] = {"Its page number", "Its words", "Its words and page", "Its note's number", "Words of my own"};
+    static const char* names[] = {"Page", "Words", "Both", "Note", "Own\u2026", "Cite"};
+    static const char* tips[] = {"Its page number", "Its words", "Its words and page", "Its note's number", "Words of my own",
+                                 "A source's number in the bibliography: [3]"};   // s141
     Gtk::ToggleButton* first = nullptr;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         auto t = Gtk::make_managed<Gtk::ToggleButton>(names[i]);
         t->set_tooltip_text(tips[i]);
         if (first) t->set_group(*first); else first = t;
-        t->set_active(i == std::clamp(m_xref_show, 0, 4));
+        t->set_active(i == std::clamp(m_xref_show, 0, 5));
         t->signal_toggled().connect([this, t, i, pattern] {
             if (!t->get_active()) return;
             m_xref_show = i;
@@ -189,7 +207,7 @@ void Shell::open_xref(int edit_para, int edit_k) {
         apply->set_halign(Gtk::Align::END);
         apply->signal_clicked().connect([this, story, edit_para, edit_k] {
             const bool did = core::doc::set_ref(m_journal, m_doc, story, edit_para, edit_k,
-                                                static_cast<core::RefShow>(std::clamp(m_xref_show, 0, 4)), m_xref_pattern);
+                                                static_cast<core::RefShow>(std::clamp(m_xref_show, 0, 5)), m_xref_pattern);
             if (auto lg = log::get(log::Area::Shell)) lg->info("xref: edit {}:{} shows {} -> {}", edit_para, edit_k, m_xref_show, did ? "set" : "nothing");
             if (m_xref_pop) m_xref_pop->popdown();
             if (did) m_canvas_view.canvas().model_changed();
@@ -221,7 +239,7 @@ void Shell::open_xref(int edit_para, int edit_k) {
         const auto ts = t.story;
         const int tp = t.para, tk = t.k;
         b->signal_clicked().connect([this, story, at, ts, tp, tk, edit, edit_para, edit_k] {
-            const auto how = static_cast<core::RefShow>(std::clamp(m_xref_show, 0, 4));
+            const auto how = static_cast<core::RefShow>(std::clamp(m_xref_show, 0, 5));
             if (edit) {   // s130: the reference pointed here instead
                 const bool did = core::doc::retarget_ref(m_journal, m_doc, story, edit_para, edit_k, ts, tp, tk, how, m_xref_pattern);
                 if (auto lg = log::get(log::Area::Shell)) lg->info("xref: edit {}:{} to {} para {} note {} -> {}", edit_para, edit_k, ts, tp, tk, did ? "set" : "nothing");

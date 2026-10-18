@@ -1881,6 +1881,10 @@ std::string ref_value_by(const core::Doc& d, const core::XRef& r, const std::fun
         if (c == '#') out += page();
         else if (c == '%') out += words();
         else if (c == '*') out += note();
+        else if (c == '^') {   // s141: the source's number
+            const int n = core::source_number(d, st, at.at.para);
+            out += n > 0 ? std::to_string(n) : std::string("??");
+        }
         else out += c;
     }
     return out;

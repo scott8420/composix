@@ -389,7 +389,7 @@ std::optional<Record> from(const json& j) {
                 fit_notes(para);   // a mark without its note (or the other way): made to match
                 if (p.contains("refs") && p.at("refs").is_array())   // s128
                     for (const auto& r : p.at("refs"))
-                        para.refs.push_back({val<std::string>(r, "to", ""), static_cast<RefShow>(std::clamp(val(r, "show", 0), 0, 4)),
+                        para.refs.push_back({val<std::string>(r, "to", ""), static_cast<RefShow>(std::clamp(val(r, "show", 0), 0, 5)),
                                              val<std::string>(r, "pattern", "")});   // s129
                 if (p.contains("anchors") && p.at("anchors").is_array())
                     for (const auto& a : p.at("anchors")) para.anchors.push_back(a.is_string() ? a.get<std::string>() : std::string{});

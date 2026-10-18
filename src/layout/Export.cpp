@@ -669,9 +669,16 @@ std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& fl
     const auto* l = d.as<core::GenList>(list);
     if (l && l->kind == core::ListKind::Bibliography) {   // s140: the sources -- each paragraph in its styles (its own story's too), once, sorted
         std::map<std::string, core::doc::ListEntry> by;   // the sort key -> the entry
-        for (const auto& sid : d.ids_of<core::Story>()) {
-            for (const auto& para : d.as<core::Story>(sid)->paras) {
+        // s141: its own story first -- a source there keeps its anchors (citations point at
+        // them); a copy from elsewhere comes without (one place, one id).
+        const auto own = core::doc::list_story(d, list);
+        std::vector<std::string> order;
+        if (!own.empty()) order.push_back(own);
+        for (const auto& sid : d.ids_of<core::Story>()) if (sid != own) order.push_back(sid);
+        for (const auto& sid : order) {
+            for (auto para : d.as<core::Story>(sid)->paras) {
                 if (std::find(l->from_styles.begin(), l->from_styles.end(), para.style) == l->from_styles.end()) continue;
+                if (sid != own) for (auto& a : para.anchors) a.clear();
                 std::string w;
                 for (std::size_t i = 0; i < para.text.size();) {
                     if (static_cast<unsigned char>(para.text[i]) == 0xEE && i + 2 < para.text.size() &&
@@ -809,7 +816,17 @@ std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows) {   // 
         const auto en = list_entries(d, flows, lid);
         std::vector<std::string> want, had;
         for (const auto& e : en) want.push_back(e.level == 0 || !l.numbers || e.folio.empty() ? e.text : e.text + ", " + e.folio);
-        for (auto k = static_cast<std::size_t>(core::doc::list_title_paras(*st, l.kind)); k < st->paras.size(); ++k) had.push_back(st->paras[k].text);
+        for (auto k = static_cast<std::size_t>(core::doc::list_title_paras(*st, l.kind)); k < st->paras.size(); ++k) {
+            // s141: as read -- the marks out (a cited source holds an anchor), tabs as spaces, trimmed as the entries are.
+            std::string t;
+            const auto& raw = st->paras[k].text;
+            for (std::size_t i = 0; i < raw.size();) {
+                if (static_cast<unsigned char>(raw[i]) == 0xEE && i + 2 < raw.size() && static_cast<unsigned char>(raw[i + 1]) == 0x80) { i += 3; continue; }
+                t += raw[i];
+                ++i;
+            }
+            had.push_back(l.kind == core::ListKind::Bibliography ? trimmed(t) : t);
+        }
         if (had.size() == 1 && had[0].empty()) had.clear();   // built with no entries
         std::string why;
         const auto name = [](const core::doc::ListEntry& e) { return "\u201c" + e.text + "\u201d"; };

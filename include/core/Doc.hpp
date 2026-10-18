@@ -274,11 +274,11 @@ struct Note {
 // an anchor (kMarkAnchor, by its id) is: its page's number, its paragraph's
 // words, or both. Kept with the paragraph its mark is in (the k-th mark is
 // refs[k]), as notes are.
-enum class RefShow { Page, Text, TextPage, Note, Custom };   // s129: Note -- the note's number; Custom -- its own pattern
+enum class RefShow { Page, Text, TextPage, Note, Custom, Cite };   // s129: Note -- the note's number; Custom -- its own pattern; s141: Cite -- "[3]"
 struct XRef {
     std::string target;                  // an anchor's id ("" or gone: shows "??")
     RefShow     show = RefShow::Page;
-    std::string pattern;                 // s129: Custom -- # the page, % the words, * the note's number
+    std::string pattern;                 // s129: Custom -- # the page, % the words, * the note's number; s141: ^ the source's number
     bool operator==(const XRef&) const = default;
 };
 // s134: an index entry marked in the text (kMarkIndex): its term, and a
@@ -887,6 +887,9 @@ bool        insert_ref_to(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a
 // mark (made if none is there), the reference at `at` to it. One step.
 bool insert_ref_to_note(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para, int k,
                         RefShow show, const std::string& pattern = {});
+// s141: a citation of source paragraph to_para (an anchor at its start, made if
+// none) at `at`, shown "[n]". One step; false if it isn't a source.
+bool insert_citation(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para);
 // s130: the reference whose mark is at `at` or ends there: its paragraph,
 // index in Para::refs and mark's byte; k -1 none.
 struct RefAt { int para = -1, k = -1, byte = -1; };
@@ -1042,6 +1045,9 @@ struct ListEntry {
     bool operator==(const ListEntry&) const = default;
 };
 bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<ListEntry>& entries);
+// s141: the story a list is written into -- its own, or (a bibliography not
+// yet built) a story of sources only already on its page; "" none yet.
+Doc::Id list_story(const Doc& d, const Doc::Id& list);
 // s090: how many paragraphs open a list's story as its title (0 or 1): the
 // first, when it has words and no tab and either stands alone or some later
 // paragraph is in another style. (Entries may have no tab -- page numbers off.)
@@ -1231,6 +1237,10 @@ int  note_number(const Story& s, int p, int k);
 // chapter's start (a paragraph that starts a new page) when the footnotes
 // count by chapter; else through the story.
 int  note_number(const Doc& d, const Story& s, int p, int k);
+// s141: a source's number -- paragraph p of story s counted among the
+// story's sources (paragraphs in a style a Bibliography list gathers), from
+// 1; 0 when it isn't one. A citation (RefShow::Cite) shows it: "[3]".
+int source_number(const Doc& d, const Story& s, int p);
 // The paragraph's notes made to match its marks (missing ones empty, extras dropped).
 void fit_notes(Para& p);
 // Which marker starts at text[i] (0 page, 1 section, 2 next, 3 previous;

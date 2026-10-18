@@ -1442,6 +1442,23 @@ int list_title_paras(const Story& st, ListKind kind) {   // s135
     return letter_head(st.paras.front().text) ? 0 : t;
 }
 
+Doc::Id list_story(const Doc& d, const Doc::Id& list) {   // s141 (s140's adoption, shared)
+    const auto* l = d.as<GenList>(list);
+    if (!l) return {};
+    if (d.as<Story>(l->story)) return l->story;
+    if (l->kind != ListKind::Bibliography || !d.as<Page>(l->placed_on)) return {};
+    for (const auto& fid : d.frames_on(l->placed_on)) {
+        const auto* f = d.as<Frame>(fid);
+        const auto* fs = f && !f->story.empty() ? d.as<Story>(f->story) : nullptr;
+        if (!fs || fs->paras.empty()) continue;
+        if (std::all_of(fs->paras.begin(), fs->paras.end(), [&](const Para& p) {
+                return std::find(l->from_styles.begin(), l->from_styles.end(), p.style) != l->from_styles.end();
+            }))
+            return f->story;
+    }
+    return {};
+}
+
 bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<ListEntry>& entries) {   // s087
     const auto* l = d.as<GenList>(list);
     if (!l) return false;
@@ -1449,15 +1466,10 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
     // s140: a bibliography with no story yet, its page already holding a story all of
     // sources (typed there by hand): that one is it -- sorted where it is, no frame on top.
     Doc::Id adopt;
-    if (!st && l->kind == ListKind::Bibliography && d.as<Page>(l->placed_on))
-        for (const auto& fid : d.frames_on(l->placed_on)) {
-            const auto* f = d.as<Frame>(fid);
-            const auto* fs = f && !f->story.empty() ? d.as<Story>(f->story) : nullptr;
-            if (!fs || fs->paras.empty()) continue;
-            if (std::all_of(fs->paras.begin(), fs->paras.end(), [&](const Para& p) {
-                    return std::find(l->from_styles.begin(), l->from_styles.end(), p.style) != l->from_styles.end();
-                })) { adopt = f->story; st = fs; break; }
-        }
+    if (!st && l->kind == ListKind::Bibliography) {
+        adopt = list_story(d, list);
+        st = adopt.empty() ? nullptr : d.as<Story>(adopt);
+    }
     const auto* pg = l->placed_on.empty() ? nullptr : d.as<Page>(l->placed_on);
     if (!st && !pg) return false;
     // Level 1's style, and the title.
@@ -2786,6 +2798,12 @@ bool set_index_mark(DocJournal& j, Doc& d, const Doc::Id& story, int para, int k
     return true;
 }
 
+bool insert_citation(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Doc::Id& to_story, int to_para) {   // s141
+    const auto* ts = d.as<Story>(to_story);
+    if (!ts || source_number(d, *ts, to_para) == 0) return false;
+    return insert_ref_to(j, d, story, at, to_story, to_para, RefShow::Cite);
+}
+
 int note_mark_byte(const Story& s, int p, int k) {   // s113
     if (p < 0 || p >= static_cast<int>(s.paras.size()) || k < 0) return -1;
     const auto& t = s.paras[static_cast<std::size_t>(p)].text;
@@ -3369,6 +3387,7 @@ const std::vector<Verb>& verbs() {
             j.run("t", {"story.1"}, [&] { insert_index_mark(j, d, "story.1", {1, 4}, "Harbors"); set_index_mark(j, d, "story.1", 1, 0, "Ports", "fees"); });
         }},
         {"add_list", [](DocJournal& j, Doc& d) { add_list(j, d, ListKind::Index, "Index", d.pages().back()); }},   // s135
+        {"insert_citation", [](DocJournal& j, Doc& d) { insert_citation(j, d, "story.1", {1, 4}, "story.4", 1); }},   // s141: the sample's Sources
         {"insert_ref_to_note", [](DocJournal& j, Doc& d) { insert_ref_to_note(j, d, "story.1", {1, 4}, "story.1", 5, 0, RefShow::Custom, "note *"); }},   // s129: the sample's note
         {"set_units", [](DocJournal& j, Doc& d) { set_units(j, d, Units::Millimetres); }},   // s073
         {"save_query", [](DocJournal& j, Doc& d) { save_query(j, d, {"Dashes", "--", "\u2014"}); }},   // s078
@@ -4002,8 +4021,21 @@ std::string ref_pattern(const XRef& r) {   // s129
     case RefShow::TextPage: return "\u201c%\u201d on page #";
     case RefShow::Note:     return "*";
     case RefShow::Custom:   return r.pattern.empty() ? std::string("#") : r.pattern;
+    case RefShow::Cite:     return "[^]";   // s141
     }
     return "#";
+}
+
+int source_number(const Doc& d, const Story& s, int p) {   // s141
+    std::vector<std::string> styles;
+    for (const auto& lid : d.ids_of<GenList>())
+        if (const auto& l = *d.as<GenList>(lid); l.kind == ListKind::Bibliography)
+            styles.insert(styles.end(), l.from_styles.begin(), l.from_styles.end());
+    const auto is_source = [&](const Para& x) { return std::find(styles.begin(), styles.end(), x.style) != styles.end(); };
+    if (p < 0 || p >= static_cast<int>(s.paras.size()) || !is_source(s.paras[static_cast<std::size_t>(p)])) return 0;
+    int n = 0;
+    for (int q = 0; q <= p; ++q) n += is_source(s.paras[static_cast<std::size_t>(q)]);
+    return n;
 }
 
 }  // namespace composix::core

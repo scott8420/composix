@@ -8110,6 +8110,64 @@ int main() {
         check("undo all", d.strays() == 0 && d.as<core::GenList>("list.2")->story.empty());
     }
 
+    {
+        std::cout << "\n-- citations (s141) --\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);   // story.4: Almanac, Harbor Registers, Letters -- Sources (list.2 gathers style.4)
+        const auto& src = *d.as<core::Story>("story.4");
+        check("sources numbered in their story", core::source_number(d, src, 0) == 1 && core::source_number(d, src, 2) == 3 &&
+                                                 core::source_number(d, *d.as<core::Story>("story.1"), 1) == 0);
+        check("a citation of what isn't a source: nothing", !D::insert_citation(j, d, "story.1", {1, 0}, "story.1", 2) && j.size() == 0);
+        check("a citation: one step", D::insert_citation(j, d, "story.1", {1, 3}, "story.4", 2) && j.size() == 1);
+        const auto shown = [&](int p) {
+            const auto r = L::resolve_story(d, "story.1", "");
+            return r.any ? r.text.paras[static_cast<std::size_t>(p)].text : std::string{};
+        };
+        check("  shows [3]", shown(1).rfind("The[3]", 0) == 0, shown(1).substr(0, 12));
+        // A source typed at the top, the bibliography rebuilt: sorted, the cited one is 4th now.
+        D::edit_text(j, d, "story.4", {0, 0}, {0, 0}, "Baltic Pilot.\n");
+        L::build_list(j, d, "list.2");
+        check("sorted again: the citation follows its source -- [4]", shown(1).rfind("The[4]", 0) == 0 &&
+                                                                      d.as<core::Story>("story.4")->paras[3].text.find("Letters of the Surveyor General.") != std::string::npos,
+              shown(1).substr(0, 12));
+        check("  its anchor kept by the rebuild", !d.as<core::Story>("story.4")->paras[3].anchors.empty());
+        {
+            L::FlowCache f;
+            bool stale = false;
+            for (const auto& x : L::stale_lists(d, f)) stale = stale || x.list == "list.2";
+            check("  a cited source (its anchor) doesn't make it out of date", !stale);
+        }
+        {   // A bibliography elsewhere: copies come without the anchor (one place, one id).
+            const auto bl = D::add_list(j, d, core::ListKind::Bibliography, "Works Cited", d.pages()[d.pages().size() - 2]);
+            core::GenList g = *d.as<core::GenList>(bl);
+            g.from_styles = {"style.4"};
+            j.run("styles", {bl}, [&] { d.put(bl, g); });
+            L::build_list(j, d, bl);
+            int with = 0;
+            for (const auto& p : d.as<core::Story>(d.as<core::GenList>(bl)->story)->paras)
+                for (const auto& a : p.anchors) with += !a.empty();
+            check("a copy elsewhere: no anchor ids copied", with == 0);
+        }
+        // The source deleted: the citation broken, Preflight says so.
+        D::edit_text(j, d, "story.4", {3, 0}, {3, static_cast<int>(d.as<core::Story>("story.4")->paras[3].text.size())}, "", "Delete", "");
+        D::edit_text(j, d, "story.4", {2, static_cast<int>(d.as<core::Story>("story.4")->paras[2].text.size())}, {3, 0}, "", "Delete", "");
+        L::FlowCache fl;
+        int xr = 0;
+        for (const auto& i : L::preflight_issues(d, fl, {})) xr += i.kind == "xref";
+        check("its source gone: ??, and a Preflight warning", shown(1).rfind("The??", 0) == 0 && xr == 1, shown(1).substr(0, 12));
+        {
+            core::Doc e;
+            std::string err;
+            check("json: a citation kept", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+        }
+        while (j.can_undo()) j.undo();
+        check("undo all", d.strays() == 0 && d.as<core::Story>("story.1")->paras[1].refs.empty());
+    }
+
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;
