@@ -62,7 +62,8 @@ void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const Ima
     cairo_surface_destroy(pic);
 }
 
-void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, FlowCache& flows,
+// True when it drew how.stop_after (and stopped there).
+bool draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, FlowCache& flows,
                  const ImageSource& images, std::set<std::string>* missing, const PageDraw& how,
                  const core::Doc::Id& on_page) {
     for (const auto& fid : d.frames_on(owner)) {
@@ -116,7 +117,9 @@ void draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
             cairo_stroke(cr);
         }
         if (cut) cairo_restore(cr);   // s155
+        if (!how.stop_after.empty() && fid == how.stop_after) return true;   // s193
     }
+    return false;
 }
 
 void crop_marks(cairo_t* cr, double w, double h, double bleed) {
@@ -304,7 +307,8 @@ void draw_master_mockup(cairo_t* cr, const core::Doc& d, const core::Doc::Id& ma
 void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& id, FlowCache& flows, const ImageSource& images,
                std::set<std::string>* missing, const PageDraw& how) {
     const core::Doc::Id on_page = d.as<core::Page>(id) ? id : core::Doc::Id{};
-    for (const auto& m : core::master_chain(d, id)) draw_frames(cr, d, m, flows, images, missing, how, on_page);
+    for (const auto& m : core::master_chain(d, id))
+        if (draw_frames(cr, d, m, flows, images, missing, how, on_page)) return;   // s193: stopped at its frame
     draw_frames(cr, d, id, flows, images, missing, how, on_page);
 }
 

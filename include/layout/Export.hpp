@@ -197,6 +197,9 @@ inline constexpr const char* kCmykMime = "application/x-composix-cmyk";
 // `placeholders` draws a soft plate where a picture can't be had (thumbs).
 struct PageDraw {
     bool placeholders = false;
+    // s193: draw up to and including this frame, then stop (the PDF/X-1a
+    // flattener's "everything to here"); "" = all of it.
+    std::string stop_after;
 };
 void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& page_or_master, FlowCache& flows,
                const ImageSource& images, std::set<std::string>* missing = nullptr, const PageDraw& how = {});

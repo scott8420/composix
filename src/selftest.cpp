@@ -1932,8 +1932,12 @@ int main() {
         if (fs::exists(gracol)) {
             opt.profile = gracol;
             opt.standard = L::plate_standard::X1a;
-            check("x1a: opacity refused, the frame named",
-                  !L::export_print_pdf(d, out, opt, none, nullptr, &err) && err.find("page 7 at 50% opacity") != std::string::npos, err);
+            L::PdfReport xr;   // s193: flattened now, and said so (was: refused)
+            check("x1a: opacity flattened, the frame named",
+                  L::export_print_pdf(d, out, opt, none, &xr, &err) && (pdf = read(), pdf.find("/ExtGState") == std::string::npos) &&
+                      std::any_of(xr.warnings.begin(), xr.warnings.end(), [](const std::string& w) {
+                          return w.find("flattened for PDF/X-1a") != std::string::npos && w.find("page 7: a frame at 50% opacity") != std::string::npos; }),
+                  err);
             opt.standard = L::plate_standard::X4;
             check("x4: opacity kept", L::export_print_pdf(d, out, opt, none, nullptr, &err), err);
         }
@@ -5288,6 +5292,8 @@ int main() {
         o.profile = true;
         v = L::preflight_issues(d, flows, o);
         check("X-1a with a profile: RGB converts (no error), transparency still", !has(v, "rgb") && has(v, "transparency"));
+        check("X-1a: transparency is a warning now (flattened on export, s193)", std::any_of(v.begin(), v.end(), [](const L::Issue& i) {
+                  return i.kind == "transparency" && i.level == Lv::Warning; }));
         L::PdfReport rep;
         L::preflight(d, {}, 16, &rep);
         check("export report: the same checks", std::any_of(rep.warnings.begin(), rep.warnings.end(), [](const std::string& w) {
@@ -9905,6 +9911,70 @@ int main() {
         const auto rs = core::clip_shape(ring, 100, 100, 10);
         check("clip path: two subpaths read; the outline spans the outer one",
               ring.polys.size() == 2 && rs.size() == 21 && std::abs(rs[11] - 0.1f) < 0.02f && std::abs(rs[12] - 0.9f) < 0.02f);
+    }
+    // ── s193 (G6): PDF/X-1a -- transparency flattened ──
+    {
+        std::cout << "--- s193 X-1a flattening ---\n";
+        namespace L = composix::layout;
+        namespace D = core::doc;
+        namespace fs = std::filesystem;
+        std::string profile;
+        for (const char* p : {"/usr/share/color/icc/GRACoL2013_CRPC6.icc", "/usr/share/color/icc/ghostscript/default_cmyk.icc",
+                              "/usr/share/texlive/texmf-dist/tex/generic/colorprofiles/FOGRA39L_coated.icc"})
+            if (fs::exists(p)) { profile = p; break; }
+        if (profile.empty()) {
+            std::cout << "  (no CMYK profile here -- the X-1a export checks skipped)\n";
+        } else {
+            core::Doc d;
+            core::DocJournal j{d};
+            d.set_door([&j] { return j.open(); });
+            core::load_sample(d);
+            const auto page = d.as<core::Frame>("frame.1")->owner;
+            const auto half = D::add_frame(j, d, page, core::FrameKind::Shape, {200, 40, 60, 60});
+            D::edit_frames(j, d, {half}, "Half", [&](core::Frame& f) {
+                for (const auto& sw : d.ids_of<core::Swatch>()) if (d.as<core::Swatch>(sw)->name == "Black") f.fill = sw;
+                f.opacity = 0.5;
+                f.z = 1e6;
+            });
+            const L::ImageSource src = [](const core::Asset& a, double, double) -> cairo_surface_t* {
+                if (a.name == "harbor.psd") return nullptr;
+                cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+                cairo_t* c = cairo_create(s);
+                cairo_set_source_rgba(c, 0.2, 0.4, 0.6, a.name == "lighthouse.jpg" ? 0.5 : 1.0);   // the lighthouse: see-through
+                cairo_set_operator(c, CAIRO_OPERATOR_SOURCE);
+                cairo_paint(c);
+                cairo_destroy(c);
+                return s;
+            };
+            const auto base = fs::temp_directory_path() / "composix_selftest_s193";
+            std::error_code ec;
+            fs::create_directories(base, ec);
+            const auto out = (base / "x1a.pdf").string();
+            L::PdfOptions opt;
+            opt.compress = false;
+            opt.profile = profile;
+            opt.convert = true;
+            opt.standard = L::plate_standard::X1a;
+            L::PdfReport rep;
+            std::string err;
+            const bool ok = L::export_print_pdf(d, out, opt, src, &rep, &err);
+            const auto read = [&] { std::ifstream in(out, std::ios::binary); std::stringstream ss; ss << in.rdbuf(); return ss.str(); };
+            const std::string pdf = read();
+            check("X-1a: exports with transparency in it (was refused)", ok, err);
+            check("X-1a: nothing see-through left in the file -- no ExtGState alpha, no SMask",
+                  pdf.find("/ca ") == std::string::npos && pdf.find("/SMask") == std::string::npos);
+            std::string flat;
+            for (const auto& w : rep.warnings) if (w.find("flattened for PDF/X-1a") != std::string::npos) flat = w;
+            check("X-1a: the report names what was flattened", flat.find("a frame at 50% opacity") != std::string::npos &&
+                  flat.find("a see-through picture (lighthouse.jpg)") != std::string::npos, flat);
+            check("X-1a: the flattened regions are pictures (DeviceCMYK, converted)", pdf.find("/ColorSpace /DeviceCMYK") != std::string::npos);
+            opt.standard = L::plate_standard::X4;
+            L::PdfReport r4;
+            const bool ok4 = L::export_print_pdf(d, out, opt, src, &r4, &err);
+            check("X-4: transparency kept live (nothing flattened)", ok4 && read().find("/ca 0.5") != std::string::npos &&
+                  std::none_of(r4.warnings.begin(), r4.warnings.end(), [](const std::string& w) { return w.find("flattened") != std::string::npos; }), err);
+            fs::remove_all(base, ec);
+        }
     }
     // ── s190 (G4): hyphenation in more languages ──
     {

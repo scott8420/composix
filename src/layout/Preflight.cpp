@@ -135,9 +135,10 @@ std::vector<Issue> preflight_issues(const core::Doc& d, FlowCache& flows, const 
             if (empty && d.as<core::Page>(f.owner))
                 out.push_back({L::Info, "empty", "Empty text frame" + where(d, pg), pg, fid});
         }
-        if (o.standard == 1 && f.opacity < 1)
-            out.push_back({L::Error, "transparency", "Transparency (" + core::tint_text(f.opacity) +
-                                                         " opacity) \u2014 PDF/X-1a allows none" + where(d, pg), pg, fid});
+        if (o.standard == 1 && f.opacity < 1)   // s193: flattened on export now -- a warning, not a stop
+            out.push_back({L::Warning, "transparency", "Transparency (" + core::tint_text(f.opacity) +
+                                                           " opacity) \u2014 flattened for PDF/X-1a (300 ppi, process colour there)" +
+                                                           where(d, pg), pg, fid});
     }
     // Colours: spot plates (info); RGB swatches in use under X-1a.
     std::map<std::string, std::string> used;   // swatch -> a frame using it

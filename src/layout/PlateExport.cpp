@@ -108,7 +108,31 @@ struct Ctx {
     std::map<std::string, plate::ImageId> placed;   // asset -> image (one embedding per file)
     std::set<std::string> missing;
     std::set<std::string> rgb_images;   // placed and left RGB
+    // s193 (G6): PDF/X-1a -- transparency flattened region by region.
+    bool x1a = false;
+    std::map<std::string, bool> see_through;   // asset -> its picture has see-through pixels
+    std::vector<std::string> flattened;         // "page 3: a frame at 50% opacity"
 };
+
+// s193: does this asset's picture (for print) have see-through pixels?
+bool asset_see_through(Ctx& c, const core::Asset& a, const core::Frame& f, const std::string& aid) {
+    if (const auto it = c.see_through.find(aid); it != c.see_through.end()) return it->second;
+    bool clear = false;
+    if (cairo_surface_t* pic = c.images ? c.images(a, f.w, f.h) : nullptr) {
+        if (cairo_surface_status(pic) == CAIRO_STATUS_SUCCESS && cairo_image_surface_get_format(pic) == CAIRO_FORMAT_ARGB32) {
+            cairo_surface_flush(pic);
+            const int w = cairo_image_surface_get_width(pic), h = cairo_image_surface_get_height(pic);
+            const int stride = cairo_image_surface_get_stride(pic);
+            const unsigned char* data = cairo_image_surface_get_data(pic);
+            for (int y = 0; y < h && !clear; ++y)
+                for (int x = 0; x < w; ++x)
+                    if ((reinterpret_cast<const std::uint32_t*>(data + static_cast<std::ptrdiff_t>(y) * stride)[x] >> 24) < 255) { clear = true; break; }
+        }
+        cairo_surface_destroy(pic);
+    }
+    c.see_through[aid] = clear;
+    return clear;
+}
 
 void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string& fid, const std::string& on_page) {
     const auto* st = c.d.as<core::Story>(f.story);
@@ -206,6 +230,57 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core
             if (sd == core::Side::Left) pg.clip_rect({-1e4, -1e4, 1e4 + page->w, 2e4});
             else                        pg.clip_rect({0, -1e4, 1e4, 2e4});
         }
+        // s193 (G6): PDF/X-1a has no transparency -- a see-through frame (its
+        // opacity, or a picture with see-through pixels; a clipping path is
+        // not transparency) goes in FLATTENED: its
+        // box, with everything under it, drawn as one picture at 300 ppi
+        // (to the press's CMYK, as any RGB picture); what's above stays vector.
+        if (c.x1a) {
+            const auto* a = f.kind == core::FrameKind::Image ? c.d.as<core::Asset>(f.asset) : nullptr;
+            const bool clear = f.opacity < 1 || (a && asset_see_through(c, *a, f, f.asset));
+            if (clear) {
+                const double grow = (c.d.as<core::Swatch>(f.stroke) ? f.stroke_w / 2 : 0) + 0.5;
+                core::Rect box{f.x - grow, f.y - grow, f.w + 2 * grow, f.h + 2 * grow};
+                const double bl = core::bleed_of(c.d, on_page);
+                const double pw = page ? page->w : box.r(), ph = page ? page->h : box.b();
+                const double x0 = std::max(box.x, -bl), y0 = std::max(box.y, -bl), x1 = std::min(box.r(), pw + bl), y1 = std::min(box.b(), ph + bl);
+                if (x1 > x0 && y1 > y0) {
+                    constexpr double kPpi = 300;
+                    const double k = std::min(kPpi / 72.0, 8000.0 / std::max(x1 - x0, y1 - y0));   // at most 8000 px a side
+                    const int W = std::max(1, static_cast<int>(std::ceil((x1 - x0) * k))), H = std::max(1, static_cast<int>(std::ceil((y1 - y0) * k)));
+                    cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, W, H);
+                    cairo_t* cr = cairo_create(s);
+                    cairo_set_source_rgb(cr, 1, 1, 1);   // paper
+                    cairo_paint(cr);
+                    cairo_scale(cr, k, k);
+                    cairo_translate(cr, -x0, -y0);
+                    PageDraw how;
+                    how.stop_after = fid;
+                    draw_page(cr, c.d, on_page.empty() ? owner : on_page, c.flows, c.images, nullptr, how);
+                    cairo_destroy(cr);
+                    cairo_surface_flush(s);
+                    std::vector<std::uint8_t> rgb(static_cast<std::size_t>(W) * H * 3);
+                    const unsigned char* data = cairo_image_surface_get_data(s);
+                    const int stride = cairo_image_surface_get_stride(s);
+                    for (int y = 0; y < H; ++y)
+                        for (int x = 0; x < W; ++x) {
+                            const std::uint32_t p = reinterpret_cast<const std::uint32_t*>(data + static_cast<std::ptrdiff_t>(y) * stride)[x];
+                            const std::size_t i = (static_cast<std::size_t>(y) * W + x) * 3;
+                            rgb[i] = (p >> 16) & 0xff;
+                            rgb[i + 1] = (p >> 8) & 0xff;
+                            rgb[i + 2] = p & 0xff;
+                        }
+                    cairo_surface_destroy(s);
+                    const auto id = c.doc.add_image_rgb(W, H, rgb.data());
+                    pg.image(id, {x0, y0, x1 - x0, y1 - y0});
+                    const std::string where = page ? "page " + c.d.folio(on_page) : "a master";
+                    c.flattened.push_back(where + ": " + (f.opacity < 1 ? "a frame at " + core::tint_text(f.opacity) + " opacity"
+                                                                        : "a see-through picture" + (a ? " (" + a->name + ")" : std::string{})));
+                }
+                pg.restore();
+                continue;
+            }
+        }
         if (f.opacity < 1) pg.set_alpha(f.opacity, f.opacity);   // s021: fill, content and stroke alike
         if (c.d.as<core::Swatch>(f.fill)) {   // s016: the frame's background
             pg.set_fill(ink_of(c.d, f.fill, f.fill_tint));
@@ -255,21 +330,7 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
     // s017: set before anything is drawn (the writer converts as it goes).
     if (opt.standard != plate_standard::None) {
         if (opt.profile.empty()) { if (err) *err = "PDF/X needs an output profile."; return false; }
-        if (opt.standard == plate_standard::X1a) {   // s021: no transparency -- say which frames
-            std::string seen;
-            for (const auto& pid : pages)
-                for (const auto& owner : [&] { auto o = core::master_chain(d, pid); o.push_back(pid); return o; }())
-                    for (const auto& fid : d.frames_on(owner))
-                        if (const auto* f = d.as<core::Frame>(fid); f && f->opacity < 1) {
-                            const std::string where = d.as<core::Page>(owner) ? "page " + d.folio(owner) : "a master";
-                            const std::string line = "\n\u2022 a frame on " + where + " at " + core::tint_text(f->opacity) + " opacity";
-                            if (seen.find(line) == std::string::npos) seen += line;
-                        }
-            if (!seen.empty()) {
-                if (err) *err = "PDF/X-1a allows no transparency:" + seen + "\nSet them to 100% or export PDF/X-4.";
-                return false;
-            }
-        }
+        // s021 refused a frame with transparency under PDF/X-1a; s193 flattens it (draw_frames).
         doc.set_standard(opt.standard == plate_standard::X1a ? plate::Standard::X1a_2003 : plate::Standard::X4);
     }
     // s016: the press's profile; RGB converted to its CMYK, or kept (tagged sRGB).
@@ -279,7 +340,8 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         doc.set_intent(opt.perceptual ? plate::Intent::Perceptual : plate::Intent::RelativeColorimetric);
         doc.set_convert_rgb(opt.convert);
     }
-    Ctx c{d, doc, images, {}, {}, {}};
+    Ctx c{d, doc, images, {}, {}, {}, {}};
+    c.x1a = opt.standard == plate_standard::X1a;   // s193
     const std::size_t npages = pages.size();
     if (opt.progress)   // s102: lay it all out first, so the bar can say so
         flow_all(d, c.flows, [&](int done, int total) {
@@ -358,6 +420,12 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         report->warnings.insert(report->warnings.begin(), "Output profile: " + doc.output_profile_name() +
                                                               (doc.convert_rgb() ? std::string(" (RGB converted, ") + (opt.perceptual ? "perceptual)" : "relative colorimetric)")
                                                                                  : std::string()));   // s085
+    if (report && !c.flattened.empty()) {   // s193: say what went in flattened, and what that costs
+        std::string list;
+        for (const auto& f : c.flattened) if (list.find(f) == std::string::npos) list += (list.empty() ? "" : "; ") + f;
+        report->warnings.push_back("Transparency flattened for PDF/X-1a (300 ppi, process colour -- spot inks and black text "
+                                   "under it print as CMYK there): " + list);
+    }
     if (report && doc.standard() != plate::Standard::None)
         report->warnings.insert(report->warnings.begin(), std::string("Standard: ") +
                                                               plate::Document::standard_name(doc.standard()) +
