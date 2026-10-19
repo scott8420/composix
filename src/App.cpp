@@ -65,6 +65,8 @@ void App::on_activate() {
     if (auto display = Gdk::Display::get_default()) {
         auto icons = Gtk::IconTheme::get_for_display(display);
         icons->add_resource_path("/io/github/scott8420/Composix/icons");
+        // s183 (Scott's logo): every window's icon, where the desktop shows one.
+        Gtk::Window::set_default_icon_name("composix-logo-symbolic");
 
         // The house look (s002): one stylesheet from the bundle, APPLICATION
         // priority so it sits over the theme but under a user's own CSS. Its

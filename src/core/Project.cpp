@@ -72,7 +72,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"dnote_rule_w", 1, 0.1, 6}, {"dnote_space", 1, 0, 36},   // s118
         {"dtrim", 72, 36, 5000}, {"dbleed", 72, 0, 72},   // s066
         {"msize", 72, 36, 5000}, {"mbleed", 72, 0, 72},   // s148
-        {"mgrid", 1, 0, 144},   // s150 (Scott): a baseline grid of any measure, the presets beside
+        {"mgrid", 1, 0, 144}, {"split_gutter", 1, 0, 500},   // s183   // s150 (Scott): a baseline grid of any measure, the presets beside
         {"pic_off", 72, -20000, 20000},   // s076
         {"plindent", 1, 0, 1000}, {"prindent", 1, 0, 1000}, {"pfindent", 1, -1000, 1000}, {"pbefore", 1, 0, 1000}, {"pafter", 1, 0, 1000},   // s093
         {"ptop", 72, 0, 5000}, {"pbottom", 72, 0, 5000}, {"pinside", 72, 0, 5000}, {"poutside", 72, 0, 5000}};   // s062
@@ -142,7 +142,7 @@ std::string style_group(const Field& f) {
         {"color", "Text"}, {"color_tint", "Text"},
         {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
         {"findent", "Paragraph"}, {"indent_after", "Paragraph"}, {"tabs", "Paragraph"}, {"drop_lines", "Paragraph"},
-        {"drop_chars", "Paragraph"}, {"span", "Paragraph"},
+        {"drop_chars", "Paragraph"}, {"span", "Paragraph"}, {"split_gutter", "Paragraph"},
         {"align_grid", "Flow"}, {"hyphenate", "Flow"}, {"hyph_limit", "Flow"}, {"hyph_shortest", "Flow"}, {"hyph_last_word", "Flow"},
         {"keep_next", "Flow"}, {"keep_lines", "Flow"}, {"pstart", "Flow"},
         {"list_type", "List"}, {"list_bullet", "List"}, {"list_num", "List"}, {"list_cont", "List"}, {"list_level", "List"},
@@ -503,7 +503,15 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 if (s.drop_lines >= 2)
                     f.push_back({"Drop letters", std::to_string(s.drop_chars), "drop_chars", {{"1", "1"}, {"2", "2"}, {"3", "3"}}});
                 // s166: across all the frame's columns.
-                f.push_back({"Span columns", s.span ? "All columns" : "Off", "span", {{"0", "Off"}, {"1", "All columns"}}});
+                // s183: or split into sub-columns (a one-column frame's).
+                f.push_back({"Span columns",
+                             s.span ? "All columns" : s.split >= 2 ? "Split into " + std::to_string(s.split) : "Off", "span",
+                             {{"0", "Off"}, {"1", "All columns"}, {"s2", "Split into 2"}, {"s3", "Split into 3"}, {"s4", "Split into 4"}}});
+                if (s.split >= 2) {
+                    std::vector<Choice> g_ch;
+                    for (double v : {6.0, 9.0, 12.0, 18.0, 24.0}) g_ch.push_back({pts(v), pt(v)});
+                    f.push_back({"Split gutter", pt(s.split_gutter), "split_gutter", g_ch});
+                }
                 // s036: lines on the page's baseline grid.
                 f.push_back({"Baseline grid", s.align_grid ? "Align to grid" : "Off", "align_grid",
                              {{"0", "Off"}, {"1", "Align to grid"}}});

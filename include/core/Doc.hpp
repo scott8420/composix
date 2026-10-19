@@ -452,6 +452,11 @@ struct Style {
     // text before it balanced over the columns above it, the text after
     // going on in columns below it.
     bool        span = false;
+    // s183 (G1): a paragraph SPLIT into sub-columns inside a one-column
+    // frame (InDesign's Split Column): its lines balanced over `split`
+    // columns (0 / 1: not split), `split_gutter` points between them.
+    int         split = 0;
+    double      split_gutter = 12;
     bool operator==(const Style&) const = default;
 };
 
@@ -686,6 +691,16 @@ struct ImageFile {
     std::int64_t stamp = 0;
     std::vector<float> shape;            // s173: traced (Asset::shape), when the UI traced it
 };
+// s184 (G5): a picture's colour space from its file's own header -- "CMYK",
+// "Gray", "RGB" or "Lab"; "" when the bytes aren't a format read here. JPEG:
+// its frame's components (1 / 3 / 4); PNG: IHDR's colour type; TIFF:
+// PhotometricInterpretation (5 = separated, CMYK); PSD: its colour mode;
+// GIF / BMP / WebP: RGB. `read(offset, n)`: up to n bytes from offset
+// (fewer at the end) -- the app reads the file; the core never opens one.
+using ReadAt = std::function<std::string(std::uint64_t offset, std::size_t n)>;
+std::string picture_color(const ReadAt& read);
+std::string picture_color(const std::string& bytes);   // a file's bytes, whole or its start
+
 // Where an asset's file is: an absolute path, or "" when it can't be known (a
 // relative path in an unsaved project).
 std::string  resolve_asset(const Asset& a, const std::string& project_dir);

@@ -72,7 +72,17 @@ void Shell::build_start() {  // zone
     auto sub = Gtk::make_managed<Gtk::Label>("Books and pages, set with care.");
     sub->add_css_class("cx-start-sub");
     sub->set_xalign(0);
-    box->append(*title);
+    {   // s183 (Scott's logo): beside the name
+        auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 14);
+        auto logo = Gtk::make_managed<Gtk::Image>();
+        logo->set_from_icon_name("composix-logo-symbolic");
+        logo->set_pixel_size(48);
+        logo->add_css_class("cx-start-logo");
+        logo->set_valign(Gtk::Align::CENTER);
+        row->append(*logo);
+        row->append(*title);
+        box->append(*row);
+    }
     box->append(*sub);
     auto acts = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
     for (const auto& [label, action, suggested] : {std::tuple{"New Document…", "win.new", true},

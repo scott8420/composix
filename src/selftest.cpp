@@ -19,6 +19,8 @@
 #include <cstring>
 #include <plate/plate.hpp>
 #include "layout/Export.hpp"
+#include "layout/Psd.hpp"
+#include <zlib.h>
 #include "layout/BigBook.hpp"
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
@@ -9829,6 +9831,271 @@ int main() {
             check("eyedropper: where nothing is -- paper", cx >= 0 && L::sample_page(d, page, flows, {}, cx, cy, 0.5) == 0xFFFFFFu);
         }
         check("eyedropper: nothing changed, no step", d.as<core::Frame>(box)->fill == sw);
+    }
+    // ── s185 (G5b): a PSD's merged picture ──
+    {
+        std::cout << "--- s185 PSD ---\n";
+        namespace L = composix::layout;
+        using B = std::string;
+        const auto be16 = [](unsigned v) { return B{static_cast<char>(v >> 8), static_cast<char>(v & 0xFF)}; };
+        const auto be32 = [&](unsigned v) { return be16(v >> 16) + be16(v & 0xFFFF); };
+        // A PSD: header, colour mode data, no resources, the layer section (a
+        // negative count when `alpha`), then the image data as given.
+        const auto psd = [&](int ch, int w, int h, int depth, int mode, const B& cm, bool alpha, int comp, const B& data) {
+            B s = B("8BPS") + be16(1) + B(6, '\0') + be16(static_cast<unsigned>(ch)) + be32(static_cast<unsigned>(h)) +
+                  be32(static_cast<unsigned>(w)) + be16(static_cast<unsigned>(depth)) + be16(static_cast<unsigned>(mode));
+            s += be32(static_cast<unsigned>(cm.size())) + cm + be32(0);
+            if (alpha) s += be32(6) + be32(2) + be16(0xFFFF);   // layer info: count -1
+            else s += be32(0);
+            return s + be16(static_cast<unsigned>(comp)) + data;
+        };
+        const auto at = [](const std::vector<std::uint32_t>& px, int w, int x, int y) { return px[static_cast<std::size_t>(y * w + x)]; };
+        int w = 0, h = 0;
+        {   // RGB, raw, 2 x 1: red, blue
+            const B data = B{'\xFF', '\x00'} + B{'\x00', '\x00'} + B{'\x00', '\xFF'};
+            const auto px = L::psd_decode(psd(3, 2, 1, 8, 3, "", false, 0, data), w, h);
+            check("PSD: RGB raw", w == 2 && h == 1 && px.size() == 2 && at(px, 2, 0, 0) == 0xFFFF0000u && at(px, 2, 1, 0) == 0xFF0000FFu);
+        }
+        {   // RGB + transparency, PackBits, 4 x 1: each channel's row a run of 4 (counts first)
+            B counts, rows;
+            const unsigned char v[4] = {0x40, 0x80, 0xC0, 0x80};   // R G B A
+            for (int c = 0; c < 4; ++c) { counts += be16(2); rows += B{static_cast<char>(-3), static_cast<char>(v[c])}; }
+            const auto px = L::psd_decode(psd(4, 4, 1, 8, 3, "", true, 1, counts + rows), w, h);
+            const auto p = px.empty() ? 0u : px[3];
+            check("PSD: PackBits, the merged picture's transparency (premultiplied)",
+                  w == 4 && px.size() == 4 && (p >> 24) == 0x80 && ((p >> 16) & 0xFF) == 0x40 * 0x80 / 255);
+            const auto opaque = L::psd_decode(psd(4, 4, 1, 8, 3, "", false, 1, counts + rows), w, h);
+            check("PSD: an extra channel without the flag -- not transparency", !opaque.empty() && (opaque[0] >> 24) == 0xFF);
+        }
+        {   // CMYK, raw, 1 x 1: stored as 255 - ink -- 100% cyan
+            const auto px = L::psd_decode(psd(4, 1, 1, 8, 4, "", false, 0, B{'\x00', '\xFF', '\xFF', '\xFF'}), w, h);
+            check("PSD: CMYK (inverted ink) -- cyan on screen", px.size() == 1 && px[0] == 0xFF00FFFFu);
+        }
+        {   // Gray 16-bit, ZIP with prediction, 3 x 1: 0x1000, +0x1000, +0x1000
+            const B raw = be16(0x1000) + be16(0x1000) + be16(0x1000);
+            uLongf n = compressBound(static_cast<uLong>(raw.size()));
+            B z(n, '\0');
+            compress(reinterpret_cast<Bytef*>(z.data()), &n, reinterpret_cast<const Bytef*>(raw.data()), static_cast<uLong>(raw.size()));
+            z.resize(n);
+            const auto px = L::psd_decode(psd(1, 3, 1, 16, 1, "", false, 3, z), w, h);
+            check("PSD: 16-bit gray, ZIP with prediction", px.size() == 3 && (px[0] & 0xFF) == 0x10 && (px[1] & 0xFF) == 0x20 && (px[2] & 0xFF) == 0x30);
+        }
+        {   // Indexed: index 1 -> the palette's second colour
+            B pal(768, '\0');
+            pal[1] = '\x11';
+            pal[256 + 1] = '\x22';
+            pal[512 + 1] = '\x33';
+            const auto px = L::psd_decode(psd(1, 1, 1, 8, 2, pal, false, 0, B{'\x01'}), w, h);
+            check("PSD: indexed, by its palette", px.size() == 1 && px[0] == 0xFF112233u);
+        }
+        {   // Bitmap, 8 x 1 in one byte: 1 = black
+            const auto px = L::psd_decode(psd(1, 8, 1, 1, 0, "", false, 0, B{'\xF0'}), w, h);
+            check("PSD: bitmap", px.size() == 8 && px[0] == 0xFF000000u && px[7] == 0xFFFFFFFFu);
+        }
+        {   // shrunk for the screen: 8 x 4 at most 2 a side -> every 4th pixel
+            B data(8 * 4 * 3, '\x7F');
+            const auto px = L::psd_decode(psd(3, 8, 4, 8, 3, "", false, 0, data), w, h, 2);
+            check("PSD: shrunk on the way", w == 2 && h == 1 && px.size() == 2);
+        }
+        std::string why;
+        check("PSD: header read", L::psd_info(psd(3, 640, 480, 8, 3, "", false, 0, "")).ok &&
+                                  L::psd_info(psd(3, 640, 480, 8, 3, "", false, 0, "")).w == 640);
+        check("PSD: refused, saying why -- PSB, 32-bit, cut short",
+              L::psd_decode(B("8BPS") + be16(2) + B(40, '\0'), w, h, 0, &why).empty() && why.find("PSB") != B::npos &&
+              L::psd_decode(psd(3, 1, 1, 32, 3, "", false, 0, B(12, '\0')), w, h, 0, &why).empty() && why.find("32") != B::npos &&
+              L::psd_decode(psd(3, 4, 4, 8, 3, "", false, 0, B(5, '\0')), w, h, 0, &why).empty() && why == "cut short");
+        check("PSD: its colour space from the header", core::picture_color(psd(4, 1, 1, 8, 4, "", false, 0, B(4, '\0'))) == "CMYK");
+    }
+    // ── s184 (G5): a picture's colour space from its header ──
+    {
+        std::cout << "--- s184 picture colour spaces ---\n";
+        namespace D = core::doc;
+        using B = std::string;
+        const auto bytes = [](std::initializer_list<int> v) { B s; for (int c : v) s += static_cast<char>(c); return s; };
+        const auto jpeg = [&](int sof, int comps, std::size_t app2) {
+            B s = bytes({0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}) + "JFIF" + B(10, '\0');
+            if (app2) {   // a big APP2 (an ICC profile) before the frame
+                s += bytes({0xFF, 0xE2, static_cast<int>((app2 + 2) >> 8), static_cast<int>((app2 + 2) & 0xFF)});
+                s += B(app2, 'x');
+            }
+            s += bytes({0xFF, 0xC4, 0x00, 0x04, 0x00, 0x00});   // a DHT first (not a frame)
+            s += bytes({0xFF, sof, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x10, comps});
+            return s + B(20, '\0');
+        };
+        check("JPEG: 4 components -- CMYK (past a big ICC segment and a DHT)", core::picture_color(jpeg(0xC0, 4, 60000)) == "CMYK");
+        check("JPEG: 3 -- RGB; 1 (progressive) -- Gray",
+              core::picture_color(jpeg(0xC0, 3, 0)) == "RGB" && core::picture_color(jpeg(0xC2, 1, 0)) == "Gray");
+        const auto png = [&](int ct) { return bytes({0x89}) + "PNG" + bytes({13, 10, 26, 10, 0, 0, 0, 13}) + "IHDR" + B(8, '\1') + bytes({8, ct}) + B(10, '\0'); };
+        check("PNG: grey / grey+alpha -- Gray; truecolour -- RGB",
+              core::picture_color(png(0)) == "Gray" && core::picture_color(png(4)) == "Gray" && core::picture_color(png(6)) == "RGB");
+        const auto psd = [&](int mode) { return B("8BPS") + bytes({0, 1}) + B(6, '\0') + bytes({0, 4, 0, 0, 1, 0, 0, 0, 1, 0, 0, 8, 0, mode}) + B(8, '\0'); };
+        check("PSD: CMYK / Gray / Lab / RGB modes", core::picture_color(psd(4)) == "CMYK" && core::picture_color(psd(1)) == "Gray" &&
+                                                    core::picture_color(psd(9)) == "Lab" && core::picture_color(psd(3)) == "RGB");
+        const auto tiff = [&](bool le, int photometric) {
+            const auto s16 = [&](int v) { return le ? bytes({v & 0xFF, v >> 8}) : bytes({v >> 8, v & 0xFF}); };
+            const auto s32 = [&](int v) { return le ? bytes({v & 0xFF, (v >> 8) & 0xFF, 0, 0}) : bytes({0, 0, (v >> 8) & 0xFF, v & 0xFF}); };
+            B s = le ? B("II") + s16(42) : B("MM") + s16(42);
+            s += s32(8) + s16(2);   // IFD at 8, two entries
+            s += s16(256) + s16(3) + s32(1) + s16(64) + s16(0);           // ImageWidth
+            s += s16(262) + s16(3) + s32(1) + s16(photometric) + s16(0);  // PhotometricInterpretation
+            return s + s32(0);
+        };
+        check("TIFF: separated -- CMYK, either byte order", core::picture_color(tiff(true, 5)) == "CMYK" && core::picture_color(tiff(false, 5)) == "CMYK");
+        check("TIFF: RGB / black-is-zero", core::picture_color(tiff(true, 2)) == "RGB" && core::picture_color(tiff(false, 1)) == "Gray");
+        check("GIF / BMP / WebP: RGB; not a picture: none",
+              core::picture_color(B("GIF89a") + B(10, '\0')) == "RGB" && core::picture_color(B("BM") + B(30, '\0')) == "RGB" &&
+              core::picture_color(B("RIFF") + B(4, '\0') + "WEBP" + B(8, '\0')) == "RGB" &&
+              core::picture_color(B("hello, world")).empty() && core::picture_color(B{}).empty() &&
+              core::picture_color(bytes({0xFF, 0xD8, 0xFF, 0xDA, 0, 2})).empty());
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        core::Doc::Id frame;
+        for (const auto& fid : d.ids_of<core::Frame>())
+            if (const auto* f = d.as<core::Frame>(fid); f->kind == core::FrameKind::Image && d.as<core::Page>(f->owner)) { frame = fid; break; }
+        core::ImageFile f;
+        f.path = "/x/press-ready.tif";
+        f.name = "press-ready.tif";
+        f.px_w = 3000;
+        f.px_h = 2000;
+        f.color = "CMYK";
+        check("placed: the asset keeps CMYK", !frame.empty() && D::place_image(j, d, frame, f) &&
+              d.as<core::Asset>(d.as<core::Frame>(frame)->asset)->color == "CMYK");
+    }
+    // ── s183 (G1): a paragraph split into sub-columns in a one-column frame ──
+    {
+        std::cout << "--- s183 split columns ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int P = 3;
+        {   // a long plain paragraph P (many lines in any font)
+            core::Doc::Loading load(d);
+            auto s = *d.as<core::Story>("story.1");
+            auto& para = s.paras.at(P);
+            para.text.clear();
+            for (int i = 0; i < 14; ++i) para.text += "The tide came in over the stones and went out again. ";
+            para.runs.clear();
+            para.notes.clear();
+            para.refs.clear();
+            para.anchors.clear();
+            para.index.clear();
+            para.brk = core::ParaStart::Anywhere;
+            d.put("story.1", s);
+        }
+        const auto body = d.as<core::Story>("story.1")->paras.at(P).style;
+        const auto sp = D::duplicate_style(j, d, body);
+        check("split: a style setting -- Span columns: Split into 2",
+              D::edit_styles(j, d, {sp}, "Span columns", [&](core::Style& st) { D::style_edit(d, st, "span", "s2"); st.start = core::ParaStart::Anywhere; }) &&
+              d.as<core::Style>(sp)->split == 2 && !d.as<core::Style>(sp)->span);
+        D::set_para_style(j, d, "story.1", {P, 0}, {P, 0}, sp);
+        L::FlowCache fl;
+        const L::FrameText* ft = nullptr;
+        for (const auto& x : fl.get(d, "story.1").frames) for (const auto& l : x.lines) if (l.para == P) ft = &x;
+        const auto* fr = ft ? d.as<core::Frame>(ft->frame) : nullptr;
+        check("split: set, in a one-column frame", fr && core::column_count(*fr) == 1);
+        if (fr) {
+            const double x0 = core::column_x(*fr, 0), W = core::column_width(*fr, 0), g = d.as<core::Style>(sp)->split_gutter;
+            const double sw = (W - g) / 2;
+            int n0 = 0, n1 = 0;
+            double top = 1e9, bot = -1, b0 = -1, b1 = -1;
+            bool geo = true;
+            int band = -1;
+            for (const auto& l : ft->lines) {
+                if (l.para != P) continue;
+                top = std::min(top, l.y);
+                bot = std::max(bot, l.y + l.h);
+                (l.col == 0 ? n0 : n1)++;
+                (l.col == 0 ? b0 : b1) = std::max(l.col == 0 ? b0 : b1, l.y + l.h);
+                const double cx = x0 + l.col * (sw + g);
+                geo = geo && l.col <= 1 && std::abs(l.cw - sw) < 0.01 && l.x >= cx - 0.01 && l.x < cx + sw;
+                band = l.band;
+            }
+            check("split: two sub-columns, each half the column less the gutter", geo && n0 > 0 && n1 > 0);
+            check("split: balanced -- the two within a line of each other", std::abs(n0 - n1) <= 1 && std::abs(b0 - b1) < 20);
+            bool before = true, after = true, other_band = true;
+            for (const auto& l : ft->lines) {
+                if (l.para < P) before = before && l.y + l.h <= top + 0.01 && l.col == 0;
+                if (l.para > P) after = after && l.y >= bot - 0.01 && l.col == 0;
+                if (l.para != P) other_band = other_band && l.band != band;
+            }
+            check("split: the text before above it, the text after below it, one column", before && after && other_band);
+            D::edit_styles(j, d, {sp}, "Split gutter", [&](core::Style& st) { D::style_edit(d, st, "split_gutter", "24"); });
+            L::FlowCache fl2;
+            double x1 = -1;
+            for (const auto& x : fl2.get(d, "story.1").frames)
+                for (const auto& l : x.lines) if (l.para == P && l.col == 1 && (x1 < 0 || l.x < x1)) x1 = l.x;
+            check("split: the gutter widens", x1 >= x0 + (W - 24) / 2 + 24 - 0.01);
+        }
+        {   // a split paragraph's footnote: at the frame's foot, the column's full width
+            std::string ns;
+            int np = -1;
+            for (const auto& sid : d.ids_of<core::Story>()) {
+                const auto& ps = d.as<core::Story>(sid)->paras;
+                for (int i = 0; i < static_cast<int>(ps.size()) && np < 0; ++i)
+                    if (!ps[static_cast<std::size_t>(i)].notes.empty()) { ns = sid; np = i; }
+                if (np >= 0) break;
+            }
+            bool ok = np >= 0;
+            if (ok) {
+                D::set_para_style(j, d, ns, {np, 0}, {np, 0}, sp);
+                L::FlowCache fn;
+                bool found = false;
+                for (const auto& x : fn.get(d, ns).frames)
+                    for (const auto& n : x.notes) {
+                        if (n.para != np) continue;
+                        const auto* f = d.as<core::Frame>(x.frame);
+                        double low = 0;
+                        for (const auto& l : x.lines) if (l.para == np) low = std::max(low, l.y + l.h);
+                        found = true;
+                        ok = ok && core::column_count(*f) == 1 && std::abs(n.w - core::column_width(*f, 0)) < 0.01 && n.y > low;
+                    }
+                ok = ok && found;
+                j.undo();
+            }
+            check("split: its footnote at the frame's foot, the column's width", ok);
+        }
+        {
+            core::Doc e;
+            check("split: saved with the style",core::from_json(e, core::to_json(d)) && e.as<core::Style>(sp)->split == 2 &&
+                                                 e.as<core::Style>(sp)->split_gutter == 24);
+        }
+        {   // a style based on it takes a change to the split; back Off clears it
+            const auto kid = D::duplicate_style(j, d, sp);   // split like it: nothing its own
+            const bool based = D::set_style_base(j, d, kid, sp);
+            D::edit_styles(j, d, {sp}, "Span columns", [&](core::Style& st) { D::style_edit(d, st, "span", "s3"); });
+            check("split: Split into 3 -- reaches the style based on it", based && d.as<core::Style>(kid)->based_on == sp &&
+                                                                         d.as<core::Style>(kid)->split == 3);
+            D::edit_styles(j, d, {sp}, "Span columns", [&](core::Style& st) { D::style_edit(d, st, "span", "0"); });
+            check("split: Off", d.as<core::Style>(sp)->split == 0 && !d.as<core::Style>(sp)->span);
+        }
+        {   // the inspector offers it
+            const auto o = core::project(d, "");
+            bool offered = false;
+            for (const auto& it : o.items())
+                for (const auto& f : it.fields)
+                    if (f.edit == "span")
+                        for (const auto& ch : f.choices) offered = offered || ch.id == "s2";
+            check("split: offered in the style's Span columns", offered);
+        }
+        {   // a two-column frame: a split style is set as usual (in its column)
+            core::Doc::Loading load(d);
+            for (const auto& fid : d.ids_of<core::Frame>()) {
+                auto f = *d.as<core::Frame>(fid);
+                if (f.story != "story.1") continue;
+                f.columns = 2;
+                d.put(fid, f);
+            }
+        }
+        D::edit_styles(j, d, {sp}, "Span columns", [&](core::Style& st) { D::style_edit(d, st, "span", "s2"); });
+        L::FlowCache fl3;
+        bool plain = true;
+        for (const auto& x : fl3.get(d, "story.1").frames) for (const auto& l : x.lines) if (l.para == P) plain = plain && l.cw == 0;
+        check("split: in a frame of columns -- set in its column as usual", plain);
     }
     // ── s181 (C1b): a vector picture's colours, as written ──
     {

@@ -76,6 +76,7 @@ add_library(composix_layout STATIC
     src/layout/Preflight.cpp
     # s053: the colour report -- RGB proofed through the press profile.
     src/layout/ColorReport.cpp
+    src/layout/Psd.cpp          # s185: a PSD's merged picture
     # s100: the generated long test book (fitted by flowing it).
     src/layout/BigBook.cpp
     # s103: page thumbnails on a worker thread, from a document snapshot.

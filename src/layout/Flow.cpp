@@ -1105,6 +1105,18 @@ bool spans(const core::Doc& d, const core::Story& st, int p) {
     return p >= 0 && p < static_cast<int>(st.paras.size()) && style_of(d, st.paras[static_cast<std::size_t>(p)]).span;
 }
 
+// s183 (G1): paragraph p's sub-columns when it splits (a one-column
+// frame's; 0 = not split).
+int splits(const core::Doc& d, const core::Story& st, const core::Frame& fr, int p) {
+    if (core::column_count(fr) != 1 || p < 0 || p >= static_cast<int>(st.paras.size())) return 0;
+    const int k = style_of(d, st.paras[static_cast<std::size_t>(p)]).split;
+    return k >= 2 ? k : 0;
+}
+// A paragraph that starts a band of its own: spanning (2+ columns) or split (one).
+bool own_band(const core::Doc& d, const core::Story& st, const core::Frame& fr, int p) {
+    return core::column_count(fr) >= 2 ? spans(d, st, p) : splits(d, st, fr, p) > 0;
+}
+
 // s166 (Scott): a frame of columns with paragraphs spanning them -- in
 // bands, top down: the columns up to the next spanning paragraph, balanced
 // (the shortest height that still holds them); the spanning paragraph
@@ -1131,6 +1143,44 @@ bool fill_bands(const core::Doc& d, const core::Story& st, const core::Frame& fr
     whole.inset.right = fr.w - x1;
     while (true) {
         if (notes_only || c.p >= paras) return fill_cols(d, st, fr, wraps, c, hmax, ft, nc, notes_only, fs, top, -1, band);
+        if (const int k = splits(d, st, fr, c.p); k > 0) {   // s183: split -- its lines balanced over k sub-columns
+            const auto style = style_of(d, st.paras[static_cast<std::size_t>(c.p)]);
+            const double before = c.start == 0 && top > std::max(0.0, fr.inset.top) + 0.01 ? style.space_before : 0;
+            core::Frame sub = fr;   // the frame's one column cut in k, the split gutter between
+            sub.columns = k;
+            sub.gutter = std::max(0.0, style.split_gutter);
+            sub.widths.clear();
+            sub.balance = false;
+            const int p0 = c.p;
+            const auto holds = [&](double h) {
+                Cursor t = c;
+                FrameText tmp = ft;
+                NoteCount tc = nc ? *nc : NoteCount{};
+                FootShare tf = fs ? *fs : FootShare{};
+                fill_cols(d, st, sub, wraps, t, h, tmp, nc ? &tc : nullptr, false, fs ? &tf : nullptr, top + before, p0 + 1, band);
+                return t.p > p0;
+            };
+            const std::size_t from = ft.lines.size();
+            double h = hmax;
+            if (holds(hmax)) {   // the shortest height that still holds it all: balanced
+                double lo = top + before, hi = hmax;
+                for (int it = 0; it < 20 && hi - lo > 0.5; ++it) {
+                    const double mid = (lo + hi) / 2;
+                    if (holds(mid)) hi = mid; else lo = mid;
+                }
+                h = hi;
+            }
+            fill_cols(d, st, sub, wraps, c, h, ft, nc, false, fs, top + before, p0 + 1, band);
+            for (std::size_t i = from; i < ft.lines.size(); ++i) {
+                ft.lines[i].cw = core::column_width(sub, ft.lines[i].col);
+                ft.lines[i].band = band;
+            }
+            ++band;
+            if (c.p >= paras) return true;
+            if (c.p == p0) return false;   // it didn't all fit: the frame is full (on in the next)
+            top = bottom_of(from) + style.space_after;
+            continue;
+        }
         if (c.start == 0 && spans(d, st, c.p)) {   // across them all
             const auto style = style_of(d, st.paras[static_cast<std::size_t>(c.p)]);
             const double before = top > std::max(0.0, fr.inset.top) + 0.01 ? style.space_before : 0;
@@ -1144,9 +1194,17 @@ bool fill_bands(const core::Doc& d, const core::Story& st, const core::Frame& fr
             top = bottom_of(from) + style.space_after;
             continue;
         }
-        int sp = -1;   // the next spanning paragraph
-        for (int p = c.p + 1; p < paras; ++p) if (spans(d, st, p)) { sp = p; break; }
+        int sp = -1;   // the next spanning (s183: or split) paragraph
+        for (int p = c.p + 1; p < paras; ++p) if (own_band(d, st, fr, p)) { sp = p; break; }
         if (sp < 0) return fill_cols(d, st, fr, wraps, c, hmax, ft, nc, false, fs, top, -1, band);
+        if (n == 1) {   // s183: one column -- nothing to balance; up to the split paragraph
+            const std::size_t from = ft.lines.size();
+            fill_cols(d, st, fr, wraps, c, hmax, ft, nc, false, fs, top, sp, band);
+            if (c.p < sp) return false;   // the frame is full first
+            ++band;
+            top = bottom_of(from) + style_of(d, st.paras[static_cast<std::size_t>(sp - 1)]).space_after;
+            continue;
+        }
         // The columns up to it -- the shortest height that holds them all.
         const auto holds = [&](double h) {
             Cursor t = c;
@@ -1186,8 +1244,7 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 const Away* away = nullptr) {
     const int n = core::column_count(fr);
     bool banded = false;
-    if (n >= 2)
-        for (int p = std::max(0, c.p); p < static_cast<int>(st.paras.size()) && !banded; ++p) banded = spans(d, st, p);
+    for (int p = std::max(0, c.p); p < static_cast<int>(st.paras.size()) && !banded; ++p) banded = own_band(d, st, fr, p);   // s183: a split too
     const auto fill_h = [&](FootShare* fs, double h) {
         return banded ? fill_bands(d, st, fr, wraps, c, h, ft, nc, notes_only, fs)
                       : fill_cols(d, st, fr, wraps, c, h, ft, nc, notes_only, fs);
@@ -1233,7 +1290,8 @@ bool fill_frame(const core::Doc& d, const core::Story& st, const core::Frame& fr
         }
         return done;
     }
-    if (n < 2 || d.settings().note_at != core::NoteAt::Foot) return fill(nullptr);
+    // s183: a one-column frame with a split paragraph too -- its notes at the frame's foot, not the band's.
+    if ((n < 2 && !banded) || d.settings().note_at != core::NoteAt::Foot) return fill(nullptr);
     const Cursor c0 = c;
     const FrameText ft0 = ft;
     const NoteCount nc0 = nc ? *nc : NoteCount{};

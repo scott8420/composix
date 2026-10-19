@@ -123,8 +123,8 @@ std::vector<Issue> preflight_issues(const core::Doc& d, FlowCache& flows, const 
                 out.push_back({L::Warning, "lowres", "Low resolution: " + a->name + " (" +
                                                          std::to_string(static_cast<int>(std::lround(ppi))) + " ppi)" + where(d, pg),
                                pg, fid});
-            if (o.standard == 1 && a->color == "RGB" && !o.profile)
-                out.push_back({L::Error, "rgb", "RGB picture (PDF/X-1a needs a profile to convert it): " + a->name + where(d, pg), pg, fid});
+            if (o.standard == 1 && (a->color == "RGB" || a->color == "Lab") && !o.profile)   // s184: Lab too
+                out.push_back({L::Error, "rgb", a->color + " picture (PDF/X-1a needs a profile to convert it): " + a->name + where(d, pg), pg, fid});
         } else if (f.kind == core::FrameKind::Text) {
             const auto* st = d.as<core::Story>(f.story);
             bool empty = !st;

@@ -1,5 +1,6 @@
 #include "views/Images.hpp"
 #include "Log.hpp"
+#include "layout/Psd.hpp"
 
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gdkmm/general.h>
@@ -8,6 +9,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -39,6 +42,45 @@ Cache& cache() {
     static auto* c = new Cache;
     return *c;
 }
+// s185 (G5b): a Photoshop file -- by its first bytes (gdk-pixbuf reads none).
+std::string head_of(const std::string& path, std::size_t n) {
+    std::ifstream in(path, std::ios::binary);
+    std::string b(n, '\0');
+    in.read(b.data(), static_cast<std::streamsize>(n));
+    b.resize(static_cast<std::size_t>(std::max<std::streamsize>(0, in.gcount())));
+    return b;
+}
+bool is_psd(const std::string& path) { return head_of(path, 4) == "8BPS"; }
+std::string whole_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), {});
+}
+// The file's own size in pixels, whatever reads it.
+bool file_size(const std::string& path, int& w, int& h) {
+    if (gdk_pixbuf_get_file_info(path.c_str(), &w, &h) && w > 0 && h > 0) return true;
+    const auto i = layout::psd_info(head_of(path, 26));
+    w = i.w;
+    h = i.h;
+    return i.ok;
+}
+// A PSD's merged picture as a cairo surface (`max_side` 0: full size).
+Cairo::RefPtr<Cairo::ImageSurface> psd_surface(const std::string& path, int max_side) {
+    int w = 0, h = 0;
+    std::string why;
+    const auto px = layout::psd_decode(whole_file(path), w, h, max_side, &why);
+    if (px.empty()) {
+        if (auto lg = log::get(log::Area::Io)) lg->warn("images: '{}' -- {}", path, why);
+        return {};
+    }
+    auto s = Cairo::ImageSurface::create(Cairo::Surface::Format::ARGB32, w, h);
+    s->flush();
+    unsigned char* d = s->get_data();
+    for (int y = 0; y < h; ++y)
+        std::memcpy(d + static_cast<std::size_t>(y) * static_cast<std::size_t>(s->get_stride()),
+                    px.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(w), static_cast<std::size_t>(w) * 4);
+    s->mark_dirty();
+    return s;
+}
 bool is_svg(const std::string& path) {
     auto ext = std::filesystem::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -49,16 +91,35 @@ bool is_svg(const std::string& path) {
 std::optional<core::ImageFile> probe(const std::string& path) {
     int w = 0, h = 0;
     GdkPixbufFormat* fmt = gdk_pixbuf_get_file_info(path.c_str(), &w, &h);
-    if (!fmt || w <= 0 || h <= 0) return std::nullopt;
+    if (!fmt || w <= 0 || h <= 0) {   // s185: a PSD -- its header, if its picture can be read
+        const auto i = layout::psd_info(head_of(path, 26));
+        if (!i.ok || i.mode == 7 || (i.depth != 1 && i.depth != 8 && i.depth != 16)) return std::nullopt;
+        w = i.w;
+        h = i.h;
+        fmt = nullptr;
+    }
     core::ImageFile f;
     f.path = std::filesystem::absolute(path).lexically_normal().string();
     f.name = std::filesystem::path(path).filename().string();
     f.px_w = w;
     f.px_h = h;
-    gchar* name = gdk_pixbuf_format_get_name(fmt);
+    gchar* name = fmt ? gdk_pixbuf_format_get_name(fmt) : nullptr;
     f.vector = is_svg(path) || (name && std::string(name) == "svg");
     g_free(name);
-    f.color = "RGB";   // gdk-pixbuf reads everything as RGB(A); CMYK detection is output's job
+    // s184 (G5): its colour space from the file's own header (gdk-pixbuf
+    // reads everything as RGB); "RGB" when the header says nothing we read.
+    {
+        std::ifstream in(f.path, std::ios::binary);
+        const auto c = core::picture_color([&in](std::uint64_t off, std::size_t n) {
+            std::string b(n, '\0');
+            in.clear();
+            in.seekg(static_cast<std::streamoff>(off));
+            in.read(b.data(), static_cast<std::streamsize>(n));
+            b.resize(static_cast<std::size_t>(std::max<std::streamsize>(0, in.gcount())));
+            return b;
+        });
+        f.color = c.empty() || f.vector ? "RGB" : c;
+    }
     f.stamp = core::file_stamp(f.path);
     return f;
 }
@@ -81,7 +142,9 @@ Entry decode(const std::string& path, std::int64_t stamp) {
     if (stamp == 0) return e;
     try {
         int fw = 0, fh = 0;
-        if (gdk_pixbuf_get_file_info(path.c_str(), &fw, &fh) && fw > 0 && fh > 0) {
+        if (is_psd(path)) {   // s185: read here (shrunk on the way for the screen)
+            if (file_size(path, fw, fh)) { e.w = fw; e.h = fh; e.pix = psd_surface(path, kMaxPx); }
+        } else if (gdk_pixbuf_get_file_info(path.c_str(), &fw, &fh) && fw > 0 && fh > 0) {
             e.w = fw;
             e.h = fh;
             // A vector renders at the preview size (crisp when zoomed);
@@ -161,7 +224,7 @@ Cairo::RefPtr<Cairo::ImageSurface> peek(const std::string& path, std::int64_t st
     }
     // Small: here and now. Big: on a thread of its own.
     int fw = 0, fh = 0;
-    const bool big = stamp != 0 && gdk_pixbuf_get_file_info(path.c_str(), &fw, &fh) &&
+    const bool big = stamp != 0 && file_size(path, fw, fh) &&   // s185: a PSD's too
                      static_cast<long>(fw) * static_cast<long>(fh) > kInlinePx && !is_svg(path);
     if (!big) return get(path, stamp, w, h);
     {
@@ -248,6 +311,10 @@ void paint(const Cairo::RefPtr<Cairo::Context>& cr, const Cairo::RefPtr<Cairo::I
 
 cairo_surface_t* print_surface(const std::string& path, double want_w, double want_h) {
     if (path.empty()) return nullptr;
+    if (is_psd(path)) {   // s185: full size
+        auto s = psd_surface(path, 0);
+        return s ? cairo_surface_reference(s->cobj()) : nullptr;
+    }
     try {
         Glib::RefPtr<Gdk::Pixbuf> pb;
         if (is_svg(path)) {
@@ -276,7 +343,7 @@ cairo_surface_t* print_surface(const std::string& path, double want_w, double wa
 
 const std::vector<std::string>& patterns() {
     static const std::vector<std::string> p{"*.png", "*.jpg", "*.jpeg", "*.tif", "*.tiff", "*.gif",
-                                            "*.bmp", "*.svg", "*.webp"};
+                                            "*.bmp", "*.svg", "*.webp", "*.psd"};   // s185
     return p;
 }
 

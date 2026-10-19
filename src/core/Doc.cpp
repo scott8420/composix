@@ -2346,6 +2346,10 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("drop_lines", "Drop cap", drop_lines),
         COMPOSIX_SF("drop_chars", "Drop letters", drop_chars),
         COMPOSIX_SF("align_grid", "Baseline grid", align_grid),
+        // s183: span / split columns ride together (one choice sets them).
+        StyleField{"span", "Span columns",
+                   [](Style& t, const Style& f) { t.span = f.span; t.split = f.split; t.split_gutter = f.split_gutter; },
+                   [](const Style& a, const Style& b) { return a.span == b.span && a.split == b.split && a.split_gutter == b.split_gutter; }},
         COMPOSIX_SF("hyphenate", "Hyphenate", hyphenate),
         COMPOSIX_SF("hyph_limit", "Hyphens in a row", hyph_limit),         // s065
         COMPOSIX_SF("hyph_shortest", "Shortest word", hyph_shortest),
@@ -2558,7 +2562,8 @@ std::string style_edit_label(const std::string& key) {   // s164
         {"list_type", "List"}, {"list_bullet", "Bullet"}, {"list_num", "Numbers"}, {"list_hang", "Hang"},
         {"pstart", "Start"}, {"keep_next", "Keep with next"}, {"keep_lines", "Keep lines"},
         {"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"}, {"hyph_last_word", "Hyphenate last word"},
-        {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}, {"span", "Span columns"}};
+        {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}, {"span", "Span columns"},
+        {"split_gutter", "Split gutter"}};
     if (const auto it = labels.find(key); it != labels.end()) return it->second;
     if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {
         static const std::map<char, std::string> rl{{'w', "Rule"}, {'c', "Rule colour"}, {'t', "Rule tint"}, {'o', "Rule offset"},
@@ -2616,7 +2621,11 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
     else if (key == "hyph_last_word") st.hyph_last_word = std::stoi(choice) != 0;
     else if (key == "hyphenate") st.hyphenate = choice == "1";
     else if (key == "align_grid") st.align_grid = choice == "1";
-    else if (key == "span") st.span = choice == "1";   // s166
+    else if (key == "span") {   // s166; s183: "s2".."s4" -- split into that many
+        st.span = choice == "1";
+        st.split = choice.size() == 2 && choice[0] == 's' ? std::clamp(choice[1] - '0', 2, 4) : 0;
+    }
+    else if (key == "split_gutter") st.split_gutter = std::clamp(std::stod(choice), 0.0, 500.0);   // s183
     else if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {   // s044: paragraph rules
         const bool above = key[5] == 'a';
         const char what = key.back();
@@ -2665,7 +2674,7 @@ std::string style_key_of_edit(const std::string& e) {   // s092
         {"nobreak", "no_break"}, {"color", "color"}, {"color_tint", "color_tint"}, {"align", "align"},
         {"before", "space_before"}, {"after", "space_after"}, {"lindent", "left_indent"}, {"rindent", "right_indent"},
         {"findent", "first_indent"}, {"indent_after", "skip_after_heading"}, {"tabs", "tabs"}, {"drop_lines", "drop_lines"},
-        {"drop_chars", "drop_chars"}, {"span", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"hyph_limit", "hyph_limit"},
+        {"drop_chars", "drop_chars"}, {"span", "span"}, {"split_gutter", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"hyph_limit", "hyph_limit"},
         {"hyph_shortest", "hyph_shortest"}, {"hyph_last_word", "hyph_last_word"}, {"keep_next", "keep_next"},
         {"keep_lines", "keep_lines"}, {"pstart", "start"}};
     if (const auto it = m.find(e); it != m.end()) return it->second;
@@ -3521,6 +3530,86 @@ Doc::Id place_image_new(DocJournal& j, Doc& d, const Doc::Id& owner, const Rect&
     });
     return made_frame;
 }
+
+}  // namespace doc
+
+// ── s184 (G5): a picture's colour space from its header ──────────────────────
+std::string picture_color(const ReadAt& read) {
+    const std::string h = read(0, 32);
+    const auto u8 = [](const std::string& s, std::size_t i) { return i < s.size() ? static_cast<unsigned>(static_cast<unsigned char>(s[i])) : 0u; };
+    if (h.size() >= 3 && u8(h, 0) == 0xFF && u8(h, 1) == 0xD8) {   // JPEG: marker to marker, to the frame header
+        std::uint64_t at = 2;
+        for (int guard = 0; guard < 4096; ++guard) {
+            const std::string m = read(at, 4);
+            if (m.size() < 4 || u8(m, 0) != 0xFF) return "";
+            const unsigned code = u8(m, 1);
+            if (code == 0xFF) { ++at; continue; }   // fill byte
+            if (code == 0xD8 || code == 0x01 || (code >= 0xD0 && code <= 0xD7)) { at += 2; continue; }   // no length
+            if (code == 0xD9 || code == 0xDA) return "";   // end / scan before a frame: not a picture we know
+            const unsigned len = (u8(m, 2) << 8) | u8(m, 3);
+            if (len < 2) return "";
+            if (code >= 0xC0 && code <= 0xCF && code != 0xC4 && code != 0xC8 && code != 0xCC) {   // SOFn
+                const std::string f = read(at + 4, 6);
+                const unsigned n = u8(f, 5);   // precision, height(2), width(2), components
+                return n == 1 ? "Gray" : n == 4 ? "CMYK" : n == 3 ? "RGB" : "";
+            }
+            at += 2 + len;
+        }
+        return "";
+    }
+    if (h.size() >= 26 && h.compare(1, 3, "PNG") == 0 && u8(h, 0) == 0x89) {
+        const unsigned ct = u8(h, 25);   // IHDR's colour type
+        return ct == 0 || ct == 4 ? "Gray" : "RGB";
+    }
+    if (h.size() >= 26 && h.compare(0, 4, "8BPS") == 0) {   // Photoshop
+        switch ((u8(h, 24) << 8) | u8(h, 25)) {
+        case 0: case 1: case 8: return "Gray";   // bitmap, grayscale, duotone
+        case 4: return "CMYK";
+        case 9: return "Lab";
+        default: return "RGB";   // RGB, indexed, multichannel
+        }
+    }
+    if (h.size() >= 8 && ((h[0] == 'I' && h[1] == 'I' && u8(h, 2) == 42 && u8(h, 3) == 0) ||
+                          (h[0] == 'M' && h[1] == 'M' && u8(h, 2) == 0 && u8(h, 3) == 42))) {   // TIFF
+        const bool le = h[0] == 'I';
+        const auto num = [&](const std::string& s, std::size_t i, int n) {
+            std::uint64_t v = 0;
+            for (int k = 0; k < n; ++k) v |= static_cast<std::uint64_t>(u8(s, i + static_cast<std::size_t>(k))) << (8 * (le ? k : n - 1 - k));
+            return v;
+        };
+        const std::uint64_t ifd = num(h, 4, 4);
+        const std::string cnt = read(ifd, 2);
+        if (cnt.size() < 2) return "";
+        const std::size_t n = static_cast<std::size_t>(num(cnt, 0, 2));
+        const std::string e = read(ifd + 2, n * 12);
+        long photometric = -1, samples = 1;
+        for (std::size_t i = 0; i + 12 <= e.size(); i += 12) {
+            const auto tag = num(e, i, 2), type = num(e, i + 2, 2);
+            const auto v = type == 3 ? num(e, i + 8, 2) : num(e, i + 8, 4);   // SHORT or LONG, inline
+            if (tag == 262) photometric = static_cast<long>(v);
+            if (tag == 277) samples = static_cast<long>(v);
+        }
+        switch (photometric) {
+        case 0: case 1: return samples >= 3 ? "RGB" : "Gray";
+        case 5: return "CMYK";   // separated (ink set 1)
+        case 8: case 9: case 10: return "Lab";
+        case -1: return "";
+        default: return "RGB";   // RGB, palette, YCbCr ...
+        }
+    }
+    if (h.size() >= 6 && (h.compare(0, 6, "GIF87a") == 0 || h.compare(0, 6, "GIF89a") == 0)) return "RGB";
+    if (h.size() >= 2 && h[0] == 'B' && h[1] == 'M') return "RGB";
+    if (h.size() >= 12 && h.compare(0, 4, "RIFF") == 0 && h.compare(8, 4, "WEBP") == 0) return "RGB";
+    return "";
+}
+
+std::string picture_color(const std::string& bytes) {
+    return picture_color([&bytes](std::uint64_t off, std::size_t n) {
+        return off >= bytes.size() ? std::string{} : bytes.substr(static_cast<std::size_t>(off), n);
+    });
+}
+
+namespace doc {
 
 bool relink_assets(DocJournal& j, Doc& d, const std::vector<std::pair<Doc::Id, ImageFile>>& files) {
     std::vector<Doc::Id> ids;
