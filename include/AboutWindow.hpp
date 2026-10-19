@@ -21,9 +21,11 @@
 // bundle (the RESOURCE-PIPELINE paradigm -- App::on_activate registers it), so
 // the window also exercises resource resolution + theme recolour.
 //
-// It is deliberately minimal: this is a paradigm seed, not a product About box,
-// so there's no branded chrome (credits, licence, links) -- just enough to prove
-// the lifetime and the resource icon. See docs/resources-and-dialog-lifetime.md.
+// s192 (Scott's logo in, the seed's words out): Composix's own About -- the
+// logo, name, version and the build's session, what it is, the credits
+// (libraries and the hyphenation patterns, with their licences), and the
+// versions of what it's running on, with Copy Details for bug reports
+// (Fedora and Ubuntu builds differ). See docs/resources-and-dialog-lifetime.md.
 // ─────────────────────────────────────────────────────────────────────────────
 namespace composix {
 

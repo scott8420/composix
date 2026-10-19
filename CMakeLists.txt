@@ -193,6 +193,10 @@ target_include_directories(composix PRIVATE include ${GTKMM_INCLUDE_DIRS})
 target_link_libraries(composix     PRIVATE ${GTKMM_LIBRARIES} composix_core composix_layout spdlog::spdlog Threads::Threads)
 target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
+# s192: the About window's version, and the session that built it (bump
+# COMPOSIX_BUILD with each session's ship, so the two machines can tell).
+set(COMPOSIX_BUILD "s192")
+target_compile_definitions(composix PRIVATE COMPOSIX_VERSION="${PROJECT_VERSION}" COMPOSIX_BUILD="${COMPOSIX_BUILD}")
 # s187: libtiff, when it's there -- a CMYK TIFF's own separations into the
 # print PDF (without it a CMYK TIFF goes through RGB, as before).
 pkg_check_modules(TIFF libtiff-4)

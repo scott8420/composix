@@ -739,6 +739,10 @@ void place_notes(const core::Doc& d, const core::Story& st, const core::Frame& f
     }
 }
 
+// s191: inside a paragraph's in-column split (fill_cols on its sub-columns):
+// no splitting again there. (Per thread: the flow runs on workers too.)
+thread_local int g_split_depth = 0;
+
 // s156: one frame's columns (fill_frame, below); `fs` -- one foot under all
 // of them, else each column's own.
 bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr, const std::vector<core::WrapRect>& wraps,
@@ -957,6 +961,57 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                     place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c, fs, band);   // s109
                     return false;
                 }
+            }
+            // s191 (G1b): a paragraph split into sub-columns WITHIN this column
+            // (a frame of 2+ columns): its own band here, balanced over them;
+            // the column goes on below it. Too tall for the room left under
+            // text already here: the next column, whole.
+            if (n >= 2 && style.split >= 2 && g_split_depth == 0) {   // (its rest, on from a column before, splits too)
+                const double above = c.start == 0 && y > top ? style.space_before : 0;
+                core::Frame sub = fr;
+                sub.columns = std::min(style.split, 4);
+                sub.gutter = std::max(0.0, style.split_gutter);
+                sub.widths.clear();
+                sub.balance = false;
+                sub.inset.left = cx;
+                sub.inset.right = std::max(0.0, fr.w - (cx + cw));
+                int sband = 1000;   // in-column bands: apart from fill_bands' own numbers
+                for (const auto& l : ft.lines) if (l.band >= 1000) sband = std::max(sband, l.band + 1);
+                const int p0 = c.p;
+                ++g_split_depth;
+                const auto holds = [&](double h) {
+                    Cursor t = c;
+                    FrameText tmp = ft;
+                    NoteCount tc = nc ? *nc : NoteCount{};
+                    FootShare tf = fs ? *fs : FootShare{};
+                    fill_cols(d, st, sub, wraps, t, h, tmp, nc ? &tc : nullptr, false, fs ? &tf : nullptr, y + above, p0 + 1, sband);
+                    return t.p > p0;
+                };
+                const double room = lim();
+                const bool fits = holds(room);
+                if (!fits && y > top + 0.01) { --g_split_depth; break; }   // the next column, whole
+                double h = room;
+                if (fits) {
+                    double lo = y + above, hi = room;
+                    for (int it = 0; it < 20 && hi - lo > 0.5; ++it) {
+                        const double mid = (lo + hi) / 2;
+                        if (holds(mid)) hi = mid; else lo = mid;
+                    }
+                    h = hi;
+                }
+                const std::size_t from = ft.lines.size();
+                fill_cols(d, st, sub, wraps, c, h, ft, nc, false, fs, y + above, p0 + 1, sband);
+                --g_split_depth;
+                double bottom = y;
+                for (std::size_t i = from; i < ft.lines.size(); ++i) {
+                    ft.lines[i].cw = core::column_width(sub, ft.lines[i].col);
+                    ft.lines[i].band = sband;
+                    bottom = std::max(bottom, ft.lines[i].y + ft.lines[i].h);
+                }
+                in_col += static_cast<int>(ft.lines.size() - from);
+                if (c.p == p0) break;   // it didn't all fit (a fresh column too small): its rest in the next, split there too
+                y = bottom + style.space_after;
+                continue;
             }
             // s011: space before a paragraph -- not at the top of a column.
             const double before = (c.start == 0 && y > top) ? style.space_before : 0;
@@ -1177,7 +1232,9 @@ bool fill_bands(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 FrameText tmp = ft;
                 NoteCount tc = nc ? *nc : NoteCount{};
                 FootShare tf = fs ? *fs : FootShare{};
+                ++g_split_depth;   // s191: its sub-columns don't split it again
                 fill_cols(d, st, sub, wraps, t, h, tmp, nc ? &tc : nullptr, false, fs ? &tf : nullptr, top + before, p0 + 1, band);
+                --g_split_depth;
                 return t.p > p0;
             };
             const std::size_t from = ft.lines.size();
@@ -1190,7 +1247,9 @@ bool fill_bands(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 }
                 h = hi;
             }
+            ++g_split_depth;
             fill_cols(d, st, sub, wraps, c, h, ft, nc, false, fs, top + before, p0 + 1, band);
+            --g_split_depth;
             for (std::size_t i = from; i < ft.lines.size(); ++i) {
                 ft.lines[i].cw = core::column_width(sub, ft.lines[i].col);
                 ft.lines[i].band = band;
@@ -2590,17 +2649,33 @@ core::TextPos hit_text(const core::Doc& d, const std::string& story, const Story
     int col = fr ? core::column_at(*fr, x) : 0;
     while (col > 0 && std::none_of(ft->lines.begin(), ft->lines.end(), [&](const Line& l) { return l.col == col; })) --col;
     const Line* want = nullptr;
-    // s166: in bands -- the band under y first (a spanning paragraph is all
-    // the columns'), then its column under x.
+    // s166: in bands (s191: column-first) -- the lines whose column (a
+    // spanning paragraph's: all of them; a split one's: its sub-column) holds
+    // x, nearest across when none does; among them the line under y.
     int band = 0;
     if (fr && std::any_of(ft->lines.begin(), ft->lines.end(), [](const Line& l) { return l.band > 0; })) {
-        for (const auto& l : ft->lines) if (y >= l.y) band = l.band;
-        const bool across = std::any_of(ft->lines.begin(), ft->lines.end(), [&](const Line& l) { return l.band == band && l.cw > 0; });
-        if (across) col = 0;
-        else while (col > 0 && std::none_of(ft->lines.begin(), ft->lines.end(), [&](const Line& l) { return l.band == band && l.col == col; })) --col;
+        const auto extent = [&](const Line& l) {
+            const double x0 = l.cw > 0 ? l.x : core::column_x(*fr, l.col);
+            return std::pair<double, double>{x0, x0 + line_width_of(*fr, l)};
+        };
+        double best = 1e18;
+        for (const auto& l : ft->lines) {   // how far x is from the nearest line's column
+            const auto [x0, x1] = extent(l);
+            best = std::min(best, x < x0 ? x0 - x : x > x1 ? x - x1 : 0.0);
+        }
+        const Line* top = nullptr;
+        for (const auto& l : ft->lines) {
+            const auto [x0, x1] = extent(l);
+            if ((x < x0 ? x0 - x : x > x1 ? x - x1 : 0.0) > best + 0.01) continue;
+            if (y >= l.y && (!want || l.y >= want->y)) want = &l;
+            if (!top || l.y < top->y) top = &l;
+        }
+        if (!want) want = top;
+        if (want) { band = want->band; col = want->col; }
     }
-    for (const auto& l : ft->lines)
-        if (l.band == band && l.col == col && (!want || y >= l.y)) want = &l;
+    if (!want)
+        for (const auto& l : ft->lines)
+            if (l.band == band && l.col == col && (!want || y >= l.y)) want = &l;
     if (!want) want = &ft->lines.front();
     // s018: lines side by side (a wrap between them): the rightmost that
     // starts left of x, else the leftmost.
@@ -2638,7 +2713,7 @@ core::TextPos line_move(const core::Doc& d, const std::string& story, const Stor
     const auto same_row = [&](int a, int b) {
         const auto& [fa, la] = all[static_cast<std::size_t>(a)];
         const auto& [fb, lb] = all[static_cast<std::size_t>(b)];
-        return fa == fb && la->col == lb->col && la->y == lb->y;
+        return fa == fb && la->col == lb->col && la->band == lb->band && la->y == lb->y;   // s191: and band
     };
     int to = cur;
     while (to >= 0 && to < static_cast<int>(all.size()) && same_row(to, cur)) to += dir;

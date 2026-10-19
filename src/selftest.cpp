@@ -10382,20 +10382,68 @@ int main() {
                         for (const auto& ch : f.choices) offered = offered || ch.id == "s2";
             check("split: offered in the style's Span columns", offered);
         }
-        {   // a two-column frame: a split style is set as usual (in its column)
+        {   // s191 (G1b): a two-column frame -- split WITHIN its column (no
+            // picture wrapping into it, a paragraph short enough to balance)
             core::Doc::Loading load(d);
             for (const auto& fid : d.ids_of<core::Frame>()) {
                 auto f = *d.as<core::Frame>(fid);
+                if (f.wrap != core::Wrap::None) { f.wrap = core::Wrap::None; d.put(fid, f); continue; }
                 if (f.story != "story.1") continue;
                 f.columns = 2;
                 d.put(fid, f);
             }
+            auto s1 = *d.as<core::Story>("story.1");
+            s1.paras.at(P).text.clear();
+            for (int i = 0; i < 4; ++i) s1.paras.at(P).text += "The tide came in over the stones and went out again. ";
+            d.put("story.1", s1);
         }
         D::edit_styles(j, d, {sp}, "Span columns", [&](core::Style& st) { D::style_edit(d, st, "span", "s2"); });
         L::FlowCache fl3;
-        bool plain = true;
-        for (const auto& x : fl3.get(d, "story.1").frames) for (const auto& l : x.lines) if (l.para == P) plain = plain && l.cw == 0;
-        check("split: in a frame of columns -- set in its column as usual", plain);
+        const auto& flow3 = fl3.get(d, "story.1");
+        const L::FrameText* f3 = nullptr;
+        for (const auto& x : flow3.frames) for (const auto& l : x.lines) if (l.para == P && !f3) f3 = &x;
+        const auto* fr3 = f3 ? d.as<core::Frame>(f3->frame) : nullptr;
+        check("in-column split: set, in a frame of two columns", fr3 && core::column_count(*fr3) == 2);
+        if (fr3) {
+            const double g = d.as<core::Style>(sp)->split_gutter;
+            // which column it's in: the one holding its first line
+            int home = -1;
+            double top = 1e9, bot = -1;
+            int n0 = 0, n1 = 0;
+            for (const auto& l : f3->lines)
+                if (l.para == P) {
+                    top = std::min(top, l.y);
+                    bot = std::max(bot, l.y + l.h);
+                    (l.col == 0 ? n0 : n1)++;
+                    for (int c = 0; c < 2 && home < 0; ++c)
+                        if (l.x >= core::column_x(*fr3, c) - 0.01 && l.x < core::column_x(*fr3, c) + core::column_width(*fr3, c)) home = c;
+                }
+            const double cx = home >= 0 ? core::column_x(*fr3, home) : 0, cw = home >= 0 ? core::column_width(*fr3, home) : 0;
+            const double sw = (cw - g) / 2;
+            bool inside = home >= 0;
+            for (const auto& l : f3->lines)
+                if (l.para == P) inside = inside && std::abs(l.cw - sw) < 0.01 && l.x >= cx - 0.01 && l.x + 0.01 < cx + cw && l.band >= 1000;
+            check("in-column split: two sub-columns inside its column, each half of it less the gutter", inside && n0 > 0 && n1 > 0);
+            check("in-column split: balanced", std::abs(n0 - n1) <= 1, std::to_string(n0) + " / " + std::to_string(n1));
+            bool above = true, below = true, below_any = false;
+            for (const auto& l : f3->lines) {
+                if (l.para == P || l.band >= 1000) continue;
+                const bool same_col = std::abs(core::column_x(*fr3, l.col) - cx) < 0.01;
+                if (!same_col) continue;
+                if (l.para < P) above = above && l.y + l.h <= top + 0.01;
+                if (l.para > P) { below = below && l.y >= bot - 0.01; below_any = true; }
+            }
+            check("in-column split: in its column the text before is above it, the text after below it", above && below);
+            (void)below_any;
+            // A click in its second sub-column lands in it (column-first hit-testing).
+            const L::Line* second = nullptr;
+            for (const auto& l : f3->lines) if (l.para == P && l.col == 1 && !second) second = &l;
+            if (second) {
+                const auto at = L::hit_text(d, "story.1", flow3, f3->frame, second->x + 4, second->y + second->h / 2);
+                check("in-column split: a click in its second sub-column lands there", at.para == P && at.byte >= second->start && at.byte <= second->end,
+                      std::to_string(at.para) + ":" + std::to_string(at.byte));
+            }
+        }
     }
     // ── s181 (C1b): a vector picture's colours, as written ──
     {
