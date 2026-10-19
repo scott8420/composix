@@ -95,6 +95,8 @@ public:
     void move_to(double x, double y);
     void line_to(double x, double y);
     void rect(const Rect& r);
+    void close_path();       // s189
+    void clip_even_odd();    // s189: the path built so far clips what follows (even-odd), and is ended
     void fill();
     void stroke();
     // An image stretched into r.
@@ -173,6 +175,9 @@ public:
     FontId add_font(hb_face_t* face);
     // 8-bit RGB rows (3 bytes a pixel, w*3 a row); `alpha` (w*h) may be null.
     ImageId add_image_rgb(int w, int h, const std::uint8_t* rgb, const std::uint8_t* alpha = nullptr);
+    // s187: 8-bit CMYK rows, as ink (0 none .. 255 full; 4 bytes a pixel) --
+    // the picture's own separations, embedded as they are; `alpha` may be null.
+    ImageId add_image_cmyk(int w, int h, const std::uint8_t* cmyk, const std::uint8_t* alpha = nullptr);
     // A JPEG's own bytes, embedded untouched (1 = gray, 3 = RGB, 4 = CMYK).
     ImageId add_image_jpeg(const std::string& bytes, int w, int h, int components);
 

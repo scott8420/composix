@@ -341,6 +341,15 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
                 cr->rectangle(r.x, r.y, r.w, r.h);
                 cr->clip();
                 const Rect ir = core::picture_rect(r, f, iw, ih, s);   // s035: Custom placement too
+                if (const auto polys = core::clip_polys(*asset, ir); !polys.empty()) {   // s189: its clipping path
+                    cr->set_fill_rule(Cairo::Context::FillRule::EVEN_ODD);
+                    for (const auto& poly : polys) {
+                        cr->move_to(poly[0][0], poly[0][1]);
+                        for (std::size_t i = 1; i < poly.size(); ++i) cr->line_to(poly[i][0], poly[i][1]);
+                        cr->close_path();
+                    }
+                    cr->clip();
+                }
                 images::paint(cr, pic, ir.x, ir.y, ir.w, ir.h, dim * op);   // s021: its opacity
                 cr->restore();
                 if (status == core::LinkStatus::Modified) {   // a quiet corner flag

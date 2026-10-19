@@ -42,6 +42,28 @@ plate::Color ink_of(const core::Doc& d, const std::string& swatch, double tint =
 // An image for Plate: a JPEG's own bytes when the source kept them, else
 // the surface's pixels (un-premultiplied) with their alpha.
 plate::ImageId add_image(plate::Document& doc, cairo_surface_t* pic, bool* rgb_kept) {
+    {   // s187: a CMYK picture's own separations, when the source kept them
+        // Copied out FIRST: cairo_surface_flush lets go of a surface's mime data.
+        const unsigned char* got = nullptr;
+        unsigned long n = 0;
+        cairo_surface_get_mime_data(pic, kCmykMime, &got, &n);
+        const std::vector<std::uint8_t> ink(got, got ? got + n : got);
+        const int w = cairo_image_surface_get_width(pic), h = cairo_image_surface_get_height(pic);
+        if (!ink.empty() && w > 0 && h > 0 && n == static_cast<unsigned long>(w) * static_cast<unsigned long>(h) * 4) {
+            cairo_surface_flush(pic);
+            std::vector<std::uint8_t> alpha;
+            if (cairo_image_surface_get_format(pic) == CAIRO_FORMAT_ARGB32) {
+                alpha.resize(static_cast<std::size_t>(w) * h);
+                const unsigned char* data = cairo_image_surface_get_data(pic);
+                const int stride = cairo_image_surface_get_stride(pic);
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                        alpha[static_cast<std::size_t>(y) * w + x] =
+                            static_cast<std::uint8_t>(reinterpret_cast<const std::uint32_t*>(data + static_cast<std::ptrdiff_t>(y) * stride)[x] >> 24);
+            }
+            return doc.add_image_cmyk(w, h, ink.data(), alpha.empty() ? nullptr : alpha.data());
+        }
+    }
     unsigned char* jpeg = nullptr;
     unsigned long jlen = 0;
     cairo_surface_get_mime_data(pic, CAIRO_MIME_TYPE_JPEG, const_cast<const unsigned char**>(&jpeg), &jlen);
@@ -158,6 +180,14 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
     const core::Rect r = core::picture_rect({f.x, f.y, f.w, f.h}, f, iw, ih);
     pg.save();
     pg.clip_rect({f.x, f.y, f.w, f.h});
+    if (const auto polys = core::clip_polys(*a, r); !polys.empty()) {   // s189: its clipping path
+        for (const auto& poly : polys) {
+            pg.move_to(poly[0][0], poly[0][1]);
+            for (std::size_t i = 1; i < poly.size(); ++i) pg.line_to(poly[i][0], poly[i][1]);
+            pg.close_path();
+        }
+        pg.clip_even_odd();
+    }
     pg.image(id, {r.x, r.y, r.w, r.h});
     pg.restore();
 }

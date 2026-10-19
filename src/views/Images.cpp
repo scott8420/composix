@@ -1,6 +1,7 @@
 #include "views/Images.hpp"
 #include "Log.hpp"
 #include "layout/Psd.hpp"
+#include "layout/Export.hpp"   // s187: kCmykMime
 
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gdkmm/general.h>
@@ -12,6 +13,9 @@
 #include <fstream>
 #include <iterator>
 #include <cstring>
+#ifdef COMPOSIX_HAVE_TIFF
+#include <tiffio.h>
+#endif
 #include <map>
 #include <mutex>
 #include <glibmm/main.h>
@@ -81,6 +85,74 @@ Cairo::RefPtr<Cairo::ImageSurface> psd_surface(const std::string& path, int max_
     s->mark_dirty();
     return s;
 }
+// s187: a picture's CMYK separations put on its print surface (layout::kCmykMime).
+void attach_ink(cairo_surface_t* s, std::vector<std::uint8_t> ink) {
+    auto* copy = new std::vector<std::uint8_t>(std::move(ink));
+    cairo_surface_set_mime_data(s, layout::kCmykMime, copy->data(), copy->size(),
+                                [](void* p) { delete static_cast<std::vector<std::uint8_t>*>(p); }, copy);
+}
+#ifdef COMPOSIX_HAVE_TIFF
+// A CMYK TIFF's separations (8 or 16 bits, chunky), the file's own size; empty otherwise.
+std::vector<std::uint8_t> tiff_ink(const std::string& path, int want_w, int want_h, int* got_w = nullptr, int* got_h = nullptr) {
+    std::vector<std::uint8_t> out;
+    TIFFSetWarningHandler(nullptr);
+    TIFF* t = TIFFOpen(path.c_str(), "r");
+    if (!t) return out;
+    uint32_t w = 0, h = 0;
+    uint16_t spp = 0, bps = 0, photo = 0, planar = PLANARCONFIG_CONTIG, inkset = INKSET_CMYK;
+    TIFFGetField(t, TIFFTAG_IMAGEWIDTH, &w);
+    TIFFGetField(t, TIFFTAG_IMAGELENGTH, &h);
+    TIFFGetFieldDefaulted(t, TIFFTAG_SAMPLESPERPIXEL, &spp);
+    TIFFGetFieldDefaulted(t, TIFFTAG_BITSPERSAMPLE, &bps);
+    TIFFGetField(t, TIFFTAG_PHOTOMETRIC, &photo);
+    TIFFGetFieldDefaulted(t, TIFFTAG_PLANARCONFIG, &planar);
+    TIFFGetFieldDefaulted(t, TIFFTAG_INKSET, &inkset);
+    if (photo == PHOTOMETRIC_SEPARATED && inkset == INKSET_CMYK && spp >= 4 && (bps == 8 || bps == 16) &&
+        planar == PLANARCONFIG_CONTIG && (want_w <= 0 || (static_cast<int>(w) == want_w && static_cast<int>(h) == want_h))) {
+        if (got_w) *got_w = static_cast<int>(w);
+        if (got_h) *got_h = static_cast<int>(h);
+        std::vector<std::uint8_t> line(static_cast<std::size_t>(TIFFScanlineSize(t)));
+        out.resize(static_cast<std::size_t>(w) * h * 4);
+        const std::size_t step = static_cast<std::size_t>(spp) * (bps / 8);
+        for (uint32_t y = 0; y < h; ++y) {
+            if (TIFFReadScanline(t, line.data(), y, 0) < 0) { out.clear(); break; }
+            for (uint32_t x = 0; x < w; ++x)
+                for (int c = 0; c < 4; ++c) {
+                    const std::size_t at = x * step + static_cast<std::size_t>(c) * (bps / 8);
+                    // 16-bit: the high byte (TIFF's own byte order is undone by libtiff)
+                    out[(static_cast<std::size_t>(y) * w + x) * 4 + static_cast<std::size_t>(c)] =
+                        bps == 8 ? line[at] : static_cast<std::uint8_t>(reinterpret_cast<const uint16_t*>(line.data() + at)[0] >> 8);
+                }
+        }
+    }
+    TIFFClose(t);
+    return out;
+}
+// s187: a CMYK TIFF gdk-pixbuf can't decode (16-bit): drawn from its own
+// separations (plain ink arithmetic), every k-th pixel for the screen;
+// the ink rides with it for print. Null when it isn't one.
+cairo_surface_t* tiff_cmyk_surface(const std::string& path, int max_side, bool keep_ink) {
+    int W = 0, H = 0;
+    auto ink = tiff_ink(path, 0, 0, &W, &H);
+    if (ink.empty()) return nullptr;
+    const int k = max_side > 0 ? std::max(1, (std::max(W, H) + max_side - 1) / max_side) : 1;
+    const int w = (W + k - 1) / k, h = (H + k - 1) / k;
+    cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, w, h);
+    cairo_surface_flush(s);
+    unsigned char* d = cairo_image_surface_get_data(s);
+    const int stride = cairo_image_surface_get_stride(s);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const std::uint8_t* p = &ink[(static_cast<std::size_t>(y * k) * W + static_cast<std::size_t>(x * k)) * 4];
+            const unsigned kk = 255u - p[3];
+            const unsigned r = (255u - p[0]) * kk / 255, g = (255u - p[1]) * kk / 255, b = (255u - p[2]) * kk / 255;
+            reinterpret_cast<std::uint32_t*>(d + static_cast<std::ptrdiff_t>(y) * stride)[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
+        }
+    cairo_surface_mark_dirty(s);
+    if (keep_ink && k == 1) attach_ink(s, std::move(ink));
+    return s;
+}
+#endif
 bool is_svg(const std::string& path) {
     auto ext = std::filesystem::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -119,6 +191,15 @@ std::optional<core::ImageFile> probe(const std::string& path) {
             return b;
         });
         f.color = c.empty() || f.vector ? "RGB" : c;
+        // s189: its clipping path, if Photoshop gave it one
+        f.clip = core::pack_clip(core::clipping_path([&in](std::uint64_t off, std::size_t n) {
+            std::string b(n, '\0');
+            in.clear();
+            in.seekg(static_cast<std::streamoff>(off));
+            in.read(b.data(), static_cast<std::streamsize>(n));
+            b.resize(static_cast<std::size_t>(std::max<std::streamsize>(0, in.gcount())));
+            return b;
+        }));
     }
     f.stamp = core::file_stamp(f.path);
     return f;
@@ -160,6 +241,11 @@ Entry decode(const std::string& path, std::int64_t stamp) {
     } catch (const Glib::Error&) {   // a format it can't read: the stand-in
         e.pix.reset();
     }
+#ifdef COMPOSIX_HAVE_TIFF
+    if (!e.pix)   // s187: a CMYK TIFF gdk-pixbuf can't decode (16-bit)
+        if (cairo_surface_t* t = tiff_cmyk_surface(path, kMaxPx, false))
+            e.pix = Cairo::RefPtr<Cairo::ImageSurface>(new Cairo::ImageSurface(t, true));
+#endif
     return e;
 }
 
@@ -290,6 +376,25 @@ std::vector<std::uint32_t> pixels(const std::string& path, std::int64_t stamp, i
 }
 
 std::vector<float> trace(const std::string& path, std::int64_t stamp) {
+    {   // s189 (G3): its clipping path, when it has one -- what the designer drew wins over its pixels
+        std::ifstream in(path, std::ios::binary);
+        const auto clip = core::clipping_path([&in](std::uint64_t off, std::size_t n) {
+            std::string b(n, '\0');
+            in.clear();
+            in.seekg(static_cast<std::streamoff>(off));
+            in.read(b.data(), static_cast<std::streamsize>(n));
+            b.resize(static_cast<std::size_t>(std::max<std::streamsize>(0, in.gcount())));
+            return b;
+        });
+        int fw = 0, fh = 0;
+        if (!clip.polys.empty() && file_size(path, fw, fh)) {
+            auto s = core::clip_shape(clip, fw, fh);
+            if (auto lg = log::get(log::Area::Io))
+                lg->info("trace: '{}' clipping path '{}' ({} subpaths) -> {}", path, clip.name, clip.polys.size(),
+                         s.empty() ? "nothing" : std::to_string((s.size() - 1) / 2) + " bands");
+            if (!s.empty()) return s;
+        }
+    }
     int w = 0, h = 0;
     const auto px = pixels(path, stamp, w, h);
     if (px.empty()) return {};
@@ -311,9 +416,21 @@ void paint(const Cairo::RefPtr<Cairo::Context>& cr, const Cairo::RefPtr<Cairo::I
 
 cairo_surface_t* print_surface(const std::string& path, double want_w, double want_h) {
     if (path.empty()) return nullptr;
-    if (is_psd(path)) {   // s185: full size
-        auto s = psd_surface(path, 0);
-        return s ? cairo_surface_reference(s->cobj()) : nullptr;
+    if (is_psd(path)) {   // s185: full size (s187: a CMYK one's separations with it)
+        int w = 0, h = 0;
+        std::string why;
+        std::vector<std::uint8_t> ink;
+        const auto px = layout::psd_decode(whole_file(path), w, h, 0, &why, &ink);
+        if (px.empty()) return nullptr;
+        cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+        cairo_surface_flush(s);
+        unsigned char* d = cairo_image_surface_get_data(s);
+        for (int y = 0; y < h; ++y)
+            std::memcpy(d + static_cast<std::size_t>(y) * static_cast<std::size_t>(cairo_image_surface_get_stride(s)),
+                        px.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(w), static_cast<std::size_t>(w) * 4);
+        cairo_surface_mark_dirty(s);
+        if (!ink.empty()) attach_ink(s, std::move(ink));
+        return s;
     }
     try {
         Glib::RefPtr<Gdk::Pixbuf> pb;
@@ -328,6 +445,12 @@ cairo_surface_t* print_surface(const std::string& path, double want_w, double wa
         cairo_surface_t* raw = cairo_surface_reference(surf->cobj());
         auto ext = std::filesystem::path(path).extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+#ifdef COMPOSIX_HAVE_TIFF
+        if (ext == ".tif" || ext == ".tiff") {   // s187: a CMYK TIFF's own separations
+            auto ink = tiff_ink(path, cairo_image_surface_get_width(raw), cairo_image_surface_get_height(raw));
+            if (!ink.empty()) attach_ink(raw, std::move(ink));
+        }
+#endif
         if (ext == ".jpg" || ext == ".jpeg") {   // the original JPEG goes into the PDF as is
             gchar* bytes = nullptr;
             gsize len = 0;
@@ -337,7 +460,11 @@ cairo_surface_t* print_surface(const std::string& path, double want_w, double wa
         }
         return raw;
     } catch (const Glib::Error&) {
+#ifdef COMPOSIX_HAVE_TIFF
+        return tiff_cmyk_surface(path, 0, true);   // s187: a 16-bit CMYK TIFF, from its own separations
+#else
         return nullptr;
+#endif
     }
 }
 

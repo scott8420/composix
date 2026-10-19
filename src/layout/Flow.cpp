@@ -323,7 +323,18 @@ int hyphen_cut(const core::Doc& d, const core::Para& para, const core::Style& st
     const int n = static_cast<int>(t.size());
     const int a = pos + took;   // where the next line would start
     if (took <= 0 || a >= n || a <= pos) return 0;
-    const auto letter = [&](int i) { return i >= 0 && i < n && std::isalpha(static_cast<unsigned char>(t[static_cast<std::size_t>(i)])); };
+    // s190 (G4): letters in UTF-8 -- accented ones too (the patterns of more
+    // languages than English); the bytes of the letter at i, 0: not a letter.
+    const auto letter_len = [&](int i) -> int {
+        if (i < 0 || i >= n) return 0;
+        const auto c = static_cast<unsigned char>(t[static_cast<std::size_t>(i)]);
+        if (c < 0x80) return std::isalpha(c) ? 1 : 0;
+        const char* p = t.c_str() + i;
+        const gunichar u = g_utf8_get_char_validated(p, n - i);
+        if (u == static_cast<gunichar>(-1) || u == static_cast<gunichar>(-2) || !g_unichar_isalpha(u)) return 0;
+        return static_cast<int>(g_utf8_next_char(p) - p);
+    };
+    const auto letter = [&](int i) { return letter_len(i) > 0; };
     // s065: a discretionary hyphen (U+00AD, typed) is part of the word.
     const auto shy = [&](int i) { return i >= 0 && i + 1 < n && static_cast<unsigned char>(t[static_cast<std::size_t>(i)]) == 0xC2 &&
                                          static_cast<unsigned char>(t[static_cast<std::size_t>(i + 1)]) == 0xAD; };
@@ -332,9 +343,17 @@ int hyphen_cut(const core::Doc& d, const core::Para& para, const core::Style& st
     std::vector<int> typed;   // after each discretionary hyphen (offsets in the word)
     while (letter(b) || shy(b)) {
         if (shy(b)) { b += 2; typed.push_back(b - a); }
-        else { ++b; ++letters; }
+        else { b += letter_len(b); ++letters; }
     }
-    if (b < n && static_cast<unsigned char>(t[static_cast<std::size_t>(b)]) >= 0x80) return 0;   // a word going on in other letters
+    // s190: a French word runs on past an apostrophe (l'eau, aujourd'hui).
+    if (core::hyphen_language(style.lang).code == std::string_view("fr"))
+        while (b < n && (t[static_cast<std::size_t>(b)] == '\'' || t.compare(static_cast<std::size_t>(b), 3, "\xE2\x80\x99") == 0) && letter(b + (t[static_cast<std::size_t>(b)] == '\'' ? 1 : 3))) {
+            b += t[static_cast<std::size_t>(b)] == '\'' ? 1 : 3;
+            while (letter(b)) { b += letter_len(b); ++letters; }
+        }
+    if (b < n && static_cast<unsigned char>(t[static_cast<std::size_t>(b)]) >= 0x80 && t.compare(static_cast<std::size_t>(b), 2, "\xC2\xAD") != 0 &&
+        !std::isspace(static_cast<unsigned char>(t[static_cast<std::size_t>(b)])))
+        return 0;   // a word going on in other characters (not a letter we know)
     std::vector<int> at;
     if (!typed.empty()) {
         // Typed hyphens are the only places it breaks; one at its start: never.
@@ -348,7 +367,8 @@ int hyphen_cut(const core::Doc& d, const core::Para& para, const core::Style& st
             while (e < n && !std::isalnum(static_cast<unsigned char>(t[static_cast<std::size_t>(e)]))) ++e;
             if (e >= n) return 0;
         }
-        at = core::hyphen_points(std::string_view(t).substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)));
+        at = core::hyphen_points(std::string_view(t).substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)), -1, -1,
+                                 style.lang);   // s190: in its style's language
     }
     for (auto k = at.rbegin(); k != at.rend(); ++k) {
         std::string s = t.substr(static_cast<std::size_t>(pos), static_cast<std::size_t>(a + *k - pos)) + "-";

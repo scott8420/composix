@@ -42,7 +42,9 @@ public:
     // s101: flow through this cache (the shell's, shared with the thumbnails).
     void share_flows(layout::FlowCache& f) { m_flowp = &f; }
     // s008: what a drag on empty space does.
-    enum class Tool { Select, Text, Image, Shape };
+    // s186 (G2): Direct -- a picture inside its frame (InDesign's Direct
+    // Selection, A): the whole picture shown, moved and scaled by hand.
+    enum class Tool { Select, Direct, Text, Image, Shape };
     Canvas(core::Doc& d, core::DocJournal& j);
     const core::Doc& doc() const { return m_doc; }   // s073: the rulers read its unit
     ~Canvas() override;
@@ -164,10 +166,16 @@ public:
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale };
     // s035: Alt+drag a picture inside its frame -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
+    // s186: the Direct tool -- the frame whose picture is on show, the
+    // handle being dragged; its frame and picture (layout space) when it
+    // has one we can show (an image frame, a picture, not turned).
+    std::string  m_direct;
+    core::Handle m_pic_handle = core::Handle::None;
+    bool direct_pic(const std::string& frame, core::Rect& frame_l, core::Rect& pic_l) const;
 
     // s034: the tab ruler -- a strip over the column being typed in, its
     // zero at the text's left edge; the stops of the caret's paragraph style.

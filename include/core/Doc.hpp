@@ -457,6 +457,9 @@ struct Style {
     // columns (0 / 1: not split), `split_gutter` points between them.
     int         split = 0;
     double      split_gutter = 12;
+    // s190 (G4): the language its words hyphenate by (core::hyphen_languages:
+    // "en-US", "de", "fr"...; "" = US English).
+    std::string lang;
     bool operator==(const Style&) const = default;
 };
 
@@ -485,6 +488,11 @@ struct Asset {
     // span as x0, x1 (0..1 of its width; x0 > x1 = nothing in that band).
     // Empty = not traced (or nothing to trace: a Shape wrap then wraps the frame).
     std::vector<float> shape;
+    // s189 (G3): its Photoshop clipping path, read when placed: each closed
+    // subpath as its point count then x, y pairs (0..1 of the picture).
+    // The picture is drawn clipped to it (even-odd); empty = none.
+    std::vector<float> clip;
+    double      vec_w = 0, vec_h = 0;    // s188: a vector's own size, points (0: not known -- placed before s188)
     bool operator==(const Asset&) const = default;
 };
 
@@ -690,6 +698,7 @@ struct ImageFile {
     std::string  color = "RGB";
     std::int64_t stamp = 0;
     std::vector<float> shape;            // s173: traced (Asset::shape), when the UI traced it
+    std::vector<float> clip;             // s189: its clipping path (Asset::clip), when it has one
 };
 // s184 (G5): a picture's colour space from its file's own header -- "CMYK",
 // "Gray", "RGB" or "Lab"; "" when the bytes aren't a format read here. JPEG:
@@ -711,6 +720,10 @@ std::string  link_status_text(LinkStatus s);
 // The picture's rect inside a frame (both in the same coordinates): Fill
 // covers the frame (cropped by it), Fit shows it whole. iw / ih: its aspect.
 Rect   fit_rect(const Rect& frame, double iw, double ih, ImageFit fit);
+// s188: a picture's shape for placing it (iw x ih) -- its pixels, a
+// vector's own size, else 1 x 1 (a vector placed before s188).
+struct Aspect { double w = 1, h = 1; };
+Aspect picture_aspect(const Asset& a);
 // s035: its scale now, percent of its own size.
 double picture_scale(const Frame& f, const Asset& a);
 // s035: where a frame's picture (iw x ih) goes in `frame` (any units, `s` of
@@ -1421,6 +1434,25 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& text_frame);
 // that colour; else nothing to trace (empty). Up to `bands` row bands
 // (fewer for a short picture). The Asset::shape layout.
 std::vector<float> trace_shape(const std::uint32_t* px, int w, int h, int stride, int bands = 96);
+// s189 (G3): a picture's Photoshop CLIPPING PATH -- the named path its
+// resources (8BIM blocks) mark as the clipping path (resource 2999), from a
+// PSD's image resources, a JPEG's APP13 ("Photoshop 3.0") segments or TIFF
+// tag 34377. Each closed subpath's Bezier knots flattened to points, as
+// fractions of the picture (x of its width, y of its height). Empty when
+// it has none. `read` as picture_color's.
+struct ClipPath {
+    std::string name;
+    std::vector<std::vector<std::array<double, 2>>> polys;   // closed, (x, y) 0..1
+};
+ClipPath clipping_path(const ReadAt& read);
+// The clipping path as a Shape wrap's outline (the Asset::shape layout):
+// filled even-odd into a mask of the picture's proportions (w x h, any
+// unit), then traced as trace_shape traces. Empty when there's no path.
+std::vector<float> clip_shape(const ClipPath& p, double w, double h, int bands = 96);
+// s189: a clipping path packed for Asset::clip, and back -- as placed, in
+// the picture's rect `pr` (whatever its units).
+std::vector<float> pack_clip(const ClipPath& p);
+std::vector<std::vector<std::array<double, 2>>> clip_polys(const Asset& a, const Rect& pr);
 // s173: a frame's traced picture as placed in it (fit / crop), in the
 // frame's coordinates, cut to the frame: each band's solid span. Empty when
 // the asset has no shape.

@@ -28,7 +28,9 @@ PsdInfo psd_info(const std::string& head);
 // The merged picture, 0xAARRGGBB premultiplied (as cairo's ARGB32), rows
 // packed. `max_side` > 0: taken at every k-th pixel so the long side is at
 // most that (the screen's copy). Empty when it can't be read; `why` says.
+// s187: `cmyk` (a CMYK file only): its own separations as ink, 4 bytes a
+// pixel (0 none .. 255 full), the same w x h -- for print.
 std::vector<std::uint32_t> psd_decode(const std::string& bytes, int& w, int& h, int max_side = 0,
-                                      std::string* why = nullptr);
+                                      std::string* why = nullptr, std::vector<std::uint8_t>* cmyk = nullptr);
 
 }  // namespace composix::layout

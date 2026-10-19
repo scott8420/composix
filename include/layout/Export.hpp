@@ -185,6 +185,11 @@ struct PdfReport {
 // destroys it), or nullptr when it can't be read. `want_w` / `want_h`: the
 // placed size in points (a vector renders to suit; a raster ignores it).
 using ImageSource = std::function<cairo_surface_t*(const core::Asset& a, double want_w, double want_h)>;
+// s187: a CMYK picture's own separations, riding on its surface as mime
+// data -- ink, 4 bytes a pixel (C M Y K, 0 none .. 255 full), the surface's
+// w x h, rows packed. The print PDF embeds them as they are (DeviceCMYK)
+// instead of the surface's RGB.
+inline constexpr const char* kCmykMime = "application/x-composix-cmyk";
 
 // s020: one page (or master) as the cairo writer draws it -- its masters'
 // items, then its own: fills, text, images, strokes -- in its own points

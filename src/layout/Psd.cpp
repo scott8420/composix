@@ -56,7 +56,8 @@ PsdInfo psd_info(const std::string& h) {
     return i;
 }
 
-std::vector<std::uint32_t> psd_decode(const std::string& b, int& w, int& h, int max_side, std::string* why) {
+std::vector<std::uint32_t> psd_decode(const std::string& b, int& w, int& h, int max_side, std::string* why,
+                                      std::vector<std::uint8_t>* cmyk) {
     w = h = 0;
     const auto fail = [why](const char* m) { if (why) *why = m; return std::vector<std::uint32_t>{}; };
     if (b.size() >= 6 && b.compare(0, 4, "8BPS") == 0 && be16(b, 4) == 2) return fail("a large-document (PSB) file");
@@ -170,6 +171,14 @@ std::vector<std::uint32_t> psd_decode(const std::string& b, int& w, int& h, int 
         }
         const unsigned a = nc > base ? p(base) : 255;
         px[i] = (a << 24) | ((r * a / 255) << 16) | ((g * a / 255) << 8) | (bl * a / 255);
+    }
+    if (cmyk) {   // s187: the separations as they are (stored 255 - ink)
+        cmyk->clear();
+        if (info.mode == 4) {
+            cmyk->resize(px.size() * 4);
+            for (std::size_t i = 0; i < px.size(); ++i)
+                for (int c = 0; c < 4; ++c) (*cmyk)[i * 4 + static_cast<std::size_t>(c)] = static_cast<std::uint8_t>(255 - planes[static_cast<std::size_t>(c)][i]);
+        }
     }
     w = static_cast<int>(w2);
     h = static_cast<int>(h2);

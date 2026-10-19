@@ -198,6 +198,7 @@ json to(const Record& r) {
             if (v.no_break) j["no_break"] = true;   // s075
             if (v.span) j["span"] = true;           // s166
             if (v.split >= 2) j["split"] = v.split;   // s183
+            if (!v.lang.empty()) j["lang"] = v.lang;   // s190
             if (v.split >= 2 && v.split_gutter != 12) j["split_gutter"] = v.split_gutter;
             if (!v.tabs.empty()) {
                 json tabs = json::array();
@@ -220,6 +221,12 @@ json to(const Record& r) {
             j = {{"kind", "asset"}, {"name", v.name}, {"pos", v.pos}, {"path", v.path},
                  {"embedded", v.embedded}, {"color", v.color}, {"px_w", v.px_w}, {"px_h", v.px_h},
                  {"source", v.source}, {"stamp", v.stamp}};
+            if (v.vec_w > 0 && v.vec_h > 0) { j["vec_w"] = v.vec_w; j["vec_h"] = v.vec_h; }   // s188
+            if (!v.clip.empty()) {   // s189: its clipping path (counts exact, points rounded)
+                json c = json::array();
+                for (float f : v.clip) c.push_back(std::round(f * 100000.0) / 100000.0);
+                j["clip"] = c;
+            }
             if (!v.shape.empty()) {   // s173: rounded -- it's an outline, not a measurement
                 json s = json::array();
                 for (float f : v.shape) s.push_back(std::round(f * 10000.0) / 10000.0);
@@ -455,6 +462,7 @@ std::optional<Record> from(const json& j) {
         v.no_break = val(j, "no_break", false);   // s075
         v.span = val(j, "span", false);           // s166
         v.split = std::clamp(val(j, "split", 0), 0, 4);   // s183
+        v.lang = val(j, "lang", std::string{});   // s190
         v.split_gutter = val(j, "split_gutter", 12.0);
         v.align = de(j, "align", Align::Left);
         v.space_before = val(j, "space_before", 0.0);
@@ -514,9 +522,13 @@ std::optional<Record> from(const json& j) {
         v.embedded = val(j, "embedded", false);
         v.color = val(j, "color", v.color);
         v.px_w = val(j, "px_w", 0);
+        v.vec_w = val(j, "vec_w", 0.0);   // s188
+        v.vec_h = val(j, "vec_h", 0.0);
         v.px_h = val(j, "px_h", 0);
         v.source = val<std::string>(j, "source", "");
         v.stamp = val(j, "stamp", std::int64_t{0});
+        if (j.contains("clip") && j["clip"].is_array())   // s189
+            for (const auto& e : j["clip"]) if (e.is_number()) v.clip.push_back(e.get<float>());
         if (j.contains("shape") && j["shape"].is_array())   // s173
             for (const auto& e : j["shape"]) if (e.is_number()) v.shape.push_back(e.get<float>());
         return v;

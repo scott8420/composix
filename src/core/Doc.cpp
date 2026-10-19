@@ -759,13 +759,21 @@ Rect picture_rect(const Rect& fr, const Frame& f, double iw, double ih, double s
 }
 
 Size2 picture_natural(const Asset& a) {
+    if ((a.px_w <= 0 || a.px_h <= 0) && a.vec_w > 0 && a.vec_h > 0) return {a.vec_w, a.vec_h};   // s188: a vector, its own size
     if (a.px_w <= 0 || a.px_h <= 0) return {2 * kPt, 2 * kPt};
     const double per = kPt / 300.0;
     return {a.px_w * per, a.px_h * per};
 }
 
+Aspect picture_aspect(const Asset& a) {   // s188
+    if (a.px_w > 0 && a.px_h > 0) return {static_cast<double>(a.px_w), static_cast<double>(a.px_h)};
+    if (a.vec_w > 0 && a.vec_h > 0) return {a.vec_w, a.vec_h};
+    return {};
+}
+
 double picture_scale(const Frame& f, const Asset& a) {
-    const double iw = a.px_w > 0 ? a.px_w : 1, ih = a.px_h > 0 ? a.px_h : 1;
+    const auto asp = picture_aspect(a);   // s188
+    const double iw = asp.w, ih = asp.h;
     const Rect r = picture_rect({0, 0, f.w, f.h}, f, iw, ih);
     const auto nat = picture_natural(a);
     return nat.w > 0 ? r.w / nat.w * 100 : 0;
@@ -781,7 +789,7 @@ double effective_ppi(const Frame& f, const Asset& a) {
 Size2 natural_size(const ImageFile& f, double max_w, double max_h) {
     double w = 0, h = 0;
     if (f.px_w > 0 && f.px_h > 0) {
-        const double per = f.vector ? 1.0 : kPt / 300.0;   // a vector's size is in points
+        const double per = f.vector ? 72.0 / 96.0 : kPt / 300.0;   // s188: a vector's size is CSS pixels, 96 to the inch (was taken as points)
         w = f.px_w * per;
         h = f.px_h * per;
     } else {
@@ -2351,6 +2359,7 @@ const std::vector<StyleField>& style_fields() {
                    [](Style& t, const Style& f) { t.span = f.span; t.split = f.split; t.split_gutter = f.split_gutter; },
                    [](const Style& a, const Style& b) { return a.span == b.span && a.split == b.split && a.split_gutter == b.split_gutter; }},
         COMPOSIX_SF("hyphenate", "Hyphenate", hyphenate),
+        COMPOSIX_SF("lang", "Language", lang),   // s190
         COMPOSIX_SF("hyph_limit", "Hyphens in a row", hyph_limit),         // s065
         COMPOSIX_SF("hyph_shortest", "Shortest word", hyph_shortest),
         COMPOSIX_SF("hyph_last_word", "Hyphenate last word", hyph_last_word),
@@ -2562,7 +2571,7 @@ std::string style_edit_label(const std::string& key) {   // s164
         {"list_type", "List"}, {"list_bullet", "Bullet"}, {"list_num", "Numbers"}, {"list_hang", "Hang"},
         {"pstart", "Start"}, {"keep_next", "Keep with next"}, {"keep_lines", "Keep lines"},
         {"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"}, {"hyph_last_word", "Hyphenate last word"},
-        {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}, {"span", "Span columns"},
+        {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}, {"span", "Span columns"}, {"lang", "Language"},
         {"split_gutter", "Split gutter"}};
     if (const auto it = labels.find(key); it != labels.end()) return it->second;
     if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {
@@ -2620,6 +2629,7 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
     else if (key == "hyph_shortest") st.hyph_shortest = std::clamp(std::stoi(choice), 4, 20);
     else if (key == "hyph_last_word") st.hyph_last_word = std::stoi(choice) != 0;
     else if (key == "hyphenate") st.hyphenate = choice == "1";
+    else if (key == "lang") st.lang = choice == "en-US" ? std::string{} : choice;   // s190
     else if (key == "align_grid") st.align_grid = choice == "1";
     else if (key == "span") {   // s166; s183: "s2".."s4" -- split into that many
         st.span = choice == "1";
@@ -2674,7 +2684,7 @@ std::string style_key_of_edit(const std::string& e) {   // s092
         {"nobreak", "no_break"}, {"color", "color"}, {"color_tint", "color_tint"}, {"align", "align"},
         {"before", "space_before"}, {"after", "space_after"}, {"lindent", "left_indent"}, {"rindent", "right_indent"},
         {"findent", "first_indent"}, {"indent_after", "skip_after_heading"}, {"tabs", "tabs"}, {"drop_lines", "drop_lines"},
-        {"drop_chars", "drop_chars"}, {"span", "span"}, {"split_gutter", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"hyph_limit", "hyph_limit"},
+        {"drop_chars", "drop_chars"}, {"span", "span"}, {"split_gutter", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"lang", "lang"}, {"hyph_limit", "hyph_limit"},
         {"hyph_shortest", "hyph_shortest"}, {"hyph_last_word", "hyph_last_word"}, {"keep_next", "keep_next"},
         {"keep_lines", "keep_lines"}, {"pstart", "start"}};
     if (const auto it = m.find(e); it != m.end()) return it->second;
@@ -3458,8 +3468,13 @@ Asset asset_from(const ImageFile& f, double pos) {
     a.color = f.color;
     a.px_w = f.vector ? 0 : f.px_w;
     a.px_h = f.vector ? 0 : f.px_h;
+    if (f.vector) {   // s188: its own size (CSS pixels, 96 to the inch) as points
+        a.vec_w = f.px_w * 72.0 / 96.0;
+        a.vec_h = f.px_h * 72.0 / 96.0;
+    }
     a.stamp = f.stamp;
     a.shape = f.shape;   // s173
+    a.clip = f.clip;     // s189
     return a;
 }
 Doc::Id existing_asset(const Doc& d, const ImageFile& f) {
@@ -3532,6 +3547,182 @@ Doc::Id place_image_new(DocJournal& j, Doc& d, const Doc::Id& owner, const Rect&
 }
 
 }  // namespace doc
+
+// ── s189 (G3): a Photoshop clipping path ─────────────────────────────────────
+namespace {
+unsigned cp_u8(const std::string& s, std::size_t i) { return i < s.size() ? static_cast<unsigned char>(s[i]) : 0u; }
+std::uint32_t cp_be16(const std::string& s, std::size_t i) { return (cp_u8(s, i) << 8) | cp_u8(s, i + 1); }
+std::uint32_t cp_be32(const std::string& s, std::size_t i) { return (cp_be16(s, i) << 16) | cp_be16(s, i + 2); }
+// The image resource blocks: id -> (name, data).
+struct Res { unsigned id; std::string name, data; };
+std::vector<Res> resource_blocks(const std::string& b) {
+    std::vector<Res> out;
+    std::size_t at = 0;
+    while (at + 12 <= b.size() && b.compare(at, 4, "8BIM") == 0) {
+        Res r;
+        r.id = cp_be16(b, at + 4);
+        const std::size_t nl = cp_u8(b, at + 6);
+        r.name = b.substr(at + 7, nl);
+        std::size_t p = at + 6 + ((nl + 2) & ~std::size_t{1});   // the pascal name, padded to even
+        if (p + 4 > b.size()) break;
+        const std::size_t len = cp_be32(b, p);
+        p += 4;
+        if (p + len > b.size()) break;
+        r.data = b.substr(p, len);
+        out.push_back(std::move(r));
+        at = p + ((len + 1) & ~std::size_t{1});
+    }
+    return out;
+}
+// The resource section of a PSD / JPEG / TIFF, "" when none.
+std::string photoshop_resources(const ReadAt& read) {
+    const std::string h = read(0, 32);
+    if (h.size() >= 26 && h.compare(0, 4, "8BPS") == 0) {
+        const std::uint64_t cm = cp_be32(read(26, 4), 0);
+        const std::uint64_t at = 30 + cm;
+        const std::uint32_t len = cp_be32(read(at, 4), 0);
+        return len > (1u << 28) ? std::string{} : read(at + 4, len);
+    }
+    if (h.size() >= 4 && cp_u8(h, 0) == 0xFF && cp_u8(h, 1) == 0xD8) {   // JPEG: every APP13 Photoshop segment, joined
+        std::string all;
+        std::uint64_t at = 2;
+        for (int guard = 0; guard < 4096; ++guard) {
+            const std::string m = read(at, 4);
+            if (m.size() < 4 || cp_u8(m, 0) != 0xFF) break;
+            const unsigned code = cp_u8(m, 1);
+            if (code == 0xFF) { ++at; continue; }
+            if (code == 0xD8 || code == 0x01 || (code >= 0xD0 && code <= 0xD7)) { at += 2; continue; }
+            if (code == 0xD9 || code == 0xDA) break;
+            const unsigned len = cp_be16(m, 2);
+            if (len < 2) break;
+            if (code == 0xED) {
+                const std::string seg = read(at + 4, len - 2);
+                static const std::string sig("Photoshop 3.0\0", 14);
+                if (seg.compare(0, sig.size(), sig) == 0) all += seg.substr(sig.size());
+            }
+            at += 2 + len;
+        }
+        return all;
+    }
+    if (h.size() >= 8 && ((h[0] == 'I' && h[1] == 'I') || (h[0] == 'M' && h[1] == 'M'))) {   // TIFF tag 34377
+        const bool le = h[0] == 'I';
+        const auto num = [&](const std::string& s, std::size_t i, int n) {
+            std::uint64_t v = 0;
+            for (int k = 0; k < n; ++k) v |= static_cast<std::uint64_t>(cp_u8(s, i + static_cast<std::size_t>(k))) << (8 * (le ? k : n - 1 - k));
+            return v;
+        };
+        if (num(h, 2, 2) != 42) return {};
+        const std::uint64_t ifd = num(h, 4, 4);
+        const std::size_t n = static_cast<std::size_t>(num(read(ifd, 2), 0, 2));
+        const std::string e = read(ifd + 2, n * 12);
+        for (std::size_t i = 0; i + 12 <= e.size(); i += 12)
+            if (num(e, i, 2) == 34377) {
+                const std::uint64_t count = num(e, i + 4, 4);
+                if (count > (1u << 28)) return {};
+                return count <= 4 ? e.substr(i + 8, static_cast<std::size_t>(count)) : read(num(e, i + 8, 4), static_cast<std::size_t>(count));
+            }
+    }
+    return {};
+}
+}  // namespace
+
+ClipPath clipping_path(const ReadAt& read) {
+    ClipPath out;
+    const auto blocks = resource_blocks(photoshop_resources(read));
+    std::string want;
+    for (const auto& r : blocks)
+        if (r.id == 2999 && !r.data.empty()) want = r.data.substr(1, cp_u8(r.data, 0));   // its name, a pascal string
+    if (want.empty()) return out;
+    const Res* path = nullptr;
+    for (const auto& r : blocks)
+        if (r.id >= 2000 && r.id <= 2997 && r.name == want) { path = &r; break; }
+    if (!path) return out;
+    out.name = want;
+    const auto fixed = [&](std::size_t i) { return static_cast<double>(static_cast<std::int32_t>(cp_be32(path->data, i))) / 16777216.0; };
+    struct Knot { double px, py, ax, ay, lx, ly; };   // preceding control, anchor, leaving control
+    std::vector<Knot> knots;
+    int left = 0;
+    bool closed = false;
+    const auto finish = [&] {
+        if (closed && knots.size() >= 2) {
+            std::vector<std::array<double, 2>> poly;
+            for (std::size_t i = 0; i < knots.size(); ++i) {
+                const Knot& a = knots[i];
+                const Knot& b = knots[(i + 1) % knots.size()];
+                for (int s = 0; s < 16; ++s) {   // a cubic from a's anchor, by a's leaving and b's preceding controls
+                    const double t = s / 16.0, u = 1 - t;
+                    poly.push_back({u * u * u * a.ax + 3 * u * u * t * a.lx + 3 * u * t * t * b.px + t * t * t * b.ax,
+                                    u * u * u * a.ay + 3 * u * u * t * a.ly + 3 * u * t * t * b.py + t * t * t * b.ay});
+                }
+            }
+            out.polys.push_back(std::move(poly));
+        }
+        knots.clear();
+    };
+    for (std::size_t at = 0; at + 26 <= path->data.size(); at += 26) {
+        const unsigned sel = cp_be16(path->data, at);
+        if (sel == 0 || sel == 3) {   // a subpath's length record
+            finish();
+            closed = sel == 0;
+            left = static_cast<int>(cp_be16(path->data, at + 2));
+        } else if ((sel == 1 || sel == 2 || sel == 4 || sel == 5) && left > 0) {
+            knots.push_back({fixed(at + 6), fixed(at + 2), fixed(at + 14), fixed(at + 10), fixed(at + 22), fixed(at + 18)});   // (vert, horiz) pairs
+            --left;
+        }
+    }
+    finish();
+    return out;
+}
+
+std::vector<float> clip_shape(const ClipPath& p, double w, double h, int bands) {
+    if (p.polys.empty() || w <= 0 || h <= 0) return {};
+    const int W = 400, H = std::clamp(static_cast<int>(std::lround(W * h / w)), 1, 4000);
+    std::vector<std::uint32_t> px(static_cast<std::size_t>(W) * static_cast<std::size_t>(H), 0u);
+    std::vector<double> xs;
+    for (int y = 0; y < H; ++y) {
+        const double fy = (y + 0.5) / H;
+        xs.clear();
+        for (const auto& poly : p.polys)
+            for (std::size_t i = 0; i < poly.size(); ++i) {
+                const auto& a = poly[i];
+                const auto& b = poly[(i + 1) % poly.size()];
+                if ((a[1] <= fy) == (b[1] <= fy)) continue;
+                xs.push_back(a[0] + (fy - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
+            }
+        std::sort(xs.begin(), xs.end());
+        for (std::size_t k = 0; k + 1 < xs.size(); k += 2) {   // even-odd
+            const int x0 = std::clamp(static_cast<int>(std::lround(xs[k] * W)), 0, W);
+            const int x1 = std::clamp(static_cast<int>(std::lround(xs[k + 1] * W)), 0, W);
+            for (int x = x0; x < x1; ++x) px[static_cast<std::size_t>(y) * W + static_cast<std::size_t>(x)] = 0xFF000000u;
+        }
+    }
+    auto s = trace_shape(px.data(), W, H, W, bands);
+    if (!s.empty()) s[0] = static_cast<float>(w / h);   // the picture's own aspect, not the mask's rounding
+    return s;
+}
+
+std::vector<float> pack_clip(const ClipPath& p) {   // s189
+    std::vector<float> out;
+    for (const auto& poly : p.polys) {
+        if (poly.size() < 3) continue;
+        out.push_back(static_cast<float>(poly.size()));
+        for (const auto& q : poly) { out.push_back(static_cast<float>(q[0])); out.push_back(static_cast<float>(q[1])); }
+    }
+    return out;
+}
+
+std::vector<std::vector<std::array<double, 2>>> clip_polys(const Asset& a, const Rect& pr) {   // s189
+    std::vector<std::vector<std::array<double, 2>>> out;
+    std::size_t i = 0;
+    while (i < a.clip.size()) {
+        const auto n = static_cast<std::size_t>(a.clip[i++]);
+        if (n == 0 || i + 2 * n > a.clip.size()) break;
+        std::vector<std::array<double, 2>> poly;
+        for (std::size_t k = 0; k < n; ++k, i += 2) poly.push_back({pr.x + a.clip[i] * pr.w, pr.y + a.clip[i + 1] * pr.h});
+        out.push_back(std::move(poly));
+    }
+    return out;
+}
 
 // ── s184 (G5): a picture's colour space from its header ──────────────────────
 std::string picture_color(const ReadAt& read) {
@@ -3691,7 +3882,8 @@ bool set_picture_scale(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, d
         for (const auto& id : frames) {
             Frame f = *d.as<Frame>(id);
             const auto& a = *d.as<Asset>(f.asset);
-            const double iw = a.px_w > 0 ? a.px_w : 1, ih = a.px_h > 0 ? a.px_h : 1;
+            const auto asp = picture_aspect(a);   // s188
+    const double iw = asp.w, ih = asp.h;
             const Rect now = picture_rect({0, 0, f.w, f.h}, f, iw, ih);
             const auto nat = picture_natural(a);
             const double w = nat.w * percent / 100, h = w * ih / iw;
@@ -3710,7 +3902,7 @@ bool set_picture_offset(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, 
     for (const auto& id : ids)
         if (const auto* f = d.as<Frame>(id); f && f->kind == FrameKind::Image && d.as<Asset>(f->asset)) {
             const auto& a = *d.as<Asset>(f->asset);
-            const Rect now = picture_rect({0, 0, f->w, f->h}, *f, a.px_w > 0 ? a.px_w : 1, a.px_h > 0 ? a.px_h : 1);
+            const Rect now = picture_rect({0, 0, f->w, f->h}, *f, picture_aspect(a).w, picture_aspect(a).h);
             if (f->fit != ImageFit::Custom || std::abs((axis ? now.y : now.x) - pts) > 1e-9) frames.push_back(id);
         }
     if (frames.empty()) return false;
@@ -3718,7 +3910,7 @@ bool set_picture_offset(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, 
         for (const auto& id : frames) {
             Frame f = *d.as<Frame>(id);
             const auto& a = *d.as<Asset>(f.asset);
-            const Rect now = picture_rect({0, 0, f.w, f.h}, f, a.px_w > 0 ? a.px_w : 1, a.px_h > 0 ? a.px_h : 1);
+            const Rect now = picture_rect({0, 0, f.w, f.h}, f, picture_aspect(a).w, picture_aspect(a).h);
             f.fit = ImageFit::Custom;
             f.pic_w = now.w;
             f.pic_x = axis == 0 ? pts : now.x;

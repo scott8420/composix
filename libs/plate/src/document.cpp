@@ -21,7 +21,7 @@ struct Document::Font {
 };
 
 struct Document::Image {
-    int w = 0, h = 0, comps = 3;   // 3 = RGB pixels, 4 = CMYK (converted)
+    int w = 0, h = 0, comps = 3;   // 3 = RGB pixels, 4 = CMYK (converted, or the picture's own -- s187)
     std::string pix, alpha, jpeg;
 };
 
@@ -93,6 +93,8 @@ void Page::move_to(double x, double y) { m_ops += num(x) + " " + num(y) + " m\n"
 void Page::line_to(double x, double y) { m_ops += num(x) + " " + num(y) + " l\n"; }
 void Page::rect(const Rect& r) { m_ops += num(r.x) + " " + num(r.y) + " " + num(r.w) + " " + num(r.h) + " re\n"; }
 void Page::fill() { m_ops += "f\n"; }
+void Page::close_path() { m_ops += "h\n"; }            // s189
+void Page::clip_even_odd() { m_ops += "W* n\n"; }      // s189
 void Page::stroke() { m_ops += "S\n"; }
 
 void Page::image(ImageId id, const Rect& r) {
@@ -188,6 +190,31 @@ ImageId Document::add_image_rgb(int w, int h, const std::uint8_t* rgb, const std
         bool opaque = true;
         for (std::size_t i = 0; i < static_cast<std::size_t>(w) * h && opaque; ++i) opaque = alpha[i] == 255;
         if (!opaque) im->alpha.assign(reinterpret_cast<const char*>(alpha), static_cast<std::size_t>(w) * h);
+    }
+    m_images.push_back(std::move(im));
+    return static_cast<ImageId>(m_images.size() - 1);
+}
+
+ImageId Document::add_image_cmyk(int w, int h, const std::uint8_t* cmyk, const std::uint8_t* alpha) {   // s187
+    auto im = std::make_unique<Image>();
+    im->w = w;
+    im->h = h;
+    im->comps = 4;
+    const std::size_t n = static_cast<std::size_t>(w) * h;
+    im->pix.assign(reinterpret_cast<const char*>(cmyk), n * 4);
+    if (alpha && m_standard == Standard::X1a_2003) {   // as add_image_rgb: flattened on paper (no ink where see-through)
+        for (std::size_t i = 0; i < n; ++i)
+            for (int k = 0; k < 4; ++k) {
+                const unsigned v = static_cast<unsigned char>(im->pix[i * 4 + k]);
+                im->pix[i * 4 + k] = static_cast<char>(v * alpha[i] / 255);
+            }
+        alpha = nullptr;
+        ++m_flattened;
+    }
+    if (alpha) {
+        bool opaque = true;
+        for (std::size_t i = 0; i < n && opaque; ++i) opaque = alpha[i] == 255;
+        if (!opaque) im->alpha.assign(reinterpret_cast<const char*>(alpha), n);
     }
     m_images.push_back(std::move(im));
     return static_cast<ImageId>(m_images.size() - 1);

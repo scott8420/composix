@@ -146,7 +146,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Double-click a tile", "Open it (or the whole selection)"},
         {"Mouse", "", {}, "Drag a frame / a handle", "Move / resize (Shift: one axis / keep shape; Alt: from the centre)"},
         {"Mouse", "", {}, "Arrow keys", "Nudge the picked frames 1 pt (Shift: 10 pt)"},
-        {"Mouse", "", {}, "V  /  T  /  F  /  M", "Select / Text frame / Image frame / Shape tool (canvas)"},
+        {"Mouse", "", {}, "V  /  A  /  T  /  F  /  M", "Select / Direct (a picture in its frame) / Text frame / Image frame / Shape tool (canvas)"},
         {"Mouse", "", {}, "Delete", "Delete the picked frames (a thread heals around them)"},
         {"Mouse", "", {}, "Click an out-port, then a frame", "Thread the text on into that frame"},
         {"Mouse", "", {}, "Alt+click an out-port", "Break the thread after that frame"},

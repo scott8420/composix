@@ -8,6 +8,7 @@
 // staleness from its last build against today's headings.
 #include "core/Doc.hpp"
 #include "core/Outline.hpp"
+#include "core/Hyphen.hpp"   // s190
 
 #include <algorithm>
 #include <cmath>
@@ -143,7 +144,7 @@ std::string style_group(const Field& f) {
         {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
         {"findent", "Paragraph"}, {"indent_after", "Paragraph"}, {"tabs", "Paragraph"}, {"drop_lines", "Paragraph"},
         {"drop_chars", "Paragraph"}, {"span", "Paragraph"}, {"split_gutter", "Paragraph"},
-        {"align_grid", "Flow"}, {"hyphenate", "Flow"}, {"hyph_limit", "Flow"}, {"hyph_shortest", "Flow"}, {"hyph_last_word", "Flow"},
+        {"align_grid", "Flow"}, {"hyphenate", "Flow"}, {"lang", "Flow"}, {"hyph_limit", "Flow"}, {"hyph_shortest", "Flow"}, {"hyph_last_word", "Flow"},
         {"keep_next", "Flow"}, {"keep_lines", "Flow"}, {"pstart", "Flow"},
         {"list_type", "List"}, {"list_bullet", "List"}, {"list_num", "List"}, {"list_cont", "List"}, {"list_level", "List"},
         {"list_hang", "List"},
@@ -518,6 +519,9 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 // s038: hyphenation.
                 f.push_back({"Hyphenate", s.hyphenate ? "On" : "Off", "hyphenate", {{"0", "Off"}, {"1", "On"}}});
                 if (s.hyphenate) {   // s065: how
+                    std::vector<Choice> langs;   // s190: in which language
+                    for (const auto& l : hyphen_languages()) langs.push_back({l.code, l.name});
+                    f.push_back({"Language", hyphen_language(s.lang).name, "lang", langs});
                     std::vector<Choice> lim{{"0", "No limit"}};
                     for (int k = 1; k <= 5; ++k) lim.push_back({std::to_string(k), std::to_string(k)});
                     f.push_back({"Hyphens in a row", s.hyph_limit > 0 ? std::to_string(s.hyph_limit) : "No limit", "hyph_limit", lim});
@@ -979,7 +983,7 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 for (int v : {10, 25, 50, 75, 100, 125, 150, 200, 300, 400}) sc.push_back({std::to_string(v), std::to_string(v) + "%"});
                 fields.push_back({"Scale", std::to_string(static_cast<int>(std::lround(picture_scale(*f, *a)))) + "%", "pic_scale", sc});
                 {   // s076: where it sits in the frame, typed (the document's unit).
-                    const Rect r = picture_rect({0, 0, f->w, f->h}, *f, a->px_w > 0 ? a->px_w : 1, a->px_h > 0 ? a->px_h : 1);
+                    const Rect r = picture_rect({0, 0, f->w, f->h}, *f, picture_aspect(*a).w, picture_aspect(*a).h);
                     Field off{"Offset (" + unit_name(U) + ")", length_in(r.x, U) + "\t" + length_in(r.y, U)};
                     off.cols = {"X", "Y"};
                     off.edit = "pic_off";

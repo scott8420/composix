@@ -18,12 +18,27 @@ find_package(Threads REQUIRED)   # s102: work off the UI thread (the progress di
 # core/ fails to compile, so the seam is enforced by the build graph and the
 # core stays headless-testable. (docs/two-layer-seam.md.)
 # s038: the hyphenation patterns (third_party/hyphen) become a source file, so
-# the app needs no hyphenation package at run time.
-file(READ ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-en-us.pat.txt CX_HYPH_PATTERNS)
-file(READ ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-en-us.hyp.txt CX_HYPH_EXCEPTIONS)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-en-us.pat.txt
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-en-us.hyp.txt)
+# the app needs no hyphenation package at run time. s190: a language each
+# (code:file) -- the patterns and, where there are any, the exceptions.
+set(CX_HYPH_LANGS "en-US:en-us" "en-GB:en-gb" "de:de-1996" "fr:fr" "es:es" "it:it" "nl:nl" "pt:pt")
+set(CX_HYPH_SETS "")
+set(CX_HYPH_COUNT 0)
+foreach(pair IN LISTS CX_HYPH_LANGS)
+    string(REPLACE ":" ";" parts "${pair}")
+    list(GET parts 0 code)
+    list(GET parts 1 file)
+    set(pat ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-${file}.pat.txt)
+    set(hyp ${CMAKE_CURRENT_SOURCE_DIR}/third_party/hyphen/hyph-${file}.hyp.txt)
+    file(READ ${pat} P)
+    set(E "")
+    if(EXISTS ${hyp})
+        file(READ ${hyp} E)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${hyp})
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${pat})
+    string(APPEND CX_HYPH_SETS "    {\"${code}\", R\"HYPH(${P})HYPH\", R\"HYPH(${E})HYPH\"},\n")
+    math(EXPR CX_HYPH_COUNT "${CX_HYPH_COUNT} + 1")
+endforeach()
 configure_file(src/core/HyphenData.cpp.in ${CMAKE_CURRENT_BINARY_DIR}/HyphenData.cpp @ONLY)
 
 add_library(composix_core STATIC
@@ -178,3 +193,15 @@ target_include_directories(composix PRIVATE include ${GTKMM_INCLUDE_DIRS})
 target_link_libraries(composix     PRIVATE ${GTKMM_LIBRARIES} composix_core composix_layout spdlog::spdlog Threads::Threads)
 target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
+# s187: libtiff, when it's there -- a CMYK TIFF's own separations into the
+# print PDF (without it a CMYK TIFF goes through RGB, as before).
+pkg_check_modules(TIFF libtiff-4)
+if(TIFF_FOUND)
+    target_compile_definitions(composix PRIVATE COMPOSIX_HAVE_TIFF=1)
+    target_include_directories(composix PRIVATE ${TIFF_INCLUDE_DIRS})
+    target_link_libraries(composix PRIVATE ${TIFF_LIBRARIES})
+    target_link_directories(composix PRIVATE ${TIFF_LIBRARY_DIRS})
+    message(STATUS "libtiff ${TIFF_VERSION}: CMYK TIFFs print as CMYK")
+else()
+    message(STATUS "libtiff not found: CMYK TIFFs print through RGB")
+endif()

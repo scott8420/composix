@@ -9832,6 +9832,306 @@ int main() {
         }
         check("eyedropper: nothing changed, no step", d.as<core::Frame>(box)->fill == sw);
     }
+    // ── s189 (G3): a picture's clipping path ──
+    {
+        std::cout << "--- s189 clipping paths ---\n";
+        using B = std::string;
+        const auto be16 = [](unsigned v) { return B{static_cast<char>(v >> 8), static_cast<char>(v & 0xFF)}; };
+        const auto be32 = [&](unsigned v) { return be16(v >> 16) + be16(v & 0xFFFF); };
+        const auto fx = [&](double v) { return be32(static_cast<unsigned>(static_cast<std::int32_t>(std::lround(v * 16777216.0)))); };
+        // A closed subpath of straight corners (controls on the anchors).
+        const auto subpath = [&](std::initializer_list<std::array<double, 2>> pts) {
+            B s = be16(0) + be16(static_cast<unsigned>(pts.size())) + B(22, '\0');
+            for (const auto& p : pts) {
+                const B yx = fx(p[1]) + fx(p[0]);   // vertical, then horizontal
+                s += be16(2) + yx + yx + yx;
+            }
+            return s;
+        };
+        const auto block = [&](unsigned id, const B& name, const B& data) {
+            B s = B("8BIM") + be16(id) + static_cast<char>(name.size()) + name;
+            if ((name.size() + 1) % 2) s += '\0';
+            s += be32(static_cast<unsigned>(data.size())) + data;
+            if (data.size() % 2) s += '\0';
+            return s;
+        };
+        const auto pascal = [](const B& n) { return static_cast<char>(n.size()) + n; };
+        const B tri = subpath({{0.5, 0.0}, {1.0, 1.0}, {0.0, 1.0}});
+        const B res = block(1005, "", B(16, '\0')) + block(2000, "Outline", be16(6) + B(24, '\0') + tri) +
+                      block(2001, "Other", subpath({{0, 0}, {0.1, 0}, {0.1, 0.1}})) + block(2999, "", pascal("Outline") + be16(0x0100));
+        const auto reader = [](const B& bytes) {
+            return core::ReadAt([bytes](std::uint64_t off, std::size_t n) { return off >= bytes.size() ? B{} : bytes.substr(static_cast<std::size_t>(off), n); });
+        };
+        // JPEG: APP0, APP13 "Photoshop 3.0", a frame.
+        const B app13 = B("Photoshop 3.0") + B(1, '\0') + res;
+        const B jpeg = B{'\xFF', '\xD8', '\xFF', '\xE0'} + be16(16) + "JFIF" + B(10, '\0') + B{'\xFF', '\xED'} +
+                       be16(static_cast<unsigned>(app13.size() + 2)) + app13 + B{'\xFF', '\xC0'} + be16(17) + B(15, '\0') + B{'\xFF', '\xD9'};
+        const auto cj = core::clipping_path(reader(jpeg));
+        bool tri_ok = cj.name == "Outline" && cj.polys.size() == 1 && !cj.polys[0].empty();
+        if (tri_ok) {   // its points: the triangle's, flattened (the anchors among them)
+            double top = 1, maxx = 0;
+            for (const auto& p : cj.polys[0]) { top = std::min(top, p[1]); maxx = std::max(maxx, p[0]); }
+            tri_ok = std::abs(top) < 1e-6 && std::abs(maxx - 1) < 1e-6;
+        }
+        check("clip path: from a JPEG's APP13 -- the one named as clipping, not the others", tri_ok);
+        // PSD: its image resources.
+        const B psd = B("8BPS") + be16(1) + B(6, '\0') + be16(3) + be32(10) + be32(10) + be16(8) + be16(3) + be32(0) +
+                      be32(static_cast<unsigned>(res.size())) + res + be32(0) + be16(0) + B(300, '\0');
+        check("clip path: from a PSD's resources", core::clipping_path(reader(psd)).polys.size() == 1);
+        // TIFF (little-endian): IFD0 with tag 34377 pointing at the resources.
+        const auto le16 = [](unsigned v) { return B{static_cast<char>(v & 0xFF), static_cast<char>(v >> 8)}; };
+        const auto le32 = [&](unsigned v) { return le16(v & 0xFFFF) + le16(v >> 16); };
+        const B tiff = B("II") + le16(42) + le32(8) + le16(1) + le16(34377) + le16(7) + le32(static_cast<unsigned>(res.size())) + le32(26) + le32(0) + res;
+        check("clip path: from a TIFF's tag 34377", core::clipping_path(reader(tiff)).name == "Outline");
+        const B none = block(2000, "Outline", tri);   // a path, none marked for clipping
+        check("clip path: paths but none for clipping -- none", core::clipping_path(reader(B{'\xFF', '\xD8', '\xFF', '\xED'} +
+                                                       be16(static_cast<unsigned>(14 + none.size() + 2)) + "Photoshop 3.0" + B(1, '\0') + none +
+                                                       B{'\xFF', '\xD9'})).polys.empty() &&
+                                                   core::clipping_path(reader(B("not a picture"))).polys.empty());
+        // The outline: narrow at the apex, the width at the foot; the picture's aspect.
+        const auto sh = core::clip_shape(cj, 300, 200, 20);
+        bool shape_ok = sh.size() == 1 + 2 * 20 && std::abs(sh[0] - 1.5f) < 1e-4;
+        if (shape_ok) {
+            const float top_w = sh[2] - sh[1], foot_w = sh[40] - sh[39];
+            shape_ok = top_w < 0.1f && foot_w > 0.9f && std::abs((sh[1] + sh[2]) / 2 - 0.5f) < 0.03f;
+        }
+        check("clip path: its outline for the wrap -- the triangle, band by band", shape_ok);
+        // A hole: a square in a square, even-odd -- the band through it spans the outer square.
+        const B holed = block(2000, "Ring", be16(6) + B(24, '\0') + subpath({{0.1, 0.1}, {0.9, 0.1}, {0.9, 0.9}, {0.1, 0.9}}) +
+                                               subpath({{0.4, 0.4}, {0.6, 0.4}, {0.6, 0.6}, {0.4, 0.6}})) +
+                        block(2999, "", pascal("Ring") + be16(0x0100));
+        const auto ring = core::clipping_path(reader(B("8BPS") + be16(1) + B(6, '\0') + be16(3) + be32(10) + be32(10) + be16(8) + be16(3) +
+                                                     be32(0) + be32(static_cast<unsigned>(holed.size())) + holed));
+        const auto rs = core::clip_shape(ring, 100, 100, 10);
+        check("clip path: two subpaths read; the outline spans the outer one",
+              ring.polys.size() == 2 && rs.size() == 21 && std::abs(rs[11] - 0.1f) < 0.02f && std::abs(rs[12] - 0.9f) < 0.02f);
+    }
+    // ── s190 (G4): hyphenation in more languages ──
+    {
+        std::cout << "--- s190 hyphenation languages ---\n";
+        namespace L = composix::layout;
+        namespace D = core::doc;
+        const auto hy = [](const char* w, const char* l) { return core::hyphenated(w, l); };
+        check("de: Sil-ben-tren-nung; ß and umlauts are letters",
+              hy("Silbentrennung", "de") == "Sil-ben-tren-nung" && hy("Stra\xC3\x9F" "enbahnhaltestelle", "de") == "Stra-\xC3\x9F" "en-bahn-hal-te-stel-le" &&
+              hy("Fu\xC3\x9Fg\xC3\xA4ngerin", "de").find('-') != std::string::npos, hy("Stra\xC3\x9F" "enbahnhaltestelle", "de"));
+        check("fr / es / it / nl / pt: their own patterns",
+              hy("hyph\xC3\xA9nation", "fr") == "hy-ph\xC3\xA9-na-tion" && hy("murci\xC3\xA9lago", "es") == "mur-ci\xC3\xA9-la-go" &&
+              hy("ipotenusa", "it") == "ipo-te-nu-sa" && hy("ziekenhuis", "nl") == "zie-ken-huis" && hy("computador", "pt") == "com-pu-ta-dor");
+        check("en-GB and en-US differ (hy-phen-a-tion / hy-phen-ation)",
+              hy("hyphenation", "en-GB") == "hy-phen-a-tion" && hy("hyphenation", "en-US") == "hy-phen-ation" && hy("hyphenation", "") == "hy-phen-ation");
+        {   // break points are byte offsets at letter starts, never inside a UTF-8 letter
+            const std::string w = "Fu\xC3\x9Fg\xC3\xA4nger\xC3\xBC" "berg\xC3\xA4nge";
+            bool clean = true;
+            for (int k : core::hyphen_points(w, -1, -1, "de")) clean = clean && (static_cast<unsigned char>(w[static_cast<std::size_t>(k)]) & 0xC0) != 0x80;
+            check("de: breaks fall between letters, not inside one's bytes", clean && !core::hyphen_points(w, -1, -1, "de").empty());
+        }
+        check("fr: an apostrophe within the word (l'\xC3\xA9la-bo-ra-tion)", hy("l'\xC3\xA9laboration", "fr").find("bo-ra-tion") != std::string::npos);
+        check("minimums: Portuguese 2 / 3, German 2 / 2", core::hyphen_language("pt").right == 3 && core::hyphen_language("de").right == 2 &&
+                                                          std::string(core::hyphen_language("xx").code) == "en-US");
+        check("not letters: no breaks", core::hyphen_points("x86-64", -1, -1, "de").empty() && core::hyphen_points("\xE2\x80\x94\xE2\x80\x94\xE2\x80\x94\xE2\x80\x94\xE2\x80\x94", -1, -1, "fr").empty());
+        // A style's Language, through the flow: a narrow frame of German compounds.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        std::string words;
+        for (int k = 0; k < 10; ++k) words += "Stra\xC3\x9F" "enbahnhaltestelle Donaudampfschifffahrtsgesellschaft Fu\xC3\x9Fg\xC3\xA4nger\xC3\xBC" "berg\xC3\xA4nge ";
+        words.pop_back();
+        D::edit_text(j, d, "story.1", {2, 0}, {2, static_cast<int>(d.as<core::Story>("story.1")->paras[2].text.size())}, words);
+        const auto sid = d.as<core::Story>("story.1")->paras[2].style;
+        check("Language: a style setting (in the inspector under Hyphenate)", D::style_edit_label("lang") == "Language" &&
+              D::edit_styles(j, d, {sid}, "Language", [&](core::Style& st) { D::style_edit(d, st, "lang", "de"); st.hyphenate = true; }) &&
+              d.as<core::Style>(sid)->lang == "de");
+        bool german_ok = true;
+        int hyph = 0;
+        const auto& txt = d.as<core::Story>("story.1")->paras[2].text;
+        const auto flow = L::flow_story(d, "story.1");
+        for (const auto& f : flow.frames)
+            for (const auto& l : f.lines)
+                if (l.para == 2 && l.hyphen) {
+                    ++hyph;
+                    // the break: one of the word's German points
+                    int s = l.end;
+                    while (s > 0 && txt[static_cast<std::size_t>(s - 1)] != ' ') --s;
+                    int e = l.end;
+                    while (e < static_cast<int>(txt.size()) && txt[static_cast<std::size_t>(e)] != ' ') ++e;
+                    const auto pts = core::hyphen_points(std::string_view(txt).substr(static_cast<std::size_t>(s), static_cast<std::size_t>(e - s)), -1, -1, "de");
+                    german_ok = german_ok && std::find(pts.begin(), pts.end(), l.end - s) != pts.end();
+                }
+        check("flow: German words break at German points (umlauts and ß inside them)", hyph > 0 && german_ok, std::to_string(hyph));
+        core::Doc e;
+        check("Language: saved with the style", core::from_json(e, core::to_json(d)) && e.as<core::Style>(sid)->lang == "de");
+    }
+    // ── s189: a picture drawn clipped to its path ──
+    {
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        core::ClipPath diamond;
+        diamond.polys.push_back({{0.5, 0.0}, {1.0, 0.5}, {0.5, 1.0}, {0.0, 0.5}});
+        core::ImageFile f;
+        f.path = "/x/clipped.jpg";
+        f.name = "clipped.jpg";
+        f.px_w = 400;
+        f.px_h = 400;
+        f.clip = core::pack_clip(diamond);
+        const auto frame = D::add_frame(j, d, d.as<core::Frame>("frame.1")->owner, core::FrameKind::Image, {300, 20, 100, 100});
+        D::edit_frames(j, d, {frame}, "Top", [](core::Frame& g) { g.z = 1e6; });
+        check("clipped: placed, its path kept on the asset", D::place_image(j, d, frame, f) &&
+              d.as<core::Asset>(d.as<core::Frame>(frame)->asset)->clip == f.clip);
+        {
+            core::Doc e;
+            check("clipped: the path saved with the document", core::from_json(e, core::to_json(d)) &&
+                  e.as<core::Asset>(d.as<core::Frame>(frame)->asset)->clip.size() == f.clip.size());
+        }
+        const L::ImageSource red = [](const core::Asset&, double, double) -> cairo_surface_t* {
+            cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 4, 4);
+            cairo_t* c = cairo_create(s);
+            cairo_set_source_rgb(c, 1, 0, 0);
+            cairo_paint(c);
+            cairo_destroy(c);
+            return s;
+        };
+        L::FlowCache flows;
+        const auto page = d.as<core::Frame>(frame)->owner;
+        const auto centre = L::sample_page(d, page, flows, red, 350, 70, 1), corner = L::sample_page(d, page, flows, red, 303, 23, 1);
+        check("clipped: drawn inside its path, not in the frame's corners", (centre & 0xFFFFFF) == 0xFF0000u && (corner & 0xFFFFFF) == 0xFFFFFFu);
+        const auto base = fs::temp_directory_path() / "composix_selftest_s189";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        L::PdfOptions opt;
+        opt.compress = false;
+        L::PdfReport rep;
+        std::string err;
+        const auto out = (base / "clip.pdf").string();
+        const bool ok = L::export_print_pdf(d, out, opt, red, &rep, &err);
+        std::ifstream in(out, std::ios::binary);
+        std::stringstream ss;
+        ss << in.rdbuf();
+        check("clipped: the print PDF clips it (even-odd) before the image", ok && ss.str().find(" l\nh\nW* n\n") != std::string::npos);
+        fs::remove_all(base, ec);
+    }
+    // ── s188 (G2b): a vector picture's own size ──
+    {
+        std::cout << "--- s188 vector sizes ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        core::Doc::Id frame;
+        for (const auto& fid : d.ids_of<core::Frame>())
+            if (const auto* f = d.as<core::Frame>(fid); f->kind == core::FrameKind::Image && d.as<core::Page>(f->owner)) { frame = fid; break; }
+        core::ImageFile f;
+        f.path = "/x/map.svg";
+        f.name = "map.svg";
+        f.vector = true;
+        f.px_w = 300;   // CSS pixels
+        f.px_h = 200;
+        check("vector: placed", !frame.empty() && D::place_image(j, d, frame, f));
+        const auto* a = d.as<core::Asset>(d.as<core::Frame>(frame)->asset);
+        check("vector: its own size kept, as points (96 px to the inch)",
+              a && a->px_w == 0 && std::abs(a->vec_w - 225) < 1e-9 && std::abs(a->vec_h - 150) < 1e-9);
+        const auto nat = a ? core::picture_natural(*a) : core::Size2{};
+        check("vector: its natural size -- 3 : 2, not a square", std::abs(nat.w - 225) < 1e-9 && std::abs(nat.h - 150) < 1e-9);
+        {   // Fit in a square frame: as wide as the frame, two thirds as tall
+            auto g = *d.as<core::Frame>(frame);
+            g.fit = core::ImageFit::Fit;
+            const auto r = core::picture_rect({0, 0, 120, 120}, g, nat.w, nat.h);
+            check("vector: Fit keeps its shape", std::abs(r.w - 120) < 1e-6 && std::abs(r.h - 80) < 1e-6);
+        }
+        core::Doc e;
+        check("vector: its size saved", a && core::from_json(e, core::to_json(d)) && e.as<core::Asset>(d.as<core::Frame>(frame)->asset)->vec_w == a->vec_w);
+        {   // placed at its own size: 100%
+            const auto ns = core::natural_size(f, 0, 0);
+            check("vector: placed at its own size (CSS px to points)", std::abs(ns.w - 225) < 1e-9 && std::abs(ns.h - 150) < 1e-9);
+        }
+        check("vector: its shape where pictures are placed (scale, offsets, the inspector)",
+              a && core::picture_aspect(*a).w == a->vec_w && core::picture_aspect(*a).h == a->vec_h);
+        core::Asset old;
+        check("vector: placed before s188 -- square as it was", core::picture_natural(old).w == core::picture_natural(old).h &&
+                                                               core::picture_aspect(old).w == 1 && core::picture_aspect(old).h == 1);
+    }
+    // ── s187 (G5c): a CMYK picture's own separations into the print PDF ──
+    {
+        std::cout << "--- s187 CMYK pictures to print ---\n";
+        namespace L = composix::layout;
+        namespace fs = std::filesystem;
+        {   // the PSD decoder hands its separations (stored 255 - ink) as ink
+            using B = std::string;
+            const auto be16 = [](unsigned v) { return B{static_cast<char>(v >> 8), static_cast<char>(v & 0xFF)}; };
+            const auto be32 = [&](unsigned v) { return be16(v >> 16) + be16(v & 0xFFFF); };
+            const B psd = B("8BPS") + be16(1) + B(6, '\0') + be16(4) + be32(1) + be32(1) + be16(8) + be16(4) + be32(0) + be32(0) +
+                          be32(0) + be16(0) + B{'\x00', '\x7F', '\xFF', '\xE6'};   // C 100%, M ~50%, Y 0, K 10%
+            int w = 0, h = 0;
+            std::vector<std::uint8_t> ink;
+            const auto px = L::psd_decode(psd, w, h, 0, nullptr, &ink);
+            check("PSD: CMYK separations as ink", px.size() == 1 && ink == std::vector<std::uint8_t>{255, 128, 0, 25});
+            std::vector<std::uint8_t> none{1};
+            L::psd_decode(psd.substr(0, 24) + be16(3) + psd.substr(26, psd.size() - 26 - 4) + B{'\x10', '\x20', '\x30'}, w, h, 0, nullptr, &none);
+            check("PSD: an RGB file gives none", none.empty());
+        }
+        core::Doc d;
+        core::load_sample(d);
+        const auto make = [](bool ink) {
+            return L::ImageSource([ink](const core::Asset&, double, double) -> cairo_surface_t* {
+                cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 2, 2);
+                cairo_t* c = cairo_create(s);
+                cairo_set_source_rgb(c, 0, 0.6, 0.9);
+                cairo_paint(c);
+                cairo_destroy(c);
+                if (ink) {
+                    auto* v = new std::vector<std::uint8_t>{200, 10, 0, 0, 200, 10, 0, 0, 200, 10, 0, 0, 200, 10, 0, 0};
+                    cairo_surface_set_mime_data(s, L::kCmykMime, v->data(), v->size(),
+                                                [](void* p) { delete static_cast<std::vector<std::uint8_t>*>(p); }, v);
+                }
+                return s;
+            });
+        };
+        const auto base = fs::temp_directory_path() / "composix_selftest_s187";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        const auto out = (base / "cmyk.pdf").string();
+        L::PdfOptions opt;
+        opt.compress = false;
+        const auto run = [&](bool ink, std::string& pdf, L::PdfReport& rep) {
+            std::string err;
+            const auto file = ink ? out : out + ".rgb.pdf";
+            const bool ok = L::export_print_pdf(d, file, opt, make(ink), &rep, &err);
+            std::ifstream f(file, std::ios::binary);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            pdf = ss.str();
+            return ok;
+        };
+        std::string pdf, pdf_rgb;
+        L::PdfReport rep, rep_rgb;
+        const bool ok = run(true, pdf, rep), ok2 = run(false, pdf_rgb, rep_rgb);
+        const auto rgb_warned = [](const L::PdfReport& r) {
+            return std::any_of(r.warnings.begin(), r.warnings.end(), [](const std::string& w) { return w.find("RGB images") != std::string::npos; });
+        };
+        const std::string pix{'\xC8', '\x0A', '\x00', '\x00', '\xC8', '\x0A', '\x00', '\x00'};
+        const auto ink_back = [&] {   // the image's stream, inflated
+            const auto at = pdf.find("/Width 2 /Height 2 /BitsPerComponent 8 /Interpolate true /ColorSpace /DeviceCMYK /Filter /FlateDecode");
+            if (at == std::string::npos) return std::string{};
+            const auto s0 = pdf.find("stream\n", at), s1 = pdf.find("\nendstream", at);
+            if (s0 == std::string::npos || s1 == std::string::npos) return std::string{};
+            std::string z = pdf.substr(s0 + 7, s1 - s0 - 7), raw(64, '\0');
+            uLongf n = static_cast<uLongf>(raw.size());
+            if (uncompress(reinterpret_cast<Bytef*>(raw.data()), &n, reinterpret_cast<const Bytef*>(z.data()), static_cast<uLong>(z.size())) != Z_OK) return std::string{};
+            raw.resize(n);
+            return raw;
+        }();
+        check("print: a picture's own CMYK goes in as DeviceCMYK, its ink as it was",
+              ok && ink_back.size() == 16 && ink_back.compare(0, 8, pix) == 0, [&] { std::string h; char b[4]; for (unsigned char c : ink_back) { std::snprintf(b, sizeof b, "%02X ", c); h += b; } return h; }());
+        check("print: no RGB warning for it (without the ink: RGB, warned)", !rgb_warned(rep) && ok2 && rgb_warned(rep_rgb));
+        fs::remove_all(base, ec);
+    }
     // ── s185 (G5b): a PSD's merged picture ──
     {
         std::cout << "--- s185 PSD ---\n";

@@ -596,7 +596,7 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
                     }
     }
     bool live = m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Gutter || m_drag == Drag::Tab ||
-                m_drag == Drag::Picture || clipped;
+                m_drag == Drag::Picture || m_drag == Drag::PicScale || clipped;
     if (!live && editing())
         for (const auto& fid : m_doc.frames_on(p.id))
             if (const auto* f = m_doc.as<core::Frame>(fid); f && f->story == m_edit_story) { live = true; break; }
@@ -769,7 +769,41 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         }
     }
     if (editing()) { draw_edit(cr); draw_tab_strip(cr); }   // s034
-    if (!m_sel.empty() && !editing()) {
+    // s186: the Direct tool -- the whole picture: the part its frame crops
+    // ghosted, its edge and handles in brown (InDesign's colour for content).
+    Rect dfl, dpl;
+    const bool direct = m_tool == Tool::Direct && !m_direct.empty() && !editing() && direct_pic(m_direct, dfl, dpl);
+    if (direct) {
+        const Rect fs = m_vp.to_screen(dfl), ps = m_vp.to_screen(dpl);
+        const auto* f = m_doc.as<core::Frame>(m_direct);
+        const auto* a = f ? m_doc.as<core::Asset>(f->asset) : nullptr;
+        if (auto pic = a ? images::get(core::resolve_asset(*a, m_dir), a->stamp) : Cairo::RefPtr<Cairo::ImageSurface>{}) {
+            cr->save();
+            cr->set_fill_rule(Cairo::Context::FillRule::EVEN_ODD);   // outside the frame only
+            cr->rectangle(ps.x, ps.y, ps.w, ps.h);
+            cr->rectangle(fs.x, fs.y, fs.w, fs.h);
+            cr->clip();
+            images::paint(cr, pic, ps.x, ps.y, ps.w, ps.h, 0.35);
+            cr->restore();
+        }
+        constexpr double kBrown[3] = {0.62, 0.38, 0.13};
+        cr->set_line_width(1);
+        cr->set_source_rgba(kBrown[0], kBrown[1], kBrown[2], 0.95);
+        cr->rectangle(std::round(ps.x) + 0.5, std::round(ps.y) + 0.5, std::round(ps.w), std::round(ps.h));
+        cr->stroke();
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.6);   // the frame, thin, no handles
+        cr->rectangle(std::round(fs.x) + 0.5, std::round(fs.y) + 0.5, std::round(fs.w), std::round(fs.h));
+        cr->stroke();
+        for (const auto& p : core::handle_points(ps)) {
+            const double x = std::round(p[0]) - 3.5, y = std::round(p[1]) - 3.5;
+            cr->set_source_rgb(1, 1, 1);
+            cr->rectangle(x, y, 7, 7);
+            cr->fill_preserve();
+            cr->set_source_rgba(kBrown[0], kBrown[1], kBrown[2], 1);
+            cr->stroke();
+        }
+    }
+    if (!m_sel.empty() && !editing() && !direct) {
         const Rect box = m_vp.to_screen(selection_box());
         if (m_sel.size() > 1) {
             std::vector<double> dash{4, 3};
@@ -1013,6 +1047,43 @@ void Canvas::on_drag_begin(double x, double y) {
         queue_draw();
         return;
     }
+    // s186 (G2): the Direct tool -- the picture inside its frame.
+    if (m_tool == Tool::Direct && m_load.empty()) {
+        m_drag = Drag::None;
+        Rect fl, pl;
+        const auto start = [&](const std::string& fid, Drag kind, const char* label) {
+            m_pic0 = {pl.x - fl.x, pl.y - fl.y, pl.w, pl.h};   // the frame's own coordinates
+            m_pic_frame = fid;
+            core::doc::frames_begin(m_journal, m_doc, {fid}, label);
+            m_begun = true;
+            m_drag = kind;
+        };
+        // A handle of the picture on show: scale it.
+        if (!m_direct.empty() && direct_pic(m_direct, fl, pl)) {
+            const auto h = core::handle_hit(m_vp.to_screen(pl), x, y);
+            if (h != core::Handle::None) {
+                m_pic_handle = h;
+                start(m_direct, Drag::PicScale, "Scale picture");
+                return;
+            }
+        }
+        // In a picture's frame -- or the part of the shown one its frame crops: move it.
+        const auto hit = core::hit_frame(m_doc, m_placed, px0, py0, 3 / m_vp.scale());
+        std::string target = hit;
+        if (!m_direct.empty() && (hit.empty() || hit == m_direct) && direct_pic(m_direct, fl, pl) && pl.contains(px0, py0))
+            target = m_direct;
+        if (!target.empty() && direct_pic(target, fl, pl)) {
+            m_direct = target;
+            pick({target});
+            start(target, Drag::Picture, "Move picture");
+            return;
+        }
+        // Anything else: picked as a frame (nothing to show), or nothing.
+        m_direct.clear();
+        pick(hit.empty() ? std::vector<std::string>{} : std::vector<std::string>{hit});
+        queue_draw();
+        return;
+    }
     // A drawing tool -- or a loaded image (s009) -- drag out a frame on a page.
     if (m_tool != Tool::Select || !m_load.empty()) {
         m_draw_page = core::page_at(m_placed, px0, py0);
@@ -1145,6 +1216,17 @@ void Canvas::on_drag_update(double ox, double oy) {
     switch (m_drag) {
     case Drag::None:
         return;
+    case Drag::PicScale: {   // s186: the picture scaled by a handle -- in proportion (Alt: about its centre)
+        const Rect r = core::resize_rect(m_pic0, m_pic_handle, ox / s, oy / s, true, m_mods_alt, 2);
+        core::doc::edit_frames(m_journal, m_doc, {m_pic_frame}, "Scale picture", [&](core::Frame& f) {
+            f.fit = core::ImageFit::Custom;
+            f.pic_w = r.w;
+            f.pic_x = r.x;
+            f.pic_y = r.y;
+        });
+        queue_draw();
+        return;
+    }
     case Drag::Picture: {   // s035: the picture follows inside its frame
         const Rect p0 = m_pic0;
         core::doc::edit_frames(m_journal, m_doc, {m_pic_frame}, "Move picture", [&](core::Frame& f) {
@@ -1338,7 +1420,7 @@ void Canvas::on_drag_end(double, double) {
         return;
     }
     if (was == Drag::Text) { queue_draw(); return; }
-    if (was == Drag::Picture) {   // s035: the move, one step
+    if (was == Drag::Picture || was == Drag::PicScale) {   // s035: the move (s186: or the scale), one step
         m_begun = false;
         core::doc::frames_end(m_journal);
         m_sig_edited.emit();
@@ -1502,6 +1584,7 @@ bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
     if (!ctrl && !alt && m_drag == Drag::None) {   // s008: tools by letter (as InDesign), Delete
         switch (kv) {
         case GDK_KEY_v: case GDK_KEY_V: set_tool(Tool::Select); m_sig_tool.emit(); return true;
+        case GDK_KEY_a: case GDK_KEY_A: set_tool(Tool::Direct); m_sig_tool.emit(); return true;   // s186
         case GDK_KEY_t: case GDK_KEY_T: set_tool(Tool::Text);   m_sig_tool.emit(); return true;
         case GDK_KEY_f: case GDK_KEY_F: set_tool(Tool::Image);  m_sig_tool.emit(); return true;
         case GDK_KEY_m: case GDK_KEY_M: set_tool(Tool::Shape);  m_sig_tool.emit(); return true;
@@ -1599,6 +1682,12 @@ void Canvas::on_motion(double x, double y) {
 void Canvas::set_tool(Tool t) {
     cancel_take();   // s180
     end_edit();
+    if (t != Tool::Direct) m_direct.clear();   // s186
+    else if (m_sel.size() == 1) {   // s186: a picked picture shows at once
+        Rect fl, pl;
+        if (direct_pic(m_sel.front(), fl, pl)) m_direct = m_sel.front();
+    }
+    queue_draw();
     m_tool = t;
     m_thread_from.clear();
     m_load.clear();
@@ -2157,6 +2246,19 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
 }
 
 // ── s009: placing images ────────────────────────────────────────────────────
+bool Canvas::direct_pic(const std::string& fid, Rect& fl, Rect& pl) const {   // s186
+    const auto* f = m_doc.as<core::Frame>(fid);
+    if (!f || f->kind != core::FrameKind::Image || f->rot != 0) return false;
+    const auto* a = m_doc.as<core::Asset>(f->asset);
+    if (!a) return false;
+    if (std::none_of(m_placed.begin(), m_placed.end(), [&](const core::Placed& p) { return p.id == f->owner; })) return false;
+    fl = core::frame_in_layout(m_doc, m_placed, fid);
+    const auto nat = core::picture_natural(*a);
+    const double iw = a->px_w > 0 ? a->px_w : nat.w, ih = a->px_h > 0 ? a->px_h : nat.h;
+    pl = core::picture_rect(fl, *f, iw, ih);
+    return pl.w > 0 && pl.h > 0;
+}
+
 void Canvas::take_colour(std::function<void(std::optional<std::uint32_t>)> done) {   // s180
     cancel_take();
     end_edit();
@@ -2286,6 +2388,18 @@ void Canvas::update_cursor() {
             return;
         }
     }
+    if (m_tool == Tool::Direct) {   // s186: a picture's handle, else a hand over pictures
+        Rect fl, pl;
+        if (!m_direct.empty() && direct_pic(m_direct, fl, pl)) {
+            const auto h = core::handle_hit(m_vp.to_screen(pl), m_mx, m_my);
+            if (h != core::Handle::None) { set_cursor(Gdk::Cursor::create(cursor_for(h))); return; }
+        }
+        double lx = 0, ly = 0;
+        m_vp.to_doc(m_mx, m_my, lx, ly);
+        const bool over = (direct_pic(m_hover, fl, pl)) || (!m_direct.empty() && direct_pic(m_direct, fl, pl) && pl.contains(lx, ly));
+        set_cursor(Gdk::Cursor::create(m_drag == Drag::Picture ? "grabbing" : over ? "grab" : "default"));
+        return;
+    }
     if (m_tool != Tool::Select) { set_cursor(Gdk::Cursor::create("crosshair")); return; }
     if (!m_sel.empty()) {
         const auto h = core::handle_hit(m_vp.to_screen(selection_box()), m_mx, m_my);
@@ -2350,6 +2464,8 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     struct T { const char* icon; const char* name; const char* tip; Canvas::Tool tool; };
     static const T tools[] = {
         {"composix-tool-select-symbolic", "canvas_view.tool.select", "Select  (V)", Canvas::Tool::Select},
+        {"composix-tool-direct-symbolic", "canvas_view.tool.direct", "Direct  (A) \u2014 a picture inside its frame: drag to move it, a corner to scale it",
+         Canvas::Tool::Direct},   // s186
         {"insert-text-symbolic",          "canvas_view.tool.text",   "Text frame  (T) \u2014 drag on a page", Canvas::Tool::Text},
         {"image-x-generic-symbolic",      "canvas_view.tool.image",  "Image frame  (F) \u2014 drag on a page", Canvas::Tool::Image},
         {"composix-tool-shape-symbolic",  "canvas_view.tool.shape",  "Shape  (M) \u2014 drag on a page; Shift for a square", Canvas::Tool::Shape},
