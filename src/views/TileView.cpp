@@ -81,6 +81,16 @@ TileView::TileView()
     }
     m_sizes.set_visible(false);
     m_head.append(m_sizes);
+    {   // s172: the colour libraries, beside New Swatch.
+        auto lb = Gtk::make_managed<Gtk::Button>("Libraries\u2026");
+        lb->set_name("tiles.libraries");
+        lb->set_tooltip_text("Colours from My Library, other programs' palettes and files -- into the document");
+        lb->set_valign(Gtk::Align::CENTER);
+        lb->set_visible(false);
+        lb->signal_clicked().connect([this] { m_lib_sig.emit(); });
+        m_head.append(*lb);
+        m_lib_btn = lb;
+    }
     {   // s058: a new swatch, from the Colors view.
         auto nb = Gtk::make_managed<Gtk::Button>("New Swatch\u2026");
         nb->set_name("tiles.new");
@@ -182,6 +192,7 @@ void TileView::show_section(const core::Outline& o, core::Segment s, const std::
     m_sizes.set_visible(true);
     sync_size_buttons();
     if (m_new_btn) m_new_btn->set_visible(s == core::Segment::Colors);
+    if (m_lib_btn) m_lib_btn->set_visible(s == core::Segment::Colors);   // s172
     bool grouped = false;
     for (const auto* it : items) grouped = grouped || (s == core::Segment::Colors && !it->group.empty());
     m_grid.set_visible(!grouped);

@@ -20,6 +20,7 @@
 #include <pangomm/layout.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -48,6 +49,7 @@ const char* cursor_for(core::Handle h) {
 Canvas::Canvas(core::Doc& d, core::DocJournal& j)
     : widgets::DrawingArea("canvas"), m_doc(d), m_journal(j) {
     add_css_class("cx-canvas");
+    images::set_ready_hook([this] { queue_draw(); });   // s174: a big picture decoded: its pages again
     set_hexpand(true);
     set_vexpand(true);
     set_focusable(true);
@@ -580,6 +582,16 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
             const auto [at, total] = core::thread_place(m_doc, fid);
             var += "|" + std::to_string(at) + "/" + std::to_string(total) + (flows().get(m_doc, f->story).overset ? "+" : "");
         }
+        // s174: a picture still decoding shows as "Loading"; once it's in, the page is drawn again.
+        auto owners = core::master_chain(m_doc, p.id);
+        owners.push_back(p.id);
+        for (const auto& o : owners)
+            for (const auto& fid : m_doc.frames_on(o))
+                if (const auto* f = m_doc.as<core::Frame>(fid); f && f->kind == core::FrameKind::Image)
+                    if (const auto* a = m_doc.as<core::Asset>(f->asset)) {
+                        const std::string file = core::resolve_asset(*a, m_dir);
+                        if (const int n = file.empty() ? 0 : images::arrivals(file)) var += "|i" + std::to_string(n);
+                    }
     }
     bool live = m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Gutter || m_drag == Drag::Tab ||
                 m_drag == Drag::Picture || clipped;
@@ -708,7 +720,41 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->stroke();
         // s018: a wrapping frame shows its wrap edge (the offsets), dotted.
         const auto* f = m_doc.as<core::Frame>(id);
-        if (f && f->wrap != core::Wrap::None) {
+        const auto* fa = f && f->wrap == core::Wrap::Shape ? m_doc.as<core::Asset>(f->asset) : nullptr;
+        const auto bands = fa ? core::shape_bands(*f, *fa) : std::vector<core::Band>{};
+        if (!bands.empty()) {   // s173: the outline it wraps to, dotted -- each run of touching bands one shape
+            const Rect fr = core::frame_in_layout(m_doc, m_placed, id);
+            const auto& o = f->wrap_off;
+            std::vector<double> dash{2, 3};
+            cr->set_dash(dash, 0);
+            cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.7);
+            std::size_t a = 0;
+            while (a < bands.size()) {
+                std::size_t b = a + 1;
+                while (b < bands.size() && bands[b].y0 <= bands[b - 1].y1 + 0.01) ++b;
+                const auto pt = [&](double x, double y) {
+                    const Rect s = m_vp.to_screen({fr.x + x, fr.y + y, 0, 0});
+                    return std::array<double, 2>{std::round(s.x) + 0.5, std::round(s.y) + 0.5};
+                };
+                std::vector<std::array<double, 2>> poly;
+                for (std::size_t k = a; k < b; ++k) {   // down the left
+                    const double y0 = k == a ? bands[k].y0 - o.top : bands[k].y0, y1 = k + 1 == b ? bands[k].y1 + o.bottom : bands[k].y1;
+                    poly.push_back(pt(bands[k].x0 - o.left, y0));
+                    poly.push_back(pt(bands[k].x0 - o.left, y1));
+                }
+                for (std::size_t k = b; k-- > a;) {   // up the right
+                    const double y0 = k == a ? bands[k].y0 - o.top : bands[k].y0, y1 = k + 1 == b ? bands[k].y1 + o.bottom : bands[k].y1;
+                    poly.push_back(pt(bands[k].x1 + o.right, y1));
+                    poly.push_back(pt(bands[k].x1 + o.right, y0));
+                }
+                cr->move_to(poly[0][0], poly[0][1]);
+                for (std::size_t k = 1; k < poly.size(); ++k) cr->line_to(poly[k][0], poly[k][1]);
+                cr->close_path();
+                cr->stroke();
+                a = b;
+            }
+            cr->unset_dash();
+        } else if (f && f->wrap != core::Wrap::None) {
             const Rect fr = core::frame_in_layout(m_doc, m_placed, id);
             const auto& o = f->wrap_off;
             const Rect w = m_vp.to_screen({fr.x - o.left, fr.y - o.top, fr.w + o.left + o.right, fr.h + o.top + o.bottom});
@@ -2069,12 +2115,13 @@ void Canvas::load_images(std::vector<core::ImageFile> files) {
 // or a new frame -- the one drawn, else the file's own size, kept on the page.
 void Canvas::place_loaded(double lx, double ly, const Rect* drawn) {
     if (m_load.empty()) return;
-    const core::ImageFile file = m_load.current();
+    core::ImageFile file = m_load.current();
     std::string made;
     front_panel(lx, ly);   // s150
     if (!drawn) {
         const auto hit = core::hit_frame(m_doc, m_placed, lx, ly, 3 / m_vp.scale());
         if (const auto* f = m_doc.as<core::Frame>(hit); f && f->kind == core::FrameKind::Image) {
+            if (f->wrap == core::Wrap::Shape) file.shape = images::trace(file.path, file.stamp);   // s175: its outline, as Replace
             core::doc::place_image(m_journal, m_doc, hit, file);
             made = hit;
         }

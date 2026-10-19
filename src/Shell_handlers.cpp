@@ -91,6 +91,8 @@ void Shell::on_place() {  // handler
         const auto& sel = cv.selection();
         if (sel.size() == 1) {
             if (const auto* fr = m_doc.as<core::Frame>(sel.front()); fr && fr->kind == core::FrameKind::Image) {
+                if (fr->wrap == core::Wrap::Shape)   // s173: a frame wrapping to its picture's outline: the new one's
+                    files.front().shape = views::images::trace(files.front().path, files.front().stamp);
                 core::doc::place_image(m_journal, m_doc, sel.front(), files.front());
                 files.erase(files.begin());
                 if (files.empty()) return;
@@ -114,12 +116,17 @@ void Shell::on_asset_action(const std::string& act) {  // handler
             return;
         }
         const auto id = assets.front();
-        pick_image([this, id](const core::ImageFile& f) { core::doc::relink_assets(m_journal, m_doc, {{id, f}}); });
+        pick_image([this, id](const core::ImageFile& f) {
+            std::vector<std::pair<core::Doc::Id, core::ImageFile>> files{{id, f}};
+            retrace(files);   // s173
+            core::doc::relink_assets(m_journal, m_doc, files);
+        });
     } else if (act == "update") {   // the same files, read again
         std::vector<std::pair<core::Doc::Id, core::ImageFile>> files;
         for (const auto& id : assets)
             if (auto f = views::images::probe(core::resolve_asset(*m_doc.as<core::Asset>(id), m_project_dir)))
                 files.push_back({id, *f});
+        retrace(files);   // s173
         core::doc::relink_assets(m_journal, m_doc, files);
     } else if (act == "embed") {
         if (m_project_dir.empty()) {
@@ -710,6 +717,7 @@ void Shell::bind_context_actions() {  // bindings
     add_action("delete-frames", [this] { m_canvas_view.canvas().delete_selection(); });
     add_action_with_parameter("frame-wrap", Glib::Variant<Glib::ustring>::variant_type(), [this, picked](const Glib::VariantBase& p) {
         const int w = std::stoi(Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(p).get());
+        if (w == 3) { wrap_to_shape(picked()); return; }   // s173
         core::doc::edit_frames(m_journal, m_doc, picked(), "Text wrap", [&](core::Frame& f) {
             const auto to = static_cast<core::Wrap>(std::clamp(w, 0, 2));
             if (f.wrap == core::Wrap::None && to != core::Wrap::None && f.wrap_off == core::Sides{}) f.wrap_off = {9, 9, 9, 9};
@@ -760,6 +768,9 @@ void Shell::on_canvas_context(const views::Canvas::ContextHit& h) {  // handler
         wrap->append("None", "win.frame-wrap::0");
         wrap->append("Wrap Around", "win.frame-wrap::1");
         wrap->append("Jump Over", "win.frame-wrap::2");
+        bool image = false;   // s173: an image frame can wrap to its picture's outline
+        for (const auto& id : sel) if (const auto* f = m_doc.as<core::Frame>(id)) image = image || f->kind == core::FrameKind::Image;
+        if (image) wrap->append("Wrap to Shape", "win.frame-wrap::3");
         arrange->append_submenu("Text Wrap", wrap);
         if (text) arrange->append(ignoring ? "Let Wrap Push the Text" : "Ignore Others' Wrap", "win.frame-ignore-wrap");
         menu->append_section(arrange);
@@ -894,6 +905,20 @@ std::vector<core::Field> Shell::section_fields(core::Segment s) const {  // help
         out.push_back(act);
         return out;
     }
+    if (s == core::Segment::Colors) {   // s179: the swatches nothing uses, all at once
+        const auto unused = core::doc::unused_swatches(m_doc);
+        if (unused.empty()) { out.push_back({"Unused", "None"}); return out; }
+        std::string names;
+        for (std::size_t k = 0; k < unused.size() && k < 8; ++k)
+            names += (names.empty() ? "" : "\n") + m_doc.as<core::Swatch>(unused[k])->name;
+        if (unused.size() > 8) names += "\n\u2026 and " + std::to_string(unused.size() - 8) + " more";
+        out.push_back({"Unused", std::to_string(unused.size()) + (unused.size() == 1 ? " swatch" : " swatches")});
+        out.push_back({"", names});
+        core::Field act{"", "", "swatches_unused", {{"select", "Select Them"}, {"delete", "Delete Them"}}};
+        act.buttons = true;
+        out.push_back(act);
+        return out;
+    }
     if (s != core::Segment::Assets || m_project_dir.empty()) return out;
     std::vector<std::string> held;
     m_journal.each_value([&](const core::Record& r) {
@@ -938,6 +963,17 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         return;
     }
     if (key == "notes_panel") { open_notes_panel(); return; }   // s121
+    if (key == "swatches_unused") {   // s179: the Colors section's unused swatches (nothing picked)
+        if (choice == "select") {
+            const auto ids = core::doc::unused_swatches(m_doc);
+            Glib::signal_idle().connect_once([this, ids] { m_tiles.show_section(m_outline, core::Segment::Colors, ids); on_tiles_selection(ids); });
+        } else if (choice == "delete") {
+            const int n = core::doc::delete_unused_swatches(m_journal, m_doc);
+            if (auto lg = log::get(log::Area::Shell)) lg->info("swatches: {} unused deleted", n);
+            Glib::signal_idle().connect_once([this] { on_tiles_selection({}); });
+        }
+        return;
+    }
     if (m_inspected.empty()) return;
     if (key == "note" || key == "note_words") {   // s115: a footnote picked in Footnotes
         std::string story;
@@ -1109,6 +1145,14 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 open_swatch_editor(m_inspected.front());
                 return;
             }
+            if (choice == "mine") {   // s172: the picked swatches into My Library; the window shows them there
+                std::vector<core::Swatch> cs;
+                std::vector<std::string> names;
+                for (const auto& id : m_inspected)
+                    if (const auto* s = m_doc.as<core::Swatch>(id)) { cs.push_back(*s); names.push_back(s->name); }
+                if (!cs.empty() && add_to_my_library(cs) >= 0) open_libraries("mine", names);
+                return;
+            }
             if (choice == "duplicate" && !m_inspected.empty()) {
                 const auto made = core::doc::duplicate_swatch(m_journal, m_doc, m_inspected.front());
                 did = !made.empty();
@@ -1256,6 +1300,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             const double v = std::stod(colon == std::string::npos ? choice : choice.substr(colon + 1));
             did = core::doc::set_side(m_journal, m_doc, m_inspected,
                                       key == "inset" ? core::doc::SideOf::Inset : core::doc::SideOf::Wrap, side, v);
+        } else if (key == "wrap" && choice == "3") {   // s173: the pictures' outlines
+            did = wrap_to_shape(m_inspected);
         } else if (key == "wrap") {   // s018: text wrap
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Text wrap", [&](core::Frame& f) {
                 const auto w = static_cast<core::Wrap>(std::stoi(choice));
@@ -1311,6 +1357,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                         if (const auto* a = m_doc.as<core::Asset>(f->asset))
                             if (auto img = views::images::probe(core::resolve_asset(*a, m_project_dir)))
                                 files.push_back({f->asset, *img});
+                retrace(files);   // s173
                 did = core::doc::relink_assets(m_journal, m_doc, files);
             } else {
                 on_place();

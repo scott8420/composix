@@ -142,6 +142,24 @@ void Shell::build_shell() {  // zone: header + panes
         "shell.nav.handle", views::PanelHandle::Side::Left, m_nav_rev, 180, 420);
     m_nav_handle->set_width(250);
     m_nav_handle->changed = [this] { sync_nav(); };
+    // s176: the navigator's pull tab, as the inspector's: on the main view's
+    // left edge, halfway down -- drag to size, click to push back / pull out.
+    m_nav_tab.add_css_class("cx-pull-tab");
+    m_nav_tab.add_css_class("cx-left");
+    m_nav_tab.set_halign(Gtk::Align::START);
+    m_nav_tab.set_valign(Gtk::Align::CENTER);
+    m_nav_tab_glyph.set_hexpand(true);
+    m_nav_tab_glyph.set_vexpand(true);
+    m_nav_tab.append(m_nav_tab_glyph);
+    m_nav_tab.set_cursor(Gdk::Cursor::create("col-resize"));
+    m_nav_handle->add_drag(m_nav_tab, true);
+    for (Gtk::Widget* w : {static_cast<Gtk::Widget*>(&m_nav_tab), static_cast<Gtk::Widget*>(m_nav_handle.get())}) {
+        auto motion = Gtk::EventControllerMotion::create();
+        motion->signal_enter().connect([this](double, double) { tab_hover(true, true); });
+        motion->signal_leave().connect([this] { tab_hover(false, true); });
+        w->add_controller(motion);
+    }
+    m_main_over.add_overlay(m_nav_tab);
     m_nav_handle->set_open(true);
     m_right.set_hexpand(true);
     m_body.append(m_nav_rev);
@@ -252,11 +270,12 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
 
 namespace composix {
 
-void Shell::tab_hover(bool in) {  // helper: the pull tab's shared hover
-    m_tab_fade.disconnect();
-    if (in) { m_insp_tab.add_css_class("cx-lit"); return; }
-    m_tab_fade = Glib::signal_timeout().connect(
-        [this] { m_insp_tab.remove_css_class("cx-lit"); return false; }, 250);
+void Shell::tab_hover(bool in, bool nav) {  // helper: a pull tab's shared hover
+    auto& tab = nav ? m_nav_tab : m_insp_tab;
+    auto& fade = nav ? m_nav_tab_fade : m_tab_fade;
+    fade.disconnect();
+    if (in) { tab.add_css_class("cx-lit"); return; }
+    fade = Glib::signal_timeout().connect([&tab] { tab.remove_css_class("cx-lit"); return false; }, 250);
 }
 
 }  // namespace composix

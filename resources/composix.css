@@ -209,6 +209,10 @@ flowboxchild:selected > .cx-tile-card {
 }
 .cx-pull-tab.cx-open { opacity: 1; }
 .cx-pull-tab.cx-lit  { opacity: 1; background: @cx_accent; color: @theme_selected_fg_color; border-color: @cx_accent; }
+/* s176: the navigator's, on the left edge -- mirrored */
+.cx-pull-tab.cx-left { border-radius: 0 10px 10px 0; border: 1px solid @cx_hair; border-left: none;
+                       box-shadow: 2px 0 8px alpha(black, 0.12); }
+.cx-pull-tab.cx-left.cx-lit { border-color: @cx_accent; }
 
 /* ── inspector ──────────────────────────────────────────────────────────── */
 .cx-inspector               { background: @cx_sidebar; }

@@ -1909,6 +1909,36 @@ bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const s
     });
 }
 
+bool set_wrap_shape(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids,
+                    const std::map<Doc::Id, std::vector<float>>& traced) {
+    std::vector<Doc::Id> frames, assets;
+    for (const auto& id : ids) {
+        const auto* fr = d.as<Frame>(id);
+        if (!fr || fr->kind != FrameKind::Image) continue;
+        if (fr->wrap != Wrap::Shape) frames.push_back(id);
+        const auto t = traced.find(fr->asset);
+        if (const auto* a = d.as<Asset>(fr->asset); a && t != traced.end() && a->shape != t->second &&
+                                                   std::find(assets.begin(), assets.end(), fr->asset) == assets.end())
+            assets.push_back(fr->asset);
+    }
+    if (frames.empty() && assets.empty()) return false;
+    std::vector<Doc::Id> touched = frames;
+    touched.insert(touched.end(), assets.begin(), assets.end());
+    return j.run("Text wrap", touched, [&] {
+        for (const auto& id : frames) {
+            Frame t = *d.as<Frame>(id);
+            if (t.wrap == Wrap::None && t.wrap_off == Sides{}) t.wrap_off = {9, 9, 9, 9};
+            t.wrap = Wrap::Shape;
+            d.put(id, t);
+        }
+        for (const auto& id : assets) {
+            Asset a = *d.as<Asset>(id);
+            a.shape = traced.at(id);
+            d.put(id, a);
+        }
+    });
+}
+
 // ── stacking order (s070) ───────────────────────────────────────────────────
 namespace {
 // The owner's frames bottom up, rearranged.
@@ -3303,6 +3333,28 @@ bool delete_swatch(DocJournal& j, Doc& d, const Doc::Id& id) {
     return j.run("Delete swatch " + cur->name, {id}, [&] { d.put(id, std::nullopt); });
 }
 
+std::vector<Doc::Id> unused_swatches(const Doc& d) {
+    std::vector<std::pair<double, Doc::Id>> v;
+    for (const auto& id : d.ids_of<Swatch>()) {
+        const auto* s = d.as<Swatch>(id);
+        if (s->name == "Black" || s->name == "Paper" || swatch_uses(d, id) > 0) continue;
+        v.push_back({s->pos, id});
+    }
+    std::stable_sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<Doc::Id> out;
+    for (auto& [p, id] : v) out.push_back(id);
+    return out;
+}
+
+int delete_unused_swatches(DocJournal& j, Doc& d) {
+    const auto gone = unused_swatches(d);
+    if (gone.empty()) return 0;
+    const std::string label = gone.size() == 1 ? "Delete swatch " + d.as<Swatch>(gone.front())->name
+                                               : "Delete " + std::to_string(gone.size()) + " unused swatches";
+    j.run(label, gone, [&] { for (const auto& id : gone) d.put(id, std::nullopt); });
+    return static_cast<int>(gone.size());
+}
+
 int style_uses(const Doc& d, const Doc::Id& style) {
     int n = 0;
     for (const auto& sid : d.ids_of<Story>())
@@ -3366,6 +3418,7 @@ Asset asset_from(const ImageFile& f, double pos) {
     a.px_w = f.vector ? 0 : f.px_w;
     a.px_h = f.vector ? 0 : f.px_h;
     a.stamp = f.stamp;
+    a.shape = f.shape;   // s173
     return a;
 }
 Doc::Id existing_asset(const Doc& d, const ImageFile& f) {
@@ -3394,6 +3447,10 @@ bool place_image(DocJournal& j, Doc& d, const Doc::Id& frame, const ImageFile& f
         if (fresh) {
             d.put(a, asset_from(file, d.pos_after<Asset>({})));
             made.push_back(a);
+        } else if (!file.shape.empty() && d.as<Asset>(a)->shape.empty()) {   // s175: an outline it didn't have
+            Asset t = *d.as<Asset>(a);
+            t.shape = file.shape;
+            d.put(a, t);
         }
         Frame nf = *d.as<Frame>(frame);
         nf.asset = a;
@@ -3848,6 +3905,7 @@ const std::vector<Verb>& verbs() {
         }},
         {"duplicate_swatch", [](DocJournal& j, Doc& d) { duplicate_swatch(j, d, "swatch.3"); }},
         {"delete_unused_swatch", [](DocJournal& j, Doc& d) { delete_swatch(j, d, "swatch.4"); }},
+        {"delete_unused_swatches", [](DocJournal& j, Doc& d) { delete_unused_swatches(j, d); }},   // s179
         {"delete_unused_style", [](DocJournal& j, Doc& d) { delete_styles(j, d, {"style.6", "style.1"}); }},  // Body is used: stays
         // s037: Based on / Next style.
         {"set_style_base", [](DocJournal& j, Doc& d) { set_style_base(j, d, "style.6", "style.1"); }},
@@ -3869,6 +3927,9 @@ const std::vector<Verb>& verbs() {
          }},
         {"place_same_file", [](DocJournal& j, Doc& d) {   // into a frame showing a shared asset
              place_image(j, d, "frame.8", {"/pics/cove.png", "cove.png", 2400, 1600, false, "RGB", 7});
+         }},
+        {"wrap_shape", [](DocJournal& j, Doc& d) {   // s173: a traced outline, then the wrap
+             set_wrap_shape(j, d, {"frame.4"}, {{d.as<Frame>("frame.4")->asset, {1.5f, 0.2f, 0.8f, 0.f, 1.f}}});
          }},
         {"relink_asset", [](DocJournal& j, Doc& d) {
              relink_assets(j, d, {{"asset.2", {"/pics/harbor.png", "harbor.png", 3000, 2000, false, "RGB", 9}}});
@@ -4167,6 +4228,20 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
             if (beneath && !above) continue;   // below the text: it doesn't push
             if (o != t->owner && !master_item_on(d, fid, t->owner)) continue;   // s025: not shown on this page
             const double fx = f->x + (o != t->owner ? across_dx(d, *f, d.side_of(t->owner)) : 0.0);   // s155
+            // s173: Shape -- the picture's traced outline, band by band, grown by the offsets.
+            if (f->wrap == Wrap::Shape)
+                if (const auto* a = d.as<Asset>(f->asset); a && !a->shape.empty()) {
+                    const auto bands = shape_bands(*f, *a);
+                    if (!bands.empty()) {
+                        for (const auto& b : bands) {
+                            WrapRect r{fx + b.x0 - f->wrap_off.left - t->x, f->y + b.y0 - f->wrap_off.top - t->y,
+                                       fx + b.x1 + f->wrap_off.right - t->x, f->y + b.y1 + f->wrap_off.bottom - t->y, false};
+                            if (r.x1 <= 0 || r.y1 <= 0 || r.x0 >= t->w || r.y0 >= t->h) continue;
+                            out.push_back(r);
+                        }
+                        continue;
+                    }
+                }
             WrapRect r{fx - f->wrap_off.left - t->x, f->y - f->wrap_off.top - t->y,
                        fx + f->w + f->wrap_off.right - t->x, f->y + f->h + f->wrap_off.bottom - t->y,
                        f->wrap == Wrap::Jump};
@@ -4174,6 +4249,66 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
             if (r.x1 <= 0 || r.y1 <= 0 || r.x0 >= t->w || r.y0 >= t->h) continue;
             out.push_back(r);
         }
+    return out;
+}
+
+std::vector<float> trace_shape(const std::uint32_t* px, int w, int h, int stride, int bands) {
+    std::vector<float> out;
+    if (!px || w <= 0 || h <= 0 || stride < w) return out;
+    const auto at = [&](int x, int y) { return px[static_cast<std::size_t>(y) * static_cast<std::size_t>(stride) + static_cast<std::size_t>(x)]; };
+    const auto ch = [](std::uint32_t c, int k) { return static_cast<int>((c >> (8 * k)) & 0xff); };
+    bool clear = false;
+    for (int y = 0; y < h && !clear; ++y)
+        for (int x = 0; x < w; ++x)
+            if (ch(at(x, y), 3) < 255) { clear = true; break; }
+    // No see-through pixels: the corners' colour is the background, if they share one.
+    constexpr int kTol = 24;
+    const std::uint32_t corners[4] = {at(0, 0), at(w - 1, 0), at(0, h - 1), at(w - 1, h - 1)};
+    const auto near = [&](std::uint32_t a, std::uint32_t b) {
+        for (int k = 0; k < 3; ++k) if (std::abs(ch(a, k) - ch(b, k)) > kTol) return false;
+        return true;
+    };
+    const std::uint32_t bg = corners[0];
+    if (!clear)
+        for (auto c : corners)
+            if (!near(c, bg)) return out;   // a photo to its edges: nothing to trace
+    const auto solid = [&](std::uint32_t c) { return clear ? ch(c, 3) >= 128 : !near(c, bg); };
+    const int n = std::clamp(bands, 1, h);
+    out.push_back(static_cast<float>(static_cast<double>(w) / h));
+    bool any = false;
+    for (int b = 0; b < n; ++b) {
+        const int y0 = b * h / n, y1 = std::max(y0 + 1, (b + 1) * h / n);
+        int lo = w, hi = -1;
+        for (int y = y0; y < y1; ++y) {
+            for (int x = 0; x < lo; ++x) if (solid(at(x, y))) { lo = x; break; }
+            for (int x = w - 1; x > hi; --x) if (solid(at(x, y))) { hi = x; break; }
+        }
+        if (hi < lo) { out.push_back(1.f); out.push_back(0.f); continue; }
+        any = true;
+        out.push_back(static_cast<float>(static_cast<double>(lo) / w));
+        out.push_back(static_cast<float>(static_cast<double>(hi + 1) / w));
+    }
+    if (!any) out.clear();   // see-through all over: nothing to wrap
+    return out;
+}
+
+std::vector<Band> shape_bands(const Frame& f, const Asset& a) {
+    std::vector<Band> out;
+    if (a.shape.size() < 3 || a.shape[0] <= 0) return out;
+    const double aspect = a.shape[0];
+    const Rect pr = picture_rect({0, 0, f.w, f.h}, f, aspect, 1.0);
+    const std::size_t n = (a.shape.size() - 1) / 2;
+    if (pr.w <= 0 || pr.h <= 0 || n == 0) return out;
+    for (std::size_t i = 0; i < n; ++i) {
+        const double s0 = a.shape[1 + 2 * i], s1 = a.shape[2 + 2 * i];
+        if (s1 <= s0) continue;
+        Band b{pr.x + s0 * pr.w, pr.y + pr.h * static_cast<double>(i) / static_cast<double>(n),
+               pr.x + s1 * pr.w, pr.y + pr.h * static_cast<double>(i + 1) / static_cast<double>(n)};
+        // The frame crops the picture.
+        b.x0 = std::max(b.x0, 0.0); b.y0 = std::max(b.y0, 0.0);
+        b.x1 = std::min(b.x1, f.w); b.y1 = std::min(b.y1, f.h);
+        if (b.x1 > b.x0 && b.y1 > b.y0) out.push_back(b);
+    }
     return out;
 }
 

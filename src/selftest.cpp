@@ -1664,6 +1664,124 @@ int main() {
     }
 
     {
+        std::cout << "\n-- s173: wrap to an image's shape --\n";
+        namespace L = composix::layout;
+        // Tracing: a see-through picture -- a triangle, its point up.
+        const int W = 40, H = 40;
+        std::vector<std::uint32_t> px(W * H, 0x00000000u);
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+                if (std::abs(x - 20) * 2 <= y) px[static_cast<std::size_t>(y * W + x)] = 0xff336699u;
+        const auto tri = core::trace_shape(px.data(), W, H, W, 4);
+        check("trace: aspect, then a span a band", tri.size() == 9 && std::abs(tri[0] - 1.f) < 1e-6);
+        check("trace: narrow at the top, wide at the foot", tri.size() == 9 && (tri[2] - tri[1]) < (tri[8] - tri[7]) &&
+              tri[7] <= 0.05f && tri[8] >= 0.95f && tri[1] > 0.3f && tri[2] < 0.7f);
+        {   // No alpha: a product on white -- the corners' colour is the ground.
+            std::vector<std::uint32_t> q(W * H, 0xfffefefeu);
+            for (int y = 10; y < 30; ++y) for (int x = 15; x < 25; ++x) q[static_cast<std::size_t>(y * W + x)] = 0xff202020u;
+            const auto sq = core::trace_shape(q.data(), W, H, W, 4);
+            check("trace: on a plain ground -- the object, the empty bands marked",
+                  sq.size() == 9 && sq[1] > sq[2] && std::abs(sq[3] - 15.f / 40) < 1e-6 && std::abs(sq[4] - 25.f / 40) < 1e-6 && sq[7] > sq[8]);
+            q[0] = 0xff00ff00u;   // a corner of another colour: a photo to its edges
+            check("trace: a photo to its edges -- nothing", core::trace_shape(q.data(), W, H, W, 4).empty());
+            std::vector<std::uint32_t> none(W * H, 0x00000000u);
+            check("trace: see-through all over -- nothing", core::trace_shape(none.data(), W, H, W, 4).empty());
+        }
+        // As placed: Fit in a frame twice as wide -- the picture centred.
+        {
+            core::Frame f;
+            f.kind = core::FrameKind::Image;
+            f.w = 200; f.h = 100;
+            f.fit = core::ImageFit::Fit;
+            core::Asset a;
+            a.shape = tri;
+            const auto b = core::shape_bands(f, a);
+            check("shape bands: in the frame, the picture's place", b.size() == 4 && b[0].x0 > 50 && b[3].x0 >= 50 - 1e-9 &&
+                  b[3].x1 <= 150 + 1e-9 && std::abs(b[0].y0) < 1e-9 && std::abs(b[3].y1 - 100) < 1e-9);
+            a.shape.clear();
+            check("shape bands: untraced -- none", core::shape_bands(f, a).empty());
+        }
+        // The sample's lighthouse (Around) -> Shape, traced as the triangle.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto around = core::wrap_rects(d, "frame.1");
+        const auto aid = d.as<core::Frame>("frame.11")->asset;
+        const auto steps = j.size();
+        check("wrap shape: one step", core::doc::set_wrap_shape(j, d, {"frame.11", "frame.1"}, {{aid, tri}}) && j.size() == steps + 1 &&
+              d.as<core::Frame>("frame.11")->wrap == core::Wrap::Shape && d.as<core::Asset>(aid)->shape == tri &&
+              d.as<core::Frame>("frame.1")->wrap == core::Wrap::None);
+        check("wrap shape: again -- nothing", !core::doc::set_wrap_shape(j, d, {"frame.11"}, {{aid, tri}}) && j.size() == steps + 1);
+        const auto shaped = core::wrap_rects(d, "frame.1");
+        bool inside = around.size() == 1 && shaped.size() == 4;
+        for (const auto& r : shaped)
+            inside = inside && r.x0 >= around[0].x0 - 1e-9 && r.x1 <= around[0].x1 + 1e-9 && r.y0 >= around[0].y0 - 1e-9 && r.y1 <= around[0].y1 + 1e-9;
+        check("wrap shape: a rect a band, within the frame's wrap", inside && shaped[0].x1 - shaped[0].x0 < shaped[3].x1 - shaped[3].x0);
+        {   // The text comes into the frame's old box, and keeps clear of every band.
+            const auto flow = L::flow_story(d, "story.1");
+            bool clear = true, closer = false;
+            for (const auto& ft : flow.frames) {
+                if (ft.frame != "frame.1") continue;
+                const double fw = d.as<core::Frame>("frame.1")->w;
+                for (const auto& l : ft.lines) {
+                    const double x1 = l.x + (l.w > 0 ? l.w : fw);
+                    for (const auto& r : shaped)
+                        if (l.y + l.h > r.y0 && l.y < r.y1) clear = clear && (x1 <= r.x0 + 0.01 || l.x >= r.x1 - 0.01);
+                    if (!around.empty() && l.y + l.h > around[0].y0 && l.y < around[0].y1 && l.x > around[0].x0 + 1 && l.x < around[0].x1 - 1)
+                        closer = true;
+                }
+            }
+            check("wrap shape: lines keep clear of the outline", clear);
+            check("wrap shape: text comes in closer than the frame's box", closer);
+        }
+        {
+            core::Doc e;
+            check("wrap shape: saved with the document (outline rounded)", core::from_json(e, core::to_json(d)) &&
+                  e.as<core::Frame>("frame.11")->wrap == core::Wrap::Shape && e.as<core::Asset>(aid)->shape.size() == tri.size() &&
+                  std::abs(e.as<core::Asset>(aid)->shape[2] - tri[2]) < 1e-4);
+        }
+        {
+            const auto items = core::frame_items(d, {"frame.11"}, "");
+            bool sh = false;
+            for (const auto& f : items.front().fields)
+                if (f.edit == "wrap") for (const auto& c : f.choices) sh = sh || (c.id == "3" && f.value == "Shape");
+            const auto titems = core::frame_items(d, {"frame.1"}, "");
+            bool tsh = false;
+            for (const auto& f : titems.front().fields)
+                if (f.edit == "wrap") for (const auto& c : f.choices) tsh = tsh || c.id == "3";
+            check("wrap shape: the inspector offers Shape on pictures only", sh && !tsh);
+        }
+        // A relink keeps a traced outline when the new file brings one; untraced wraps the frame.
+        core::ImageFile nf{"/pics/new.png", "new.png", 400, 400, false, "RGB", 5};
+        check("wrap shape: relinked without an outline -- the frame's box", core::doc::relink_assets(j, d, {{aid, nf}}) &&
+              d.as<core::Asset>(aid)->shape.empty() && core::wrap_rects(d, "frame.1").size() == 1);
+        nf.shape = tri;
+        nf.stamp = 6;
+        check("wrap shape: relinked with one -- kept", core::doc::relink_assets(j, d, {{aid, nf}}) &&
+              d.as<core::Asset>(aid)->shape == tri && core::wrap_rects(d, "frame.1").size() == 4);
+        {   // s175: placed into a Shape frame with its outline (Replace, a drop): kept -- a new asset or one already there.
+            core::ImageFile pf{"/pics/other.png", "other.png", 300, 300, false, "RGB", 3};
+            pf.shape = tri;
+            const bool placed = core::doc::place_image(j, d, "frame.11", pf);
+            const auto* na = d.as<core::Asset>(d.as<core::Frame>("frame.11")->asset);
+            check("wrap shape: placed with an outline -- kept, wraps to it", placed && na && na->shape == tri &&
+                  core::wrap_rects(d, "frame.1").size() == 4);
+            j.undo();
+            core::ImageFile again{"/pics/cove.png", "cove.png", 2400, 1600, false, "RGB", 7};
+            const bool p1 = core::doc::place_image(j, d, "frame.4", again);   // cove.png now an asset, untraced
+            again.shape = tri;
+            const bool p2 = core::doc::place_image(j, d, "frame.11", again);
+            const auto* ca = d.as<core::Asset>(d.as<core::Frame>("frame.11")->asset);
+            check("wrap shape: an asset already there gains the outline", p1 && p2 && ca && ca->shape == tri);
+            j.undo(); j.undo();
+        }
+        j.undo(); j.undo(); j.undo();
+        check("wrap shape: undone -- Around, untraced", d.as<core::Frame>("frame.11")->wrap == core::Wrap::Around &&
+              d.as<core::Asset>(aid)->shape.empty() && core::wrap_rects(d, "frame.1").size() == 1);
+    }
+
+    {
         std::cout << "\n-- new document --\n";
         namespace L = composix::layout;
         const double in = core::kPt;
@@ -9536,6 +9654,86 @@ int main() {
         j.undo();
         j.undo();
         check("library into the document: undone", d.ids_of<core::Swatch>().size() == before);
+        // s179: unused swatches, all at once (Black and Paper stay).
+        {
+            core::Doc e;
+            core::DocJournal je{e};
+            e.set_door([&je] { return je.open(); });
+            core::load_sample(e);
+            const auto before = e.ids_of<core::Swatch>().size();
+            const std::size_t steps = je.size();
+            D::add_library_swatches(je, e, {four[0], four[1]}, "Earth");   // two new, unused
+            const auto un = D::unused_swatches(e);
+            bool fine = un.size() >= 2;
+            for (const auto& id : un) {
+                const auto* s = e.as<core::Swatch>(id);
+                fine = fine && s->name != "Black" && s->name != "Paper" && D::swatch_uses(e, id) == 0;
+            }
+            check("unused swatches: found, never Black or Paper", fine);
+            const int n = D::delete_unused_swatches(je, e);
+            check("unused swatches: gone in one step", n == static_cast<int>(un.size()) && je.size() == steps + 2 &&
+                  D::unused_swatches(e).empty() && e.ids_of<core::Swatch>().size() == before + 2 - un.size());
+            check("unused swatches: none -- no step", D::delete_unused_swatches(je, e) == 0 && je.size() == steps + 2);
+            je.undo();
+            check("unused swatches: undone", D::unused_swatches(e).size() == un.size());
+        }
+        // s177: a picture's colours.
+        {
+            const int W = 100, H = 100;
+            std::vector<std::uint32_t> px(W * H);
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x)   // 60% sky (two near blues), 30% sand, 10% see-through
+                    px[static_cast<std::size_t>(y * W + x)] = y < 60 ? (x % 2 ? 0xff3366ccu : 0xff3a6ad0u)
+                                                             : y < 90 ? 0xffe0c080u : 0x00000000u;
+            const auto pc = SW::picture_colors(px.data(), W, H, W);
+            check("picture colours: the main ones, most first; near ones pooled; see-through not counted",
+                  pc.size() == 2 && std::abs(pc[0].share - 60.0 / 90) < 0.01 && std::abs(pc[1].share - 30.0 / 90) < 0.01 &&
+                  pc[1].rgb == 0xe0c080u && ((pc[0].rgb >> 16) & 0xff) >= 0x33 && ((pc[0].rgb >> 16) & 0xff) <= 0x3a);
+            px[5] = 0xff00ff00u;   // one green pixel: under 1%
+            check("picture colours: a speck left out", SW::picture_colors(px.data(), W, H, W).size() == 2);
+            check("picture colours: at most asked", SW::picture_colors(px.data(), W, H, W, 1).size() == 1);
+            std::vector<std::uint32_t> clear(16, 0u);
+            check("picture colours: see-through all over -- none", SW::picture_colors(clear.data(), 4, 4, 4).empty());
+            const auto pl = SW::picture_library("cove.png", pc);
+            check("picture colours: a library of RGB swatches named by hex", pl.name == "cove.png" && pl.colors.size() == 2 &&
+                  pl.colors[1].name == "#E0C080" && pl.colors[1].model == CM::RGB && pl.colors[1].preview == 0xe0c080u);
+        }
+        // s172: the Libraries window's shelf.
+        {
+            check("shelf: My Library's file", SW::mine_file("/d") == "/d/composix/swatches/my-library.json");
+            core::AppSettings st;
+            const bool a = SW::remember_imported(st, "/x/a.ase"), b = SW::remember_imported(st, "/x/b.gpl"),
+                       again = SW::remember_imported(st, "/x/a.ase");
+            check("shelf: imported remembered in order, once", a && b && !again &&
+                  SW::imported(st) == std::vector<std::string>{"/x/a.ase", "/x/b.gpl"});
+            check("shelf: forgotten", SW::forget_imported(st, "/x/a.ase") && !SW::forget_imported(st, "/x/a.ase") &&
+                  SW::imported(st) == std::vector<std::string>{"/x/b.gpl"});
+            SW::forget_imported(st, "/x/b.gpl");
+            check("shelf: none left -- the setting goes", !st.count("colors.imported") && SW::imported(st).empty());
+            check("shelf: save format by extension", SW::save_format("p.GPL") == SW::Format::GPL &&
+                  SW::save_format("p.ase") == SW::Format::ASE && SW::save_format("p") == SW::Format::ASE &&
+                  SW::save_format("p.json") == SW::Format::Composix);
+            check("shelf: extension added when missing", SW::with_extension("/t/Earth", SW::Format::GPL) == "/t/Earth.gpl" &&
+                  SW::with_extension("/t/Earth.ase", SW::Format::GPL) == "/t/Earth.ase" &&
+                  SW::with_extension("/t/E.v2", SW::Format::ASE) == "/t/E.v2.ase");
+            SW::Library lib;
+            lib.colors = {four[0], four[1], four[2], four[3]};
+            const int gone = SW::remove_at(lib, {3, 0, 3, 9});
+            check("shelf: removed by place (repeats and strays ignored)", gone == 2 && lib.colors.size() == 2 &&
+                  lib.colors[0].name == four[1].name && lib.colors[1].name == four[2].name);
+            const auto dc = SW::document_colors(d);
+            bool ordered = dc.size() == d.ids_of<core::Swatch>().size();
+            for (std::size_t i = 1; i < dc.size(); ++i) ordered = ordered && dc[i - 1].pos <= dc[i].pos;
+            check("shelf: the document's colours, in order", ordered && !dc.empty());
+            // Out and back: the document's colours to .ase, then read as a library.
+            const auto tmp2 = std::filesystem::temp_directory_path() / "cx_s172_shelf";
+            std::filesystem::create_directories(tmp2);
+            const auto out = SW::with_extension((tmp2 / "Doc").string(), SW::Format::ASE);
+            const bool wrote = SW::write_file(out, "Doc", dc, SW::save_format(out));
+            const auto back = SW::read_file(out);
+            check("shelf: the document exported and read back", wrote && back && back->colors.size() == dc.size());
+            std::filesystem::remove_all(tmp2);
+        }
     }
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";

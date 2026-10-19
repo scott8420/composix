@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -724,6 +725,142 @@ std::vector<Found> system_palettes() {
         fixed.push_back({fp, std::string(fp).find("inkscape") != std::string::npos ? "Inkscape"
                             : std::string(fp).find("gimp") != std::string::npos ? "GIMP" : "LibreOffice"});
     return system_palettes(h ? h : "", data, fixed);
+}
+
+// ── s177: a picture's colours ────────────────────────────────────────────────
+std::vector<PictureColor> picture_colors(const std::uint32_t* px, int w, int h, int stride, int most) {
+    std::vector<PictureColor> out;
+    if (!px || w <= 0 || h <= 0 || stride < w || most <= 0) return out;
+    // Every pixel of a small picture; a big one sampled evenly (about 250k).
+    const long total = static_cast<long>(w) * h;
+    const int step = std::max(1, static_cast<int>(std::sqrt(static_cast<double>(total) / 250000.0)));
+    struct Bin { double r = 0, g = 0, b = 0; long n = 0; };
+    std::vector<Bin> bins(1 << 15);   // 5 bits a channel
+    long counted = 0;
+    for (int y = 0; y < h; y += step)
+        for (int x = 0; x < w; x += step) {
+            const std::uint32_t c = px[static_cast<std::size_t>(y) * static_cast<std::size_t>(stride) + static_cast<std::size_t>(x)];
+            const int a = static_cast<int>(c >> 24);
+            if (a < 128) continue;
+            // Premultiplied (cairo): back to the colour.
+            const auto un = [a](std::uint32_t v) { return a >= 255 ? static_cast<double>(v) : std::min(255.0, v * 255.0 / a); };
+            const double r = un((c >> 16) & 0xff), g = un((c >> 8) & 0xff), b = un(c & 0xff);
+            const int k = (static_cast<int>(r) >> 3) << 10 | (static_cast<int>(g) >> 3) << 5 | (static_cast<int>(b) >> 3);
+            auto& bin = bins[static_cast<std::size_t>(k)];
+            bin.r += r; bin.g += g; bin.b += b; ++bin.n;
+            ++counted;
+        }
+    if (counted == 0) return out;
+    std::vector<std::size_t> order;
+    for (std::size_t i = 0; i < bins.size(); ++i) if (bins[i].n) order.push_back(i);
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return bins[a].n > bins[b].n; });
+    // Greedy, busiest first: a bin near a chosen colour joins it; else it's a new one.
+    struct Pick { double r, g, b; long n; };
+    std::vector<Pick> picks;
+    constexpr double kNear = 40.0;   // RGB distance that reads as the same colour
+    for (auto i : order) {
+        const auto& bn = bins[i];
+        const double r = bn.r / bn.n, g = bn.g / bn.n, b = bn.b / bn.n;
+        Pick* at = nullptr;
+        double best = kNear;
+        for (auto& p : picks) {
+            const double d = std::sqrt((p.r - r) * (p.r - r) + (p.g - g) * (p.g - g) + (p.b - b) * (p.b - b));
+            if (d < best) { best = d; at = &p; }
+        }
+        if (at) {   // pooled: the chosen colour stays the busiest bin's own
+            at->n += bn.n;
+        } else {
+            picks.push_back({r, g, b, bn.n});
+        }
+    }
+    std::stable_sort(picks.begin(), picks.end(), [](const Pick& a, const Pick& b) { return a.n > b.n; });
+    for (const auto& p : picks) {
+        const double share = static_cast<double>(p.n) / counted;
+        if (share < 0.01 || static_cast<int>(out.size()) >= most) break;
+        const auto c8 = [](double v) { return static_cast<std::uint32_t>(std::lround(std::clamp(v, 0.0, 255.0))); };
+        out.push_back({(c8(p.r) << 16) | (c8(p.g) << 8) | c8(p.b), share});
+    }
+    return out;
+}
+
+Library picture_library(const std::string& name, const std::vector<PictureColor>& colors) {
+    Library lib;
+    lib.name = name;
+    lib.source = "Pictures";
+    lib.kind = LibKind::Imported;
+    for (const auto& c : colors) {
+        char hex[8];
+        std::snprintf(hex, sizeof hex, "#%06X", c.rgb & 0xFFFFFF);
+        lib.colors.push_back(rgb_swatch(hex, (c.rgb >> 16) & 0xFF, (c.rgb >> 8) & 0xFF, c.rgb & 0xFF));
+    }
+    return lib;
+}
+
+// ── s172: the shelf ───────────────────────────────────────────────────────────
+std::string mine_file(const std::string& data_home) {
+    return (fs::path(data_home) / "composix" / "swatches" / "my-library.json").string();
+}
+
+std::vector<std::string> imported(const AppSettings& s) {
+    std::vector<std::string> out;
+    const auto it = s.find("colors.imported");
+    if (it == s.end()) return out;
+    std::istringstream in(it->second);
+    for (std::string line; std::getline(in, line);) {
+        line = trim(line);
+        if (!line.empty() && std::find(out.begin(), out.end(), line) == out.end()) out.push_back(line);
+    }
+    return out;
+}
+
+namespace {
+void put_imported(AppSettings& s, const std::vector<std::string>& v) {
+    std::string t;
+    for (const auto& p : v) t += (t.empty() ? "" : "\n") + p;
+    if (t.empty()) s.erase("colors.imported"); else s["colors.imported"] = t;
+}
+}  // namespace
+
+bool remember_imported(AppSettings& s, const std::string& path) {
+    auto v = imported(s);
+    if (path.empty() || std::find(v.begin(), v.end(), path) != v.end()) return false;
+    v.push_back(path);
+    put_imported(s, v);
+    return true;
+}
+
+bool forget_imported(AppSettings& s, const std::string& path) {
+    auto v = imported(s);
+    const auto n = std::erase(v, path);
+    if (n) put_imported(s, v);
+    return n > 0;
+}
+
+Format save_format(const std::string& path) {
+    const auto ext = lower(fs::path(path).extension().string());
+    return ext == ".gpl" ? Format::GPL : ext == ".json" ? Format::Composix : Format::ASE;
+}
+
+std::string with_extension(const std::string& path, Format f) {
+    const auto ext = lower(fs::path(path).extension().string());
+    if (ext == ".ase" || ext == ".gpl" || ext == ".json") return path;
+    return path + (f == Format::GPL ? ".gpl" : f == Format::Composix ? ".json" : ".ase");
+}
+
+int remove_at(Library& lib, std::vector<std::size_t> at) {
+    std::sort(at.begin(), at.end());
+    at.erase(std::unique(at.begin(), at.end()), at.end());
+    int n = 0;
+    for (auto it = at.rbegin(); it != at.rend(); ++it)
+        if (*it < lib.colors.size()) { lib.colors.erase(lib.colors.begin() + static_cast<std::ptrdiff_t>(*it)); ++n; }
+    return n;
+}
+
+std::vector<Swatch> document_colors(const Doc& d) {
+    std::vector<Swatch> out;
+    for (const auto& id : d.ids_of<Swatch>()) out.push_back(*d.as<Swatch>(id));
+    std::stable_sort(out.begin(), out.end(), [](const Swatch& a, const Swatch& b) { return a.pos < b.pos; });
+    return out;
 }
 
 }  // namespace composix::core::swatches

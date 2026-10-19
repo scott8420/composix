@@ -9,6 +9,7 @@
 #include "json.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <cstdio>
 #include <set>
@@ -217,6 +218,11 @@ json to(const Record& r) {
             j = {{"kind", "asset"}, {"name", v.name}, {"pos", v.pos}, {"path", v.path},
                  {"embedded", v.embedded}, {"color", v.color}, {"px_w", v.px_w}, {"px_h", v.px_h},
                  {"source", v.source}, {"stamp", v.stamp}};
+            if (!v.shape.empty()) {   // s173: rounded -- it's an outline, not a measurement
+                json s = json::array();
+                for (float f : v.shape) s.push_back(std::round(f * 10000.0) / 10000.0);
+                j["shape"] = s;
+            }
         } else if constexpr (std::is_same_v<T, Guide>) {
             j = {{"kind", "guide"}, {"owner", v.owner}, {"vertical", v.vertical}, {"pos", v.pos}};
         } else if constexpr (std::is_same_v<T, GenList>) {
@@ -507,6 +513,8 @@ std::optional<Record> from(const json& j) {
         v.px_h = val(j, "px_h", 0);
         v.source = val<std::string>(j, "source", "");
         v.stamp = val(j, "stamp", std::int64_t{0});
+        if (j.contains("shape") && j["shape"].is_array())   // s173
+            for (const auto& e : j["shape"]) if (e.is_number()) v.shape.push_back(e.get<float>());
         return v;
     }
     if (k == "guide") {

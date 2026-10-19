@@ -25,6 +25,7 @@ Shell::Shell()
       m_main_over("shell.main_over"),
       m_insp_rev("shell.inspector.reveal"),
       m_insp_tab("shell.inspector.tab", Gtk::Orientation::VERTICAL),
+      m_nav_tab("shell.nav.tab", Gtk::Orientation::VERTICAL),
       m_main("shell.main"),
       m_welcome("shell.welcome", Gtk::Orientation::VERTICAL, 8) {
     set_name("shell.window");

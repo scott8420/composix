@@ -17,6 +17,7 @@
 // the document (doc::add_library_swatches), its `from` naming the library:
 // the document always carries its own colours.
 #include "core/Doc.hpp"
+#include "core/Settings.hpp"
 
 #include <optional>
 #include <string>
@@ -76,6 +77,37 @@ struct Found {
 std::vector<Found> system_palettes();
 std::vector<Found> system_palettes(const std::string& home, const std::vector<std::string>& data_dirs,
                                    const std::vector<Found>& extra = {});   // more folders, each its source
+
+// s177: the colours IN a picture -- its main ones, most first. Pixels as
+// trace_shape takes them (ARGB32, 0xAARRGGBB, `stride` pixels a row);
+// see-through pixels (alpha under half) don't count. Colours closer than a
+// small step are one (their pixels pooled); a colour under 1% of the
+// picture is left out. At most `most`.
+struct PictureColor {
+    std::uint32_t rgb   = 0;   // 0xRRGGBB
+    double        share = 0;   // of the picture's counted pixels, 0..1
+};
+std::vector<PictureColor> picture_colors(const std::uint32_t* px, int w, int h, int stride, int most = 12);
+// Those as a library: RGB swatches named by their hex ("#8B4513"), its
+// name the picture's.
+Library picture_library(const std::string& name, const std::vector<PictureColor>& colors);
+
+// s172: the Libraries window's shelf -- what it keeps between runs, GTK-free.
+// My Library's file under the user's data folder.
+std::string mine_file(const std::string& data_home);   // <data_home>/composix/swatches/my-library.json
+// Imported libraries: their paths in the "colors.imported" setting, one a line,
+// in the order they were opened. Remember: false when it's there already.
+std::vector<std::string> imported(const AppSettings& s);
+bool remember_imported(AppSettings& s, const std::string& path);
+bool forget_imported(AppSettings& s, const std::string& path);
+// Saving: the format a path asks for (.gpl -> GPL, .json -> Composix, else
+// ASE), and the path with that format's extension when it has none of them.
+Format      save_format(const std::string& path);
+std::string with_extension(const std::string& path, Format f);
+// Take colours out of a library by their places in it. How many went.
+int remove_at(Library& lib, std::vector<std::size_t> at);
+// The document's swatches, in the Colors view's order (by pos).
+std::vector<Swatch> document_colors(const Doc& d);
 
 }  // namespace composix::core::swatches
 

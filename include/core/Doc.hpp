@@ -63,7 +63,7 @@ enum class ImageFit  { Fill, Fit, Custom };   // s009: cover the frame (cropped)
 // s018: how a frame pushes text in OTHER frames aside. Around: text runs
 // down both sides of it; Jump: text skips the band it covers, no lines
 // beside it.
-enum class Wrap      { None, Around, Jump };
+enum class Wrap      { None, Around, Jump, Shape };   // s173: Shape -- an image's own outline (its traced shape)
 enum class VAlign    { Top, Center, Bottom, Justify };   // s042: a text frame's text, up and down
 // s043: where a paragraph (in this style) may start.
 enum class ParaStart { Anywhere, NextColumn, NextFrame, NextPage, NextRightPage };
@@ -475,6 +475,11 @@ struct Asset {
     int         px_w = 0, px_h = 0;      // pixels; 0 = vector
     std::string source;                  // embedded (s009): the file it was copied from
     std::int64_t stamp = 0;              // linked (s009): the file's time when placed / updated; 0 = unknown
+    // s173: the picture's outline for a Shape wrap, traced from its pixels
+    // (see trace_shape): its aspect (w / h), then each row band's solid
+    // span as x0, x1 (0..1 of its width; x0 > x1 = nothing in that band).
+    // Empty = not traced (or nothing to trace: a Shape wrap then wraps the frame).
+    std::vector<float> shape;
     bool operator==(const Asset&) const = default;
 };
 
@@ -679,6 +684,7 @@ struct ImageFile {
     bool         vector = false;
     std::string  color = "RGB";
     std::int64_t stamp = 0;
+    std::vector<float> shape;            // s173: traced (Asset::shape), when the UI traced it
 };
 // Where an asset's file is: an absolute path, or "" when it can't be known (a
 // relative path in an unsaved project).
@@ -874,6 +880,12 @@ bool edit_masters(DocJournal& j, Doc& d, const std::vector<Doc::Id>& masters, co
 // ── frame settings (s012) ───────────────────────────────────────────────────
 // Change frames' settings (columns, gutter, balance ...): `f` edits each;
 // one step for all.
+// s173: image frames wrap text to their picture's outline -- one step: each
+// picked image frame's wrap set to Shape (9 pt air when it had none), and
+// the traced outlines (asset -> Asset::shape, from trace_shape) kept on
+// their assets. Frames that aren't images are left. False: nothing changed.
+bool set_wrap_shape(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames,
+                    const std::map<Doc::Id, std::vector<float>>& traced);
 bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, const std::string& label,
                  const std::function<void(Frame&)>& f);
 // s070: stacking order -- the frames among the others on their page (or
@@ -1179,6 +1191,11 @@ Doc::Id add_swatch(DocJournal& j, Doc& d, Swatch s);
 bool    edit_swatch(DocJournal& j, Doc& d, const Doc::Id& id, Swatch s);
 Doc::Id duplicate_swatch(DocJournal& j, Doc& d, const Doc::Id& id);
 bool    delete_swatch(DocJournal& j, Doc& d, const Doc::Id& id);
+// s179: the swatches nothing uses -- Black (text's default) and Paper (the
+// page) never count -- in the Colors order; and all of them gone in one
+// step. How many went.
+std::vector<Doc::Id> unused_swatches(const Doc& d);
+int     delete_unused_swatches(DocJournal& j, Doc& d);
 
 // ── Find / Change (s022) ────────────────────────────────────────────────────
 // What to look for: text (in one paragraph), optionally only in a
@@ -1382,6 +1399,18 @@ struct WrapRect {
     bool   jump = false;
 };
 std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& text_frame);
+// s173: a picture's outline from its pixels -- 32-bit ARGB (cairo's
+// ARGB32: 0xAARRGGBB, premultiplied is fine), `stride` pixels a row. Solid
+// is: with any see-through pixel, alpha at least half; else, when its four
+// corners are one colour (a product shot on white), whatever differs from
+// that colour; else nothing to trace (empty). Up to `bands` row bands
+// (fewer for a short picture). The Asset::shape layout.
+std::vector<float> trace_shape(const std::uint32_t* px, int w, int h, int stride, int bands = 96);
+// s173: a frame's traced picture as placed in it (fit / crop), in the
+// frame's coordinates, cut to the frame: each band's solid span. Empty when
+// the asset has no shape.
+struct Band { double x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
+std::vector<Band> shape_bands(const Frame& f, const Asset& a);
 // s027: spreads -- facing pages pair a left page with the right one after
 // it (a book's first page stands alone on the right); without facing
 // pages each page is its own. In page order.

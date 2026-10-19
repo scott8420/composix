@@ -11,6 +11,7 @@
 #include "views/PanelHandle.hpp"
 #include "views/TileView.hpp"
 #include "core/Settings.hpp"
+#include "core/Swatches.hpp"   // s172: the Colour Libraries window
 
 #include <gtkmm/popovermenu.h>
 #include <gtkmm/applicationwindow.h>
@@ -178,6 +179,23 @@ private:
     void open_xrefs_panel();                    // category: helper: s133 -- every cross-reference, one panel
     void open_sources_panel();                  // category: helper: s144 -- the bibliography's sources, one panel
     void sources_panel_sync();                  // category: helper: s144 -- the panel from the document
+    // s173: picked image frames wrap to their pictures' outlines -- traced
+    // here (the file decoded) where an asset has none yet; one step.
+    bool wrap_to_shape(const std::vector<std::string>& frames);   // category: helper: s173
+    std::vector<float> trace_asset(const core::Asset& a) const;     // category: helper: s173 -- decode + core::trace_shape
+    void retrace(std::vector<std::pair<core::Doc::Id, core::ImageFile>>& files) const;  // category: helper: s173 -- relinks keep an outline
+    // s172: the Colour Libraries window (Shell_libraries.cpp).
+    void open_libraries(const std::string& key = {}, const std::vector<std::string>& pick = {});   // category: helper: s172 -- "doc" / "mine" / "sys:path" / "imp:path"
+    void libraries_list_sync();                 // category: helper: s172 -- the left list
+    void libraries_show(const std::string& key, const std::vector<std::string>& pick = {});   // category: helper: s172 -- a library's chips
+    std::vector<std::size_t> libraries_picked() const;   // category: helper: s172
+    void libraries_buttons_sync();              // category: helper: s172
+    void libraries_add_to_document(const std::vector<std::size_t>& at);   // category: helper: s172 -- one step
+    void libraries_remove();                    // category: helper: s172 -- My Library's colours / an imported library
+    void libraries_import();                    // category: helper: s172
+    void libraries_export(core::swatches::Format want);   // category: helper: s172 -- .ase / .gpl (s175: picked in a menu)
+    std::string my_library_file() const;        // category: helper: s172 -- XDG path
+    int  add_to_my_library(const std::vector<core::Swatch>& colors);   // category: helper: s172 -- merged, saved; -1 = not saved
     void on_index_mark();                       // category: handler: s138 -- Index Entry... at the selection
     void on_edit_index();                       // category: handler: s138 -- the mark beside the cursor
     void open_index_pop(int edit_para, int edit_k);   // category: helper: s138 -- the index entry popover
@@ -208,7 +226,7 @@ private:
     bool focus_is_text() const;                   // category: helper: the keyboard is in a text box
     void sync_inspector();                        // category: helper: toggle + tab follow the panel
     void sync_nav();                              // category: helper: the toggle follows the navigator
-    void tab_hover(bool in);                      // category: helper: the pull tab's shared hover
+    void tab_hover(bool in, bool nav = false);    // category: helper: a pull tab's shared hover (s176: nav = the navigator's)
     void pick_image(std::function<void(const core::ImageFile&)> then);  // category: helper: file dialog + probe
     std::string embed_copy(const core::Asset& a, std::string* err);     // category: helper: copy into <project>/assets
 
@@ -242,6 +260,9 @@ private:
     Gtk::Label       m_insp_tab_glyph;
     std::unique_ptr<views::PanelHandle> m_insp_handle;   // the inspector's inner edge
     sigc::connection m_tab_fade;   // "lit" ends a moment after the pointer leaves
+    widgets::Box     m_nav_tab;    // s176: the navigator's pull tab, on the main view's left edge
+    Gtk::Label       m_nav_tab_glyph;
+    sigc::connection m_nav_tab_fade;
     widgets::Stack  m_main;    // "welcome" / "tiles" / "item"
     widgets::Box    m_welcome;
     views::Navigator m_nav;
@@ -325,6 +346,25 @@ private:
     std::map<const Gtk::FlowBoxChild*, std::string> m_start_paths;
     std::unique_ptr<Gtk::Window>     m_swed;
     // s144: the Sources panel.
+    // s172: the Colour Libraries window.
+    std::unique_ptr<Gtk::Window>     m_lib;
+    Gtk::ListBox*                    m_lib_list = nullptr;
+    Gtk::FlowBox*                    m_lib_chips = nullptr;
+    Gtk::Label*                      m_lib_title = nullptr;
+    Gtk::Label*                      m_lib_sub = nullptr;
+    Gtk::Label*                      m_lib_note = nullptr;
+    Gtk::Button*                     m_lib_add_doc = nullptr;
+    Gtk::Button*                     m_lib_add_mine = nullptr;
+    Gtk::Button*                     m_lib_remove = nullptr;
+    Gtk::Widget*                     m_lib_export = nullptr;   // s175: a menu button (.ase / .gpl)
+    std::vector<std::string>         m_lib_keys;    // each list row's library ("" = a heading)
+    std::vector<std::string>         m_lib_names;   // each chip's colour name
+    std::string                      m_lib_on;      // the library on show
+    core::swatches::Library          m_lib_cur;
+    std::vector<core::swatches::Found> m_lib_found; // the system's palettes, found once
+    bool                             m_lib_found_once = false;
+    bool                             m_lib_quiet = false;
+    bool                             m_lib_note_is_count = true;
     std::unique_ptr<Gtk::Window>     m_sp;
     Gtk::ListBox*                    m_sp_list = nullptr;
     Gtk::Label*                      m_sp_count = nullptr;
@@ -363,6 +403,9 @@ private:
     Gtk::Label*                      m_sw_press = nullptr;
     Gtk::Button*                     m_sw_save = nullptr;
     Gtk::DrawingArea*                m_sw_chip = nullptr;
+    Gtk::DrawingArea*                m_sw_field = nullptr;    // s178: hue strip + saturation / brightness square
+    double                           m_sw_h = 210, m_sw_s = 0.5, m_sw_v = 0.8;   // s178: the field's place (hue kept through greys)
+    bool                             m_sw_field_drag = false;
     std::vector<Gtk::Widget*>        m_sw_rows;                // 4 component rows
     std::vector<Gtk::Label*>         m_sw_labels;
     std::vector<Gtk::Scale*>         m_sw_scales;

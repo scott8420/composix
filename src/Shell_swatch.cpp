@@ -8,6 +8,9 @@
 #include <glibmm/main.h>
 
 #include <cmath>
+#include <algorithm>
+#include <memory>
+#include <gtkmm/gesturedrag.h>
 #include <cstdio>
 
 // Shell_swatch.cpp -- s058: the swatch editor. A sheet: the swatch's name,
@@ -21,6 +24,28 @@
 namespace composix {
 
 namespace {
+// s178: HSV <-> 0xRRGGBB for the colour field (h 0..360, s / v 0..1).
+std::uint32_t hsv_rgb(double h, double s, double v) {
+    h = std::fmod(std::fmod(h, 360.0) + 360.0, 360.0) / 60.0;
+    const double c = v * s, x = c * (1 - std::abs(std::fmod(h, 2.0) - 1)), m = v - c;
+    double r = 0, g = 0, b = 0;
+    if (h < 1) { r = c; g = x; } else if (h < 2) { r = x; g = c; } else if (h < 3) { g = c; b = x; }
+    else if (h < 4) { g = x; b = c; } else if (h < 5) { r = x; b = c; } else { r = c; b = x; }
+    const auto q = [m](double t) { return static_cast<std::uint32_t>(std::lround(std::clamp(t + m, 0.0, 1.0) * 255)); };
+    return (q(r) << 16) | (q(g) << 8) | q(b);
+}
+void rgb_hsv(std::uint32_t c, double& h, double& s, double& v) {
+    const double r = ((c >> 16) & 0xff) / 255.0, g = ((c >> 8) & 0xff) / 255.0, b = (c & 0xff) / 255.0;
+    const double mx = std::max({r, g, b}), mn = std::min({r, g, b}), d = mx - mn;
+    v = mx;
+    s = mx > 0 ? d / mx : 0;
+    if (d <= 0) return;   // a grey: the hue stays where it was
+    if (mx == r) h = 60 * std::fmod((g - b) / d, 6.0);
+    else if (mx == g) h = 60 * ((b - r) / d + 2);
+    else h = 60 * ((r - g) / d + 4);
+    if (h < 0) h += 360;
+}
+constexpr int kStrip = 22, kGap = 8;   // the hue strip at the field's right
 std::string hex_of(std::uint32_t c) {
     char b[8];
     std::snprintf(b, sizeof b, "#%06X", c & 0xFFFFFF);
@@ -82,6 +107,86 @@ void Shell::open_swatch_editor(const std::string& id) {  // helper
             fill(m_sw_after, cw / 2.0, cw / 2.0);
         });
         box->append(*m_sw_chip);
+
+        // s178: the colour field -- pick by eye: saturation across, brightness
+        // up, the hue strip beside. Dragging sets the swatch in its own model.
+        m_sw_field = Gtk::make_managed<Gtk::DrawingArea>();
+        m_sw_field->set_name("swatch.field");
+        m_sw_field->set_content_width(320);
+        m_sw_field->set_content_height(150);
+        m_sw_field->set_cursor(Gdk::Cursor::create("crosshair"));
+        m_sw_field->set_draw_func([this](const Cairo::RefPtr<Cairo::Context>& cr, int cw, int ch) {
+            const int sw = std::max(1, cw - kStrip - kGap);
+            auto sq = Cairo::ImageSurface::create(Cairo::Surface::Format::RGB24, sw, ch);
+            {
+                sq->flush();
+                unsigned char* d = sq->get_data();
+                const int st = sq->get_stride();
+                for (int y = 0; y < ch; ++y)
+                    for (int x = 0; x < sw; ++x)
+                        *reinterpret_cast<std::uint32_t*>(d + y * st + x * 4) =
+                            hsv_rgb(m_sw_h, static_cast<double>(x) / std::max(1, sw - 1), 1.0 - static_cast<double>(y) / std::max(1, ch - 1));
+                sq->mark_dirty();
+            }
+            cr->set_source(sq, 0, 0);
+            cr->paint();
+            // The hue strip.
+            for (int y = 0; y < ch; ++y) {
+                const std::uint32_t c = hsv_rgb(360.0 * y / std::max(1, ch - 1), 1, 1);
+                cr->set_source_rgb(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
+                cr->rectangle(sw + kGap, y, kStrip, 1);
+                cr->fill();
+            }
+            cr->set_line_width(1);
+            cr->set_source_rgba(0, 0, 0, 0.25);
+            cr->rectangle(0.5, 0.5, sw - 1, ch - 1);
+            cr->rectangle(sw + kGap + 0.5, 0.5, kStrip - 1, ch - 1);
+            cr->stroke();
+            // Where it is: a ring on the square, a bar on the strip.
+            const double mx = m_sw_s * (sw - 1), my = (1 - m_sw_v) * (ch - 1), hy = m_sw_h / 360.0 * (ch - 1);
+            cr->set_line_width(2);
+            cr->set_source_rgb(1, 1, 1);
+            cr->arc(mx, my, 6, 0, 2 * M_PI);
+            cr->stroke();
+            cr->set_line_width(1);
+            cr->set_source_rgb(0, 0, 0);
+            cr->arc(mx, my, 7.5, 0, 2 * M_PI);
+            cr->stroke();
+            cr->rectangle(sw + kGap - 2.5, std::round(hy) - 2.5, kStrip + 4, 5);
+            cr->set_source_rgb(1, 1, 1);
+            cr->fill_preserve();
+            cr->set_source_rgb(0, 0, 0);
+            cr->stroke();
+        });
+        {
+            auto drag = Gtk::GestureDrag::create();
+            auto* dp = drag.get();
+            auto strip = std::make_shared<bool>(false);
+            const auto at = [this, strip](double x, double y) {
+                const int cw = m_sw_field->get_width(), ch = m_sw_field->get_height();
+                const int sw = std::max(1, cw - kStrip - kGap);
+                if (*strip) m_sw_h = std::clamp(y / std::max(1, ch - 1), 0.0, 1.0) * 360.0;
+                else {
+                    m_sw_s = std::clamp(x / std::max(1, sw - 1), 0.0, 1.0);
+                    m_sw_v = std::clamp(1.0 - y / std::max(1, ch - 1), 0.0, 1.0);
+                }
+                core::doc::swatch_from_rgb(m_sw, hsv_rgb(m_sw_h, m_sw_s, m_sw_v));
+                m_sw_field_drag = true;   // the field keeps its own place while it leads
+                swatch_editor_sync();
+                m_sw_field_drag = false;
+            };
+            drag->signal_drag_begin().connect([this, at, strip](double x, double y) {
+                const int sw = std::max(1, m_sw_field->get_width() - kStrip - kGap);
+                *strip = x > sw + kGap / 2.0;   // the strip sets the hue; the square the rest
+                at(x, y);
+            });
+            drag->signal_drag_update().connect([at, dp](double dx, double dy) {
+                double sx = 0, sy = 0;
+                if (dp->get_start_point(sx, sy)) at(sx + dx, sy + dy);
+            });
+            m_sw_field->add_controller(drag);
+        }
+        box->append(*m_sw_field);
         m_sw_press = Gtk::make_managed<Gtk::Label>();
         m_sw_press->set_name("swatch.press");
         m_sw_press->add_css_class("cx-export-note");
@@ -233,11 +338,14 @@ void Shell::open_swatch_editor(const std::string& id) {  // helper
 
 void Shell::swatch_editor_sync() {  // helper
     m_sw_quiet = true;
+    struct FieldSync { Shell* s; ~FieldSync() { if (s->m_sw_field) s->m_sw_field->queue_draw(); } } fs{this};
     // The screen colour: the swatch's own until its values change.
     {
         const auto* cur = m_doc.as<core::Swatch>(m_sw_id);
         m_sw.preview = (cur && cur->model == m_sw.model && cur->v == m_sw.v) ? cur->preview : core::doc::swatch_preview(m_sw);
     }
+    // s178: the field follows the colour -- unless it's the one leading.
+    if (!m_sw_field_drag) rgb_hsv(m_sw.preview, m_sw_h, m_sw_s, m_sw_v);
     const int mi = model_index(m_sw.model);
     if (m_sw_model->get_selected() != static_cast<guint>(mi)) m_sw_model->set_selected(static_cast<guint>(mi));
     if (std::string(m_sw_name->get_text()) != m_sw.name) m_sw_name->set_text(m_sw.name);

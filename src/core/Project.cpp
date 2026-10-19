@@ -686,7 +686,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                 : s.model == ColorModel::RGB  ? "RGB \u2014 converts at output"
                                 : s.model == ColorModel::Gray ? "Gray" : "Process (CMYK)";
         // s058: edit it, copy it, delete it (when nothing uses it).
-        Field act{"", "", "swatch", {{"edit", "Edit\u2026"}, {"duplicate", "Duplicate"}}};
+        Field act{"", "", "swatch", {{"edit", "Edit\u2026"}, {"duplicate", "Duplicate"}, {"mine", "Add to My Library"}}};   // s172: mine
         if (uses == 0 && s.name != "Black" && s.name != "Paper") act.choices.push_back({"delete", "Delete"});
         act.buttons = true;
         std::vector<Field> fields{{"Model", model_text(s.model)}, {"Value", swatch_value(s)}, {"Used", used}, {"Type", type}};
@@ -878,8 +878,15 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             fields.push_back({"Shows on", f->across ? "Across the spine" : sides[static_cast<int>(f->side)], "side", ch});
         }
         {   // s018: text wrap -- how this frame pushes OTHER frames' text aside.
-            static const char* names[] = {"None", "Around", "Jump"};
-            fields.push_back({"Wrap", names[static_cast<int>(f->wrap)], "wrap", {{"0", "None"}, {"1", "Around"}, {"2", "Jump"}}});
+            static const char* names[] = {"None", "Around", "Jump", "Shape"};
+            std::vector<Choice> wc{{"0", "None"}, {"1", "Around"}, {"2", "Jump"}};
+            if (f->kind == FrameKind::Image) wc.push_back({"3", "Shape"});   // s173: the picture's own outline
+            fields.push_back({"Wrap", names[static_cast<int>(f->wrap)], "wrap", wc});
+            if (f->wrap == Wrap::Shape) {
+                const auto* a = d.as<Asset>(f->asset);
+                if (!a || a->shape.empty())
+                    fields.push_back({"Shape", "Nothing to trace \u2014 wraps the frame"});
+            }
             if (f->wrap != Wrap::None) {
                 std::vector<Choice> oc;
                 for (double v : {0.0, 3.0, 6.0, 9.0, 12.0, 18.0, 24.0, 36.0}) oc.push_back({pts(v), pts(v) + " pt"});

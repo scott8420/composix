@@ -332,10 +332,11 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
         const auto status = asset ? core::link_status(*asset, P.dir) : core::LinkStatus::Missing;
         const bool missing = status == core::LinkStatus::Missing || status == core::LinkStatus::EmbeddedMissing;
         // s009: the real picture, cropped by its frame.
+        bool pending = false;   // s174: a big picture decodes on its own thread; meanwhile, a quiet plate
         if (asset && !missing) {
             const std::string file = core::resolve_asset(*asset, P.dir);
             int iw = 0, ih = 0;
-            if (auto pic = images::get(file, core::file_stamp(file), &iw, &ih)) {
+            if (auto pic = images::peek(file, core::file_stamp(file), &iw, &ih, &pending)) {
                 cr->save();
                 cr->rectangle(r.x, r.y, r.w, r.h);
                 cr->clip();
@@ -347,6 +348,24 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
                     cr->move_to(r.r(), r.y); cr->line_to(r.r() - 12, r.y); cr->line_to(r.r(), r.y + 12);
                     cr->close_path();
                     cr->fill();
+                }
+                break;
+            }
+        }
+        if (pending) {   // s174: still decoding -- say so
+            {
+                cr->set_source_rgba(0.5, 0.5, 0.55, 0.12 * dim * op);
+                cr->rectangle(r.x, r.y, r.w, r.h);
+                cr->fill();
+                cr->set_source_rgba(0.35, 0.35, 0.4, 0.8 * dim * op);
+                cr->select_font_face("Sans", Cairo::ToyFontFace::Slant::NORMAL, Cairo::ToyFontFace::Weight::NORMAL);
+                cr->set_font_size(std::clamp(r.h * 0.08, 7.0, 13.0));
+                Cairo::TextExtents te;
+                const std::string t = "Loading " + asset->name + "\u2026";
+                cr->get_text_extents(t, te);
+                if (te.width < r.w - 8) {
+                    cr->move_to(r.x + (r.w - te.width) / 2 - te.x_bearing, r.y + r.h / 2 - te.height / 2 - te.y_bearing);
+                    cr->show_text(t);
                 }
                 break;
             }

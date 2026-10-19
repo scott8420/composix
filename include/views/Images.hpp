@@ -11,6 +11,7 @@
 #include <cairomm/context.h>
 #include <cairomm/surface.h>
 
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -26,6 +27,29 @@ std::optional<core::ImageFile> probe(const std::string& path);
 // file's own size (pixels; a vector's own size).
 Cairo::RefPtr<Cairo::ImageSurface> get(const std::string& path, std::int64_t stamp,
                                        int* w = nullptr, int* h = nullptr);
+
+// s174: the picture without waiting -- for the canvas. Ready (decoded,
+// this file time): it, as get. A big one not yet decoded (over kInlinePx
+// pixels): null, `*pending` set, and its decode started on a thread of its
+// own (once); when it's done the ready hook runs on the main loop. A small
+// one decodes here and now. Any thread.
+inline constexpr long kInlinePx = 2'000'000;
+Cairo::RefPtr<Cairo::ImageSurface> peek(const std::string& path, std::int64_t stamp,
+                                        int* w = nullptr, int* h = nullptr, bool* pending = nullptr);
+// s174: how many times this file has come in from its own thread (0: never
+// -- it was small, or it's still coming). What a cached page image keys on,
+// so a page drawn with "Loading" is drawn again once its picture is in.
+int arrivals(const std::string& path);
+// s174: run (on the main loop) when a background decode finishes. One hook.
+void set_ready_hook(std::function<void()> f);
+
+// s173 (s175: here, for the canvas too): a picture's outline for a Shape
+// wrap, traced from its screen decode (core::trace_shape). Empty when it
+// can't be read or has nothing to trace.
+std::vector<float> trace(const std::string& path, std::int64_t stamp);
+// s177: the screen decode's pixels, 0xAARRGGBB (premultiplied), w x h,
+// rows packed; empty when it can't be read.
+std::vector<std::uint32_t> pixels(const std::string& path, std::int64_t stamp, int& w, int& h);
 
 // Paint a picture stretched into x, y, w, h (the caller clips).
 void paint(const Cairo::RefPtr<Cairo::Context>& cr, const Cairo::RefPtr<Cairo::ImageSurface>& pic,

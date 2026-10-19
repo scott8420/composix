@@ -1,4 +1,5 @@
 #include "views/Inspector.hpp"
+#include <gtkmm/flowbox.h>
 #include "core/Doc.hpp"
 
 #include <memory>
@@ -279,7 +280,15 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             ~Rows() { for (int r = row0; r < row; ++r) out[r] = g; }
         } rows_mark{row, row, row_group, f.group};
         if (f.buttons) {   // s009: actions -- a row of buttons under the fields
-            auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            // s179: a FlowBox -- a row too long for the panel wraps (a swatch's
+            // four buttons cut the last off in s172).
+            auto box = Gtk::make_managed<Gtk::FlowBox>();
+            box->set_selection_mode(Gtk::SelectionMode::NONE);
+            box->set_homogeneous(false);
+            box->set_column_spacing(6);
+            box->set_row_spacing(6);
+            box->set_max_children_per_line(8);
+            box->set_valign(Gtk::Align::START);
             box->set_name("inspector.actions." + f.edit);
             box->add_css_class("cx-insp-actions");
             for (const auto& c : f.choices) {
@@ -289,6 +298,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
                 const std::string key = f.edit, id = c.id;
                 b->signal_clicked().connect([this, key, id] { m_edit.emit(key, id); });
                 box->append(*b);
+                if (auto* ch = b->get_parent()) ch->set_focusable(false);   // the button takes focus, not its slot
             }
             m_fields.attach(*box, 0, row, 2, 1);
             ++row;

@@ -36,6 +36,7 @@ public:
     void     set_tile_size(core::Segment s, TileSize z);   // quietly: no signal
     sigc::signal<void(core::Segment, TileSize)>& signal_tile_size() { return m_size_sig; }
     sigc::signal<void()>&         signal_new()       { return m_new_sig; }   // s058: Colors' New Swatch
+    sigc::signal<void()>&         signal_libraries() { return m_lib_sig; }   // s172: Colors' Libraries...
     // s062: a master dropped on page tiles: (master, pages).
     sigc::signal<void(const std::string&, const std::vector<std::string>&)>& signal_master_drop() { return m_master_drop; }
 
@@ -69,8 +70,10 @@ private:
     std::map<core::Segment, TileSize> m_size_of;   // s080: each section's
     sigc::signal<void(core::Segment, TileSize)> m_size_sig;
     sigc::signal<void()>    m_new_sig;
+    sigc::signal<void()>    m_lib_sig;     // s172
     sigc::signal<void(const std::string&, const std::vector<std::string>&)> m_master_drop;
     Gtk::Widget*            m_new_btn = nullptr;
+    Gtk::Widget*            m_lib_btn = nullptr;   // s172
     core::Outline           m_last;      // the section on show, to redraw at another size
     core::Segment           m_seg = core::Segment::Document;
     bool                    m_shown = false;

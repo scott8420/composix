@@ -290,6 +290,7 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_tiles.signal_selection().connect(sigc::mem_fun(*this, &Shell::on_tiles_selection));
     m_tiles.signal_open().connect(sigc::mem_fun(*this, &Shell::on_tiles_open));
     m_tiles.signal_new().connect([this] { open_swatch_editor({}); });   // s058
+    m_tiles.signal_libraries().connect([this] { open_libraries(); });   // s172
     // s062: a master dropped on pages (tiles, navigator rows, the canvas).
     const auto master_drop = [this](const std::string& master, const std::vector<std::string>& pages) {
         const bool did = core::doc::set_master(m_journal, m_doc, pages, master);

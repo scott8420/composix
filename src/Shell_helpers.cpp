@@ -1,4 +1,5 @@
 #include "Shell.hpp"
+#include <cstring>
 #include "layout/Export.hpp"   // s163: a style's specimen
 #include "plate/plate.hpp"
 #include "views/Images.hpp"
@@ -116,6 +117,10 @@ void Shell::refresh() {  // helper
     if (m_np && m_np->get_visible()) notes_panel_sync();   // s121
     if (m_xp && m_xp->get_visible()) xrefs_panel_sync();   // s133
     if (m_sp && m_sp->get_visible()) sources_panel_sync();   // s144
+    if (m_lib && m_lib->get_visible()) {   // s172: This Document's count; its chips when on show
+        libraries_list_sync();
+        if (m_lib_on == "doc") libraries_show("doc");
+    }
     m_pf_flows.set_reflow_budget(reflow_budget());   // s106 (a forget() or an adopt() replaced the cache)
     // s101: a slow refresh (100 ms+) says so -- with the canvas's draw line,
     // what a change costs. The flow it pays is shared with the canvas.
@@ -507,8 +512,15 @@ void Shell::update_undo_ui() {  // helper
 
 void Shell::sync_nav() {  // helper: the header toggle + View check follow the navigator
     if (!m_nav_handle) return;
+    const bool open = m_nav_handle->open();
     if (auto a = std::dynamic_pointer_cast<Gio::SimpleAction>(lookup_action("toggle-nav")))
-        a->change_state(m_nav_handle->open());
+        a->change_state(open);
+    // s176: the pull tab follows, as the inspector's.
+    m_nav_tab_glyph.set_text(open ? "\u2039" : "\u203A");   // < push back  /  > pull out
+    m_nav_tab.set_tooltip_text(open ? "Drag to size the navigator; click to push it back  (Ctrl+Alt+1)"
+                                    : "Click or drag to pull out the navigator  (Ctrl+Alt+1)");
+    if (open) m_nav_tab.add_css_class("cx-open");
+    else      m_nav_tab.remove_css_class("cx-open");
 }
 
 // The header toggle, the View menu's check and the pull tab all follow the
@@ -565,6 +577,31 @@ void Shell::pick_image(std::function<void(const core::ImageFile&)> then) {  // h
             if (auto lg = log::get(log::Area::Io)) lg->info("place: dismissed ({})", e.what());
         }
     });
+}
+
+// s173: a picture's outline, traced from its screen decode (at most
+// images::kMaxPx a side -- plenty for an outline). Empty when it can't be
+// read or there's nothing to trace.
+std::vector<float> Shell::trace_asset(const core::Asset& a) const {  // helper
+    return views::images::trace(core::resolve_asset(a, m_project_dir), a.stamp);
+}
+
+bool Shell::wrap_to_shape(const std::vector<std::string>& frames) {  // helper
+    std::map<core::Doc::Id, std::vector<float>> traced;
+    for (const auto& id : frames)
+        if (const auto* f = m_doc.as<core::Frame>(id); f && f->kind == core::FrameKind::Image)
+            if (const auto* a = m_doc.as<core::Asset>(f->asset); a && a->shape.empty() && !traced.count(f->asset))
+                traced[f->asset] = trace_asset(*a);
+    const bool did = core::doc::set_wrap_shape(m_journal, m_doc, frames, traced);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("wrap to shape: {} frame(s), {} traced: {}", frames.size(), traced.size(), did ? "step" : "no change");
+    return did;
+}
+
+// s173: files about to replace assets' (relink / update): an asset with an
+// outline gets its new file's.
+void Shell::retrace(std::vector<std::pair<core::Doc::Id, core::ImageFile>>& files) const {  // helper
+    for (auto& [id, f] : files)
+        if (const auto* a = m_doc.as<core::Asset>(id); a && !a->shape.empty()) f.shape = views::images::trace(f.path, f.stamp);
 }
 
 // s063: Place picks several -- each read; any that isn't a picture is
