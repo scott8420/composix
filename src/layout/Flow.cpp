@@ -2654,9 +2654,10 @@ core::TextPos hit_text(const core::Doc& d, const std::string& story, const Story
     // x, nearest across when none does; among them the line under y.
     int band = 0;
     if (fr && std::any_of(ft->lines.begin(), ft->lines.end(), [](const Line& l) { return l.band > 0; })) {
+        struct Span2 { double x0, x1; };   // (no std::pair of doubles by value: GCC's psabi note -- RULES)
         const auto extent = [&](const Line& l) {
             const double x0 = l.cw > 0 ? l.x : core::column_x(*fr, l.col);
-            return std::pair<double, double>{x0, x0 + line_width_of(*fr, l)};
+            return Span2{x0, x0 + line_width_of(*fr, l)};
         };
         double best = 1e18;
         for (const auto& l : ft->lines) {   // how far x is from the nearest line's column
