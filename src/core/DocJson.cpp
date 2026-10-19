@@ -212,6 +212,7 @@ json to(const Record& r) {
         } else if constexpr (std::is_same_v<T, Swatch>) {
             j = {{"kind", "swatch"}, {"name", v.name}, {"pos", v.pos}, {"model", en(v.model)},
                  {"v", v.v}, {"spot", v.spot}, {"preview", v.preview}};
+            if (!v.from.empty()) j["from"] = v.from;   // s171
         } else if constexpr (std::is_same_v<T, Asset>) {
             j = {{"kind", "asset"}, {"name", v.name}, {"pos", v.pos}, {"path", v.path},
                  {"embedded", v.embedded}, {"color", v.color}, {"px_w", v.px_w}, {"px_h", v.px_h},
@@ -492,6 +493,7 @@ std::optional<Record> from(const json& j) {
         v.v = val(j, "v", std::array<double, 4>{});
         v.spot = val<std::string>(j, "spot", "");
         v.preview = val(j, "preview", v.preview);
+        v.from = val<std::string>(j, "from", "");   // s171
         return v;
     }
     if (k == "asset") {

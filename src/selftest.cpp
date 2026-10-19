@@ -29,6 +29,7 @@
 #include "core/Undo.hpp"
 #include "core/TextMap.hpp"
 #include "core/Hyphen.hpp"
+#include "core/Swatches.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -9372,6 +9373,170 @@ int main() {
         }
     }
 
+
+    // ── s171: colour libraries -- the formats, My Library, the system's palettes ──
+    {
+        std::cout << "--- s171 colour libraries ---\n";
+        namespace SW = core::swatches;
+        namespace D = core::doc;
+        using CM = core::ColorModel;
+        const auto near = [](std::uint32_t a, std::uint32_t b, int tol) {
+            for (int sh : {16, 8, 0})
+                if (std::abs(static_cast<int>((a >> sh) & 0xFF) - static_cast<int>((b >> sh) & 0xFF)) > tol) return false;
+            return true;
+        };
+        check("Lab: white, black, mid grey", SW::lab_to_rgb(100, 0, 0) == 0xFFFFFF && SW::lab_to_rgb(0, 0, 0) == 0 &&
+                                               near(SW::lab_to_rgb(50, 0, 0), 0x777777, 2));
+        // ASE: written, read back -- CMYK, RGB, Gray, a spot, a name past ASCII.
+        std::vector<core::Swatch> four{
+            {"Teal", 0, CM::CMYK, {80, 0, 30, 10}},
+            {"Brick", 0, CM::RGB, {170, 60, 40, 0}},
+            {"Half", 0, CM::Gray, {50, 0, 0, 0}},
+            {"Café Ü", 0, CM::Spot, {0, 60, 100, 0}, "Café Ü"}};
+        for (auto& c : four) c.preview = D::swatch_preview(c);
+        const std::string ase = SW::to_ase(four);
+        check("ASE: sniffed", SW::format_of("x.bin", ase) == SW::Format::ASE);
+        const auto a = SW::parse(ase, SW::Format::ASE);
+        bool ase_ok = a && a->colors.size() == 4;
+        for (std::size_t i = 0; ase_ok && i < 4; ++i) {
+            const auto& g = a->colors[i];
+            ase_ok = g.name == four[i].name && g.model == four[i].model;
+            for (int k = 0; k < 4; ++k) ase_ok = ase_ok && std::abs(g.v[static_cast<std::size_t>(k)] - four[i].v[static_cast<std::size_t>(k)]) < 0.01;
+        }
+        check("ASE: CMYK, RGB, Gray and a spot back as they went", ase_ok);
+        check("ASE: the spot keeps its ink", ase_ok && a->colors[3].spot == "Café Ü");
+        check("ASE: cut short -- refused or what was whole", !SW::parse("ASEF", SW::Format::ASE) || SW::parse("ASEF", SW::Format::ASE)->colors.empty());
+        {   // An ASE colour in Lab, by hand: L 0.5 (50), a 0, b 0.
+            std::string b = "ASEF";
+            const auto put = [&](std::uint32_t v, int n) { for (int i = n - 1; i >= 0; --i) b += static_cast<char>((v >> (8 * i)) & 0xFF); };
+            const auto f32 = [&](float f) { std::uint32_t v; std::memcpy(&v, &f, 4); put(v, 4); };
+            put(1, 2); put(0, 2); put(3, 4);
+            put(0xC001, 2); put(8, 4); put(3, 2); put('G', 2); put('1', 2); put(0, 2);   // a group
+            put(1, 2); put(2 + 4 + 4 + 12 + 2, 4); put(2, 2); put('L', 2); put(0, 2);
+            b += "LAB "; f32(0.5f); f32(0.f); f32(0.f); put(2, 2);
+            put(0xC002, 2); put(0, 4);
+            const auto lab = SW::parse(b, SW::Format::ASE);
+            check("ASE: a Lab colour inside a group -- RGB, its look", lab && lab->colors.size() == 1 && lab->colors[0].model == CM::RGB &&
+                                                                    lab->colors[0].name == "L" && near(lab->colors[0].preview, 0x777777, 2));
+        }
+        // GPL.
+        const std::string gpl = "GIMP Palette\nName: Earth\nColumns: 4\n# a comment\n255   0   0\tRed\n 0 128 0 Leaf Green\n10 20 30\n";
+        const auto g = SW::parse(gpl, SW::Format::GPL);
+        check("GPL: sniffed, named, three colours", SW::format_of("p.txt", gpl) == SW::Format::GPL && g && g->name == "Earth" &&
+                                                   g->colors.size() == 3 && g->colors[1].name == "Leaf Green" && g->colors[1].v[1] == 128 &&
+                                                   g->colors[2].name == "#0A141E");
+        {
+            const auto back = SW::parse(SW::to_gpl("Mine", four), SW::Format::GPL);
+            check("GPL: written -- the screen colours, named", back && back->name == "Mine" && back->colors.size() == 4 &&
+                                                               back->colors[0].preview == four[0].preview && back->colors[3].name == four[3].name);
+        }
+        // LibreOffice .soc.
+        const std::string soc = R"(<?xml version="1.0" encoding="UTF-8"?>
+<ooo:color-table xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0">
+<draw:color draw:name="Dark Red 2" draw:color="#a51d2d"/>
+<draw:color draw:name="Salt &amp; Pepper" draw:color="#808080"/>
+</ooo:color-table>)";
+        const auto so = SW::parse(soc, SW::format_of("standard.soc", soc));
+        check("SOC: two colours, entities decoded", so && so->colors.size() == 2 && so->colors[0].preview == 0xA51D2D &&
+                                                     so->colors[1].name == "Salt & Pepper");
+        // Scribus: old (CMYK="#..") and new (Space=) attributes, a spot.
+        const std::string scx = R"(<?xml version="1.0"?><SCRIBUSCOLORS Name="Press">
+<COLOR NAME="Cyan" CMYK="#ff000000" Spot="0"/>
+<COLOR NAME="Web" RGB="#336699"/>
+<COLOR Space="CMYK" NAME="Gold Ink" C="0" M="20" Y="80" K="10" Spot="1" Register="0"/>
+</SCRIBUSCOLORS>)";
+        const auto sc = SW::parse(scx, SW::format_of("press.xml", scx));
+        check("Scribus: named, CMYK by hex and by parts, RGB, a spot", sc && sc->name == "Press" && sc->colors.size() == 3 &&
+                                                                        sc->colors[0].model == CM::CMYK && std::abs(sc->colors[0].v[0] - 100) < 0.01 &&
+                                                                        sc->colors[1].preview == 0x336699 && sc->colors[2].model == CM::Spot &&
+                                                                        sc->colors[2].spot == "Gold Ink" && sc->colors[2].v[2] == 80);
+        // Photoshop .aco: version 1 then version 2 (named).
+        {
+            std::string b;
+            const auto put = [&](std::uint32_t v, int n) { for (int i = n - 1; i >= 0; --i) b += static_cast<char>((v >> (8 * i)) & 0xFF); };
+            const auto colours = [&] {
+                put(0, 2); put(65535, 2); put(0, 2); put(0, 2); put(0, 2);           // RGB red
+                put(2, 2); put(0, 2); put(65535, 2); put(65535, 2); put(65535, 2);   // CMYK: 100 C (inverted)
+            };
+            put(1, 2); put(2, 2); colours();
+            put(2, 2); put(2, 2);
+            put(0, 2); put(65535, 2); put(0, 2); put(0, 2); put(0, 2); put(4, 4); for (char c : std::string("Red")) put(static_cast<unsigned char>(c), 2); put(0, 2);
+            put(2, 2); put(0, 2); put(65535, 2); put(65535, 2); put(65535, 2); put(5, 4); for (char c : std::string("Cyan")) put(static_cast<unsigned char>(c), 2); put(0, 2);
+            const auto ac = SW::parse(b, SW::format_of("old.aco", b));
+            check("ACO: version 2's names, RGB and inverted CMYK", ac && ac->colors.size() == 2 && ac->colors[0].name == "Red" &&
+                                                                   ac->colors[0].preview == 0xFF0000 && ac->colors[1].name == "Cyan" &&
+                                                                   std::abs(ac->colors[1].v[0] - 100) < 0.01 && ac->colors[1].v[1] < 0.01);
+        }
+        check("unknown bytes: refused", !SW::parse("hello", SW::format_of("x.txt", "hello")));
+        // Files, and My Library (lossless).
+        const auto tmp = std::filesystem::temp_directory_path() / ("cx_swatch_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::remove_all(tmp);
+        {
+            const std::string f = (tmp / "out" / "set.ase").string();
+            check("write ASE, read it: named by the file", SW::write_file(f, "Set", four, SW::Format::ASE) &&
+                                                          SW::read_file(f) && SW::read_file(f)->name == "set" && SW::read_file(f)->colors.size() == 4);
+            check("SOC isn't written", !SW::write_file((tmp / "x.soc").string(), "x", four, SW::Format::SOC) && !SW::writable(SW::Format::SOC));
+            auto mine = SW::load_mine((tmp / "lib" / "my-library.json").string());
+            check("My Library: missing is empty, its kind", mine.colors.empty() && mine.kind == SW::LibKind::Mine && mine.name == "My Library");
+            auto tagged = four;
+            tagged[0].from = "Earth";
+            check("merge: four in", SW::merge_into(mine, tagged) == 4);
+            auto other = four[1];
+            other.v = {10, 10, 10, 0};
+            check("merge: the same skipped, a taken name numbered", SW::merge_into(mine, {four[0], other}) == 1 &&
+                                                                     mine.colors.back().name == "Brick 2");
+            check("My Library: saved", SW::save_mine(mine));
+            const auto again = SW::load_mine(mine.path);
+            check("My Library: back as it was, where it came from too", again.colors == mine.colors && again.colors[0].from == "Earth");
+        }
+        {   // The system's palettes: GIMP 2 and 3 shipping one file once, Inkscape's, Scribus's (a folder down), a stray XML left out.
+            const auto data = tmp / "share", home = tmp / "home";
+            const auto mk = [](const std::filesystem::path& p, const std::string& text) {
+                std::filesystem::create_directories(p.parent_path());
+                std::ofstream(p) << text;
+            };
+            mk(data / "gimp" / "2.0" / "palettes" / "Web.gpl", gpl);
+            mk(data / "gimp" / "3.0" / "palettes" / "Web.gpl", gpl);
+            mk(data / "inkscape" / "palettes" / "Tango.gpl", gpl);
+            mk(data / "scribus" / "swatches" / "Press" / "press.xml", scx);
+            mk(data / "scribus" / "swatches" / "readme.xml", "<html/>");
+            mk(home / ".config" / "GIMP" / "3.0" / "palettes" / "Mine.gpl", gpl);
+            const auto found = SW::system_palettes(home.string(), {data.string()});
+            std::vector<std::string> got;
+            for (const auto& f : found) got.push_back(f.source + ":" + std::filesystem::path(f.path).filename().string());
+            check("system palettes: each once, by source, palettes only",
+                  got == std::vector<std::string>{"GIMP:Mine.gpl", "GIMP:Web.gpl", "Inkscape:Tango.gpl", "Scribus:press.xml"});
+        }
+        std::filesystem::remove_all(tmp);
+        // Into the document: one step, from noted; again is nothing; a taken name numbered; undo.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::NewDoc n;
+        n.pages = 1;
+        core::new_document(d, n);
+        const auto before = d.ids_of<core::Swatch>().size();
+        const auto steps = j.size();
+        const auto ids = D::add_library_swatches(j, d, {four[0], four[3], four[0]}, "Earth");
+        check("library into the document: one step, two new, the repeat is the first",
+              j.size() == steps + 1 && d.ids_of<core::Swatch>().size() == before + 2 && ids.size() == 3 && ids[0] == ids[2] &&
+                  d.as<core::Swatch>(ids[0]) && d.as<core::Swatch>(ids[0])->from == "Earth" && d.as<core::Swatch>(ids[1])->model == CM::Spot);
+        const auto again = D::add_library_swatches(j, d, {four[0]}, "Earth");
+        check("library into the document: there already -- no step, its id", j.size() == steps + 1 && again[0] == ids[0]);
+        auto teal2 = four[0];
+        teal2.v = {0, 0, 0, 100};
+        const auto renamed = D::add_library_swatches(j, d, {teal2}, "Other");
+        check("library into the document: a taken name numbered", d.as<core::Swatch>(renamed[0])->name == "Teal 2" &&
+                                                                  d.as<core::Swatch>(renamed[0])->from == "Other");
+        {
+            core::Doc e;
+            check("from: saved with the document", core::from_json(e, core::to_json(d)) && e.as<core::Swatch>(ids[0]) &&
+                                                   e.as<core::Swatch>(ids[0])->from == "Earth");
+        }
+        j.undo();
+        j.undo();
+        check("library into the document: undone", d.ids_of<core::Swatch>().size() == before);
+    }
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";
     return g_fail == 0 ? 0 : 1;

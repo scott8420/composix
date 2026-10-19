@@ -689,8 +689,10 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         Field act{"", "", "swatch", {{"edit", "Edit\u2026"}, {"duplicate", "Duplicate"}}};
         if (uses == 0 && s.name != "Black" && s.name != "Paper") act.choices.push_back({"delete", "Delete"});
         act.buttons = true;
-        o.add({sid, G::Colors, s.name, badge, {K::Swatch, 1, 1, doc::screen_rgb(s)},
-               {{"Model", model_text(s.model)}, {"Value", swatch_value(s)}, {"Used", used}, {"Type", type}, act}, group});
+        std::vector<Field> fields{{"Model", model_text(s.model)}, {"Value", swatch_value(s)}, {"Used", used}, {"Type", type}};
+        if (!s.from.empty()) fields.push_back({"From", s.from});   // s171: the library it was taken from
+        fields.push_back(act);
+        o.add({sid, G::Colors, s.name, badge, {K::Swatch, 1, 1, doc::screen_rgb(s)}, fields, group});
     }
 
     // ── Footnotes (s115): each one, story by story, in order ────────────────

@@ -46,6 +46,7 @@ add_library(composix_core STATIC
     src/core/Sample.cpp
     src/core/NewDoc.cpp
     src/core/Find.cpp
+    src/core/Swatches.cpp
     src/core/DocJson.cpp
     src/core/Project.cpp
     # s038: hyphenation -- Liang's algorithm; the TeX patterns embedded below.

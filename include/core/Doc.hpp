@@ -462,6 +462,7 @@ struct Swatch {
     std::array<double, 4> v{};          // CMYK 0-100 / RGB 0-255 / gray 0-100
     std::string           spot;          // the ink's name, for Spot
     std::uint32_t         preview = 0x808080;   // what the screen shows (spot / CMYK approximation)
+    std::string           from;          // s171: the library it was taken from ("" = made here)
     bool operator==(const Swatch&) const = default;
 };
 

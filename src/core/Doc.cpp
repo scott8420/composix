@@ -1,4 +1,5 @@
 #include "core/Doc.hpp"
+#include "core/Swatches.hpp"
 
 #include <map>
 #include <algorithm>
@@ -3841,6 +3842,10 @@ const std::vector<Verb>& verbs() {
              s.v = {20, 120, 200, 0};
              edit_swatch(j, d, "swatch.4", s);
          }},
+        {"add_library_swatches", [](DocJournal& j, Doc& d) {   // s171
+            doc::add_library_swatches(j, d, {Swatch{"Lib Red", 0, ColorModel::RGB, {200, 30, 30, 0}, "", 0xC81E1E},
+                                             Swatch{"Lib Ink", 0, ColorModel::Spot, {0, 80, 90, 0}, "Lib Ink", 0xFF331A}}, "Test Library");
+        }},
         {"duplicate_swatch", [](DocJournal& j, Doc& d) { duplicate_swatch(j, d, "swatch.3"); }},
         {"delete_unused_swatch", [](DocJournal& j, Doc& d) { delete_swatch(j, d, "swatch.4"); }},
         {"delete_unused_style", [](DocJournal& j, Doc& d) { delete_styles(j, d, {"style.6", "style.1"}); }},  // Body is used: stays
