@@ -3,6 +3,7 @@
 #include "views/Images.hpp"
 #include "views/PagePaint.hpp"
 #include "views/Ruler.hpp"
+#include "layout/Export.hpp"   // s180: sample_page
 #include "layout/Flow.hpp"
 #include "Log.hpp"
 
@@ -69,6 +70,7 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
         auto right = Gtk::GestureClick::create();
         right->set_button(GDK_BUTTON_SECONDARY);
         right->signal_pressed().connect([this](int, double x, double y) {
+            if (m_take) { cancel_take(); return; }   // s180: the eyedropper put down
             if (editing() || m_drag != Drag::None) return;
             grab_focus();
             double lx = 0, ly = 0;
@@ -818,6 +820,42 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
             }
         }
     }
+    // s180: the eyedropper -- the colour under the pointer, its hex, and how to stop.
+    if (m_take && m_in) {
+        char hx[64];
+        if (m_take_under) std::snprintf(hx, sizeof hx, "#%06X", *m_take_under & 0xFFFFFFu);
+        else std::snprintf(hx, sizeof hx, "%s", "Over a page");
+        auto lay = create_pango_layout(std::string(hx) + "  \u00b7  click to take, Esc to stop");
+        lay->set_font_description(Pango::FontDescription("Sans 9"));
+        int lw, lh;
+        lay->get_pixel_size(lw, lh);
+        const double cs = 26, x = std::round(m_mx + 16), y = std::round(m_my + 14);
+        cr->set_source_rgba(0, 0, 0, 0.25);   // the chip, with a shadow and a two-tone edge
+        cr->rectangle(x + 1, y + 1, cs, cs);
+        cr->fill();
+        if (m_take_under) {
+            const auto c = *m_take_under;
+            cr->set_source_rgb(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
+        } else {
+            cr->set_source_rgb(0.85, 0.85, 0.85);
+        }
+        cr->rectangle(x, y, cs, cs);
+        cr->fill();
+        cr->set_line_width(1);
+        cr->set_source_rgb(1, 1, 1);
+        cr->rectangle(x + 0.5, y + 0.5, cs - 1, cs - 1);
+        cr->stroke();
+        cr->set_source_rgba(0, 0, 0, 0.6);
+        cr->rectangle(x - 0.5, y - 0.5, cs + 1, cs + 1);
+        cr->stroke();
+        const double tx = x + cs + 8, ty = y + (cs - lh) / 2;
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.92);
+        cr->rectangle(tx - 5, ty - 2, lw + 10, lh + 4);
+        cr->fill();
+        cr->set_source_rgb(1, 1, 1);
+        cr->move_to(tx, ty);
+        lay->show_in_cairo_context(cr);
+    }
     if (m_drag == Drag::Marquee) {
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.12);
         cr->rectangle(m_marquee.x, m_marquee.y, m_marquee.w, m_marquee.h);
@@ -856,6 +894,18 @@ void Canvas::on_drag_begin(double x, double y) {
         m_ox0 = m_vp.ox();
         m_oy0 = m_vp.oy();
         set_cursor(Gdk::Cursor::create("grabbing"));
+        return;
+    }
+    if (m_take) {   // s180: the eyedropper -- a click on a page takes its colour
+        m_drag = Drag::None;
+        const auto c = colour_at(x, y);
+        if (!c) return;   // off the pages: still waiting
+        auto done = std::move(m_take);
+        m_take = nullptr;
+        m_take_under.reset();
+        update_cursor();
+        queue_draw();
+        done(c);
         return;
     }
     read_mods();
@@ -1426,6 +1476,7 @@ void Canvas::cancel_drag() {
 }
 
 bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
+    if (m_take && kv == GDK_KEY_Escape) { cancel_take(); return true; }   // s180
     if (editing()) return edit_key(kv, st);
     const bool shift = (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
     const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
@@ -1529,6 +1580,11 @@ void Canvas::on_motion(double x, double y) {
     m_in = true;
     m_sig_view.emit();
     if (!m_load.empty()) queue_draw();   // the file's name rides with the pointer
+    if (m_take) {   // s180: the colour under the pointer rides with it
+        m_take_under = colour_at(x, y);
+        queue_draw();
+        return;
+    }
     if (m_drag != Drag::None) return;
     double dx, dy;
     m_vp.to_doc(x, y, dx, dy);
@@ -1541,6 +1597,7 @@ void Canvas::on_motion(double x, double y) {
 }
 
 void Canvas::set_tool(Tool t) {
+    cancel_take();   // s180
     end_edit();
     m_tool = t;
     m_thread_from.clear();
@@ -2100,6 +2157,45 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
 }
 
 // ── s009: placing images ────────────────────────────────────────────────────
+void Canvas::take_colour(std::function<void(std::optional<std::uint32_t>)> done) {   // s180
+    cancel_take();
+    end_edit();
+    if (m_drag != Drag::None) cancel_drag();
+    m_thread_from.clear();
+    m_load.clear();
+    m_take = std::move(done);
+    m_take_under = m_in ? colour_at(m_mx, m_my) : std::nullopt;
+    grab_focus();
+    update_cursor();
+    queue_draw();
+}
+
+void Canvas::cancel_take() {   // s180
+    if (!m_take) return;
+    auto done = std::move(m_take);
+    m_take = nullptr;
+    m_take_under.reset();
+    update_cursor();
+    queue_draw();
+    done(std::nullopt);
+}
+
+std::optional<std::uint32_t> Canvas::colour_at(double x, double y) const {   // s180
+    double lx = 0, ly = 0;
+    m_vp.to_doc(x, y, lx, ly);
+    for (const auto& p : m_placed) {
+        if (!p.r.contains(lx, ly)) continue;
+        const std::string dir = m_dir;
+        const layout::ImageSource pics = [dir](const core::Asset& a, double, double) -> cairo_surface_t* {
+            auto pic = images::get(core::resolve_asset(a, dir), a.stamp);
+            return pic ? cairo_surface_reference(pic->cobj()) : nullptr;
+        };
+        return layout::sample_page(m_doc, p.id, flows(), pics, lx - p.r.x, ly - p.r.y,
+                                   std::min(1.0, 3 / m_vp.scale()));   // at most a point: type gives its ink at any zoom
+    }
+    return std::nullopt;
+}
+
 void Canvas::load_image(const core::ImageFile& f) { load_images({f}); }
 
 void Canvas::load_images(std::vector<core::ImageFile> files) {
@@ -2180,6 +2276,7 @@ bool Canvas::on_drop(const Glib::ValueBase& v, double x, double y) {
 
 void Canvas::update_cursor() {
     if (m_space) { set_cursor(Gdk::Cursor::create(m_drag == Drag::Pan ? "grabbing" : "grab")); return; }
+    if (m_take) { set_cursor(Gdk::Cursor::create("crosshair")); return; }   // s180: the eyedropper
     if (!m_thread_from.empty() || !m_load.empty()) { set_cursor(Gdk::Cursor::create("copy")); return; }   // loaded
     if (!out_port_hit(m_mx, m_my).empty() && !editing()) { set_cursor(Gdk::Cursor::create("pointer")); return; }
     if (editing() || m_tool == Tool::Text) {   // s010: the I-beam over text you can type in

@@ -4,6 +4,7 @@
 
 #include <gtkmm/box.h>
 #include <gtkmm/grid.h>
+#include <gtkmm/image.h>
 #include <gtkmm/stringlist.h>
 #include <glibmm/main.h>
 
@@ -187,6 +188,23 @@ void Shell::open_swatch_editor(const std::string& id) {  // helper
             m_sw_field->add_controller(drag);
         }
         box->append(*m_sw_field);
+        // s180: the eyedropper -- the sheet steps aside, a click on a page
+        // gives the colour there (as it prints), and the sheet comes back.
+        {
+            auto row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            m_sw_take = Gtk::make_managed<Gtk::Button>();
+            m_sw_take->set_name("swatch.take");
+            auto in = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            auto icon = Gtk::make_managed<Gtk::Image>();
+            icon->set_from_icon_name("color-select-symbolic");
+            in->append(*icon);
+            in->append(*Gtk::make_managed<Gtk::Label>("Take from Page"));
+            m_sw_take->set_child(*in);
+            m_sw_take->set_tooltip_text("Click anywhere on a page to take its colour — Esc to stop");
+            m_sw_take->signal_clicked().connect([this] { swatch_take_colour(); });
+            row->append(*m_sw_take);
+            box->append(*row);
+        }
         m_sw_press = Gtk::make_managed<Gtk::Label>();
         m_sw_press->set_name("swatch.press");
         m_sw_press->add_css_class("cx-export-note");
@@ -312,6 +330,12 @@ void Shell::open_swatch_editor(const std::string& id) {  // helper
             m_swed->set_visible(false);
         });
     }
+    // s180: opened again while the eyedropper waits (from another swatch):
+    // the canvas lets go, and stays where the user went.
+    if (m_canvas_view.canvas().taking_colour()) {
+        m_sw_back.reset();
+        m_canvas_view.canvas().cancel_take();
+    }
     // The swatch, or a new one (a mid grey-blue in CMYK to start).
     m_sw_id = id;
     if (const auto* s = m_doc.as<core::Swatch>(id)) m_sw = *s;
@@ -334,6 +358,55 @@ void Shell::open_swatch_editor(const std::string& id) {  // helper
     m_swed->set_transient_for(*this);
     m_swed->present();
     m_sw_name->grab_focus();
+}
+
+void Shell::swatch_take_colour() {  // helper
+    auto& cv = m_canvas_view.canvas();
+    const bool on_canvas = m_main.get_visible_child_name() == "canvas";
+    // Pages to take from: the canvas's (still there), else the first page.
+    std::vector<std::string> show;
+    if (!on_canvas) {
+        for (const auto& id : cv.shown())
+            if (m_doc.as<core::Page>(id) || m_doc.as<core::Master>(id)) show.push_back(id);
+        if (show.empty()) {
+            const core::Page* best = nullptr;
+            for (const auto& id : m_doc.pages()) {
+                const auto* pg = m_doc.as<core::Page>(id);
+                if (pg && (!best || pg->pos < best->pos)) { best = pg; show = {id}; }
+            }
+        }
+        if (show.empty()) return;   // no pages: nothing to take from
+        m_sw_back = m_pick;
+        m_sw_back_tiles = m_pick.segment ? m_tiles.selected() : std::vector<std::string>{};
+    } else {
+        m_sw_back.reset();
+    }
+    m_swed->set_visible(false);
+    if (!on_canvas) m_nav.select_items(show);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("swatch: eyedropper out ({})", on_canvas ? "on the canvas" : "pages shown");
+    m_canvas_view.canvas().take_colour([this](std::optional<std::uint32_t> c) {
+        if (c) {
+            core::doc::swatch_from_rgb(m_sw, *c);
+            if (auto lg = log::get(log::Area::Shell)) lg->info("swatch: eyedropper took #{:06X}", *c);
+        }
+        // Back where it was: the section (its tiles picked again) or the items.
+        if (m_sw_back) {
+            const auto back = *m_sw_back;
+            m_sw_back.reset();
+            m_moving = true;   // not a pick of the user's own: Forward stays
+            if (back.segment) {
+                m_up_keep = m_sw_back_tiles;
+                m_nav.select_section(*back.segment);
+                m_up_keep.clear();
+            } else if (!back.items.empty()) {
+                m_nav.select_items(back.items);
+            }
+            m_moving = false;
+        }
+        swatch_editor_sync();
+        m_swed->set_transient_for(*this);
+        m_swed->present();
+    });
 }
 
 void Shell::swatch_editor_sync() {  // helper

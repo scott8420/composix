@@ -299,6 +299,35 @@ void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& id, FlowCac
     draw_frames(cr, d, id, flows, images, missing, how, on_page);
 }
 
+std::uint32_t sample_page(const core::Doc& d, const core::Doc::Id& id, FlowCache& flows, const ImageSource& images,
+                          double x, double y, double across) {
+    constexpr int N = 3;   // 3 x 3 samples across the square
+    across = std::max(across, 1e-3);
+    cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_RGB24, N, N);
+    cairo_t* cr = cairo_create(s);
+    cairo_set_source_rgb(cr, 1, 1, 1);   // paper
+    cairo_paint(cr);
+    const double k = N / across;
+    cairo_scale(cr, k, k);
+    cairo_translate(cr, -(x - across / 2), -(y - across / 2));
+    draw_page(cr, d, id, flows, images, nullptr, {});
+    cairo_destroy(cr);
+    cairo_surface_flush(s);
+    const unsigned char* data = cairo_image_surface_get_data(s);
+    const int stride = cairo_image_surface_get_stride(s);
+    unsigned r = 0, g = 0, b = 0;
+    for (int row = 0; row < N; ++row)
+        for (int col = 0; col < N; ++col) {
+            const std::uint32_t p = reinterpret_cast<const std::uint32_t*>(data + row * stride)[col];
+            r += (p >> 16) & 0xff;
+            g += (p >> 8) & 0xff;
+            b += p & 0xff;
+        }
+    cairo_surface_destroy(s);
+    const auto avg = [](unsigned t) { return static_cast<std::uint32_t>((t + N * N / 2) / (N * N)); };
+    return (avg(r) << 16) | (avg(g) << 8) | avg(b);
+}
+
 PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) {
     PageKey k;
     std::map<std::string, StoryFlow> ref_flows;   // s128: where references' targets are set

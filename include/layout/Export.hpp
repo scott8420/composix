@@ -195,6 +195,12 @@ struct PageDraw {
 };
 void draw_page(cairo_t* cr, const core::Doc& d, const core::Doc::Id& page_or_master, FlowCache& flows,
                const ImageSource& images, std::set<std::string>* missing = nullptr, const PageDraw& how = {});
+// s180: the eyedropper -- the colour at (x, y) on a page or master (its own
+// points) as it prints: its masters' items and its own, drawn as draw_page
+// draws them on paper white, averaged over a square `across` points wide
+// (the canvas passes three screen pixels' worth, at most 1 pt). 0xRRGGBB.
+std::uint32_t sample_page(const core::Doc& d, const core::Doc::Id& page_or_master, FlowCache& flows,
+                          const ImageSource& images, double x, double y, double across);
 // s163 (Scott): a style shown greeked -- ON ITS OWN (a few paragraphs set
 // in it; a character style on some words of the body) and IN USE (a page of
 // the document's styles mixed -- a heading, body, the style among them --

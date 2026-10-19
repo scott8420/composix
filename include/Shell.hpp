@@ -123,6 +123,7 @@ private:
     void save_window();                          // category: helper: s057 -- and back, at close
     void open_swatch_editor(const std::string& id);   // category: helper: s058 -- edit a swatch ("" = a new one)
     void swatch_editor_sync();                   // category: helper: s058 -- the sheet's fields from m_sw
+    void swatch_take_colour();                   // category: helper: s180 -- the eyedropper: a colour from the page
     void on_color_report();                      // category: handler: s053 -- the Colour Report window
     void report_refresh();                       // category: helper: s053 -- proof again (profile picked / shown)
     void on_export_pdf();                        // category: handler: the Export PDF sheet -> a file -> the report
@@ -406,6 +407,9 @@ private:
     Gtk::DrawingArea*                m_sw_field = nullptr;    // s178: hue strip + saturation / brightness square
     double                           m_sw_h = 210, m_sw_s = 0.5, m_sw_v = 0.8;   // s178: the field's place (hue kept through greys)
     bool                             m_sw_field_drag = false;
+    Gtk::Button*                     m_sw_take = nullptr;     // s180: the eyedropper
+    std::optional<views::Pick>       m_sw_back;               // s180: where to go back to after it (not on the canvas)
+    std::vector<std::string>         m_sw_back_tiles;
     std::vector<Gtk::Widget*>        m_sw_rows;                // 4 component rows
     std::vector<Gtk::Label*>         m_sw_labels;
     std::vector<Gtk::Scale*>         m_sw_scales;

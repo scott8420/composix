@@ -3880,8 +3880,45 @@ int main() {
         check("undo: Right again", !d.as<core::Frame>(id)->across && d.as<core::Frame>(id)->side == core::Side::Right);
         j.redo();
         const auto copy = core::doc::override_master_item(j, d, Rp, id);
-        check("override on the right page: its copy where it showed", !copy.empty() && !d.as<core::Frame>(copy)->across &&
-                                                                       d.as<core::Frame>(copy)->x == -100);
+        check("override on the right page: its copy where it showed -- cut at the spine (s182)",
+              !copy.empty() && !d.as<core::Frame>(copy)->across && d.as<core::Frame>(copy)->x == 0 &&
+              d.as<core::Frame>(copy)->w == 60);
+        {   // s182 (W2): the left page's copy -- its part up to the spine; a picture stays put; text whole
+            const auto lcopy = core::doc::override_master_item(j, d, Lp, id);
+            const auto* lc = d.as<core::Frame>(lcopy);
+            check("override on the left page: its part up to the spine", lc && lc->x == w - 100 && lc->w == 100);
+            const auto pic = core::doc::add_frame(j, d, M, core::FrameKind::Image, {w - 120, 300, 200, 100}, 1, 12, true);
+            {
+                core::Doc::Loading load(d);
+                core::Asset a;
+                a.name = "spread.jpg";
+                a.path = "/x/spread.jpg";
+                a.px_w = 4000;
+                a.px_h = 1000;   // 4:1 -- Fill covers 200 x 100 at 400 x 100, centred
+                d.put("asset.s182", a);
+                auto g = *d.as<core::Frame>(pic);
+                g.asset = "asset.s182";
+                d.put(pic, g);
+            }
+            const auto before = core::picture_rect({w - 120, 300, 200, 100}, *d.as<core::Frame>(pic), 4000, 1000);
+            const auto rp = core::doc::override_master_item(j, d, Rp, pic);
+            const auto* rf = d.as<core::Frame>(rp);
+            const auto after = rf ? core::picture_rect({rf->x + w, rf->y, rf->w, rf->h}, *rf, 4000, 1000) : core::Rect{};
+            const auto near = [](double a, double b) { return std::abs(a - b) < 1e-6; };
+            check("override a picture on the right: cut at the spine, the picture where it was",
+                  rf && near(rf->x, 0) && near(rf->w, 80) && rf->fit == core::ImageFit::Custom &&
+                  near(after.x, before.x) && near(after.y, before.y) && near(after.w, before.w) && near(after.h, before.h));
+            const auto tx = core::doc::add_frame(j, d, M, core::FrameKind::Text, {w - 50, 500, 100, 40}, 1, 12, true);
+            const auto tc = core::doc::override_master_item(j, d, Lp, tx);
+            check("override a text frame across: kept whole (its words would reflow)",
+                  d.as<core::Frame>(tc) && d.as<core::Frame>(tc)->w == 100 && d.as<core::Frame>(tc)->x == w - 50);
+            j.undo();
+            j.undo();
+            j.undo();
+            j.undo();
+            j.undo();
+            check("overrides undone", !d.as<core::Frame>(lcopy) && !d.as<core::Frame>(rp) && !d.as<core::Frame>(tc));
+        }
         // a single (not facing) master has no spine
         std::string single;
         for (const auto& m : d.ids_of<core::Master>()) if (!d.as<core::Master>(m)->facing && !d.frames_on(m).empty()) single = m;
@@ -9734,6 +9771,110 @@ int main() {
             check("shelf: the document exported and read back", wrote && back && back->colors.size() == dc.size());
             std::filesystem::remove_all(tmp2);
         }
+    }
+    // ── s180: the eyedropper -- a colour taken from the page as it prints ──
+    {
+        std::cout << "--- s180 eyedropper ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto sw = D::add_swatch(j, d, core::Swatch{"Brick", 0, core::ColorModel::RGB, {180, 60, 40, 0}});
+        const auto box = D::add_frame(j, d, page, core::FrameKind::Shape, {300, 20, 40, 30});
+        D::edit_frames(j, d, {box}, "Fill", [&](core::Frame& f) { f.fill = sw; f.stroke.clear(); f.z = 1e6; });
+        L::FlowCache flows;
+        const auto want = d.as<core::Swatch>(sw)->preview;
+        const auto near = [](std::uint32_t a, std::uint32_t b, int tol) {
+            for (int sh : {16, 8, 0})
+                if (std::abs(static_cast<int>((a >> sh) & 0xFF) - static_cast<int>((b >> sh) & 0xFF)) > tol) return false;
+            return true;
+        };
+        const auto in = L::sample_page(d, page, flows, {}, 320, 35, 1);
+        char hx[16];
+        std::snprintf(hx, sizeof hx, "#%06X", in);
+        check("eyedropper: inside a filled frame -- its colour", near(in, want, 2), hx);
+        const auto tinted = [&] {
+            D::edit_frames(j, d, {box}, "Fill tint", [](core::Frame& f) { f.fill_tint = 0.5; });
+            const auto c = L::sample_page(d, page, flows, {}, 320, 35, 1);
+            j.undo();
+            return c;
+        }();
+        const auto half = [](std::uint32_t c, int sh) { return (static_cast<int>((c >> sh) & 0xFF) + 255) / 2; };
+        check("eyedropper: a tint -- half way to paper",
+              std::abs(static_cast<int>((tinted >> 16) & 0xFF) - half(want, 16)) <= 3 &&
+              std::abs(static_cast<int>(tinted & 0xFF) - half(want, 0)) <= 3);
+        const auto edge = L::sample_page(d, page, flows, {}, 300, 35, 2);   // half on the frame, half off
+        check("eyedropper: across an edge -- the two averaged",
+              ((edge >> 16) & 0xFF) > ((want >> 16) & 0xFF) && (edge & 0xFF) > (want & 0xFF) && (edge & 0xFF) < 0xF0);
+        {   // a spot clear of every item on the page and its masters (either side of a spread)
+            const auto* pg = d.as<core::Page>(page);
+            auto owners = core::master_chain(d, page);
+            owners.push_back(page);
+            const auto clear = [&](double x, double y) {
+                for (const auto& o : owners)
+                    for (const auto& fid : d.frames_on(o)) {
+                        const auto r = core::frame_rect(*d.as<core::Frame>(fid));
+                        for (const double dx : {0.0, -pg->w, pg->w})
+                            if (x > r.x + dx - 4 && x < r.r() + dx + 4 && y > r.y - 4 && y < r.b() + 4) return false;
+                    }
+                return true;
+            };
+            double cx = -1, cy = -1;
+            for (double y = 2; pg && y < pg->h - 2 && cx < 0; y += 7)
+                for (double x = 2; x < pg->w - 2; x += 7)
+                    if (clear(x, y)) { cx = x; cy = y; break; }
+            check("eyedropper: where nothing is -- paper", cx >= 0 && L::sample_page(d, page, flows, {}, cx, cy, 0.5) == 0xFFFFFFu);
+        }
+        check("eyedropper: nothing changed, no step", d.as<core::Frame>(box)->fill == sw);
+    }
+    // ── s181 (C1b): a vector picture's colours, as written ──
+    {
+        std::cout << "--- s181 SVG colours ---\n";
+        namespace SW = core::swatches;
+        check("css: #rgb, #rrggbb, #rrggbbaa", SW::css_color("#f80") == 0xFF8800u && SW::css_color(" #1A2b3C ") == 0x1A2B3Cu &&
+                                                SW::css_color("#11223380") == 0x112233u && SW::css_color("#f808") == 0xFF8800u);
+        check("css: rgb() numbers and percentages, rgba()", SW::css_color("rgb(255, 0, 10)") == 0xFF000Au &&
+              SW::css_color("rgb(100%,50%,0%)") == 0xFF8000u && SW::css_color("rgba(0 128 255 / 0.5)") == 0x0080FFu);
+        check("css: hsl()", SW::css_color("hsl(120, 100%, 25%)") == 0x008000u && SW::css_color("hsl(0,0%,100%)") == 0xFFFFFFu);
+        check("css: names, any case", SW::css_color("Teal") == 0x008080u && SW::css_color("rebeccapurple") == 0x663399u &&
+                                      SW::css_color("aliceblue") == 0xF0F8FFu && SW::css_color("yellowgreen") == 0x9ACD32u);
+        check("css: not colours", !SW::css_color("none") && !SW::css_color("currentColor") && !SW::css_color("url(#g1)") &&
+                                  !SW::css_color("transparent") && !SW::css_color("inherit") && !SW::css_color("#12") &&
+                                  !SW::css_color("#ggg") && !SW::css_color(""));
+        const std::string svg = R"svg(<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <style>.sea { fill: #1E6091; stroke:none } .sand{fill:rgb(233,196,106)!important}</style>
+  <defs><linearGradient id="g1"><stop offset="0" stop-color="#1E6091"/><stop offset="1" style="stop-color:white;stop-opacity:1"/></linearGradient></defs>
+  <rect class="sea" width="100" height="60"/>
+  <rect fill="url(#g1)" fill-opacity="0.5" data-fill="#ABCDEF" width="10" height="10"/>
+  <path fill="#1e6091" d="M0 0"/>
+  <circle style="fill:#e63946 icc-color(FOGRA39, 0, 0.85, 0.7, 0.05);stroke:#000" r="5"/>
+  <text fill="none" stroke="currentColor" color="crimson">fill: lots</text>
+</svg>)svg";
+        const auto vc = SW::svg_colors(svg);
+        const auto find = [&](std::uint32_t rgb, bool cmyk) -> const SW::VectorColor* {
+            for (const auto& c : vc) if (c.rgb == rgb && c.cmyk == cmyk) return &c;
+            return nullptr;
+        };
+        const auto* sea = find(0x1E6091u, false);
+        check("svg: attributes, style=, <style> and stops all read; the most used first",
+              sea && sea->uses == 3 && &vc.front() == sea && find(0xE9C46Au, false) && find(0xFFFFFFu, false) && find(0x000000u, false) &&
+              find(0xDC143Cu, false));
+        const auto* red = find(0xE63946u, true);
+        check("svg: an icc-color gives its CMYK (the fallback for the screen)",
+              red && red->v[0] == 0 && red->v[1] == 85 && red->v[2] == 70 && red->v[3] == 5 && !find(0xE63946u, false));
+        check("svg: none / url() / currentColor / data-fill / fill-opacity / text not taken",
+              !find(0xABCDEFu, false) && vc.size() == 6);
+        check("svg: at most asked", SW::svg_colors(svg, 2).size() == 2);
+        check("svg: nothing drawn in colour -- none", SW::svg_colors("<svg><rect fill=\"none\"/></svg>").empty());
+        const auto lib = SW::vector_library("map.svg", vc);
+        bool named = lib.name == "map.svg" && lib.colors.size() == vc.size();
+        for (const auto& s : lib.colors)
+            named = named && (s.model == core::ColorModel::CMYK ? s.name == "C0 M85 Y70 K5" : s.name.size() == 7 && s.name[0] == '#');
+        check("svg: a library -- RGB by hex, CMYK by its values", named && lib.colors.front().name == "#1E6091");
     }
     std::cout << "-----------------------------------------------\n";
     std::cout << g_pass << " pass / " << g_fail << " fail\n";

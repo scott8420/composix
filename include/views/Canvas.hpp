@@ -102,6 +102,18 @@ public:
     void load_images(std::vector<core::ImageFile> files);   // s063: several, one click each
     bool loaded() const { return !m_load.empty(); }
 
+    // s180: the eyedropper. The next click on a page takes the colour there
+    // -- as it prints (layout::sample_page), three screen pixels averaged (at
+    // most a point across, so type gives its ink zoomed out) --
+    // and hands it to `done`; a click off the pages takes nothing and keeps
+    // waiting. Esc, a right-click or another tool: `done(nullopt)`. While it
+    // waits, a chip of the colour under the pointer rides beside it.
+    void take_colour(std::function<void(std::optional<std::uint32_t>)> done);
+    bool taking_colour() const { return static_cast<bool>(m_take); }
+    void cancel_take();
+    // The colour a click at (x, y) (widget pixels) would take; nullopt off the pages.
+    std::optional<std::uint32_t> colour_at(double x, double y) const;
+
     // s010: editing text in place. Double-click a text frame (or click one
     // with the Text tool; a new text frame starts editing): a caret, typing
     // through the IM, Backspace / Delete / Enter, arrows (Shift extends, Ctrl
@@ -297,6 +309,8 @@ private:
 
     // s008
     Tool        m_tool = Tool::Select;
+    std::function<void(std::optional<std::uint32_t>)> m_take;   // s180: the eyedropper, waiting
+    std::optional<std::uint32_t>                      m_take_under;   // what's under the pointer
     std::string m_draw_page;                 // the page a frame is being drawn on
     double      m_dx0 = 0, m_dy0 = 0;        // its first corner (layout)
     core::Rect  m_draw;                      // the frame being drawn (layout)

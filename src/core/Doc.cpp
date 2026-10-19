@@ -1763,9 +1763,41 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
 namespace {
 // s025 / s072: the page's own copy of master item `mf`, made inside a step;
 // its records (the frame, a text frame's story) go on `ids`.
+// s182 (W2): an item across the spine, overridden on one page, keeps only
+// the part on that page -- cut at the spine, so it no longer hangs over
+// the facing page (where the master's other part still shows). A picture
+// stays exactly where it was (placed by hand from its old place); a shape
+// keeps its fill (a stroke gains an edge at the spine). Kept whole, as
+// before: a text frame (cutting it would reflow its words -- Scott's
+// call), a turned one, and a vector picture set to Fill / Fit (its aspect
+// isn't known here). `c` is already shifted for the page (across_dx).
+void cut_at_spine(const Doc& d, Frame& c, Side side) {
+    if (!c.across || (side != Side::Left && side != Side::Right) || c.rot != 0) return;
+    if (c.kind == FrameKind::Text) return;
+    const auto* m = d.as<Master>(c.owner);
+    if (!m) return;
+    const double x0 = side == Side::Right ? std::max(c.x, 0.0) : c.x;
+    const double x1 = side == Side::Left ? std::min(c.x + c.w, m->w) : c.x + c.w;
+    if (x1 - x0 <= 0 || (x0 == c.x && x1 == c.x + c.w)) return;   // nothing over the spine
+    if (c.kind == FrameKind::Image && !c.asset.empty()) {
+        const auto* a = d.as<Asset>(c.asset);
+        const bool known = a && a->px_w > 0 && a->px_h > 0;
+        if (c.fit != ImageFit::Custom && !known) return;
+        const Rect pr = picture_rect({0, 0, c.w, c.h}, c, known ? a->px_w : 1, known ? a->px_h : 1);
+        c.fit = ImageFit::Custom;
+        c.pic_x = pr.x - (x0 - c.x);
+        c.pic_y = pr.y;
+        c.pic_w = pr.w;
+    }
+    c.x = x0;
+    c.w = x1 - x0;
+}
+
 Doc::Id copy_master_item(Doc& d, const Doc::Id& page, const Doc::Id& mf, std::vector<Doc::Id>& ids) {
     Frame c = *d.as<Frame>(mf);
-    c.x += across_dx(d, c, d.side_of(page));   // s155: across the spine -- where it sits on this page
+    const Side side = d.side_of(page);
+    c.x += across_dx(d, c, side);   // s155: across the spine -- where it sits on this page
+    cut_at_spine(d, c, side);       // s182 (W2): and only the part on this page
     c.across = false;
     c.owner = page;
     c.overrides = mf;

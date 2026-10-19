@@ -190,6 +190,12 @@ void Shell::sync_up() {  // helper
 
 void Shell::show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles) {  // helper
     show_pick_now(p, keep_tiles);
+    // s180: the eyedropper waits on the canvas -- turning to pages keeps it;
+    // leaving the canvas puts it down (the swatch sheet comes back as it was).
+    if (auto& cv = m_canvas_view.canvas(); cv.taking_colour() && m_main.get_visible_child_name() != "canvas") {
+        m_sw_back.reset();
+        cv.cancel_take();
+    }
     sync_up();
 }
 

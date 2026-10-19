@@ -20,6 +20,7 @@
 #include "core/Settings.hpp"
 
 #include <optional>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -91,6 +92,28 @@ std::vector<PictureColor> picture_colors(const std::uint32_t* px, int w, int h, 
 // Those as a library: RGB swatches named by their hex ("#8B4513"), its
 // name the picture's.
 Library picture_library(const std::string& name, const std::vector<PictureColor>& colors);
+
+// s181 (C1b): the colours a VECTOR picture (SVG) is drawn in -- exactly as
+// written, not sampled: fill / stroke / stop-color / flood-color /
+// lighting-color / solid-color / color, whether attributes, in style="",
+// or in a <style> sheet. #rgb, #rrggbb (#rgba / #rrggbbaa: alpha dropped),
+// rgb() / rgba() (numbers or %), hsl() / hsla(), the CSS colour names.
+// Inkscape's icc-color(profile, c, m, y, k) after the fallback gives the
+// CMYK itself. none / currentColor / url(...) / inherit / transparent are
+// not colours. Each once (CMYK ones by their values), most used first
+// (ties: first seen). At most `most`.
+struct VectorColor {
+    std::uint32_t         rgb  = 0;       // 0xRRGGBB (a CMYK one: its fallback, else its preview)
+    bool                  cmyk = false;
+    std::array<double, 4> v{};            // C M Y K, 0-100, when cmyk
+    int                   uses = 0;
+};
+std::vector<VectorColor> svg_colors(const std::string& svg, int most = 24);
+// A CSS colour value alone ("#abc", "rgb(10%,0,0)", "teal"); nullopt when not one.
+std::optional<std::uint32_t> css_color(std::string value);
+// Those as a library: RGB swatches named by hex, CMYK ones named by their
+// values ("C0 M100 Y100 K0"); its name the picture's.
+Library vector_library(const std::string& name, const std::vector<VectorColor>& colors);
 
 // s172: the Libraries window's shelf -- what it keeps between runs, GTK-free.
 // My Library's file under the user's data folder.

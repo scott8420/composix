@@ -26,6 +26,8 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 
 // Shell_libraries.cpp -- s172: the Colour Libraries window, on s171's core.
@@ -248,6 +250,15 @@ void Shell::open_libraries(const std::string& key, const std::vector<std::string
 
 // The left list: This Document, My Library, the system's (headed by
 // program), the imported -- each with its count where it's cheap to know.
+// s181: an SVG by its name (.svg / .svgz).
+static bool is_svg_name(const std::string& n) {
+    const auto dot = n.rfind('.');
+    if (dot == std::string::npos) return false;
+    std::string e = n.substr(dot + 1);
+    for (auto& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return e == "svg" || e == "svgz";
+}
+
 void Shell::libraries_list_sync() {  // helper
     if (!m_lib_list) return;
     m_lib_quiet = true;
@@ -315,11 +326,15 @@ void Shell::libraries_list_sync() {  // helper
         bool any = false;
         for (const auto& id : m_doc.ids_of<core::Asset>()) {
             const auto* a = m_doc.as<core::Asset>(id);
-            if (!a || a->px_w <= 0) continue;   // a vector: its colours aren't read yet
+            if (!a) continue;
+            // s181 (C1b): a vector (SVG) too -- the colours it's drawn in, as written.
+            const bool vector = a->px_w <= 0;
+            if (vector && !is_svg_name(a->name) && !is_svg_name(a->path)) continue;   // a vector we can't read
             if (!any) { heading("Pictures"); any = true; }
             const auto st = core::link_status(*a, m_project_dir);
             const bool there = st != core::LinkStatus::Missing && st != core::LinkStatus::EmbeddedMissing;
-            entry("pic:" + id, a->name, there ? "" : "missing", !there, "The main colours in " + a->name);
+            entry("pic:" + id, a->name, there ? (vector ? "vector" : "") : "missing", !there,
+                  (vector ? "The colours " : "The main colours in ") + a->name + (vector ? " is drawn in" : ""));
         }
     }
     const auto imp = SW::imported(m_settings);
@@ -365,7 +380,24 @@ void Shell::libraries_show(const std::string& key, const std::vector<std::string
         sub = "Yours, for every document · " + tilde(m_lib_cur.path);
     } else if (key.rfind("pic:", 0) == 0) {   // s177: a placed picture's colours
         const std::string id = key.substr(4);
-        if (const auto* a = m_doc.as<core::Asset>(id)) {
+        if (const auto* a = m_doc.as<core::Asset>(id); a && a->px_w <= 0) {   // s181: a vector -- read as written
+            const std::string file = core::resolve_asset(*a, m_project_dir);
+            std::string text;
+            if (!file.empty()) {
+                std::ifstream in(file, std::ios::binary);
+                if (in) text.assign(std::istreambuf_iterator<char>(in), {});
+            }
+            const bool gz = text.size() > 2 && static_cast<unsigned char>(text[0]) == 0x1f && static_cast<unsigned char>(text[1]) == 0x8b;
+            if (gz) text.clear();   // .svgz: compressed, not read here
+            m_lib_cur = SW::vector_library(a->name, SW::svg_colors(text));
+            sub = "The colours this drawing is drawn in, most used first";
+            if (text.empty()) {
+                bad = true;
+                err = gz ? "a compressed SVG (.svgz) isn\u2019t read here -- save it as plain .svg." : "the drawing is missing or can\u2019t be read.";
+            } else if (m_lib_cur.colors.empty()) {
+                sub = "No colours named in this drawing (it may take them from its text, or be all black)";
+            }
+        } else if (const auto* a = m_doc.as<core::Asset>(id)) {
             const std::string file = core::resolve_asset(*a, m_project_dir);
             int w = 0, h = 0;
             const auto px = file.empty() ? std::vector<std::uint32_t>{} : views::images::pixels(file, a->stamp, w, h);
