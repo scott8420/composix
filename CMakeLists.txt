@@ -8,6 +8,43 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
 
+# s194: faster builds, each tool only when it's installed (none is required).
+#  ccache  -- a rebuild of an unchanged file is a cache hit, even after
+#             rm -rf build (Fedora/Ubuntu package: ccache). COMPOSIX_CCACHE=OFF
+#             to leave it out.
+#  mold / lld -- the links (three executables, Debug-sized) go faster than ld.bfd.
+#             COMPOSIX_LINKER=bfd to keep the default.
+#  Ninja is build.sh's choice (it passes -G Ninja when ninja is there).
+option(COMPOSIX_CCACHE "Compile through ccache when it is installed" ON)
+if(COMPOSIX_CCACHE AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
+    find_program(CCACHE_PROGRAM ccache)
+    if(CCACHE_PROGRAM)
+        set(CMAKE_C_COMPILER_LAUNCHER   ${CCACHE_PROGRAM})
+        set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
+        message(STATUS "ccache: ${CCACHE_PROGRAM}")
+    endif()
+endif()
+set(COMPOSIX_LINKER "" CACHE STRING "mold, lld or bfd (empty: the fastest one installed)")
+if(NOT COMPOSIX_LINKER)
+    find_program(MOLD_PROGRAM mold)
+    find_program(LLD_PROGRAM ld.lld)
+    if(MOLD_PROGRAM)
+        set(COMPOSIX_LINKER_USE mold)
+    elseif(LLD_PROGRAM)
+        set(COMPOSIX_LINKER_USE lld)
+    endif()
+else()
+    set(COMPOSIX_LINKER_USE ${COMPOSIX_LINKER})
+endif()
+if(COMPOSIX_LINKER_USE AND NOT COMPOSIX_LINKER_USE STREQUAL "bfd")
+    include(CheckLinkerFlag)
+    check_linker_flag(CXX "-fuse-ld=${COMPOSIX_LINKER_USE}" COMPOSIX_HAS_LD_${COMPOSIX_LINKER_USE})
+    if(COMPOSIX_HAS_LD_${COMPOSIX_LINKER_USE})
+        add_link_options("-fuse-ld=${COMPOSIX_LINKER_USE}")
+        message(STATUS "linker: ${COMPOSIX_LINKER_USE}")
+    endif()
+endif()
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM REQUIRED gtkmm-4.0)
 find_package(spdlog REQUIRED)
@@ -103,7 +140,11 @@ target_link_directories(composix_layout PUBLIC ${PANGOCAIRO_LIBRARY_DIRS})
 target_compile_options(composix_layout PUBLIC ${PANGOCAIRO_CFLAGS_OTHER})
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-add_executable(composix_selftest src/selftest.cpp)
+# s196: its blocks in eight files, so they compile side by side (one file was
+# the build's slowest by far). src/selftest/Selftest.hpp says how to add one.
+add_executable(composix_selftest src/selftest.cpp
+    src/selftest/part1.cpp src/selftest/part2.cpp src/selftest/part3.cpp src/selftest/part4.cpp
+    src/selftest/part5.cpp src/selftest/part6.cpp src/selftest/part7.cpp src/selftest/part8.cpp)
 target_link_libraries(composix_selftest PRIVATE composix_core composix_layout Threads::Threads)
 
 # ── s100: timings on the generated long book -- run by hand, not a gate ───────
@@ -195,8 +236,11 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s193")
-target_compile_definitions(composix PRIVATE COMPOSIX_VERSION="${PROJECT_VERSION}" COMPOSIX_BUILD="${COMPOSIX_BUILD}")
+set(COMPOSIX_BUILD "s196")
+# s194: on the About window's file alone -- on the whole target, each bump
+# rebuilt every app file and missed ccache.
+set_source_files_properties(src/AboutWindow.cpp PROPERTIES
+    COMPILE_DEFINITIONS "COMPOSIX_VERSION=\"${PROJECT_VERSION}\";COMPOSIX_BUILD=\"${COMPOSIX_BUILD}\"")
 # s187: libtiff, when it's there -- a CMYK TIFF's own separations into the
 # print PDF (without it a CMYK TIFF goes through RGB, as before).
 pkg_check_modules(TIFF libtiff-4)
@@ -208,4 +252,40 @@ if(TIFF_FOUND)
     message(STATUS "libtiff ${TIFF_VERSION}: CMYK TIFFs print as CMYK")
 else()
     message(STATUS "libtiff not found: CMYK TIFFs print through RGB")
+endif()
+
+# ── s195: precompiled headers ────────────────────────────────────────────────
+# The standard library a TU each (every core / layout file opens with the same
+# dozen), gtkmm's commonest widgets for the app. System headers only: our own
+# change too often, and the core's PCH stays GTK-free like the core. Files
+# still include what they use -- COMPOSIX_PCH=OFF builds without, and must.
+option(COMPOSIX_PCH "Precompile the common system headers" ON)
+if(COMPOSIX_PCH)
+    set(CX_PCH_STD
+        <algorithm> <array> <chrono> <cmath> <cstddef> <cstdint> <cstdio> <cstring>
+        <filesystem> <fstream> <functional> <map> <memory> <optional> <set>
+        <sstream> <string> <string_view> <unordered_map> <utility> <vector>)
+    target_precompile_headers(composix_core     PRIVATE ${CX_PCH_STD})
+    target_precompile_headers(composix_layout   PRIVATE ${CX_PCH_STD} <cairo.h> <pango/pangocairo.h>)
+    target_precompile_headers(composix_selftest PRIVATE ${CX_PCH_STD} <regex> <cairo.h>)
+    target_precompile_headers(composix PRIVATE ${CX_PCH_STD}
+        <glibmm/main.h> <glibmm/dispatcher.h> <glibmm/miscutils.h> <sigc++/signal.h>
+        <gdkmm/cursor.h> <pangomm/layout.h>
+        <gtkmm/alertdialog.h> <gtkmm/box.h> <gtkmm/button.h> <gtkmm/checkbutton.h>
+        <gtkmm/drawingarea.h> <gtkmm/dropdown.h> <gtkmm/droptarget.h> <gtkmm/entry.h>
+        <gtkmm/eventcontrollerfocus.h> <gtkmm/eventcontrollerkey.h> <gtkmm/filedialog.h>
+        <gtkmm/flowbox.h> <gtkmm/flowboxchild.h> <gtkmm/gestureclick.h> <gtkmm/gesturedrag.h>
+        <gtkmm/grid.h> <gtkmm/image.h> <gtkmm/label.h> <gtkmm/listbox.h> <gtkmm/menubutton.h>
+        <gtkmm/popover.h> <gtkmm/scrolledwindow.h> <gtkmm/spinbutton.h> <gtkmm/stringlist.h>
+        <gtkmm/textview.h> <gtkmm/togglebutton.h> <gtkmm/window.h>)
+    # The resource bundle is C: no C++ header for it.
+    set_source_files_properties(${COMPOSIX_RESOURCES_C} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # ccache and a PCH: hits need these relaxed (ccache's own advice).
+    if(CMAKE_CXX_COMPILER_LAUNCHER MATCHES "ccache")
+        set(CX_CCACHE_ENV ${CMAKE_COMMAND} -E env
+            CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime)
+        foreach(t composix_core composix_layout composix_selftest composix)
+            set_target_properties(${t} PROPERTIES CXX_COMPILER_LAUNCHER "${CX_CCACHE_ENV};${CCACHE_PROGRAM}")
+        endforeach()
+    endif()
 endif()
