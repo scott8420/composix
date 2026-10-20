@@ -278,6 +278,11 @@ struct Frame {
     // the path, starting `path_from` points along it.
     bool        on_path = false;
     double      path_from = 0;
+    // s218: the words on the path's other side (the path run the other way),
+    // and where the line sits on it: 0 its baseline, 1 its middle, 2 its
+    // top (the words hang below), 3 its bottom.
+    bool        path_flip = false;
+    int         path_align = 0;
     bool operator==(const Frame&) const = default;
 };
 
@@ -937,6 +942,14 @@ struct PathTrack {
     double nearest(double x, double y, double* dist = nullptr) const;   // how far along the closest point is
 };
 PathTrack path_track(const Frame& f);
+// s218: the text box's coordinates (bx along, by down; `base` its first
+// baseline) to the owner's, and back -- `shift`: how far the baseline sits
+// below the path (path_shift).
+void path_point(const PathTrack& tr, const Frame& f, double bx, double by, double base, double shift, double& x, double& y);
+void path_unpoint(const PathTrack& tr, const Frame& f, double x, double y, double base, double shift, double& bx, double& by);
+// The baseline's distance below the path for the frame's alignment, from the
+// line's ascent and descent (points).
+double path_shift(const Frame& f, double ascent, double descent);
 // The box the frame's text is flowed in: itself -- or, for text on a path,
 // one long line as long as the path (from path_from), its shape a box.
 Frame text_box(const Frame& f);

@@ -106,6 +106,8 @@ json to(const Record& r) {
             if (v.radius > 0) j["radius"] = v.radius;   // s205
             if (!v.subs.empty()) j["subs"] = v.subs;      // s211
             if (v.on_path) { j["on_path"] = true; j["path_from"] = v.path_from; }   // s216
+            if (v.path_flip) j["path_flip"] = true;          // s218
+            if (v.path_align) j["path_align"] = v.path_align;
             if (!v.path.empty()) {
                 json pts = json::array();
                 for (const auto& p : v.path) pts.push_back({p.x, p.y, p.ix, p.iy, p.ox, p.oy, p.smooth ? 1 : 0});
@@ -390,6 +392,7 @@ std::optional<Record> from(const json& j) {
         v.radius = val(j, "radius", 0.0);   // s205
         v.subs = val(j, "subs", std::vector<int>{});   // s211
         v.on_path = val(j, "on_path", false); v.path_from = val(j, "path_from", 0.0);   // s216
+        v.path_flip = val(j, "path_flip", false); v.path_align = val(j, "path_align", 0);   // s218
         if (j.contains("path") && j["path"].is_array())
             for (const auto& a : j["path"])
                 if (a.is_array() && a.size() >= 6)

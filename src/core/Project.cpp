@@ -863,6 +863,11 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             std::vector<Choice> sc;
             for (double v : {0.0, 6.0, 12.0, 18.0, 24.0, 36.0, 48.0, 72.0, 96.0, 144.0}) sc.push_back({pts(v), pts(v) + " pt"});
             fields.push_back({"Path start", pts(f->path_from) + " pt", "path_from", sc});
+            // s218: its side of the path, and what of the line sits on it
+            fields.push_back({"Side", f->path_flip ? "Flipped" : "As drawn", "path_flip", {{"0", "As drawn"}, {"1", "Flipped"}}});
+            static const char* on[] = {"Baseline", "Middle", "Top", "Bottom"};
+            fields.push_back({"On the path", on[std::clamp(f->path_align, 0, 3)], "path_align",
+                              {{"0", "Baseline"}, {"1", "Middle"}, {"2", "Top"}, {"3", "Bottom"}}});
         }
         {   // s197: its outline -- a rectangle and an oval trade places (s210: any frame's)
             if (f->shape == ShapeKind::Path) {

@@ -1339,6 +1339,13 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::set_text_on_path(m_journal, m_doc, m_inspected, false);
         } else if (key == "content") {   // s210: a shape made a text or picture frame
             did = core::doc::set_frame_content(m_journal, m_doc, m_inspected, static_cast<core::FrameKind>(std::stoi(choice)));
+        } else if (key == "path_flip" || key == "path_align") {   // s218
+            const int v = std::stoi(choice);
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, key == "path_flip" ? "Flip text on path" : "Text on path: align",
+                                         [&](core::Frame& f) {
+                                             if (!f.on_path) return;
+                                             if (key == "path_flip") f.path_flip = v != 0; else f.path_align = std::clamp(v, 0, 3);
+                                         });
         } else if (key == "path_from") {   // s217
             const double v = std::max(0.0, std::stod(choice));
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Path start", [&](core::Frame& f) { if (f.on_path) f.path_from = v; });

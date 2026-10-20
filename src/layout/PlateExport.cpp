@@ -154,7 +154,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
     // s216: text on a path -- each glyph turned to the path at its middle (one line).
     const bool on_path = f.on_path && f.kind == core::FrameKind::Text;
     const core::doc::PathTrack tr = on_path ? core::doc::path_track(f) : core::doc::PathTrack{};
-    double first_base = -1;
+    double first_base = -1, shift = 0;
     const auto show = [&](const plate::pango::Run& run) {
         if (!on_path) { plate::pango::show(c.doc, pg, run); return; }
         double pen = run.x;
@@ -167,7 +167,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             tr.at(s, px, py, ang);
             plate::pango::Run one = run;
             one.x = -g.advance / 2;
-            one.baseline = 0;
+            one.baseline = shift;   // s218: below the path by the alignment
             one.glyphs = {g};
             pg.save();
             pg.concat(std::cos(ang), std::sin(ang), -std::sin(ang), std::cos(ang), px, py);
@@ -178,7 +178,10 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
     visit_lines(c.d, f.story, flow, fid, [&](const LineVisit& v) {
         if (v.para >= static_cast<int>(st->paras.size())) return;
         if (on_path) {   // its first line only
-            if (first_base < 0) first_base = v.baseline;
+            if (first_base < 0) {
+                first_base = v.baseline;
+                shift = core::doc::path_shift(f, line_ascent(v.line), line_descent(v.line));
+            }
             if (v.baseline > first_base + 0.01) return;
         }
         const auto& para = st->paras[static_cast<std::size_t>(v.para)];

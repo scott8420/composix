@@ -199,6 +199,12 @@ std::string marker_value(const core::Doc& d, int k, const std::string& page, con
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
                      const std::string& frame, double ox, double oy, double ink = 0.08,
                      const core::Story* text = nullptr);
+// s218: text on a path -- its line's baseline in the text box and how far
+// below the path that baseline sits (the frame's alignment). ok: it has a line.
+struct PathLine { double base = 0, shift = 0; bool ok = false; };
+PathLine path_line(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame);
+double line_ascent(PangoLayoutLine* l);
+double line_descent(PangoLayoutLine* l);
 
 // s015: the lines `flow` put in `frame`, exactly as drawn: the Pango line, its
 // left and baseline (frame coordinates), the paragraph, and the byte in it

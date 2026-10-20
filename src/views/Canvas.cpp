@@ -950,6 +950,19 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
             }
         }
     }
+    // s220: where the picked text on a path starts -- a bar across the path, a dot on it.
+    if (double mx, my, ma; path_start_mark(mx, my, ma)) {
+        double sx, sy;
+        m_vp.to_screen(mx, my, sx, sy);
+        const double nx = -std::sin(ma), ny = std::cos(ma);
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+        cr->set_line_width(2);
+        cr->move_to(sx - nx * 12, sy - ny * 12);
+        cr->line_to(sx + nx * 6, sy + ny * 6);
+        cr->stroke();
+        cr->arc(sx, sy, 3.5, 0, 2 * M_PI);
+        cr->fill();
+    }
     // Loaded (s009): the file's name beside the pointer.
     if (!m_load.empty() && m_in) {
         // s063: and how many more wait; the next one's picture beside it.
@@ -1233,16 +1246,9 @@ void Canvas::on_drag_begin(double x, double y) {
                 relayout();
                 pick({under});
                 m_sig_edited.emit();
-                Glib::signal_timeout().connect_once([this] { open_story_editor(); }, 150);   // its words typed there, once the navigator has its story (the canvas edits text in boxes)
+                begin_edit(under, {0, 0});   // s219: typed right there, along the path
                 return;
             }
-        }
-        // s217: text on a path is typed in the Story Editor (double-click / the Text tool open it).
-        if (text_frame && uf->on_path && m_load.empty() && ((m_tool == Tool::Select && m_clicks >= 2) || m_tool == Tool::Text)) {
-            m_drag = Drag::None;
-            pick({under});
-            Glib::signal_timeout().connect_once([this] { open_story_editor(); }, 150);
-            return;
         }
         if (m_thread_from.empty() && m_load.empty() && text_frame && !m_mods_alt && out_port_hit(x, y).empty() &&
             ((m_tool == Tool::Select && m_clicks >= 2) || m_tool == Tool::Text)) {
@@ -1411,6 +1417,17 @@ void Canvas::on_drag_begin(double x, double y) {
         return;
     }
 
+    // s220: the picked text on a path's start mark -- drag it along the path.
+    if (double mx, my, ma; path_start_mark(mx, my, ma)) {
+        double sx, sy;
+        m_vp.to_screen(mx, my, sx, sy);
+        if (std::hypot(sx - x, sy - y) <= 7) {
+            core::doc::frames_begin(m_journal, m_doc, {m_sel.front()}, "Path start");
+            m_begun = true;
+            m_drag = Drag::PathStart;
+            return;
+        }
+    }
     // s012: a picked text frame's gutter -- drag it to share the width
     // differently between the columns either side.
     if (const int k = gutter_hit(x, y); k >= 0) {
@@ -1561,6 +1578,20 @@ void Canvas::on_drag_update(double ox, double oy) {
         }
         const bool open = m_pts_open;
         core::doc::edit_frames(m_journal, m_doc, {m_direct}, "Edit path", [&](core::Frame& f) { core::doc::set_path(f, P, open); });
+        queue_draw();
+        return;
+    }
+    case Drag::PathStart: {   // s220: the nearest place along the path to the pointer
+        if (m_sel.empty()) return;
+        const auto* f = m_doc.as<core::Frame>(m_sel.front());
+        if (!f) return;
+        const Rect lr = core::frame_in_layout(m_doc, m_placed, m_sel.front());
+        double lx, ly;
+        m_vp.to_doc(m_px + ox, m_py + oy, lx, ly);
+        const auto tr = core::doc::path_track(*f);
+        const double at = std::clamp(tr.nearest(lx - (lr.x - f->x), ly - (lr.y - f->y)), 0.0, std::max(0.0, tr.length() - 1));
+        core::doc::edit_frames(m_journal, m_doc, {m_sel.front()}, "Path start", [&](core::Frame& g) { g.path_from = std::round(at * 10) / 10; });
+        relayout();
         queue_draw();
         return;
     }
@@ -1814,7 +1845,7 @@ void Canvas::on_drag_end(double, double) {
         return;
     }
     if (was == Drag::Text) { queue_draw(); return; }
-    if (was == Drag::Picture || was == Drag::PicScale || was == Drag::PathPoint) {   // s035: the move (s186: or the scale; s200: a point), one step
+    if (was == Drag::Picture || was == Drag::PicScale || was == Drag::PathPoint || was == Drag::PathStart) {   // s220: the start mark too   // s035: the move (s186: or the scale; s200: a point), one step
         m_begun = false;
         core::doc::frames_end(m_journal);
         m_sig_edited.emit();
@@ -1972,7 +2003,7 @@ void Canvas::on_drag_end(double, double) {
 // Escape mid-drag: everything back where it was, no step.
 void Canvas::cancel_drag() {
     if ((m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Guide || m_drag == Drag::Gutter ||
-         m_drag == Drag::Picture || m_drag == Drag::PicScale || m_drag == Drag::PathPoint) && m_begun) {   // s200: a picture's / a point's drag too
+         m_drag == Drag::Picture || m_drag == Drag::PicScale || m_drag == Drag::PathPoint || m_drag == Drag::PathStart) && m_begun) {   // s200: a picture's / a point's drag too
         core::doc::frames_cancel(m_journal);
         m_sig_edited.emit();
     }
@@ -2175,6 +2206,42 @@ std::vector<core::PathPoint> Canvas::drawn_polygon(double& inner) const {   // s
     return core::doc::polygon_points(m_dx0, m_dy0, rr, m_poly_sides, inner, std::atan2(m_ly1 - m_dy0, m_lx1 - m_dx0));
 }
 
+bool Canvas::path_start_mark(double& x, double& y, double& angle) const {   // s220
+    if (m_sel.size() != 1 || !text_on_path(m_sel.front()) || editing()) return false;
+    const auto* f = m_doc.as<core::Frame>(m_sel.front());
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, m_sel.front());
+    if (lr.w <= 0 && lr.h <= 0 && lr.x == 0 && lr.y == 0) return false;
+    double px, py;
+    core::doc::path_track(*f).at(std::max(0.0, f->path_from), px, py, angle);
+    x = lr.x - f->x + px;
+    y = lr.y - f->y + py;
+    return true;
+}
+
+bool Canvas::text_on_path(const std::string& frame) const {   // s219
+    const auto* f = m_doc.as<core::Frame>(frame);
+    return f && f->on_path && f->kind == core::FrameKind::Text;
+}
+
+void Canvas::box_to_layout(const std::string& frame, double bx, double by, double& lx, double& ly) const {   // s219
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
+    const auto* f = m_doc.as<core::Frame>(frame);
+    if (!f || !text_on_path(frame)) { lx = lr.x + bx; ly = lr.y + by; return; }
+    const auto pl = layout::path_line(m_doc, f->story, flows().get(m_doc, f->story), frame);
+    double x, y;
+    core::doc::path_point(core::doc::path_track(*f), *f, bx, by, pl.base, pl.shift, x, y);
+    lx = lr.x - f->x + x;
+    ly = lr.y - f->y + y;
+}
+
+void Canvas::layout_to_box(const std::string& frame, double lx, double ly, double& bx, double& by) const {   // s219
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
+    const auto* f = m_doc.as<core::Frame>(frame);
+    if (!f || !text_on_path(frame)) { bx = lx - lr.x; by = ly - lr.y; return; }
+    const auto pl = layout::path_line(m_doc, f->story, flows().get(m_doc, f->story), frame);
+    core::doc::path_unpoint(core::doc::path_track(*f), *f, lx - (lr.x - f->x), ly - (lr.y - f->y), pl.base, pl.shift, bx, by);
+}
+
 void Canvas::open_story_editor() {   // s217: the window's Story Editor action, for text on a path
     auto* root = dynamic_cast<Gtk::Widget*>(get_root());
     const bool ok = root && root->activate_action("win.story-editor");
@@ -2334,6 +2401,12 @@ Rect Canvas::caret_screen() const {   // s109
     if (!c.ok) return {};
     const Rect fr = core::frame_in_layout(m_doc, m_placed, c.frame);
     if (fr.w <= 0) return {};
+    if (text_on_path(c.frame)) {   // s219: the caret's ends along the path
+        double x0, y0, x1, y1;
+        box_to_layout(c.frame, c.x, c.y, x0, y0);
+        box_to_layout(c.frame, c.x, c.y + c.h, x1, y1);
+        return m_vp.to_screen(Rect::from_corners(x0, y0, x1 + 1, y1));
+    }
     return m_vp.to_screen(Rect{fr.x + c.x, fr.y + c.y, 1, c.h});
 }
 
@@ -2383,6 +2456,11 @@ core::TextPos Canvas::hit_story(const std::string& frame, double lx, double ly) 
     const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
     const auto& flow = flows().get(m_doc, m_edit_story.empty() ? m_doc.as<core::Frame>(frame)->story : m_edit_story);
     const std::string story = m_edit_story.empty() ? m_doc.as<core::Frame>(frame)->story : m_edit_story;
+    if (text_on_path(frame)) {   // s219: along its path
+        double bx, by;
+        layout_to_box(frame, lx, ly, bx, by);
+        return layout::hit_text(m_doc, story, flow, frame, bx, by);
+    }
     return layout::hit_text(m_doc, story, flow, frame, lx - lr.x, ly - lr.y);
 }
 
@@ -2421,6 +2499,12 @@ void Canvas::follow_caret() {
         fr = core::frame_in_layout(m_doc, m_placed, c.frame);
         if (fr.w <= 0) return;
         if (auto lg = log::get(log::Area::View)) lg->info("caret: followed onto {}", f->owner);
+    }
+    if (text_on_path(c.frame)) {   // s219
+        double x0, y0;
+        box_to_layout(c.frame, c.x, c.y + c.h / 2, x0, y0);
+        if (m_vp.reveal({x0 - 2, y0 - c.h / 2, 4, c.h}, 48)) queue_draw();
+        return;
     }
     if (m_vp.reveal({fr.x + c.x - 2, fr.y + c.y, 4, c.h}, 48)) queue_draw();
 }
@@ -2530,7 +2614,7 @@ bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {
 // ── s034: the tab ruler ─────────────────────────────────────────────────────
 Canvas::TabStrip Canvas::tab_strip() const {
     TabStrip t;
-    if (!editing()) return t;
+    if (!editing() || text_on_path(m_edit_frame)) return t;   // s219: no tab stops along a path
     const auto* st = m_doc.as<core::Story>(m_edit_story);
     if (!st || st->paras.empty()) return t;
     const auto& para = st->paras[static_cast<std::size_t>(std::min<int>(m_caret.para, static_cast<int>(st->paras.size()) - 1))];
@@ -2689,6 +2773,31 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
         const Rect fr = m_vp.to_screen(lr);
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.6);
         cr->set_line_width(1);
+        if (text_on_path(ft.frame)) {   // s219: the selection follows the path, in slices
+            for (const auto& r : layout::selection_rects(m_doc, m_edit_story, flow, ft.frame, lo, hi)) {
+                const int n = std::max(1, static_cast<int>(std::ceil(r.w / 3)));
+                std::vector<std::array<double, 2>> poly;
+                for (int k = 0; k <= n; ++k) {
+                    double x, y;
+                    box_to_layout(ft.frame, r.x + r.w * k / n, r.y, x, y);
+                    poly.push_back({x, y});
+                }
+                for (int k = n; k >= 0; --k) {
+                    double x, y;
+                    box_to_layout(ft.frame, r.x + r.w * k / n, r.y + r.h, x, y);
+                    poly.push_back({x, y});
+                }
+                for (std::size_t k = 0; k < poly.size(); ++k) {
+                    double sx, sy;
+                    m_vp.to_screen(poly[k][0], poly[k][1], sx, sy);
+                    if (k) cr->line_to(sx, sy); else cr->move_to(sx, sy);
+                }
+                cr->close_path();
+                cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.28);
+                cr->fill();
+            }
+            continue;
+        }
         cr->rectangle(std::round(fr.x) + 0.5, std::round(fr.y) + 0.5, std::round(fr.w), std::round(fr.h));
         cr->stroke();
         for (const auto& r : layout::selection_rects(m_doc, m_edit_story, flow, ft.frame, lo, hi)) {
@@ -2724,7 +2833,18 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
     if (m_caret_on && lo == hi) {
         const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
         const Rect lr = c.ok ? core::frame_in_layout(m_doc, m_placed, c.frame) : Rect{};
-        if (c.ok && lr.w > 0) {
+        if (c.ok && lr.w > 0 && text_on_path(c.frame)) {   // s219: turned with the path
+            double x0, y0, x1, y1, a0, b0, a1, b1;
+            box_to_layout(c.frame, c.x, c.y, x0, y0);
+            box_to_layout(c.frame, c.x, c.y + c.h, x1, y1);
+            m_vp.to_screen(x0, y0, a0, b0);
+            m_vp.to_screen(x1, y1, a1, b1);
+            cr->set_source_rgb(0.05, 0.05, 0.08);
+            cr->set_line_width(std::max(1.0, std::min(2.0, m_vp.scale())));
+            cr->move_to(a0, b0);
+            cr->line_to(a1, b1);
+            cr->stroke();
+        } else if (c.ok && lr.w > 0) {
             const Rect sr = m_vp.to_screen(Rect{lr.x + c.x, lr.y + c.y, 0, c.h});
             cr->set_source_rgb(0.05, 0.05, 0.08);
             cr->set_line_width(std::max(1.0, std::min(2.0, m_vp.scale())));
@@ -2738,8 +2858,7 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
     if (!m_preedit.empty() && lo == hi) {
         const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
         if (c.ok) {
-            const Rect fr = core::frame_in_layout(m_doc, m_placed, c.frame);
-            const Rect sr = m_vp.to_screen(Rect{fr.x + c.x, fr.y + c.y, 1, c.h});
+            const Rect sr = caret_screen();   // s219: on a path too
             const auto* st = edit_story();
             core::Style ps;
             if (st && m_caret.para < static_cast<int>(st->paras.size()))

@@ -2038,5 +2038,55 @@ void part8() {
         while (j.can_undo()) j.undo();
         check("on path: all undone exactly", core::to_json(d) == before);
     }
+    // ── s218: text on a path -- flip, alignment, the box <-> the path ──────
+    {
+        std::cout << "--- s218 path mapping ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Frame f;
+        f.kind = core::FrameKind::Text;
+        f.on_path = true;
+        D::set_path(f, {D::corner_point(100, 300), D::corner_point(300, 300)}, true);
+        f.kind = core::FrameKind::Text;
+        f.path_from = 10;
+        const auto tr = D::path_track(f);
+        double x, y, bx, by;
+        D::path_point(tr, f, 40, 12, 12, 0, x, y);   // on the baseline, 40 in
+        check("map: on the baseline, 40 along from 10 in -- (150, 300)", std::abs(x - 150) < 1e-9 && std::abs(y - 300) < 1e-9);
+        D::path_point(tr, f, 40, 2, 12, 0, x, y);    // 10 above the baseline
+        check("map: above the baseline -- above the path", std::abs(x - 150) < 1e-9 && std::abs(y - 290) < 1e-9);
+        D::path_unpoint(tr, f, 150, 290, 12, 0, bx, by);
+        check("unmap: back again", std::abs(bx - 40) < 1e-9 && std::abs(by - 2) < 1e-9);
+        f.path_flip = true;
+        const auto tf = D::path_track(f);
+        D::path_point(tf, f, 40, 2, 12, 0, x, y);
+        check("flip: from the other end, above it now below the path", std::abs(x - 250) < 1e-9 && std::abs(y - 310) < 1e-9);
+        f.path_align = 2;
+        check("align: its top on the path -- the baseline an ascent below", D::path_shift(f, 9, 3) == 9 && [&] {
+            core::Frame g = f; g.path_align = 1; return D::path_shift(g, 9, 3) == 3; }() && [&] {
+            core::Frame g = f; g.path_align = 3; return D::path_shift(g, 9, 3) == -3; }());
+        // A real line's baseline and shift, from the flow.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto ln = D::add_path(j, d, page, {D::corner_point(100, 300), D::corner_point(300, 300)}, true);
+        D::set_text_on_path(j, d, {ln}, true, 0);
+        {
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>(d.as<core::Frame>(ln)->story);
+            st.paras[0].text = "Words on a line";
+            d.put(d.as<core::Frame>(ln)->story, st);
+        }
+        L::FlowCache flows;
+        const auto pl = L::path_line(d, d.as<core::Frame>(ln)->story, flows.get(d, d.as<core::Frame>(ln)->story), ln);
+        check("path line: its baseline in the box, no shift on the baseline", pl.ok && pl.base > 5 && pl.shift == 0);
+        D::edit_frames(j, d, {ln}, "Align", [](core::Frame& g) { g.path_align = 2; });
+        L::FlowCache f2;
+        const auto pl2 = L::path_line(d, d.as<core::Frame>(ln)->story, f2.get(d, d.as<core::Frame>(ln)->story), ln);
+        check("path line: hung from its top -- shifted down by the ascent", pl2.ok && pl2.shift > 5);
+        while (j.can_undo()) j.undo();
+    }
 }
 }  // namespace cxtest

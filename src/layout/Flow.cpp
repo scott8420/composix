@@ -2159,12 +2159,37 @@ std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& stor
     return out;
 }
 
+// s218: a Pango line's ascent / descent (points, its logical extents).
+double line_ascent(PangoLayoutLine* l) {
+    PangoRectangle ink, log;
+    pango_layout_line_get_extents(l, &ink, &log);
+    return -log.y / static_cast<double>(PANGO_SCALE);
+}
+double line_descent(PangoLayoutLine* l) {
+    PangoRectangle ink, log;
+    pango_layout_line_get_extents(l, &ink, &log);
+    return (log.height + log.y) / static_cast<double>(PANGO_SCALE);
+}
+
+PathLine path_line(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame) {   // s218
+    PathLine out;
+    const auto* f = d.as<core::Frame>(frame);
+    if (!f || !f->on_path) return out;
+    walk_frame(d, story, flow, frame, [&](const Placed& pl) {
+        if (out.ok) return;
+        out.ok = true;
+        out.base = pl.base;
+        out.shift = core::doc::path_shift(*f, line_ascent(pl.pl), line_descent(pl.pl));
+    });
+    return out;
+}
+
 namespace {
 // s216: one Pango line set along a path -- each glyph turned to the path at
 // its middle, its baseline on it. (dx, dy): from the path's (owner)
 // coordinates to the context's; x0: the line's left in the text box.
 void show_line_on_path(cairo_t* cr, PangoLayoutLine* line, double x0, const core::doc::PathTrack& tr, double from,
-                       double dx, double dy) {
+                       double dx, double dy, double shift) {
     double run_x = 0;   // Pango units
     for (GSList* l = line->runs; l; l = l->next) {
         auto* run = static_cast<PangoGlyphItem*>(l->data);
@@ -2196,7 +2221,7 @@ void show_line_on_path(cairo_t* cr, PangoLayoutLine* line, double x0, const core
             cairo_save(cr);
             cairo_translate(cr, dx + px, dy + py);
             cairo_rotate(cr, ang);
-            cairo_move_to(cr, -w / 2 + g.geometry.x_offset / static_cast<double>(PANGO_SCALE), 0);
+            cairo_move_to(cr, -w / 2 + g.geometry.x_offset / static_cast<double>(PANGO_SCALE), shift);   // s218: below the path by the alignment
             pango_cairo_show_glyph_string(cr, font, one);
             cairo_restore(cr);
             pango_glyph_string_free(one);
@@ -2230,7 +2255,8 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
             } else {
                 cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
             }
-            show_line_on_path(cr, pl.pl, pl.x, tr, std::max(0.0, pf->path_from), ox - pf->x, oy - pf->y);
+            show_line_on_path(cr, pl.pl, pl.x, tr, std::max(0.0, pf->path_from), ox - pf->x, oy - pf->y,
+                              core::doc::path_shift(*pf, line_ascent(pl.pl), line_descent(pl.pl)));
         }, text);
         cairo_restore(cr);
         return;

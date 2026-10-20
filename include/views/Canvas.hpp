@@ -180,7 +180,7 @@ public:
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart };
     // s035: Alt+drag a picture inside its frame -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
@@ -361,7 +361,14 @@ private:
     double      m_pen_ox = 0, m_pen_oy = 0;
     void pen_finish(bool keep, bool closed = false);   // Enter / Esc / another tool: drawn (two points or more)
     bool pen_near_first(double sx, double sy) const;
-    void open_story_editor();                // s217   // the pointer on the first point (screen): it closes
+    void open_story_editor();                // s217
+    // s219: a point in a frame's text box (frame coordinates, as the flow
+    // has it) in the layout -- text on a path follows its path. And back.
+    void box_to_layout(const std::string& frame, double bx, double by, double& lx, double& ly) const;
+    void layout_to_box(const std::string& frame, double lx, double ly, double& bx, double& by) const;
+    bool text_on_path(const std::string& frame) const;
+    // s220: the picked text on a path's start mark (layout coordinates); false: none to show.
+    bool path_start_mark(double& x, double& y, double& angle) const;   // the pointer on the first point (screen): it closes
     std::string m_thread_from;               // "loaded": the next click threads into a frame
 
     // s009

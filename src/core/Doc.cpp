@@ -1412,6 +1412,7 @@ PathTrack path_track(const Frame& f) {
         const bool closed = !(f.shape == ShapeKind::Path && f.open);
         if (closed && !t.pts.empty()) t.pts.push_back(t.pts.front());
     }
+    if (f.path_flip) std::reverse(t.pts.begin(), t.pts.end());   // s218: run the other way -- the words on its other side
     double run = 0;
     for (std::size_t i = 0; i < t.pts.size(); ++i) {
         if (i) run += std::hypot(t.pts[i].x - t.pts[i - 1].x, t.pts[i].y - t.pts[i - 1].y);
@@ -1446,6 +1447,32 @@ double PathTrack::nearest(double x, double y, double* dist) const {
     }
     if (dist) *dist = best;
     return at_s;
+}
+
+void path_point(const PathTrack& tr, const Frame& f, double bx, double by, double base, double shift, double& x, double& y) {   // s218
+    double px, py, a;
+    tr.at(std::max(0.0, f.path_from) + bx, px, py, a);
+    const double v = by - base + shift;   // below the path, along its left-hand normal turned down
+    x = px - std::sin(a) * v;
+    y = py + std::cos(a) * v;
+}
+
+void path_unpoint(const PathTrack& tr, const Frame& f, double x, double y, double base, double shift, double& bx, double& by) {
+    const double s = tr.nearest(x, y);
+    double px, py, a;
+    tr.at(s, px, py, a);
+    const double v = (x - px) * -std::sin(a) + (y - py) * std::cos(a);
+    bx = s - std::max(0.0, f.path_from);
+    by = base + v - shift;
+}
+
+double path_shift(const Frame& f, double ascent, double descent) {
+    switch (f.path_align) {
+    case 1: return (ascent - descent) / 2;   // its middle on the path
+    case 2: return ascent;                   // its top: the words hang below
+    case 3: return -descent;                 // its bottom
+    default: return 0;                       // its baseline
+    }
 }
 
 Frame text_box(const Frame& f) {
