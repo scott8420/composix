@@ -26,6 +26,8 @@ namespace composix::layout {
 struct OdtInfo {
     int pages = 0, paragraphs = 0, styles = 0, notes = 0, chapters = 0;
     int headers = 0;                               // s237: a header, a footer (each counted once)
+    int lists = 0;                                 // s243: list styles made (a paragraph style at a list's level)
+    int placed = 0;                                // s245: pictures placed
     bool front_matter = false;                     // s237: words before the first chapter -> their own section
     int tables = 0, pictures = 0, contents = 0;   // in the file, not brought in
     std::vector<std::string> notes_said;           // what didn't come over as it was, in words
@@ -33,6 +35,7 @@ struct OdtInfo {
 
 struct OdtOptions {
     std::function<void(double, const std::string&)> progress;   // 0..1 and what it's doing
+    std::string picture_dir;   // s245: where its pictures are written (and linked from); "" = left out
 };
 
 // Replace `d` with the book (loaded: not a step). False with `err` when

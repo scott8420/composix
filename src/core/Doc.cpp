@@ -3285,6 +3285,7 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("align", "Align", align),
         COMPOSIX_SF("space_before", "Space before", space_before),
         COMPOSIX_SF("space_after", "Space after", space_after),
+        COMPOSIX_SF("top_space", "Space at the top", top_space),   // s242
         COMPOSIX_SF("left_indent", "Left indent", left_indent),
         COMPOSIX_SF("right_indent", "Right indent", right_indent),
         COMPOSIX_SF("first_indent", "First indent", first_indent),
@@ -3503,7 +3504,7 @@ bool clear_para_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Te
 std::string style_edit_label(const std::string& key) {   // s164
     static const std::map<std::string, std::string> labels{
         {"font", "Font"}, {"ssize", "Size"}, {"leading", "Leading"}, {"bold", "Weight"}, {"italic", "Slant"},
-        {"align", "Align"}, {"before", "Space before"}, {"after", "Space after"}, {"lindent", "Left indent"},
+        {"align", "Align"}, {"before", "Space before"}, {"after", "Space after"}, {"top_space", "Space at the top"}, {"lindent", "Left indent"},
         {"rindent", "Right indent"}, {"findent", "First indent"}, {"indent_after", "Indent when"}, {"tabs", "Tabs"},
         {"drop_lines", "Drop cap"}, {"drop_chars", "Drop letters"}, {"color", "Color"}, {"color_tint", "Tint"},
         {"nobreak", "No break"}, {"next_style", "Next style"}, {"list_cont", "Numbering"}, {"list_level", "Level"},
@@ -3524,6 +3525,7 @@ std::string style_edit_label(const std::string& key) {   // s164
 void style_edit(const Doc& d, Style& st, const std::string& key, const std::string& choice) {   // s164 (from the shell's handler)
     const bool para = st.kind == StyleKind::Paragraph;
     if (key == "font") { st.family = choice; return; }
+    if (key == "top_space") { if (para) st.top_space = choice == "1"; return; }   // s242
     if (key == "ssize" || key == "leading" || key == "bold" || key == "italic" || key == "align" || key == "before" || key == "after") {
         const double v = std::stod(choice);
         if (key == "ssize") {
@@ -3622,7 +3624,7 @@ std::string style_key_of_edit(const std::string& e) {   // s092
     static const std::map<std::string, std::string> m{
         {"font", "family"}, {"ssize", "size"}, {"leading", "leading"}, {"bold", "bold"}, {"italic", "italic"},
         {"nobreak", "no_break"}, {"color", "color"}, {"color_tint", "color_tint"}, {"align", "align"},
-        {"before", "space_before"}, {"after", "space_after"}, {"lindent", "left_indent"}, {"rindent", "right_indent"},
+        {"before", "space_before"}, {"after", "space_after"}, {"top_space", "top_space"}, {"lindent", "left_indent"}, {"rindent", "right_indent"},
         {"findent", "first_indent"}, {"indent_after", "skip_after_heading"}, {"tabs", "tabs"}, {"drop_lines", "drop_lines"},
         {"drop_chars", "drop_chars"}, {"span", "span"}, {"split_gutter", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"lang", "lang"}, {"clang", "lang"}, {"hyph_limit", "hyph_limit"},
         {"hyph_shortest", "hyph_shortest"}, {"hyph_last_word", "hyph_last_word"}, {"keep_next", "keep_next"},

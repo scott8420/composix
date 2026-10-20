@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- s242 (Scott): the Zoom tool, a magnifying glass. -->
+  <path fill="currentColor" fill-rule="evenodd"
+        d="M6.5 1a5.5 5.5 0 1 1 0 11a5.5 5.5 0 1 1 0-11zM6.5 2.8a3.7 3.7 0 1 0 0 7.4a3.7 3.7 0 1 0 0-7.4z"/>
+  <path fill="currentColor" d="M9.6 11.1l1.5-1.5 4.2 4.2a1.06 1.06 0 0 1-1.5 1.5z"/>
+</svg>

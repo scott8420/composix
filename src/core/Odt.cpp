@@ -25,6 +25,59 @@ double length(const std::string& v, double fallback) {
     return fallback;
 }
 
+bool pixel_size(const std::string& b, int& w, int& h) {   // s244
+    w = h = 0;
+    const auto u8 = [&](std::size_t i) { return i < b.size() ? static_cast<unsigned>(static_cast<unsigned char>(b[i])) : 0u; };
+    if (b.size() >= 24 && b.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0) {
+        w = static_cast<int>(u8(16) << 24 | u8(17) << 16 | u8(18) << 8 | u8(19));
+        h = static_cast<int>(u8(20) << 24 | u8(21) << 16 | u8(22) << 8 | u8(23));
+        return w > 0 && h > 0;
+    }
+    if (b.size() >= 10 && (b.compare(0, 6, "GIF87a") == 0 || b.compare(0, 6, "GIF89a") == 0)) {
+        w = static_cast<int>(u8(6) | u8(7) << 8);
+        h = static_cast<int>(u8(8) | u8(9) << 8);
+        return w > 0 && h > 0;
+    }
+    if (u8(0) == 0xFF && u8(1) == 0xD8) {   // JPEG: to a start-of-frame
+        std::size_t i = 2;
+        while (i + 9 < b.size()) {
+            if (u8(i) != 0xFF) { ++i; continue; }
+            const unsigned m = u8(i + 1);
+            if (m == 0xD8 || m == 0x01 || (m >= 0xD0 && m <= 0xD7) || m == 0xFF) { ++i; continue; }
+            const unsigned len = u8(i + 2) << 8 | u8(i + 3);
+            if ((m >= 0xC0 && m <= 0xCF) && m != 0xC4 && m != 0xC8 && m != 0xCC) {
+                h = static_cast<int>(u8(i + 5) << 8 | u8(i + 6));
+                w = static_cast<int>(u8(i + 7) << 8 | u8(i + 8));
+                return w > 0 && h > 0;
+            }
+            i += 2 + len;
+        }
+    }
+    return false;
+}
+
+std::string base64(const std::string& t) {   // s244
+    std::string out;
+    unsigned buf = 0;
+    int bits = 0;
+    for (char c : t) {
+        int v;
+        if (c >= 'A' && c <= 'Z') v = c - 'A';
+        else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+        else if (c >= '0' && c <= '9') v = c - '0' + 52;
+        else if (c == '+') v = 62;
+        else if (c == '/') v = 63;
+        else continue;   // white space, '='
+        buf = buf << 6 | static_cast<unsigned>(v);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out += static_cast<char>((buf >> bits) & 0xFF);
+        }
+    }
+    return out;
+}
+
 Props Book::resolved(const std::string& name) const {
     Props out;
     const auto take = [&](const Props& p) {
@@ -55,6 +108,33 @@ Props Book::resolved(const std::string& name) const {
 
 namespace {
 using xml::Node;
+
+// s244: a draw:frame holding a picture -- its anchor, place, size, wrap, file.
+bool read_frame(const Node& k, const Book& b, Picture& pic) {
+    const Node* img = k.child("draw:image");
+    if (!img) return false;
+    pic.name = k.attr_or("draw:name");
+    pic.anchor = k.attr_or("text:anchor-type", "paragraph");
+    pic.page = std::max(1, std::atoi(k.attr_or("text:anchor-page-number", "1").c_str()));
+    pic.x = length(k.attr_or("svg:x"), 0);
+    pic.y = length(k.attr_or("svg:y"), 0);
+    pic.w = length(k.attr_or("svg:width"), 0);
+    pic.h = length(k.attr_or("svg:height"), 0);
+    if (const auto it = b.graphics.find(k.attr_or("draw:style-name")); it != b.graphics.end()) {
+        pic.wrap = it->second.wrap;
+        pic.hpos = it->second.hpos;
+        pic.vpos = it->second.vpos;
+        pic.whole_page = it->second.whole_page;
+    }
+    pic.href = img->attr_or("xlink:href");
+    if (pic.href.rfind("./", 0) == 0) pic.href = pic.href.substr(2);
+    if (const auto* bin = img->child("office:binary-data")) {   // a flat file: inline
+        std::string t;
+        for (const auto& q : bin->kids) if (q.is_text()) t += q.text;
+        pic.bytes = base64(t);
+    }
+    return pic.w > 0 && pic.h > 0;
+}
 
 std::string unquote(std::string s) {
     if (s.size() >= 2 && (s.front() == '\'' || s.front() == '"') && s.back() == s.front()) s = s.substr(1, s.size() - 2);
@@ -98,7 +178,7 @@ void read_props(const Node& st, Props& p, const std::map<std::string, std::strin
 void read_styles(const Node* group, Book& b, bool automatic, const std::string& prefix = {}) {
     if (!group) return;
     for (const auto& k : group->kids) {
-        if (k.name == "style:style") {
+        if (k.name == "style:style" && k.attr_or("style:family") != "graphic") {
             Style s;
             s.name = prefix + k.attr_or("style:name");
             s.display = k.attr_or("style:display-name", s.name);
@@ -111,6 +191,44 @@ void read_styles(const Node* group, Book& b, bool automatic, const std::string& 
             if (!s.name.empty() && (s.family == "paragraph" || s.family == "text")) b.styles[s.name] = std::move(s);
         } else if (k.name == "style:default-style") {
             read_props(k, b.defaults[k.attr_or("style:family")], b.fonts);
+        } else if (k.name == "style:style" && k.attr_or("style:family") == "graphic") {   // s244: a picture's frame style
+            Picture g;
+            if (const auto* gp = k.child("style:graphic-properties")) {
+                const auto w = gp->attr_or("style:wrap", "none");
+                g.wrap = w == "run-through" ? 0 : (w == "none" ? 2 : 1);
+                const auto hp = gp->attr_or("style:horizontal-pos", "from-left");
+                g.hpos = hp == "left" ? 1 : hp == "center" ? 2 : hp == "right" ? 3 : 0;
+                const auto vp = gp->attr_or("style:vertical-pos", "from-top");
+                g.vpos = vp == "top" ? 1 : vp == "middle" ? 2 : vp == "bottom" ? 3 : 0;
+                const auto hr = gp->attr_or("style:horizontal-rel");
+                g.whole_page = hr == "page" || hr == "page-content" ? hr == "page" : false;
+            }
+            b.graphics[prefix + k.attr_or("style:name")] = g;
+        } else if (k.name == "text:list-style") {   // s243
+            ListStyle L;
+            L.name = prefix + k.attr_or("style:name");
+            for (const auto& lv : k.kids) {
+                if (lv.name != "text:list-level-style-bullet" && lv.name != "text:list-level-style-number") continue;
+                const int n = std::clamp(std::atoi(lv.attr_or("text:level", "1").c_str()), 1, 10);
+                if (static_cast<int>(L.levels.size()) < n) L.levels.resize(static_cast<std::size_t>(n));
+                ListLevel& v = L.levels[static_cast<std::size_t>(n - 1)];
+                v.number = lv.name == "text:list-level-style-number";
+                if (!v.number) v.bullet = lv.attr_or("text:bullet-char", "\u2022");
+                v.format = lv.attr_or("style:num-format", "1");
+                v.prefix = lv.attr_or("style:num-prefix");
+                v.suffix = lv.attr_or("style:num-suffix", v.number ? "." : "");
+                if (const auto* pp = lv.child("style:list-level-properties")) {
+                    if (const auto* la = pp->child("style:list-level-label-alignment")) {   // ODF 1.2's
+                        v.indent = length(la->attr_or("fo:margin-left"), -1);
+                        const double ti = length(la->attr_or("fo:text-indent"), 0);
+                        if (ti < 0) v.label = -ti;
+                    } else {   // the older
+                        const double sb = length(pp->attr_or("text:space-before"), 0), ml = length(pp->attr_or("text:min-label-width"), -1);
+                        if (ml >= 0) { v.label = ml; v.indent = sb + ml; }
+                    }
+                }
+            }
+            if (!L.name.empty()) b.lists[L.name] = std::move(L);
         } else if (k.name == "style:page-layout") {
             PageLayout L;
             if (const auto* pl = k.child("style:page-layout-properties")) {
@@ -197,6 +315,10 @@ struct Gather {
                 raw(std::atoi(k.attr_or("text:outline-level", "1").c_str()) <= 1 ? kMarkChapter : kMarkSubhead);
             } else if (nm == "draw:frame" || nm == "draw:image") {
                 ++b.pictures;
+                if (Picture pic; nm == "draw:frame" && read_frame(k, b, pic)) {   // s244
+                    pic.at = static_cast<int>(p.text.size());
+                    p.pictures.push_back(std::move(pic));
+                }
             } else if (nm == "text:bookmark" || nm == "text:bookmark-start" || nm == "text:bookmark-end" || nm == "text:soft-page-break" ||
                        nm == "office:annotation" || nm == "office:annotation-end" || nm == "text:sequence-ref" || nm == "text:reference-mark") {
                 // nothing to keep
@@ -207,7 +329,9 @@ struct Gather {
     }
 };
 
-void read_block(const Node& n, Book& b, std::vector<Para>& out) {
+struct ListAt { std::string style; int level = 0; bool header = false; int start = 0; };
+
+void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}) {
     for (const auto& k : n.kids) {
         if (k.is_text()) continue;
         const auto& nm = k.name;
@@ -215,19 +339,47 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out) {
             Para p;
             p.style = k.attr_or("text:style-name");
             if (nm == "text:h") p.outline = std::max(1, std::atoi(k.attr_or("text:outline-level", "1").c_str()));
+            if (list.level > 0 && !list.header && nm == "text:p") {   // s243: an item's paragraph -- numbered / bulleted
+                p.list = list.style;
+                p.list_level = list.level;
+                p.start = list.start;
+                list.start = 0;   // (an item's later paragraphs aren't numbered again)
+                list.header = true;
+            }
             Gather g{b, p};
             g.node(k, {});
             while (!p.text.empty() && p.text.back() == ' ' && p.notes.empty()) p.text.pop_back();   // a trailing collapsed space
+            if (&out == &b.body)   // s244: the body's pictures, anchored to this paragraph (or a page)
+                for (auto& pic : p.pictures) {
+                    if (pic.anchor != "page") pic.para = static_cast<int>(out.size());
+                    pic.at = std::min(pic.at, static_cast<int>(p.text.size()));
+                    b.images.push_back(std::move(pic));
+                }
+            p.pictures.clear();
             out.push_back(std::move(p));
-        } else if (nm == "text:list" || nm == "text:list-item" || nm == "text:list-header" || nm == "text:section" ||
-                   nm == "text:index-body") {
-            read_block(k, b, out);
+        } else if (nm == "text:list") {   // s243: a list (inside one: a level deeper), its style or its parent's
+            ListAt in = list;
+            in.style = k.attr_or("text:style-name", list.style);
+            in.level = list.level + 1;
+            in.header = false;
+            read_block(k, b, out, in);
+        } else if (nm == "text:list-item" || nm == "text:list-header") {
+            ListAt in = list;
+            in.header = nm == "text:list-header";
+            in.start = std::atoi(k.attr_or("text:start-value", "0").c_str());
+            read_block(k, b, out, in);
+        } else if (nm == "text:section" || nm == "text:index-body") {
+            read_block(k, b, out, list);
         } else if (nm == "table:table") {
             ++b.tables;
         } else if (nm == "text:table-of-content" || nm == "text:alphabetical-index" || nm == "text:bibliography") {
             ++b.contents;
         } else if (nm == "draw:frame" || nm == "draw:custom-shape" || nm == "draw:g") {
             ++b.pictures;
+            if (Picture pic; &out == &b.body && nm == "draw:frame" && read_frame(k, b, pic)) {   // s244: on a page (body level)
+                if (pic.anchor != "page") pic.para = static_cast<int>(out.size());   // (its next paragraph)
+                b.images.push_back(std::move(pic));
+            }
         }
     }
 }
@@ -311,6 +463,10 @@ std::optional<Book> read(const std::string& bytes, std::string* err) {
     read_styles(content->child("office:automatic-styles"), b, true);
     if (const auto* body = content->child("office:body"))
         if (const auto* text = body->child("office:text")) read_block(*text, b, b.body);
+    for (auto& pic : b.images)   // s244: their files, from the zip
+        if (pic.bytes.empty() && !pic.href.empty() && bytes.compare(0, 4, "PK\x03\x04") == 0 && pic.href.find("://") == std::string::npos &&
+            pic.href.rfind("../", 0) != 0)
+            pic.bytes = zip::entry(bytes, pic.href);
     if (meta)
         if (const auto* m = meta->child("office:meta")) {
             const auto words = [](const Node* n) {

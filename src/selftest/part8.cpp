@@ -1,4 +1,5 @@
 // composix_selftest, part 8 of 8 (s196: split from src/selftest.cpp).
+#include <filesystem>
 #include "Selftest.hpp"
 
 namespace cxtest {
@@ -3319,6 +3320,182 @@ void part8() {
             }
         }
         check("shortcuts: Ctrl+2 zooms to 200%, Ctrl+3 to 300%", two && three);
+    }
+    // ── s242: space before kept at a page's top (T2c) ────────────────────────
+    {
+        std::cout << "--- s242 space at the top ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::NewDoc n;
+        core::new_document(d, n);
+        {
+            core::Doc::Loading ld(d);
+            auto h = *d.as<core::Style>("style.2");   // Heading 1
+            h.space_before = 72;
+            d.put("style.2", h);
+            d.put("story.1", core::Story{"Main", {{"style.2", "Chapter One"}, {"style.1", "Body text."}}});
+        }
+        const auto first_y = [&] {
+            const auto f = L::flow_story(d, "story.1");
+            for (const auto& ft : f.frames) if (!ft.lines.empty()) return ft.lines.front().y;
+            return -1.0;
+        };
+        const double dropped = first_y();
+        check("top space: dropped at a frame's top, as before", dropped >= 0 && dropped < 10, std::to_string(dropped));
+        check("top space: a style setting (Paragraph), one step", D::style_edit_label("top_space") == "Space at the top" &&
+              D::edit_styles(j, d, {"style.2"}, "Space at the top", [&](core::Style& st) { D::style_edit(d, st, "top_space", "1"); }) &&
+              d.as<core::Style>("style.2")->top_space);
+        const double kept = first_y();
+        check("top space: kept -- the heading 72 pt down its page", std::abs(kept - dropped - 72) < 1, std::to_string(kept));
+        core::Doc e;
+        check("top space: saved with the style", core::from_json(e, core::to_json(d)) && e.as<core::Style>("style.2")->top_space);
+    }
+    // ── s243: an ODT's lists (T2b) ───────────────────────────────────────────
+    {
+        std::cout << "--- s243 odt lists ---\n";
+        namespace L = composix::layout;
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string content = "<office:document-content" + ns + R"ODT(><office:automatic-styles>
+ <text:list-style style:name="L1">
+  <text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix=")"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment fo:margin-left="0.5in" fo:text-indent="-0.25in"/></style:list-level-properties></text:list-level-style-number>
+  <text:list-level-style-bullet text:level="2" text:bullet-char="&#x2013;"><style:list-level-properties text:space-before="0.5in" text:min-label-width="0.2in"/></text:list-level-style-bullet>
+ </text:list-style>
+ <text:list-style style:name="L2"><text:list-level-style-number text:level="1" style:num-format="i" style:num-suffix="."/></text:list-style>
+</office:automatic-styles><office:body><office:text>
+ <text:p text:style-name="Standard">Before.</text:p>
+ <text:list text:style-name="L1">
+  <text:list-item><text:p text:style-name="Standard">One</text:p></text:list-item>
+  <text:list-item><text:p text:style-name="Standard">Two</text:p>
+   <text:list><text:list-item><text:p text:style-name="Standard">Sub</text:p></text:list-item></text:list></text:list-item>
+  <text:list-header><text:p text:style-name="Standard">Unnumbered</text:p></text:list-header>
+ </text:list>
+ <text:list text:style-name="L2"><text:list-item text:start-value="5"><text:p text:style-name="Standard">Fifth</text:p></text:list-item></text:list>
+</office:text></office:body></office:document-content>)ODT";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles><style:style style:name="Standard" style:family="paragraph"/></office:styles></office:document-styles>)";
+        std::string err;
+        const auto b = core::odt::read(core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}}), &err);
+        check("odt lists: read", b && b->lists.count("L1") && b->lists.at("L1").levels.size() == 2, err);
+        if (b) {
+            const auto& L1 = b->lists.at("L1").levels;
+            check("odt lists: a numbered level (1, \")\", 0.5 in, a 0.25 in label) and a bulleted one (an en dash)",
+                  L1[0].number && L1[0].suffix == ")" && std::abs(L1[0].indent - 36) < 1e-6 && std::abs(L1[0].label - 18) < 1e-6 &&
+                  !L1[1].number && L1[1].bullet == "–" && std::abs(L1[1].indent - 50.4) < 1e-6);
+            const auto& body = b->body;
+            check("odt lists: items in their list at their level; a header and the item's start kept",
+                  body.size() == 6 && body[0].list.empty() && body[1].list == "L1" && body[1].list_level == 1 && body[3].list_level == 2 &&
+                  body[4].list.empty() && body[5].list == "L2" && body[5].start == 5);
+            core::Doc d;
+            L::OdtInfo info;
+            check("odt lists: imported", L::import_odt(d, *b, &info, {}, &err), err);
+            const auto& st = *d.as<core::Story>("story.1");
+            const auto* one = d.as<core::Style>(st.paras[1].style);
+            const auto* sub = d.as<core::Style>(st.paras[3].style);
+            const auto* fifth = d.as<core::Style>(st.paras[5].style);
+            check("import lists: a numbered style (\")\", 18 pt hang, 36 pt in)", one && one->list.type == core::ListType::Number && one->list.after == ")" &&
+                  one->list.hang == 18 && one->left_indent == 36 && st.paras[2].style == st.paras[1].style);
+            check("import lists: level 2 bullets (an en dash), its own style", sub && sub->list.type == core::ListType::Bullet && sub->list.bullet == "–" &&
+                  sub->list.level == 2 && st.paras[3].style != st.paras[1].style);
+            check("import lists: roman, starting at 5; the header and plain text outside any list",
+                  fifth && fifth->list.numbering == core::Numbering::RomanLower && st.paras[5].restart == 5 &&
+                  d.as<core::Style>(st.paras[4].style)->list.type == core::ListType::None && d.as<core::Style>(st.paras[0].style)->list.type == core::ListType::None);
+            check("import lists: numbered 1, 2 -- then 5", core::doc::list_number(d, st, 1) == 1 && core::doc::list_number(d, st, 2) == 2 &&
+                  core::doc::list_number(d, st, 5) == 5);
+            check("import lists: counted", info.lists == 3);
+        }
+    }
+    // ── s244: an ODT's pictures, read ────────────────────────────────────────
+    {
+        std::cout << "--- s244 odt pictures ---\n";
+        // A PNG's header is enough for its size (40 x 30).
+        std::string png = std::string("\x89PNG\r\n\x1a\n", 8) + std::string("\0\0\0\x0dIHDR", 8) + std::string("\0\0\0\x28\0\0\0\x1e", 8) + std::string(20, '\0');
+        int w = 0, h = 0;
+        check("pixel size: a PNG's", core::odt::pixel_size(png, w, h) && w == 40 && h == 30);
+        const std::string jpg = std::string("\xFF\xD8\xFF\xE0\0\x04xx\xFF\xC0\0\x11\x08\x01\x2C\x00\xC8", 18) + std::string(20, '\0');
+        check("pixel size: a JPEG's (200 x 300, from its frame header)", core::odt::pixel_size(jpg, w, h) && w == 200 && h == 300);
+        check("base64: decoded, white space skipped", core::odt::base64("aGVs\nbG8=") == "hello");
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f" xmlns:svg="v" xmlns:draw="d" xmlns:xlink="x")";
+        const std::string content = "<office:document-content" + ns + R"ODT(><office:automatic-styles>
+ <style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:horizontal-pos="center" style:horizontal-rel="paragraph"/></style:style>
+ <style:style style:name="fr2" style:family="graphic"><style:graphic-properties style:wrap="none"/></style:style>
+</office:automatic-styles><office:body><office:text>
+ <draw:frame draw:name="Plate" text:anchor-type="page" text:anchor-page-number="2" svg:x="1in" svg:y="2in" svg:width="3in" svg:height="2in"><draw:image xlink:href="Pictures/a.png"/></draw:frame>
+ <text:p text:style-name="Standard">Before.</text:p>
+ <text:p text:style-name="Standard">Words <draw:frame draw:name="Inline" draw:style-name="fr2" text:anchor-type="as-char" svg:width="1in" svg:height="0.75in"><draw:image xlink:href="./Pictures/a.png"/></draw:frame> after.</text:p>
+ <text:p text:style-name="Standard"><draw:frame draw:name="Side" draw:style-name="fr1" text:anchor-type="paragraph" svg:x="0in" svg:y="0.1in" svg:width="2in" svg:height="1.5in"><draw:image xlink:href="Pictures/a.png"/></draw:frame>A paragraph with a picture beside it.</text:p>
+</office:text></office:body></office:document-content>)ODT";
+        const std::string styles = "<office:document-styles" + ns + "><office:styles/></office:document-styles>";
+        std::string err;
+        const auto b = core::odt::read(core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content},
+                                                                 {"styles.xml", styles}, {"Pictures/a.png", png}}), &err);
+        check("odt pictures: three read", b && b->images.size() == 3, err);
+        if (b && b->images.size() == 3) {
+            const auto& pg = b->images[0];
+            const auto& in = b->images[1];
+            const auto& side = b->images[2];
+            check("picture on a page: its page, place and size; its file from the zip", pg.anchor == "page" && pg.page == 2 && pg.x == 72 &&
+                  pg.y == 144 && pg.w == 216 && pg.h == 144 && pg.bytes == png && pg.wrap == 2);
+            check("picture in the line: its paragraph, its place in the words, no wrap style -> jump", in.anchor == "as-char" && in.para == 1 &&
+                  in.at == 6 && in.w == 72 && in.bytes == png && in.wrap == 2);
+            check("picture by a paragraph: centred, text around it (parallel)", side.anchor == "paragraph" && side.para == 2 && side.hpos == 2 &&
+                  side.wrap == 1 && std::abs(side.y - 7.2) < 1e-9);
+            check("picture in the line: the words either side kept", b->body[1].text == "Words after.", b->body[1].text);
+        }
+        // ── s245: placed ──
+        namespace L = composix::layout;
+        if (b && b->images.size() == 3) {
+            const auto dir = (std::filesystem::temp_directory_path() / "cx-s245-pictures").string();
+            std::filesystem::remove_all(dir);
+            core::Doc d;
+            L::OdtInfo info;
+            L::OdtOptions opt;
+            opt.picture_dir = dir;
+            const bool ok = L::import_odt(d, *b, &info, opt, &err);
+            check("odt pictures: imported, three placed", ok && info.placed == 3, err + " " + std::to_string(info.placed));
+            std::vector<std::pair<std::string, const core::Frame*>> pics;
+            for (const auto& id : d.ids_of<core::Frame>())
+                if (const auto* f = d.as<core::Frame>(id); f && f->kind == core::FrameKind::Image) pics.push_back({id, f});
+            std::sort(pics.begin(), pics.end(), [](const auto& x, const auto& y) { return x.second->z < y.second->z; });
+            check("odt pictures: three picture frames", pics.size() == 3, std::to_string(pics.size()));
+            if (pics.size() == 3) {
+                const auto* a = d.as<core::Asset>(pics[0].second->asset);
+                check("odt pictures: written out once as a PNG (its own name), one link for all three, its pixels known",
+                      a && a->path == dir + "/a.png" &&
+                      pics[1].second->asset == pics[0].second->asset && pics[2].second->asset == pics[0].second->asset &&
+                      d.ids_of<core::Asset>().size() == 1 && std::filesystem::file_size(a->path) == png.size() && a->px_w == 40 && a->px_h == 30,
+                      a ? a->path : "no asset");
+                const auto* pg = pics[0].second;
+                check("page-anchored: on page 2 (a page added for it), at (72, 144), 216 x 144, jumped",
+                      pg->owner != pics[1].second->owner && info.pages == 2 && pg->x == 72 && pg->y == 144 && pg->w == 216 && pg->h == 144 && pg->wrap == core::Wrap::Jump);
+                const auto* in = pics[1].second;
+                const auto* side = pics[2].second;
+                const auto* tf = d.as<core::Frame>(d.as<core::Story>("story.1") ? pics[1].second->owner : "");
+                (void)tf;
+                const L::StoryFlow fl = L::flow_story(d, "story.1");
+                double words_y = -1, side_y = -1;
+                std::string words_page, side_page;
+                for (const auto& ft : fl.frames)
+                    for (const auto& l : ft.lines) {
+                        const auto* f = d.as<core::Frame>(ft.frame);
+                        if (l.para == 1 && words_y < 0) { words_y = f->y + l.y; words_page = f->owner; }
+                        if (l.para == 2 && side_y < 0) { side_y = f->y + l.y; side_page = f->owner; }
+                    }
+                check("in the line: its own room -- the words go on below it", in->owner == words_page && words_y >= in->y + in->h - 0.5 && words_y < in->y + in->h + 30,
+                      std::to_string(words_y) + " vs " + std::to_string(in->y + in->h));
+                const auto& m = *d.as<core::Frame>(fl.frames.front().frame);
+                check("by a paragraph: centred in the frame, 7.2 pt below where the paragraph lands, text around",
+                      side->owner == side_page && std::abs(side->x - (m.x + (m.w - 144) / 2)) < 0.5 && side->wrap == core::Wrap::Around &&
+                      side->y >= side_y - 0.5,
+                      std::to_string(side->x) + "," + std::to_string(side->y) + " para at " + std::to_string(side_y));
+            }
+            L::OdtInfo none;
+            core::Doc e;
+            check("odt pictures: no folder -- left out, and said", L::import_odt(e, *b, &none, {}, &err) && none.placed == 0 &&
+                  !none.notes_said.empty() && none.notes_said.back().find("3 pictures left out") != std::string::npos);
+            std::filesystem::remove_all(dir);
+        }
     }
 }
 }  // namespace cxtest

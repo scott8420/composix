@@ -3550,7 +3550,7 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
         {"composix-tool-eyedropper-symbolic", "canvas_view.tool.eyedropper",
          "Eyedropper  (I) — click the page: its colour onto the picked frames' fill; Shift: their stroke; Alt: just a swatch",
          Canvas::Tool::Eyedropper},
-        {"zoom-in-symbolic", "canvas_view.tool.zoom",
+        {"composix-tool-zoom-symbolic", "canvas_view.tool.zoom",   // s242 (Scott): a magnifying glass, our own
          "Zoom  (Z) — click to zoom in, Alt+click out, drag round what to see; right-click: zoom levels",
          Canvas::Tool::Zoom},   // s241
     };

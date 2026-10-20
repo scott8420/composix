@@ -512,6 +512,10 @@ struct Style {
     // s043: start in the next column / frame / page / right-hand page when
     // something is already set there (a chapter's opening heading).
     ParaStart   start = ParaStart::Anywhere;
+    // s242 (T2c): its space before kept even at a column's / frame's top (a
+    // chapter heading sunk down its new page, as LibreOffice sets it). Off:
+    // dropped there, as before.
+    bool        top_space = false;
     ParaRule    rule_above, rule_below;   // s044
     ListSpec    list;                     // s045
     // s037: styles built on styles (paragraph styles). `based_on`: a style

@@ -1,3 +1,4 @@
+#include <filesystem>
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "layout/BigBook.hpp"
@@ -159,8 +160,18 @@ void Shell::import_odt_file(const std::string& path) {  // helper
     };
     auto out = std::make_shared<Out>();
     const std::string name = Glib::path_get_basename(path);
+    // s246: its pictures written to a folder of their own (linked from there; Embed in Links & Assets keeps them in the file)
+    std::string pics;
+    {
+        std::string stem = std::filesystem::path(path).stem().string();
+        if (stem.empty()) stem = "imported";
+        const auto root = std::filesystem::path(Glib::get_user_data_dir()) / "composix" / "imported";
+        auto dir = root / stem;
+        for (int n = 2; std::filesystem::exists(dir) && n < 1000; ++n) dir = root / (stem + "-" + std::to_string(n));
+        pics = dir.string();
+    }
     busy_thread("Importing \u201c" + name + "\u201d", "Reading it\u2026",
-        [out, path](const Report& report) {
+        [out, path, pics](const Report& report) {
             std::string bytes;
             {
                 std::ifstream in(path, std::ios::binary);
@@ -173,6 +184,7 @@ void Shell::import_odt_file(const std::string& path) {  // helper
             const auto book = core::odt::read(bytes, &out->err);
             if (!book) return;
             layout::OdtOptions o;
+            o.picture_dir = pics;
             o.progress = [&](double f, const std::string& line) { report(0.05 + 0.7 * f, line); };
             out->ok = layout::import_odt(out->doc, *book, &out->info, o, &out->err);
             if (!out->ok) return;
@@ -184,7 +196,7 @@ void Shell::import_odt_file(const std::string& path) {  // helper
             });
         },
         "Showing it\u2026",
-        [this, out, name] {
+        [this, out, name, pics] {
             if (!out->ok) {
                 alert("Couldn\u2019t import \u201c" + name + "\u201d", out->err.empty() ? "It isn't an OpenDocument text." : "It " + out->err + ".");
                 return;
@@ -196,9 +208,12 @@ void Shell::import_odt_file(const std::string& path) {  // helper
                                  std::to_string(i.styles) + " styles";
             if (i.chapters) detail += ", " + std::to_string(i.chapters) + (i.chapters == 1 ? " chapter" : " chapters");
             if (i.notes) detail += ", " + std::to_string(i.notes) + (i.notes == 1 ? " note" : " notes");
+            if (i.placed) detail += ", " + std::to_string(i.placed) + (i.placed == 1 ? " picture" : " pictures");   // s246
+            if (i.lists) detail += ", " + std::to_string(i.lists) + (i.lists == 1 ? " list style" : " list styles");   // s243
             if (i.headers) detail += "; its header / footer on the master";
             if (i.front_matter) detail += "; front matter and body as sections";
             detail += ".";
+            if (i.placed) detail += "\nIts pictures are linked from " + pics + " \u2014 Embed them (Links & Assets) to keep them in the file.";
             for (const auto& s : i.notes_said) detail += "\n\u2022 " + s;
             alert("Imported \u201c" + name + "\u201d", detail);
             if (auto lg = log::get(log::Area::Io)) lg->info("import odt '{}': {} pages, {} paragraphs, {} styles", name, i.pages, i.paragraphs, i.styles);

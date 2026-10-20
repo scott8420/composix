@@ -141,7 +141,7 @@ std::string style_group(const Field& f) {
     static const std::map<std::string, std::string> by_edit{
         {"font", "Text"}, {"ssize", "Text"}, {"leading", "Text"}, {"bold", "Text"}, {"italic", "Text"}, {"nobreak", "Text"},
         {"color", "Text"}, {"color_tint", "Text"}, {"clang", "Text"},
-        {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
+        {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"top_space", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
         {"findent", "Paragraph"}, {"indent_after", "Paragraph"}, {"tabs", "Paragraph"}, {"drop_lines", "Paragraph"},
         {"drop_chars", "Paragraph"}, {"span", "Paragraph"}, {"split_gutter", "Paragraph"},
         {"align_grid", "Flow"}, {"hyphenate", "Flow"}, {"lang", "Flow"}, {"hyph_limit", "Flow"}, {"hyph_shortest", "Flow"}, {"hyph_last_word", "Flow"},
@@ -502,6 +502,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 f.push_back({"Align", align_text(s.align), "align", align_ch});
                 f.push_back({"Space before", pt(s.space_before), "before", space_ch});
                 f.push_back({"Space after", pt(s.space_after), "after", space_ch});
+                f.push_back({"At a page's top", s.top_space ? "Space kept" : "Space dropped", "top_space",   // s242 (T2c)
+                             {{"0", "Space dropped"}, {"1", "Space kept"}}});
                 // s026: indents and tabs.
                 std::vector<Choice> ind_ch, first_ch;
                 for (double v : {0.0, 6.0, 9.0, 12.0, 18.0, 24.0, 36.0, 54.0, 72.0}) ind_ch.push_back({pts(v), pt(v)});

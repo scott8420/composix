@@ -972,7 +972,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
             // the column goes on below it. Too tall for the room left under
             // text already here: the next column, whole.
             if (n >= 2 && style.split >= 2 && g_split_depth == 0) {   // (its rest, on from a column before, splits too)
-                const double above = c.start == 0 && y > top ? style.space_before : 0;
+                const double above = c.start == 0 && (y > top || style.top_space) ? style.space_before : 0;
                 core::Frame sub = fr;
                 sub.columns = std::min(style.split, 4);
                 sub.gutter = std::max(0.0, style.split_gutter);
@@ -1019,7 +1019,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                 continue;
             }
             // s011: space before a paragraph -- not at the top of a column.
-            const double before = (c.start == 0 && y > top) ? style.space_before : 0;
+            const double before = (c.start == 0 && (y > top || style.top_space)) ? style.space_before : 0;   // s242: or kept there
             const int len = static_cast<int>(para.text.size());
             const Indents ind = indents_of(d, style, st, c.p);   // s026
             double yy = y + before;
@@ -1225,7 +1225,7 @@ bool fill_bands(const core::Doc& d, const core::Story& st, const core::Frame& fr
         if (notes_only || c.p >= paras) return fill_cols(d, st, fr, wraps, c, hmax, ft, nc, notes_only, fs, top, -1, band);
         if (const int k = splits(d, st, fr, c.p); k > 0) {   // s183: split -- its lines balanced over k sub-columns
             const auto style = style_of(d, st.paras[static_cast<std::size_t>(c.p)]);
-            const double before = c.start == 0 && top > std::max(0.0, fr.inset.top) + 0.01 ? style.space_before : 0;
+            const double before = c.start == 0 && (top > std::max(0.0, fr.inset.top) + 0.01 || style.top_space) ? style.space_before : 0;
             core::Frame sub = fr;   // the frame's one column cut in k, the split gutter between
             sub.columns = k;
             sub.gutter = std::max(0.0, style.split_gutter);
@@ -1267,7 +1267,7 @@ bool fill_bands(const core::Doc& d, const core::Story& st, const core::Frame& fr
         }
         if (c.start == 0 && spans(d, st, c.p)) {   // across them all
             const auto style = style_of(d, st.paras[static_cast<std::size_t>(c.p)]);
-            const double before = top > std::max(0.0, fr.inset.top) + 0.01 ? style.space_before : 0;
+            const double before = (top > std::max(0.0, fr.inset.top) + 0.01 || style.top_space) ? style.space_before : 0;
             const std::size_t from = ft.lines.size();
             const int p0 = c.p;
             const bool ended = fill_cols(d, st, whole, wraps, c, hmax, ft, nc, false, fs, top + before, c.p + 1, band);

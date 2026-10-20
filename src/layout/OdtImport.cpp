@@ -6,6 +6,8 @@
 #include <cmath>
 #include <map>
 #include <set>
+#include <filesystem>
+#include <fstream>
 
 namespace composix::layout {
 namespace {
@@ -23,6 +25,9 @@ std::vector<odt::Para> split_lines(const odt::Para& p) {
         odt::Para q;
         q.style = p.style;
         q.outline = p.outline;
+        q.list = p.list;   // s243: its list goes with each piece (the number on the first)
+        q.list_level = p.list_level;
+        q.start = out.empty() ? p.start : 0;
         q.text = p.text.substr(a, b - a);
         for (const auto& s : p.spans) {
             const int s0 = std::max(s.start, static_cast<int>(a)), s1 = std::min(s.end, static_cast<int>(b));
@@ -44,6 +49,7 @@ struct Builder {
     std::map<std::string, std::string> para_style;   // ODT named paragraph style -> Composix id
     std::map<std::string, std::string> char_style;   // ODT named text style -> Composix id
     std::map<std::string, std::string> swatch;       // "#rrggbb" -> id
+    std::map<std::string, std::string> list_style;   // s243: "base|list|level" -> a list paragraph style
     double pos = 10;
     std::string body_id;                              // the default paragraph style's
 
@@ -90,6 +96,7 @@ struct Builder {
         set(pr.after, s.space_after);
         s.color = swatch_for(pr.color);
         if (pr.page_break == 1) s.start = core::ParaStart::NextPage;
+        if (pr.page_break == 1 && s.space_before > 0) s.top_space = true;   // s242: a chapter heading sunk down its page, as in the file
         const auto id = d.fresh_id("style");
         para_style[named] = id;
         d.put(id, s);
@@ -157,9 +164,43 @@ struct Builder {
         }
         return out;
     }
+    // s243: a paragraph style made a list's at a level -- the base's look, the list's marker.
+    std::string list_for(const std::string& base, const std::string& list, int level) {
+        const auto key = base + "|" + list + "|" + std::to_string(level);
+        if (const auto it = list_style.find(key); it != list_style.end()) return it->second;
+        const auto lit = b.lists.find(list);
+        if (lit == b.lists.end()) return base;
+        const auto& lv = lit->second.levels;
+        const odt::ListLevel L = level - 1 < static_cast<int>(lv.size()) ? lv[static_cast<std::size_t>(level - 1)] : (lv.empty() ? odt::ListLevel{} : lv.back());
+        core::Style s = *d.as<core::Style>(base);
+        s.list.type = L.number ? core::ListType::Number : core::ListType::Bullet;
+        s.list.bullet = L.bullet.empty() ? "\u2022" : L.bullet;
+        const auto& f = L.format;
+        s.list.numbering = f == "i" ? core::Numbering::RomanLower : f == "I" ? core::Numbering::RomanUpper
+                         : f == "a" ? core::Numbering::AlphaLower : f == "A" ? core::Numbering::AlphaUpper : core::Numbering::Arabic;
+        s.list.after = L.suffix;
+        s.list.hang = L.label > 0 ? L.label : 18;
+        s.list.level = std::clamp(level, 1, 2);
+        s.left_indent = L.indent >= 0 ? L.indent : s.list.hang * level;
+        if (s.left_indent < s.list.hang) s.left_indent = s.list.hang;
+        s.first_indent = 0;
+        s.name += std::string(L.number ? " (numbered" : " (bullets") + (level > 1 ? ", level " + std::to_string(level) : std::string{}) + ")";
+        s.pos = pos++;
+        s.based_on.clear();
+        s.own.clear();
+        const auto id = d.fresh_id("style");
+        d.put(id, s);
+        ++info.styles;
+        ++info.lists;
+        return list_style[key] = id;
+    }
     core::Para para_of(const odt::Para& p) {
         core::Para q;
         q.style = para_for(p.style);
+        if (!p.list.empty() && p.list_level > 0) {   // s243: a list's item
+            q.style = list_for(q.style, p.list, p.list_level);
+            q.restart = std::max(0, p.start);
+        }
         q.text = p.text;
         core::Local base;
         if (const auto it = b.styles.find(p.style); it != b.styles.end() && it->second.automatic) {   // its own look
@@ -234,7 +275,9 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     core::Story st{"Main", {}};
     bool any_foot = false, any_end = false;
     std::vector<char> heading1;   // s237: which paragraphs are chapters (level-1 headings, or a style at outline 1)
+    std::vector<int> first_of;   // s245: each body paragraph's first story paragraph (a picture's anchor)
     for (const auto& p : b.body) {
+        first_of.push_back(static_cast<int>(st.paras.size()));
         const bool ch = p.outline == 1 || [&] { const auto it = b.styles.find(bl.named_of(p.style)); return it != b.styles.end() && it->second.outline == 1; }();
         if (ch) ++info.chapters;
         bool first = true;
@@ -289,8 +332,10 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     const double per_page = std::max(200.0, area.w * area.h / (body * body * 0.55 * 1.3));   // a rough first guess
     for (int i = 0, k = std::max(1, static_cast<int>(std::ceil(static_cast<double>(bytes) / per_page))); i < k; ++i) add_page();
     if (!pages.empty()) d.put("section.1", core::Section{"Body", pages.front(), core::Numbering::Arabic, 1, n.facing ? core::Side::Right : core::Side::Any, "master.1"});
+    int keep = 1;   // s245: pages kept however little text (a picture placed on page N)
+    const auto fit = [&](double lo, double hi) {   // s245: as many pages as it takes (again, after the pictures)
     for (int round = 1; round <= 40; ++round) {
-        report(std::min(0.9, 0.15 + 0.7 * round / 12.0), "Fitting the pages (" + std::to_string(pages.size()) + ")…");
+        report(std::min(hi, lo + (hi - lo) * round / 12.0), "Fitting the pages (" + std::to_string(pages.size()) + ")\u2026");
         const StoryFlow f = flow_story(d, "story.1");
         std::size_t placed = 0;
         int last = -1;
@@ -308,7 +353,7 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             continue;
         }
         // empty pages off the end
-        while (static_cast<int>(pages.size()) > std::max(1, last + 1)) {
+        while (static_cast<int>(pages.size()) > std::max(keep, last + 1)) {
             d.put(frames.back(), std::nullopt);
             d.put(pages.back(), std::nullopt);
             frames.pop_back();
@@ -318,6 +363,114 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             d.put(frames.back(), prev);
         }
         break;
+    }
+    };
+    fit(0.15, 0.6);
+    // s245: the pictures -- written out (opt.picture_dir) and linked, placed by their anchors;
+    // then the pages fitted again, the anchored ones moved to where their paragraphs went.
+    if (!opt.picture_dir.empty() && !b.images.empty()) {
+        report(0.62, "Placing the pictures\u2026");
+        std::error_code ec;
+        std::filesystem::create_directories(opt.picture_dir, ec);
+        for (const auto& pic : b.images)
+            if (pic.anchor == "page" && !pic.bytes.empty()) keep = std::max(keep, std::min(pic.page, 999));
+        while (static_cast<int>(pages.size()) < keep) add_page();
+        struct Placed1 { std::size_t k; std::string frame; };
+        std::vector<Placed1> placed;
+        std::map<std::string, std::string> asset_of;   // href -> asset
+        const auto where = [&](const odt::Picture& pic, std::string& page, double& x, double& y) {   // on which page, at what place
+            const core::Rect page_area = core::margin_rect(d, "master.1");
+            if (pic.anchor == "page" || pic.para < 0 || pic.para >= static_cast<int>(first_of.size())) {
+                page = pages[static_cast<std::size_t>(std::clamp(pic.page, 1, static_cast<int>(pages.size())) - 1)];
+                x = pic.x;
+                y = pic.y;
+                return true;
+            }
+            const int sp = first_of[static_cast<std::size_t>(pic.para)];
+            const StoryFlow f = flow_story(d, "story.1");
+            for (const auto& ft : f.frames)
+                for (const auto& l : ft.lines) {
+                    if (l.para != sp) continue;
+                    if (pic.anchor == "as-char" && l.end < pic.at && l.end < static_cast<int>(st.paras[static_cast<std::size_t>(sp)].text.size())) continue;
+                    const auto* tf = d.as<core::Frame>(ft.frame);
+                    page = tf->owner;
+                    const double top = tf->y + l.y;
+                    const auto* ps = d.as<core::Style>(st.paras[static_cast<std::size_t>(sp)].style);
+                    const auto& q = st.paras[static_cast<std::size_t>(sp)];
+                    const bool centred = q.over.align ? *q.over.align == core::Align::Center : ps && ps->align == core::Align::Center;
+                    const int hp = pic.anchor == "as-char" ? (centred ? 2 : 1) : pic.hpos;
+                    const double ax = pic.whole_page ? 0 : tf->x, aw = pic.whole_page ? n.trim_w : tf->w;
+                    x = hp == 1 ? ax : hp == 2 ? ax + (aw - pic.w) / 2 : hp == 3 ? ax + aw - pic.w : ax + pic.x;
+                    y = pic.anchor == "as-char" ? top : top + (pic.vpos == 0 ? pic.y : 0);
+                    (void)page_area;
+                    return true;
+                }
+            return false;
+        };
+        for (std::size_t k = 0; k < b.images.size(); ++k) {
+            const auto& pic = b.images[k];
+            if (pic.bytes.empty()) continue;
+            std::string page;
+            double x = 0, y = 0;
+            if (!where(pic, page, x, y)) continue;
+            std::string& aid = asset_of[pic.href.empty() ? pic.name : pic.href];   // one file, one link -- however many frames show it
+            if (aid.empty()) {
+                int pw = 0, ph = 0;
+                const bool sized = odt::pixel_size(pic.bytes, pw, ph);
+                const std::string ext = pic.bytes.compare(0, 4, "\x89PNG") == 0 ? ".png" : pic.bytes.compare(0, 3, "GIF") == 0 ? ".gif"
+                                      : pic.bytes.compare(0, 2, "\xFF\xD8") == 0 ? ".jpg"
+                                      : std::filesystem::path(pic.href).extension().string();
+                std::string base = std::filesystem::path(pic.href).stem().string();   // the file's own name
+                if (base.empty()) base = pic.name.empty() ? "picture-" + std::to_string(k + 1) : pic.name;
+                for (auto& c : base) if (c == '/' || c == '\\' || c == ':') c = '_';
+                for (int n = 2; std::filesystem::exists(std::filesystem::path(opt.picture_dir) / (base + ext)) && n < 10000; ++n)
+                    base = std::filesystem::path(pic.href).stem().string() + "-" + std::to_string(n);
+                const auto path = (std::filesystem::path(opt.picture_dir) / (base + ext)).string();
+                { std::ofstream out(path, std::ios::binary); out << pic.bytes; }
+                core::Asset a;
+                a.name = base + ext;
+                a.pos = static_cast<double>(k + 1);
+                a.path = path;
+                a.color = core::picture_color(pic.bytes);
+                if (a.color.empty()) a.color = "RGB";
+                a.px_w = sized ? pw : 0;
+                a.px_h = sized ? ph : 0;
+                a.stamp = core::file_stamp(path);
+                aid = d.fresh_id("asset");
+                d.put(aid, a);
+            }
+            core::Frame fr{page, core::FrameKind::Image, x, y, pic.w, pic.h, 0, 1e6 + static_cast<double>(k), "", "", aid};
+            fr.fit = core::ImageFit::Fit;
+            fr.wrap = pic.wrap == 0 ? core::Wrap::None : pic.wrap == 1 ? core::Wrap::Around : core::Wrap::Jump;
+            if (pic.wrap != 0) fr.wrap_off = pic.anchor == "as-char" ? core::Sides{0, 0, 0, 0} : pic.anchor == "page" ? core::Sides{6, 6, 6, 6} : core::Sides{0, 6, 6, 6};
+            const auto fid = d.fresh_id("frame");
+            d.put(fid, fr);
+            placed.push_back({k, fid});
+            ++info.placed;
+        }
+        fit(0.66, 0.8);
+        for (int pass = 0; pass < 2; ++pass) {   // the paragraphs moved: their pictures after them
+            bool moved = false;
+            for (const auto& pl : placed) {
+                const auto& pic = b.images[pl.k];
+                if (pic.anchor == "page") continue;
+                std::string page;
+                double x = 0, y = 0;
+                auto fr = *d.as<core::Frame>(pl.frame);
+                // (its own wrap moves its paragraph: look with it out of the way)
+                d.put(pl.frame, std::nullopt);
+                const bool ok = where(pic, page, x, y);
+                if (ok && (page != fr.owner || std::abs(x - fr.x) > 0.5 || std::abs(y - fr.y) > 0.5)) {
+                    fr.owner = page;
+                    fr.x = x;
+                    fr.y = y;
+                    moved = true;
+                }
+                d.put(pl.frame, fr);
+            }
+            if (!moved) break;
+            fit(0.8, 0.9);
+        }
     }
     info.pages = static_cast<int>(pages.size());
     // s237: the first master page's header and footer -- each a story in a frame on the
@@ -390,7 +543,8 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     info.pictures = b.pictures;
     info.contents = b.contents;
     if (b.tables) info.notes_said.push_back(std::to_string(b.tables) + (b.tables == 1 ? " table" : " tables") + " left out (tables come later)");
-    if (b.pictures) info.notes_said.push_back(std::to_string(b.pictures) + (b.pictures == 1 ? " picture" : " pictures") + " left out -- place them");
+    if (b.pictures > info.placed)
+        info.notes_said.push_back(std::to_string(b.pictures - info.placed) + (b.pictures - info.placed == 1 ? " picture" : " pictures") + " left out -- place them");
     if (b.contents) info.notes_said.push_back("its contents / index left out -- build one from the styles");
     report(1.0, "Done");
     return true;

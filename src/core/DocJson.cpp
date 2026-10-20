@@ -229,6 +229,7 @@ json to(const Record& r) {
             if (v.span) j["span"] = true;           // s166
             if (v.split >= 2) j["split"] = v.split;   // s183
             if (!v.lang.empty()) j["lang"] = v.lang;   // s190
+            if (v.top_space) j["top_space"] = true;   // s242
             if (v.split >= 2 && v.split_gutter != 12) j["split_gutter"] = v.split_gutter;
             if (!v.tabs.empty()) {
                 json tabs = json::array();
@@ -529,6 +530,7 @@ std::optional<Record> from(const json& j) {
         v.span = val(j, "span", false);           // s166
         v.split = std::clamp(val(j, "split", 0), 0, 4);   // s183
         v.lang = val(j, "lang", std::string{});   // s190
+        v.top_space = val(j, "top_space", false);   // s242
         v.split_gutter = val(j, "split_gutter", 12.0);
         v.align = de(j, "align", Align::Left);
         v.space_before = val(j, "space_before", 0.0);
