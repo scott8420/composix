@@ -91,6 +91,9 @@ void Page::set_stroke(const Color& c0) {
 void Page::set_line_width(double w) { m_ops += num(w) + " w\n"; }
 void Page::move_to(double x, double y) { m_ops += num(x) + " " + num(y) + " m\n"; }
 void Page::line_to(double x, double y) { m_ops += num(x) + " " + num(y) + " l\n"; }
+void Page::curve_to(double x1, double y1, double x2, double y2, double x, double y) {   // s197
+    m_ops += num(x1) + " " + num(y1) + " " + num(x2) + " " + num(y2) + " " + num(x) + " " + num(y) + " c\n";
+}
 void Page::rect(const Rect& r) { m_ops += num(r.x) + " " + num(r.y) + " " + num(r.w) + " " + num(r.h) + " re\n"; }
 void Page::fill() { m_ops += "f\n"; }
 void Page::close_path() { m_ops += "h\n"; }            // s189

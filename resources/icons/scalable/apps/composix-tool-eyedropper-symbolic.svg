@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- s198: the Eyedropper tool. -->
+  <path fill="currentColor" fill-rule="evenodd"
+        d="M12 1.4a2 2 0 0 1 2.8 2.8l-2.1 2.1.9.9-1.2 1.2-.9-.9-5.6 5.6a2 2 0 0 1-1.4.6H3.3l-1.6 1.6-1-1 1.6-1.6v-1.2a2 2 0 0 1 .6-1.4L8.5 4.5l-.9-.9 1.2-1.2.9.9zM9.6 5.6L4 11.2v.9h.9l5.6-5.6z"/>
+</svg>

@@ -96,6 +96,13 @@ json to(const Record& r) {
             if (v.valign != VAlign::Top) j["valign"] = en(v.valign);   // s042
             if (v.autosize) j["autosize"] = true;                      // s048
             if (v.across) j["across"] = true;                          // s155
+            if (v.shape != ShapeKind::Rect) j["shape"] = en(v.shape);   // s197
+            if (v.open) j["open"] = true;
+            if (!v.path.empty()) {
+                json pts = json::array();
+                for (const auto& p : v.path) pts.push_back({p.x, p.y, p.ix, p.iy, p.ox, p.oy, p.smooth ? 1 : 0});
+                j["path"] = pts;
+            }
             if (v.ignore_wrap) j["ignore_wrap"] = true;                // s069
             if (!(v.inset == Sides{})) j["inset"] = {v.inset.top, v.inset.right, v.inset.bottom, v.inset.left};   // s040
             if (!(v.col_rule == ColumnRule{}))   // s055
@@ -367,6 +374,13 @@ std::optional<Record> from(const json& j) {
         v.autosize = val(j, "autosize", false);    // s048
         v.ignore_wrap = val(j, "ignore_wrap", false);   // s069
         v.across = val(j, "across", false);   // s155
+        v.shape = de(j, "shape", ShapeKind::Rect);   // s197
+        v.open = val(j, "open", false);
+        if (j.contains("path") && j["path"].is_array())
+            for (const auto& a : j["path"])
+                if (a.is_array() && a.size() >= 6)
+                    v.path.push_back({a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>(),
+                                      a[4].get<double>(), a[5].get<double>(), a.size() > 6 && a[6].get<int>() != 0});
         if (j.contains("wrap_off") && j["wrap_off"].is_array() && j["wrap_off"].size() == 4) {
             const auto& a = j["wrap_off"];
             v.wrap_off = {a[0].get<double>(), a[1].get<double>(), a[2].get<double>(), a[3].get<double>()};

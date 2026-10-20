@@ -1,3 +1,4 @@
+#include <functional>
 #include "views/PagePaint.hpp"
 #include "views/Images.hpp"
 
@@ -134,17 +135,31 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
     const double s = P.s;
     const double dim = from_master ? 0.45 : 1.0;
     const double op = std::clamp(f.opacity, 0.0, 1.0);   // s021: on fill, content and stroke alike
+    // s197: the frame's outline on screen -- its box, or a shape's oval / path.
+    const auto outline = [&cr, &f, r, s] {
+        if (!core::doc::has_outline(f)) { cr->rectangle(r.x, r.y, r.w, r.h); return; }
+        cr->begin_new_path();
+        const auto X = [&](double v) { return r.x + (v - f.x) * s; };
+        const auto Y = [&](double v) { return r.y + (v - f.y) * s; };
+        for (const auto& o : core::doc::outline_ops(f)) {
+            if (o.op == 'M') cr->move_to(X(o.v[0]), Y(o.v[1]));
+            else if (o.op == 'L') cr->line_to(X(o.v[0]), Y(o.v[1]));
+            else if (o.op == 'C') cr->curve_to(X(o.v[0]), Y(o.v[1]), X(o.v[2]), Y(o.v[3]), X(o.v[4]), Y(o.v[5]));
+            else cr->close_path();
+        }
+    };
     // s016: the frame's fill, behind its content (and its stroke, after).
     if (const auto* fs = P.doc.as<core::Swatch>(f.fill)) {
         const auto c = core::tint_rgb(core::doc::screen_rgb(*fs), f.fill_tint);   // s021
         cr->save();
         cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0, dim * op);
-        cr->rectangle(r.x, r.y, r.w, r.h);
+        outline();
         cr->fill();
         cr->restore();
     }
     struct StrokeLater {
         const Cairo::RefPtr<Cairo::Context>& cr; const core::Doc& d; const core::Frame& f; Rect r; double s, dim;
+        std::function<void()> outline;   // s197
         ~StrokeLater() {
             const auto* ss = d.as<core::Swatch>(f.stroke);
             if (!ss || f.stroke_w <= 0) return;
@@ -153,11 +168,11 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
             cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0,
                                 dim * std::clamp(f.opacity, 0.0, 1.0));
             cr->set_line_width(std::max(0.5, f.stroke_w * s));
-            cr->rectangle(r.x, r.y, r.w, r.h);   // centred on the frame's edge, as it prints
+            outline();   // centred on the frame's edge, as it prints
             cr->stroke();
             cr->restore();
         }
-    } stroke_later{cr, P.doc, f, r, s, dim};
+    } stroke_later{cr, P.doc, f, r, s, dim, outline};
     cr->save();
 
     switch (f.kind) {
@@ -411,7 +426,7 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
     case core::FrameKind::Shape:
         if (!f.fill.empty() || !f.stroke.empty()) break;   // s016: it has its own look
         cr->set_source_rgba(0.5, 0.5, 0.55, 0.12 * dim);
-        cr->rectangle(r.x, r.y, r.w, r.h);
+        outline();
         cr->fill_preserve();
         cr->set_source_rgba(0.4, 0.4, 0.45, 0.8 * dim);
         cr->set_line_width(1);

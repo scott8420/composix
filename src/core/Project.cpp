@@ -855,6 +855,15 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         const char* kind = f->kind == FrameKind::Text ? "Text" : f->kind == FrameKind::Image ? "Image" : "Shape";
         std::string on = d.as<Page>(f->owner) ? "Page " + d.folio(f->owner) : master_label(d, f->owner);
         std::vector<Field> fields{{"Kind", kind}, {"On", on}};
+        if (f->kind == FrameKind::Shape) {   // s197: its outline -- a rectangle and an oval trade places
+            if (f->shape == ShapeKind::Path) {
+                const bool line = f->open && f->path.size() == 2;
+                fields.push_back({"Shape", line ? std::string("Line")
+                                                : (f->open ? "Open path, " : "Closed path, ") + std::to_string(f->path.size()) + " points"});
+            } else {
+                fields.push_back({"Shape", f->shape == ShapeKind::Oval ? "Oval" : "Rectangle", "shape", {{"0", "Rectangle"}, {"1", "Oval"}}});
+            }
+        }
         // One compact row (Scott): X Y W H over their values, inches.
         const auto U = d.settings().units;   // s073
         // s154: X / Y from the rulers' zero (the origin and the dragged zero point).
@@ -865,6 +874,8 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         box.edit = "bounds";   // s041: each typed
         fields.push_back(box);
         std::string title = std::string(kind) + " frame";
+        if (f->kind == FrameKind::Shape && f->shape != ShapeKind::Rect)   // s197
+            title = f->shape == ShapeKind::Oval ? "Oval" : f->open && f->path.size() == 2 ? "Line" : "Path";
         // s016: fill and stroke, from the swatches.
         {
             std::vector<Choice> sw{{"", "None"}};
@@ -892,9 +903,9 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         {   // s018: text wrap -- how this frame pushes OTHER frames' text aside.
             static const char* names[] = {"None", "Around", "Jump", "Shape"};
             std::vector<Choice> wc{{"0", "None"}, {"1", "Around"}, {"2", "Jump"}};
-            if (f->kind == FrameKind::Image) wc.push_back({"3", "Shape"});   // s173: the picture's own outline
+            if (f->kind == FrameKind::Image || doc::has_outline(*f)) wc.push_back({"3", "Shape"});   // s173: the picture's own outline; s200: a shape's
             fields.push_back({"Wrap", names[static_cast<int>(f->wrap)], "wrap", wc});
-            if (f->wrap == Wrap::Shape) {
+            if (f->wrap == Wrap::Shape && f->kind == FrameKind::Image) {
                 const auto* a = d.as<Asset>(f->asset);
                 if (!a || a->shape.empty())
                     fields.push_back({"Shape", "Nothing to trace \u2014 wraps the frame"});

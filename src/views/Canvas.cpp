@@ -9,6 +9,10 @@
 
 #include <gdkmm/cursor.h>
 #include <glibmm/main.h>
+#include <gtkmm/image.h>
+#include <gtkmm/gesturelongpress.h>
+#include <gtkmm/overlay.h>
+#include <gtkmm/popover.h>
 #include <gtkmm/gestureclick.h>
 #include <gtkmm/droptarget.h>
 #include <gtkmm/root.h>
@@ -698,14 +702,78 @@ std::string Canvas::out_port_hit(double sx, double sy) const {
 void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
     draw_threads(cr);
     cr->set_line_width(1);
-    if (m_drag == Drag::Draw && m_draw.w > 0) {   // the frame being drawn
+    if (m_drag == Drag::Draw && (m_draw.w > 0 || m_draw.h > 0)) {   // the frame being drawn
         const Rect r = m_vp.to_screen(m_draw);
         std::vector<double> dash{5, 3};
         cr->set_dash(dash, 0);
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.9);
-        cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
+        const bool shape = m_tool == Tool::Shape && m_load.empty();
+        if (shape && m_shape == ShapeTool::Line) {   // s198
+            double ax, ay, bx, by;
+            m_vp.to_screen(m_dx0, m_dy0, ax, ay);
+            m_vp.to_screen(m_lx1, m_ly1, bx, by);
+            cr->move_to(ax, ay);
+            cr->line_to(bx, by);
+        } else if (shape && m_shape == ShapeTool::Oval && r.w > 0 && r.h > 0) {
+            cr->save();
+            cr->translate(r.x + r.w / 2, r.y + r.h / 2);
+            cr->scale(r.w / 2, r.h / 2);
+            cr->arc(0, 0, 1, 0, 2 * M_PI);
+            cr->restore();
+        } else {
+            cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
+        }
         cr->stroke();
         cr->unset_dash();
+    }
+    // s199: the Pen's path so far -- its curves, its points, the next
+    // segment to the pointer; on the first point, a ring: a click closes.
+    if (m_tool == Tool::Pen && !m_pen.empty()) {
+        const auto S = [&](double x, double y) { double sx, sy; m_vp.to_screen(x, y, sx, sy); return std::array<double, 2>{sx, sy}; };
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+        cr->set_line_width(1.5);
+        auto p0 = S(m_pen[0].x, m_pen[0].y);
+        cr->move_to(p0[0], p0[1]);
+        for (std::size_t i = 1; i < m_pen.size(); ++i) {
+            const auto a = S(m_pen[i - 1].ox, m_pen[i - 1].oy), b = S(m_pen[i].ix, m_pen[i].iy), c = S(m_pen[i].x, m_pen[i].y);
+            cr->curve_to(a[0], a[1], b[0], b[1], c[0], c[1]);
+        }
+        if (m_drag != Drag::PenHandle && m_in) {   // the next segment, to the pointer
+            const auto& l = m_pen.back();
+            const auto a = S(l.ox, l.oy);
+            const bool closing = m_pen.size() >= 2 && pen_near_first(m_mx, m_my);
+            const auto e = closing ? p0 : std::array<double, 2>{m_mx, m_my};
+            const auto b = closing ? S(m_pen[0].ix, m_pen[0].iy) : e;
+            cr->curve_to(a[0], a[1], b[0], b[1], e[0], e[1]);
+            cr->stroke();
+            if (closing) {
+                cr->arc(p0[0], p0[1], 6, 0, 2 * M_PI);
+                cr->stroke();
+            }
+        } else {
+            cr->stroke();
+        }
+        cr->set_line_width(1);
+        for (std::size_t i = 0; i < m_pen.size(); ++i) {
+            const auto& q = m_pen[i];
+            const auto c = S(q.x, q.y);
+            const bool last = i + 1 == m_pen.size();
+            if (q.smooth && (last || i + 2 == m_pen.size())) {   // the newest point's handles
+                const auto hi = S(q.ix, q.iy), ho = S(q.ox, q.oy);
+                cr->move_to(hi[0], hi[1]);
+                cr->line_to(ho[0], ho[1]);
+                cr->stroke();
+                for (const auto& h : {hi, ho}) { cr->arc(h[0], h[1], 2.5, 0, 2 * M_PI); cr->fill(); }
+            }
+            cr->rectangle(std::round(c[0]) - 3, std::round(c[1]) - 3, 6, 6);
+            if (last) cr->fill();
+            else {
+                cr->set_source_rgba(1, 1, 1, 1);
+                cr->fill_preserve();
+                cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+                cr->stroke();
+            }
+        }
     }
     // Hover: a quiet outline on the frame under the pointer.
     if (!m_hover.empty() && std::find(m_sel.begin(), m_sel.end(), m_hover) == m_sel.end()) {
@@ -723,7 +791,9 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         // s018: a wrapping frame shows its wrap edge (the offsets), dotted.
         const auto* f = m_doc.as<core::Frame>(id);
         const auto* fa = f && f->wrap == core::Wrap::Shape ? m_doc.as<core::Asset>(f->asset) : nullptr;
-        const auto bands = fa ? core::shape_bands(*f, *fa) : std::vector<core::Band>{};
+        const auto bands = fa ? core::shape_bands(*f, *fa)
+                         : f && f->wrap == core::Wrap::Shape && core::doc::has_outline(*f) ? core::outline_bands(*f, m_doc)   // s200
+                                                                                            : std::vector<core::Band>{};
         if (!bands.empty()) {   // s173: the outline it wraps to, dotted -- each run of touching bands one shape
             const Rect fr = core::frame_in_layout(m_doc, m_placed, id);
             const auto& o = f->wrap_off;
@@ -803,7 +873,9 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
             cr->stroke();
         }
     }
-    if (!m_sel.empty() && !editing() && !direct) {
+    double sdx = 0, sdy = 0;   // s200: a shape's points on show -- they, not the box's handles
+    const bool direct_shp = m_tool == Tool::Direct && !m_direct.empty() && !editing() && direct_shape(m_direct, sdx, sdy);
+    if (!m_sel.empty() && !editing() && !direct && !direct_shp) {
         const Rect box = m_vp.to_screen(selection_box());
         if (m_sel.size() > 1) {
             std::vector<double> dash{4, 3};
@@ -820,6 +892,50 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
             cr->fill_preserve();
             cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
             cr->stroke();
+        }
+    }
+    // s200: Direct on a shape -- its outline, its points (squares corners,
+    // rounds smooth; the picked one filled) and the picked one's handles.
+    if (double odx = 0, ody = 0; m_tool == Tool::Direct && !m_direct.empty() && direct_shape(m_direct, odx, ody)) {
+        const auto* f = m_doc.as<core::Frame>(m_direct);
+        bool open = false;
+        const auto P = core::doc::shape_points(*f, open);
+        const auto S = [&](double x, double y) { double sx, sy; m_vp.to_screen(x + odx, y + ody, sx, sy); return std::array<double, 2>{sx, sy}; };
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+        cr->set_line_width(1);
+        for (const auto& o : core::doc::outline_ops(*f, 0, 0)) {
+            if (o.op == 'M') { const auto a = S(o.v[0], o.v[1]); cr->move_to(a[0], a[1]); }
+            else if (o.op == 'L') { const auto a = S(o.v[0], o.v[1]); cr->line_to(a[0], a[1]); }
+            else if (o.op == 'C') {
+                const auto a = S(o.v[0], o.v[1]), b = S(o.v[2], o.v[3]), c = S(o.v[4], o.v[5]);
+                cr->curve_to(a[0], a[1], b[0], b[1], c[0], c[1]);
+            } else cr->close_path();
+        }
+        cr->stroke();
+        if (m_pt >= 0 && m_pt < static_cast<int>(P.size())) {
+            const auto& p = P[static_cast<std::size_t>(m_pt)];
+            const auto c = S(p.x, p.y);
+            for (const auto& h : {S(p.ix, p.iy), S(p.ox, p.oy)}) {
+                if (std::hypot(h[0] - c[0], h[1] - c[1]) < 0.5) continue;
+                cr->move_to(c[0], c[1]);
+                cr->line_to(h[0], h[1]);
+                cr->stroke();
+                cr->arc(h[0], h[1], 3, 0, 2 * M_PI);
+                cr->fill();
+            }
+        }
+        for (int i = 0; i < static_cast<int>(P.size()); ++i) {
+            const auto& p = P[static_cast<std::size_t>(i)];
+            const auto c = S(p.x, p.y);
+            if (p.smooth) cr->arc(c[0], c[1], 3.5, 0, 2 * M_PI);
+            else cr->rectangle(std::round(c[0]) - 3.5, std::round(c[1]) - 3.5, 7, 7);
+            if (i == m_pt) cr->fill();
+            else {
+                cr->set_source_rgba(1, 1, 1, 1);
+                cr->fill_preserve();
+                cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+                cr->stroke();
+            }
         }
     }
     // Loaded (s009): the file's name beside the pointer.
@@ -855,11 +971,14 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         }
     }
     // s180: the eyedropper -- the colour under the pointer, its hex, and how to stop.
-    if (m_take && m_in) {
+    if ((m_take || m_tool == Tool::Eyedropper) && m_in) {   // s198: the tool too
         char hx[64];
         if (m_take_under) std::snprintf(hx, sizeof hx, "#%06X", *m_take_under & 0xFFFFFFu);
         else std::snprintf(hx, sizeof hx, "%s", "Over a page");
-        auto lay = create_pango_layout(std::string(hx) + "  \u00b7  click to take, Esc to stop");
+        const char* how = m_take ? "  \u00b7  click to take, Esc to stop"
+                        : m_sel.empty() ? "  \u00b7  click: a swatch"
+                                        : "  \u00b7  click: fill, Shift: stroke, Alt: a swatch";
+        auto lay = create_pango_layout(std::string(hx) + how);
         lay->set_font_description(Pango::FontDescription("Sans 9"));
         int lw, lh;
         lay->get_pixel_size(lw, lh);
@@ -955,6 +1074,47 @@ void Canvas::on_drag_begin(double x, double y) {
     m_last_press = now;
     m_last_px = x;
     m_last_py = y;
+    // s198: the Eyedropper tool -- the colour here onto the picks' fill
+    // (Shift: stroke); Alt, or nothing picked: just the swatch.
+    if (m_tool == Tool::Eyedropper) {
+        m_drag = Drag::None;
+        const auto c = colour_at(x, y);
+        if (!c) return;
+        core::doc::take_colour_onto(m_journal, m_doc, m_mods_alt ? std::vector<std::string>{} : m_sel, *c, m_mods_shift);
+        m_sig_edited.emit();
+        queue_draw();
+        return;
+    }
+    // s199: the Pen -- a click puts down a corner, a drag pulls out its
+    // handles; on the first point it closes, a double-click ends it open.
+    if (m_tool == Tool::Pen) {
+        m_drag = Drag::None;
+        if (m_pen.size() >= 2 && pen_near_first(x, y)) { pen_finish(true, true); return; }
+        if (!m_pen.empty() && m_clicks >= 2) { pen_finish(true); return; }
+        if (m_pen.empty()) {
+            const core::Placed* at = nullptr;
+            for (const auto& p : m_placed)
+                if (p.r.contains(px0, py0)) { at = &p; break; }
+            if (!at) return;   // off the pages
+            m_pen_owner = at->id;
+            m_pen_ox = at->r.x;
+            m_pen_oy = at->r.y;
+        }
+        double qx = px0, qy = py0;
+        if (m_mods_shift && !m_pen.empty()) {   // Shift: at 45-degree steps from the last point
+            const auto& l = m_pen.back();
+            const double a = std::round(std::atan2(qy - l.y, qx - l.x) / (M_PI / 4)) * (M_PI / 4);
+            const double len = std::hypot(qx - l.x, qy - l.y);
+            qx = l.x + len * std::cos(a);
+            qy = l.y + len * std::sin(a);
+        }
+        m_pen.push_back(core::doc::corner_point(qx, qy));
+        m_dx0 = qx;
+        m_dy0 = qy;
+        m_drag = Drag::PenHandle;
+        queue_draw();
+        return;
+    }
     // s034: on the tab ruler -- a stop: drag it (double-click: its kind,
     // Shift+double-click: its leader); elsewhere: a new one.
     // s157: "Reset to style" -- the paragraphs' own stops dropped.
@@ -1051,6 +1211,64 @@ void Canvas::on_drag_begin(double x, double y) {
     if (m_tool == Tool::Direct && m_load.empty()) {
         m_drag = Drag::None;
         Rect fl, pl;
+        // s200: the shape on show -- a handle of its picked point, a point,
+        // or (double-click) its outline.
+        double odx = 0, ody = 0;
+        if (!m_direct.empty() && direct_shape(m_direct, odx, ody)) {
+            const auto* f = m_doc.as<core::Frame>(m_direct);
+            bool open = false;
+            const auto P = core::doc::shape_points(*f, open);
+            const auto near = [&](double ax, double ay) {
+                double sx, sy;
+                m_vp.to_screen(ax + odx, ay + ody, sx, sy);
+                return std::hypot(sx - x, sy - y) <= 6;
+            };
+            int part = -1, at = -1;
+            if (m_pt >= 0 && m_pt < static_cast<int>(P.size())) {
+                const auto& p = P[static_cast<std::size_t>(m_pt)];
+                if (!(p.ix == p.x && p.iy == p.y) && near(p.ix, p.iy)) { part = 1; at = m_pt; }
+                else if (!(p.ox == p.x && p.oy == p.y) && near(p.ox, p.oy)) { part = 2; at = m_pt; }
+            }
+            for (int i = 0; part < 0 && i < static_cast<int>(P.size()); ++i)
+                if (near(P[static_cast<std::size_t>(i)].x, P[static_cast<std::size_t>(i)].y)) { part = 0; at = i; }
+            if (part >= 0) {
+                m_pt = at;
+                if (part == 0 && m_mods_alt) {   // Alt-click a point: smooth <-> corner
+                    if (core::doc::path_toggle_point(m_journal, m_doc, m_direct, at)) m_sig_edited.emit();
+                    queue_draw();
+                    return;
+                }
+                m_pt_part = part;
+                m_pts0 = P;
+                m_pts_open = open;
+                m_dx0 = px0;
+                m_dy0 = py0;
+                core::doc::frames_begin(m_journal, m_doc, {m_direct}, part == 0 ? "Move point" : "Move handle");
+                m_begun = true;
+                m_drag = Drag::PathPoint;
+                queue_draw();
+                return;
+            }
+            if (m_clicks >= 2) {   // a double-click on the outline: a point there
+                const auto h = core::doc::outline_nearest(*f, px0 - odx, py0 - ody);
+                if (h.k >= 0 && h.dist * m_vp.scale() <= 6 && core::doc::path_add_point(m_journal, m_doc, m_direct, h.k, h.t)) {
+                    m_pt = h.k + 1;
+                    m_sig_edited.emit();
+                    queue_draw();
+                    return;
+                }
+            }
+        }
+        {   // a shape: its points on show
+            const auto hit = core::hit_frame(m_doc, m_placed, px0, py0, 3 / m_vp.scale());
+            if (!hit.empty() && direct_shape(hit, odx, ody)) {
+                if (hit != m_direct) m_pt = -1;
+                m_direct = hit;
+                pick({hit});
+                queue_draw();
+                return;
+            }
+        }
         const auto start = [&](const std::string& fid, Drag kind, const char* label) {
             m_pic0 = {pl.x - fl.x, pl.y - fl.y, pl.w, pl.h};   // the frame's own coordinates
             m_pic_frame = fid;
@@ -1216,6 +1434,43 @@ void Canvas::on_drag_update(double ox, double oy) {
     switch (m_drag) {
     case Drag::None:
         return;
+    case Drag::PathPoint: {   // s200: a shape's point (with its handles), or one handle
+        if (m_pt < 0 || m_pt >= static_cast<int>(m_pts0.size())) return;
+        auto P = m_pts0;
+        auto& p = P[static_cast<std::size_t>(m_pt)];
+        const double ddx = ox / s, ddy = oy / s;
+        if (m_pt_part == 0) {
+            p.x += ddx; p.ix += ddx; p.ox += ddx;
+            p.y += ddy; p.iy += ddy; p.oy += ddy;
+        } else {
+            double& hx = m_pt_part == 1 ? p.ix : p.ox;
+            double& hy = m_pt_part == 1 ? p.iy : p.oy;
+            double& kx = m_pt_part == 1 ? p.ox : p.ix;
+            double& ky = m_pt_part == 1 ? p.oy : p.iy;
+            hx += ddx;
+            hy += ddy;
+            if (m_mods_alt) p.smooth = false;   // Alt: the handles part ways
+            else if (p.smooth) {   // the other handle stays in line, its own length
+                const double other = std::hypot(kx - p.x, ky - p.y), len = std::hypot(hx - p.x, hy - p.y);
+                if (len > 1e-9) { kx = p.x - (hx - p.x) / len * other; ky = p.y - (hy - p.y) / len * other; }
+            }
+        }
+        const bool open = m_pts_open;
+        core::doc::edit_frames(m_journal, m_doc, {m_direct}, "Edit path", [&](core::Frame& f) { core::doc::set_path(f, P, open); });
+        queue_draw();
+        return;
+    }
+    case Drag::PenHandle: {   // s199: the handles out of the point just put down (and in, mirrored)
+        if (m_pen.empty() || std::hypot(ox, oy) < 3) return;
+        auto& p = m_pen.back();
+        p.ox = m_dx0 + ox / s;
+        p.oy = m_dy0 + oy / s;
+        p.ix = 2 * p.x - p.ox;
+        p.iy = 2 * p.y - p.oy;
+        p.smooth = true;
+        queue_draw();
+        return;
+    }
     case Drag::PicScale: {   // s186: the picture scaled by a handle -- in proportion (Alt: about its centre)
         const Rect r = core::resize_rect(m_pic0, m_pic_handle, ox / s, oy / s, true, m_mods_alt, 2);
         core::doc::edit_frames(m_journal, m_doc, {m_pic_frame}, "Scale picture", [&](core::Frame& f) {
@@ -1323,7 +1578,13 @@ void Canvas::on_drag_update(double ox, double oy) {
     }
     case Drag::Draw: {
         double x1 = m_dx0 + ox / s, y1 = m_dy0 + oy / s;
-        if (m_mods_shift) {   // Shift: square
+        const bool line = m_tool == Tool::Shape && m_shape == ShapeTool::Line && m_load.empty();
+        if (m_mods_shift && line) {   // s198: Shift -- a line at 45-degree steps
+            const double a = std::round(std::atan2(y1 - m_dy0, x1 - m_dx0) / (M_PI / 4)) * (M_PI / 4);
+            const double len = std::hypot(x1 - m_dx0, y1 - m_dy0);
+            x1 = m_dx0 + len * std::cos(a);
+            y1 = m_dy0 + len * std::sin(a);
+        } else if (m_mods_shift) {   // Shift: square
             const double side = std::max(std::abs(x1 - m_dx0), std::abs(y1 - m_dy0));
             x1 = m_dx0 + std::copysign(side, x1 - m_dx0);
             y1 = m_dy0 + std::copysign(side, y1 - m_dy0);
@@ -1337,6 +1598,8 @@ void Canvas::on_drag_update(double ox, double oy) {
             if (hy.hit()) { y1 += hy.delta; m_snap_y = hy.line; }
         }
         m_draw = Rect::from_corners(m_dx0, m_dy0, x1, y1);
+        m_lx1 = x1;
+        m_ly1 = y1;
         queue_draw();
         return;
     }
@@ -1420,7 +1683,7 @@ void Canvas::on_drag_end(double, double) {
         return;
     }
     if (was == Drag::Text) { queue_draw(); return; }
-    if (was == Drag::Picture || was == Drag::PicScale) {   // s035: the move (s186: or the scale), one step
+    if (was == Drag::Picture || was == Drag::PicScale || was == Drag::PathPoint) {   // s035: the move (s186: or the scale; s200: a point), one step
         m_begun = false;
         core::doc::frames_end(m_journal);
         m_sig_edited.emit();
@@ -1464,7 +1727,23 @@ void Canvas::on_drag_end(double, double) {
     if (was == Drag::Draw) {
         // Big enough to mean it (4 px on screen): a frame on the page it was
         // started on, in that page's coordinates.
-        const bool drawn = m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4;
+        const bool line = m_tool == Tool::Shape && m_shape == ShapeTool::Line;   // s198
+        const bool drawn = line ? std::hypot(m_lx1 - m_dx0, m_ly1 - m_dy0) * m_vp.scale() >= 4
+                                : m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4;
+        if (drawn && line) {
+            for (const auto& p : m_placed)
+                if (p.id == m_draw_page && p.r.contains(m_dx0, m_dy0)) {
+                    const auto id = core::doc::add_path(m_journal, m_doc, p.id,
+                                                        {core::doc::corner_point(m_dx0 - p.r.x, m_dy0 - p.r.y),
+                                                         core::doc::corner_point(m_lx1 - p.r.x, m_ly1 - p.r.y)}, true);
+                    if (!id.empty()) { relayout(); pick({id}); m_sig_edited.emit(); }
+                    break;
+                }
+            m_draw = {};
+            m_snap_x = m_snap_y = NAN;
+            queue_draw();
+            return;
+        }
         // s014: a Text-tool CLICK inside the margins makes a frame filling the
         // page's column there.
         if (!drawn && m_tool == Tool::Text) {
@@ -1489,8 +1768,9 @@ void Canvas::on_drag_end(double, double) {
         if (drawn) {
             for (const auto& p : m_placed)
                 if (p.id == m_draw_page) {
-                    static const core::FrameKind kinds[] = {core::FrameKind::Text, core::FrameKind::Text,
-                                                            core::FrameKind::Image, core::FrameKind::Shape};
+                    const core::FrameKind kind = m_tool == Tool::Text    ? core::FrameKind::Text
+                                               : m_tool == Tool::Image   ? core::FrameKind::Image
+                                                                         : core::FrameKind::Shape;
                     // s155: on a facing master's spread, drawn across the spine: one
                     // item across it, placed from the left page.
                     const core::Placed* left = nullptr;
@@ -1505,8 +1785,8 @@ void Canvas::on_drag_end(double, double) {
                     const Rect mr = core::margin_rect(m_doc, at.id, at.side);
                     auto [cols, gut] = core::page_column_setup(m_doc, at.id);
                     if (across || !(mr.w > 0 && std::abs(own.x - mr.x) < 1 && std::abs(own.r() - mr.r()) < 1)) cols = 1;
-                    const auto id = core::doc::add_frame(m_journal, m_doc, at.id, kinds[static_cast<int>(m_tool)],
-                                                         own, cols, gut, across);
+                    const auto id = core::doc::add_frame(m_journal, m_doc, at.id, kind, own, cols, gut, across,
+                                                         m_shape == ShapeTool::Oval ? core::ShapeKind::Oval : core::ShapeKind::Rect);
                     if (!id.empty()) {
                         relayout();
                         pick({id});
@@ -1543,7 +1823,8 @@ void Canvas::on_drag_end(double, double) {
 
 // Escape mid-drag: everything back where it was, no step.
 void Canvas::cancel_drag() {
-    if ((m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Guide || m_drag == Drag::Gutter) && m_begun) {
+    if ((m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Guide || m_drag == Drag::Gutter ||
+         m_drag == Drag::Picture || m_drag == Drag::PicScale || m_drag == Drag::PathPoint) && m_begun) {   // s200: a picture's / a point's drag too
         core::doc::frames_cancel(m_journal);
         m_sig_edited.emit();
     }
@@ -1551,8 +1832,10 @@ void Canvas::cancel_drag() {
     m_guide_off = false;
     m_snap_x = m_snap_y = NAN;
     if (m_drag == Drag::Marquee) pick(m_sel0);
+    if (m_drag == Drag::PenHandle) pen_finish(false);   // s199: Esc mid-drag -- the path dropped
     m_drag = Drag::None;
     m_begun = false;
+    m_pic_frame.clear();
     queue_draw();
     update_cursor();
 }
@@ -1573,6 +1856,7 @@ bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
         queue_draw();
         return true;
     }
+    if (kv == GDK_KEY_Escape && m_tool == Tool::Pen && !m_pen.empty()) { pen_finish(true); return true; }   // s199
     if (kv == GDK_KEY_Escape) {
         if (!m_thread_from.empty()) { m_thread_from.clear(); update_cursor(); queue_draw(); return true; }
         if (m_drag != Drag::None) { cancel_drag(); return true; }
@@ -1581,13 +1865,33 @@ bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
         return false;
     }
     const bool alt = (st & Gdk::ModifierType::ALT_MASK) == Gdk::ModifierType::ALT_MASK;
+    // s200: Direct -- Delete takes out the shape's picked point.
+    if (m_tool == Tool::Direct && m_pt >= 0 && !m_direct.empty() && (kv == GDK_KEY_Delete || kv == GDK_KEY_BackSpace)) {
+        if (core::doc::path_delete_point(m_journal, m_doc, m_direct, m_pt)) m_sig_edited.emit();
+        m_pt = -1;
+        queue_draw();
+        return true;
+    }
+    // s199: the Pen's path -- Enter ends it (open), Backspace takes back its last point.
+    if (m_tool == Tool::Pen && !m_pen.empty()) {
+        if (kv == GDK_KEY_Return || kv == GDK_KEY_KP_Enter) { pen_finish(true); return true; }
+        if (kv == GDK_KEY_BackSpace || kv == GDK_KEY_Delete) {
+            m_pen.pop_back();
+            queue_draw();
+            return true;
+        }
+    }
     if (!ctrl && !alt && m_drag == Drag::None) {   // s008: tools by letter (as InDesign), Delete
         switch (kv) {
         case GDK_KEY_v: case GDK_KEY_V: set_tool(Tool::Select); m_sig_tool.emit(); return true;
         case GDK_KEY_a: case GDK_KEY_A: set_tool(Tool::Direct); m_sig_tool.emit(); return true;   // s186
         case GDK_KEY_t: case GDK_KEY_T: set_tool(Tool::Text);   m_sig_tool.emit(); return true;
         case GDK_KEY_f: case GDK_KEY_F: set_tool(Tool::Image);  m_sig_tool.emit(); return true;
-        case GDK_KEY_m: case GDK_KEY_M: set_tool(Tool::Shape);  m_sig_tool.emit(); return true;
+        case GDK_KEY_m: case GDK_KEY_M: set_shape_tool(ShapeTool::Rect); m_sig_tool.emit(); return true;
+        case GDK_KEY_l: case GDK_KEY_L: set_shape_tool(ShapeTool::Oval); m_sig_tool.emit(); return true;   // s198
+        case GDK_KEY_backslash:         set_shape_tool(ShapeTool::Line); m_sig_tool.emit(); return true;
+        case GDK_KEY_p: case GDK_KEY_P: set_tool(Tool::Pen);        m_sig_tool.emit(); return true;   // s199
+        case GDK_KEY_i: case GDK_KEY_I: set_tool(Tool::Eyedropper); m_sig_tool.emit(); return true;   // s198
         case GDK_KEY_Delete: case GDK_KEY_BackSpace:
             if (!m_sel.empty()) { delete_selection(); return true; }
             return false;
@@ -1663,11 +1967,12 @@ void Canvas::on_motion(double x, double y) {
     m_in = true;
     m_sig_view.emit();
     if (!m_load.empty()) queue_draw();   // the file's name rides with the pointer
-    if (m_take) {   // s180: the colour under the pointer rides with it
+    if (m_take || m_tool == Tool::Eyedropper) {   // s180: the colour under the pointer rides with it
         m_take_under = colour_at(x, y);
         queue_draw();
         return;
     }
+    if (m_tool == Tool::Pen && !m_pen.empty()) queue_draw();   // s199: the next segment follows
     if (m_drag != Drag::None) return;
     double dx, dy;
     m_vp.to_doc(x, y, dx, dy);
@@ -1680,18 +1985,47 @@ void Canvas::on_motion(double x, double y) {
 }
 
 void Canvas::set_tool(Tool t) {
+    if (t != Tool::Pen) pen_finish(true);   // s199: another tool -- the path so far is drawn
     cancel_take();   // s180
     end_edit();
     if (t != Tool::Direct) m_direct.clear();   // s186
-    else if (m_sel.size() == 1) {   // s186: a picked picture shows at once
+    else if (m_sel.size() == 1) {   // s186: a picked picture shows at once (s200: or a shape's points)
         Rect fl, pl;
-        if (direct_pic(m_sel.front(), fl, pl)) m_direct = m_sel.front();
+        double ox = 0, oy = 0;
+        if (direct_pic(m_sel.front(), fl, pl) || direct_shape(m_sel.front(), ox, oy)) m_direct = m_sel.front();
     }
+    m_pt = -1;
     queue_draw();
     m_tool = t;
+    m_take_under.reset();
     m_thread_from.clear();
     m_load.clear();
     update_cursor();
+}
+
+bool Canvas::pen_near_first(double sx, double sy) const {   // s199
+    if (m_pen.empty()) return false;
+    double fx, fy;
+    m_vp.to_screen(m_pen.front().x, m_pen.front().y, fx, fy);
+    return std::hypot(sx - fx, sy - fy) <= 6;
+}
+
+void Canvas::pen_finish(bool keep, bool closed) {   // s199
+    if (m_pen.empty()) return;
+    auto pts = std::move(m_pen);
+    m_pen.clear();
+    if (m_drag == Drag::PenHandle) m_drag = Drag::None;
+    queue_draw();
+    if (!keep || pts.size() < 2) return;
+    for (auto& p : pts) {   // into the page's own coordinates
+        p.x -= m_pen_ox; p.ix -= m_pen_ox; p.ox -= m_pen_ox;
+        p.y -= m_pen_oy; p.iy -= m_pen_oy; p.oy -= m_pen_oy;
+    }
+    const auto id = core::doc::add_path(m_journal, m_doc, m_pen_owner, pts, !closed);
+    if (id.empty()) return;
+    relayout();
+    pick({id});
+    m_sig_edited.emit();
 }
 
 void Canvas::delete_selection() {
@@ -2246,6 +2580,16 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
 }
 
 // ── s009: placing images ────────────────────────────────────────────────────
+bool Canvas::direct_shape(const std::string& fid, double& dx, double& dy) const {   // s200
+    const auto* f = m_doc.as<core::Frame>(fid);
+    if (!f || f->kind != core::FrameKind::Shape || f->rot != 0) return false;
+    if (std::none_of(m_placed.begin(), m_placed.end(), [&](const core::Placed& p) { return p.id == f->owner; })) return false;
+    const Rect fl = core::frame_in_layout(m_doc, m_placed, fid);
+    dx = fl.x - f->x;
+    dy = fl.y - f->y;
+    return true;
+}
+
 bool Canvas::direct_pic(const std::string& fid, Rect& fl, Rect& pl) const {   // s186
     const auto* f = m_doc.as<core::Frame>(fid);
     if (!f || f->kind != core::FrameKind::Image || f->rot != 0) return false;
@@ -2464,13 +2808,43 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     struct T { const char* icon; const char* name; const char* tip; Canvas::Tool tool; };
     static const T tools[] = {
         {"composix-tool-select-symbolic", "canvas_view.tool.select", "Select  (V)", Canvas::Tool::Select},
-        {"composix-tool-direct-symbolic", "canvas_view.tool.direct", "Direct  (A) \u2014 a picture inside its frame: drag to move it, a corner to scale it",
+        {"composix-tool-direct-symbolic", "canvas_view.tool.direct", "Direct  (A) — a picture inside its frame: drag to move it, a corner to scale it",
          Canvas::Tool::Direct},   // s186
-        {"insert-text-symbolic",          "canvas_view.tool.text",   "Text frame  (T) \u2014 drag on a page", Canvas::Tool::Text},
-        {"image-x-generic-symbolic",      "canvas_view.tool.image",  "Image frame  (F) \u2014 drag on a page", Canvas::Tool::Image},
-        {"composix-tool-shape-symbolic",  "canvas_view.tool.shape",  "Shape  (M) \u2014 drag on a page; Shift for a square", Canvas::Tool::Shape},
+        {"insert-text-symbolic",          "canvas_view.tool.text",   "Text frame  (T) — drag on a page", Canvas::Tool::Text},
+        {"image-x-generic-symbolic",      "canvas_view.tool.image",  "Image frame  (F) — drag on a page", Canvas::Tool::Image},
+        {"composix-tool-rect-symbolic",   "canvas_view.tool.shape",  "", Canvas::Tool::Shape},   // s198: one button, four tools
+        {"composix-tool-eyedropper-symbolic", "canvas_view.tool.eyedropper",
+         "Eyedropper  (I) — click the page: its colour onto the picked frames' fill; Shift: their stroke; Alt: just a swatch",
+         Canvas::Tool::Eyedropper},
+    };
+    // s198 (Scott): the shapes share a button -- it draws what was picked
+    // last; right-click (or hold) for the others. A small mark in its
+    // corner says there's more.
+    struct S { const char* icon; const char* label; const char* key; Canvas::Tool tool; Canvas::ShapeTool shape; const char* tip; };
+    static const S shapes[] = {
+        {"composix-tool-rect-symbolic", "Rectangle", "M", Canvas::Tool::Shape, Canvas::ShapeTool::Rect, "Rectangle  (M) — drag on a page; Shift for a square"},
+        {"composix-tool-oval-symbolic", "Oval", "L", Canvas::Tool::Shape, Canvas::ShapeTool::Oval, "Oval  (L) — drag on a page; Shift for a circle"},
+        {"composix-tool-line-symbolic", "Line", "\\", Canvas::Tool::Shape, Canvas::ShapeTool::Line, "Line  (\\) — drag on a page; Shift at 45°"},
+        {"composix-tool-pen-symbolic", "Pen", "P", Canvas::Tool::Pen, Canvas::ShapeTool::Rect,
+         "Pen  (P) — click for corners, drag for curves; click the first point to close, Enter to end"},
+    };
+    const auto shape_index = [this] {
+        if (m_canvas.tool() == Canvas::Tool::Pen) return 3;
+        return static_cast<int>(m_canvas.shape_tool());
     };
     Gtk::ToggleButton* first = nullptr;
+    auto shape_btn_p = std::make_shared<Gtk::ToggleButton*>(nullptr);
+    auto last_shape = std::make_shared<int>(0);   // what the button draws
+    const auto show_shape = [shape_btn_p, last_shape](int k) {
+        *last_shape = k;
+        (*shape_btn_p)->set_icon_name(shapes[k].icon);
+        (*shape_btn_p)->set_tooltip_text(std::string(shapes[k].tip) + "\nRight-click or hold: rectangle, oval, line, pen");
+    };
+    const auto use_shape = [this, last_shape](int k) {
+        if (shapes[k].tool == Canvas::Tool::Pen) m_canvas.set_tool(Canvas::Tool::Pen);
+        else m_canvas.set_shape_tool(shapes[k].shape);
+        (void)last_shape;
+    };
     for (const auto& t : tools) {
         auto b = Gtk::make_managed<Gtk::ToggleButton>();
         b->set_icon_name(t.icon);
@@ -2479,14 +2853,95 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
         b->add_css_class("cx-tool");
         if (first) b->set_group(*first); else first = b;
         const auto tool = t.tool;
-        b->signal_toggled().connect([this, b, tool] { if (b->get_active()) m_canvas.set_tool(tool); });
-        m_tools.append(*b);
         m_tool_buttons.push_back(b);
+        if (tool != Canvas::Tool::Shape) {
+            b->signal_toggled().connect([this, b, tool] { if (b->get_active()) m_canvas.set_tool(tool); });
+            m_tools.append(*b);
+            continue;
+        }
+        *shape_btn_p = b;
+        b->signal_toggled().connect([b, use_shape, last_shape, this, shape_index] {
+            if (!b->get_active()) return;
+            const bool already = (m_canvas.tool() == Canvas::Tool::Shape || m_canvas.tool() == Canvas::Tool::Pen) &&
+                                 shape_index() == *last_shape;
+            if (!already) use_shape(*last_shape);
+        });
+        // The menu of the four.
+        auto pop = Gtk::make_managed<Gtk::Popover>();
+        pop->set_name("canvas_view.tool.shapes");
+        pop->set_position(Gtk::PositionType::RIGHT);
+        pop->set_has_arrow(false);
+        auto list = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
+        for (int k = 0; k < 4; ++k) {
+            auto row = Gtk::make_managed<Gtk::Button>();
+            row->add_css_class("flat");
+            row->set_name(std::string("canvas_view.tool.shapes.") + shapes[k].label);
+            auto hb = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+            auto icon = Gtk::make_managed<Gtk::Image>();
+            icon->set_from_icon_name(shapes[k].icon);
+            hb->append(*icon);
+            auto name = Gtk::make_managed<Gtk::Label>(shapes[k].label);
+            name->set_xalign(0);
+            name->set_hexpand(true);
+            hb->append(*name);
+            auto key = Gtk::make_managed<Gtk::Label>(shapes[k].key);
+            key->add_css_class("dim-label");
+            hb->append(*key);
+            row->set_child(*hb);
+            row->signal_clicked().connect([pop, k, show_shape, use_shape, b] {
+                pop->popdown();
+                show_shape(k);
+                use_shape(k);
+                b->set_active(true);
+            });
+            list->append(*row);
+        }
+        pop->set_child(*list);
+        auto ov = Gtk::make_managed<Gtk::Overlay>();
+        ov->set_child(*b);
+        auto mark = Gtk::make_managed<Gtk::DrawingArea>();   // the corner mark
+        mark->set_content_width(5);
+        mark->set_content_height(5);
+        mark->set_halign(Gtk::Align::END);
+        mark->set_valign(Gtk::Align::END);
+        mark->set_margin_end(3);
+        mark->set_margin_bottom(3);
+        mark->set_can_target(false);
+        mark->set_draw_func([mark](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+            const auto c = mark->get_color();
+            cr->set_source_rgba(c.get_red(), c.get_green(), c.get_blue(), 0.8);
+            cr->move_to(w, 0);
+            cr->line_to(w, h);
+            cr->line_to(0, h);
+            cr->close_path();
+            cr->fill();
+        });
+        ov->add_overlay(*mark);
+        pop->set_parent(*ov);
+        m_shape_pop = pop;
+        auto right = Gtk::GestureClick::create();
+        right->set_button(GDK_BUTTON_SECONDARY);
+        right->signal_pressed().connect([pop](int, double, double) { pop->popup(); });
+        ov->add_controller(right);
+        auto hold = Gtk::GestureLongPress::create();
+        hold->signal_pressed().connect([pop](double, double) { pop->popup(); });
+        ov->add_controller(hold);
+        m_tools.append(*ov);
     }
+    show_shape(0);
     first->set_active(true);
-    m_canvas.signal_tool().connect([this] {
-        const int i = static_cast<int>(m_canvas.tool());
-        if (i < static_cast<int>(m_tool_buttons.size())) m_tool_buttons[static_cast<std::size_t>(i)]->set_active(true);
+    m_canvas.signal_tool().connect([this, show_shape, shape_index] {
+        const auto t = m_canvas.tool();
+        int i = 0;
+        switch (t) {
+        case Canvas::Tool::Select: i = 0; break;
+        case Canvas::Tool::Direct: i = 1; break;
+        case Canvas::Tool::Text: i = 2; break;
+        case Canvas::Tool::Image: i = 3; break;
+        case Canvas::Tool::Shape: case Canvas::Tool::Pen: i = 4; show_shape(shape_index()); break;
+        case Canvas::Tool::Eyedropper: i = 5; break;
+        }
+        m_tool_buttons[static_cast<std::size_t>(i)]->set_active(true);
     });
     m_proof_pill = Gtk::make_managed<Gtk::Label>();   // s099: shown while proofing
     m_proof_pill->set_name("canvas_view.proof");
@@ -2540,7 +2995,9 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     m_canvas.signal_view().connect([this] { m_top->queue_draw(); m_left->queue_draw(); });
 }
 
-CanvasView::~CanvasView() = default;
+CanvasView::~CanvasView() {
+    if (m_shape_pop && m_shape_pop->get_parent()) m_shape_pop->unparent();   // s198
+}
 
 void CanvasView::set_rulers(bool on) {
     m_top->set_visible(on);

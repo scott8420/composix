@@ -1118,12 +1118,13 @@ int frames_rehome(DocJournal& j, Doc& d, const std::vector<Placed>& pl, const st
 }
 
 Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r,
-                  int columns, double gutter, bool across) {
+                  int columns, double gutter, bool across, ShapeKind shape) {
     if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
     if (r.w < 1 || r.h < 1) return {};
     static const char* what[] = {"text frame", "image frame", "shape"};
+    const bool oval = kind == FrameKind::Shape && shape == ShapeKind::Oval;   // s197
     Doc::Id made;
-    j.run(std::string("Draw ") + what[static_cast<int>(kind)], {}, [&] {
+    j.run(oval ? std::string("Draw oval") : std::string("Draw ") + what[static_cast<int>(kind)], {}, [&] {
         std::vector<Doc::Id> ids;
         Frame f;
         f.owner = owner;
@@ -1134,6 +1135,7 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
         if (kind == FrameKind::Shape)   // s016: a new shape is outlined in black, so it prints
             for (const auto& sw : d.ids_of<Swatch>())
                 if (d.as<Swatch>(sw)->name == "Black") { f.stroke = sw; break; }
+        if (oval) f.shape = ShapeKind::Oval;
         double z = 0;   // on top of the owner's frames
         for (const auto& o : d.frames_on(owner)) z = std::max(z, d.as<Frame>(o)->z);
         f.z = z + 1;
@@ -1152,6 +1154,284 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
         return ids;
     });
     return made;
+}
+
+// ── s197: shapes ────────────────────────────────────────────────────────────
+namespace {
+constexpr double kKappa = 0.5522847498307936;   // a quarter circle's handles, as a fraction of its radius
+// A path point's coordinates in the box (and back).
+PathPoint to_abs(const PathPoint& p, const Frame& f, double dx, double dy) {
+    PathPoint q = p;
+    const double X = f.x + dx, Y = f.y + dy;
+    q.x = X + p.x * f.w;   q.y = Y + p.y * f.h;
+    q.ix = X + p.ix * f.w; q.iy = Y + p.iy * f.h;
+    q.ox = X + p.ox * f.w; q.oy = Y + p.oy * f.h;
+    return q;
+}
+bool straight(const PathPoint& a, const PathPoint& b) {
+    return a.ox == a.x && a.oy == a.y && b.ix == b.x && b.iy == b.y;
+}
+XY bez(XY p0, XY p1, XY p2, XY p3, double t) {
+    const double u = 1 - t;
+    const double a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, e = t * t * t;
+    return {a * p0.x + b * p1.x + c * p2.x + e * p3.x, a * p0.y + b * p1.y + c * p2.y + e * p3.y};
+}
+// The ops for absolute points (a path or an oval's four).
+std::vector<OutlineOp> ops_of(const std::vector<PathPoint>& P, bool open) {
+    std::vector<OutlineOp> out;
+    if (P.empty()) return out;
+    out.push_back({'M', {P[0].x, P[0].y}});
+    const std::size_t n = P.size(), segs = open ? n - 1 : n;
+    for (std::size_t i = 0; i < segs; ++i) {
+        const auto& a = P[i];
+        const auto& b = P[(i + 1) % n];
+        if (straight(a, b)) out.push_back({'L', {b.x, b.y}});
+        else                out.push_back({'C', {a.ox, a.oy, b.ix, b.iy, b.x, b.y}});
+    }
+    if (!open) out.push_back({'Z', {}});
+    return out;
+}
+std::vector<PathPoint> oval_points(const Frame& f, double dx, double dy) {
+    const double cx = f.x + dx + f.w / 2, cy = f.y + dy + f.h / 2, rx = f.w / 2, ry = f.h / 2;
+    const double kx = rx * kKappa, ky = ry * kKappa;
+    // top, right, bottom, left -- clockwise on the page (y down)
+    return {
+        {cx, cy - ry, cx - kx, cy - ry, cx + kx, cy - ry, true},
+        {cx + rx, cy, cx + rx, cy - ky, cx + rx, cy + ky, true},
+        {cx, cy + ry, cx + kx, cy + ry, cx - kx, cy + ry, true},
+        {cx - rx, cy, cx - rx, cy + ky, cx - rx, cy - ky, true},
+    };
+}
+}  // namespace
+
+bool has_outline(const Frame& f) {
+    return f.kind == FrameKind::Shape && (f.shape == ShapeKind::Oval || (f.shape == ShapeKind::Path && f.path.size() >= 2));
+}
+
+std::vector<PathPoint> path_points(const Frame& f) {
+    std::vector<PathPoint> out;
+    out.reserve(f.path.size());
+    for (const auto& p : f.path) out.push_back(to_abs(p, f, 0, 0));
+    return out;
+}
+
+std::vector<OutlineOp> outline_ops(const Frame& f, double dx, double dy) {
+    if (has_outline(f)) {
+        if (f.shape == ShapeKind::Oval) return ops_of(oval_points(f, dx, dy), false);
+        std::vector<PathPoint> P;
+        for (const auto& p : f.path) P.push_back(to_abs(p, f, dx, dy));
+        return ops_of(P, f.open);
+    }
+    const double x = f.x + dx, y = f.y + dy;
+    return {{'M', {x, y}}, {'L', {x + f.w, y}}, {'L', {x + f.w, y + f.h}}, {'L', {x, y + f.h}}, {'Z', {}}};
+}
+
+std::vector<std::vector<XY>> outline_polys(const Frame& f, double tol) {
+    std::vector<std::vector<XY>> out;
+    XY cur{};
+    for (const auto& o : outline_ops(f)) {
+        switch (o.op) {
+        case 'M': out.push_back({XY{o.v[0], o.v[1]}}); cur = {o.v[0], o.v[1]}; break;
+        case 'L': if (!out.empty()) out.back().push_back({o.v[0], o.v[1]}); cur = {o.v[0], o.v[1]}; break;
+        case 'C': {
+            if (out.empty()) break;
+            const XY p1{o.v[0], o.v[1]}, p2{o.v[2], o.v[3]}, p3{o.v[4], o.v[5]};
+            // Steps from the control polygon's length: each chord within tol.
+            const double len = std::hypot(p1.x - cur.x, p1.y - cur.y) + std::hypot(p2.x - p1.x, p2.y - p1.y) +
+                               std::hypot(p3.x - p2.x, p3.y - p2.y);
+            const int n = std::clamp(static_cast<int>(std::ceil(std::sqrt(len / std::max(0.01, tol)) * 1.5)), 2, 200);
+            for (int k = 1; k <= n; ++k) out.back().push_back(bez(cur, p1, p2, p3, static_cast<double>(k) / n));
+            cur = p3;
+            break;
+        }
+        default: break;   // 'Z': a polygon closes itself
+        }
+    }
+    return out;
+}
+
+Rect path_bounds(const std::vector<PathPoint>& abs, bool open) {
+    if (abs.empty()) return {};
+    Frame f;
+    f.kind = FrameKind::Shape;
+    f.shape = ShapeKind::Path;
+    f.w = f.h = 1;   // the identity box: the points stay as they are
+    f.path = abs;
+    f.open = open;
+    double x0 = abs[0].x, y0 = abs[0].y, x1 = x0, y1 = y0;
+    for (const auto& poly : outline_polys(f, 0.05))
+        for (const auto& q : poly) { x0 = std::min(x0, q.x); y0 = std::min(y0, q.y); x1 = std::max(x1, q.x); y1 = std::max(y1, q.y); }
+    return Rect::from_corners(x0, y0, x1, y1);
+}
+
+void set_path(Frame& f, const std::vector<PathPoint>& abs, bool open) {
+    const Rect b = path_bounds(abs, open);
+    f.kind = FrameKind::Shape;
+    f.shape = ShapeKind::Path;
+    f.open = open;
+    f.x = b.x; f.y = b.y; f.w = b.w; f.h = b.h;
+    // A side with no size (a level line): the points sit at 0 across it.
+    const auto nx = [&](double v) { return b.w > 1e-9 ? (v - b.x) / b.w : 0.0; };
+    const auto ny = [&](double v) { return b.h > 1e-9 ? (v - b.y) / b.h : 0.0; };
+    f.path.clear();
+    for (const auto& p : abs)
+        f.path.push_back({nx(p.x), ny(p.y), nx(p.ix), ny(p.iy), nx(p.ox), ny(p.oy), p.smooth});
+}
+
+PathPoint corner_point(double x, double y) { return {x, y, x, y, x, y, false}; }
+
+Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<PathPoint>& abs, bool open, bool across) {
+    if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
+    if (abs.size() < 2) return {};
+    const Rect b = path_bounds(abs, open);
+    if (b.w < 1 && b.h < 1) return {};
+    bool line = open && abs.size() == 2;
+    for (const auto& p : abs) if (!(p.ix == p.x && p.iy == p.y && p.ox == p.x && p.oy == p.y)) line = false;
+    Doc::Id made;
+    j.run(line ? "Draw line" : "Draw path", {}, [&] {
+        Frame f;
+        f.owner = owner;
+        set_path(f, abs, open);
+        if (const auto* m = d.as<Master>(owner)) f.across = across && m->facing && m->folds.empty();
+        for (const auto& sw : d.ids_of<Swatch>())
+            if (d.as<Swatch>(sw)->name == "Black") { f.stroke = sw; break; }
+        double z = 0;
+        for (const auto& o : d.frames_on(owner)) z = std::max(z, d.as<Frame>(o)->z);
+        f.z = z + 1;
+        made = d.fresh_id("frame");
+        d.put(made, f);
+        return std::vector<Doc::Id>{made};
+    });
+    return made;
+}
+
+bool set_shape_kind(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ShapeKind k) {
+    if (k == ShapeKind::Path) return false;   // a path is drawn, not chosen
+    std::vector<std::pair<Doc::Id, Frame>> plan;
+    for (const auto& id : frames) {
+        const auto* f = d.as<Frame>(id);
+        if (!f || f->kind != FrameKind::Shape || f->shape == ShapeKind::Path || f->shape == k) continue;
+        Frame g = *f;
+        g.shape = k;
+        plan.emplace_back(id, g);
+    }
+    if (plan.empty()) return false;
+    std::vector<Doc::Id> ids;
+    for (const auto& [id, g] : plan) ids.push_back(id);
+    j.run(k == ShapeKind::Oval ? "Make oval" : "Make rectangle", ids, [&] {
+        for (const auto& [id, g] : plan) d.put(id, g);
+        return std::vector<Doc::Id>{};
+    });
+    return true;
+}
+
+// ── s200: Direct on a shape's points ───────────────────────────────────────
+std::vector<PathPoint> shape_points(const Frame& f, bool& open) {
+    open = false;
+    if (f.kind != FrameKind::Shape) return {};
+    if (f.shape == ShapeKind::Path) { open = f.open; return path_points(f); }
+    if (f.shape == ShapeKind::Oval) return oval_points(f, 0, 0);
+    return {corner_point(f.x, f.y), corner_point(f.x + f.w, f.y), corner_point(f.x + f.w, f.y + f.h), corner_point(f.x, f.y + f.h)};
+}
+
+OutlineHit outline_nearest(const Frame& f, double x, double y) {
+    OutlineHit best;
+    bool open = false;
+    const auto P = shape_points(f, open);
+    const std::size_t n = P.size();
+    if (n < 2) return best;
+    const std::size_t segs = open ? n - 1 : n;
+    for (std::size_t k = 0; k < segs; ++k) {
+        const auto& a = P[k];
+        const auto& b = P[(k + 1) % n];
+        constexpr int kSteps = 64;
+        for (int i = 0; i <= kSteps; ++i) {
+            const double t = static_cast<double>(i) / kSteps;
+            const XY q = bez({a.x, a.y}, {a.ox, a.oy}, {b.ix, b.iy}, {b.x, b.y}, t);
+            const double dd = std::hypot(q.x - x, q.y - y);
+            if (dd < best.dist) best = {static_cast<int>(k), t, dd};
+        }
+    }
+    return best;
+}
+
+namespace {
+// Write a shape's points back as a path (one step).
+bool put_path(DocJournal& j, Doc& d, const Doc::Id& id, const std::vector<PathPoint>& P, bool open, const std::string& label) {
+    const auto* f = d.as<Frame>(id);
+    if (!f) return false;
+    Frame g = *f;
+    set_path(g, P, open);
+    if (g == *f) return false;
+    return j.run(label, {id}, [&] { d.put(id, g); });
+}
+}  // namespace
+
+bool path_add_point(DocJournal& j, Doc& d, const Doc::Id& id, int k, double t) {
+    const auto* f = d.as<Frame>(id);
+    if (!f || f->kind != FrameKind::Shape || t <= 0 || t >= 1) return false;
+    bool open = false;
+    auto P = shape_points(*f, open);
+    const int n = static_cast<int>(P.size());
+    if (k < 0 || k >= (open ? n - 1 : n)) return false;
+    auto& a = P[static_cast<std::size_t>(k)];
+    auto& b = P[static_cast<std::size_t>((k + 1) % n)];
+    const auto lerp = [](XY p, XY q, double u) { return XY{p.x + (q.x - p.x) * u, p.y + (q.y - p.y) * u}; };
+    const XY p0{a.x, a.y}, p1{a.ox, a.oy}, p2{b.ix, b.iy}, p3{b.x, b.y};
+    const XY q0 = lerp(p0, p1, t), q1 = lerp(p1, p2, t), q2 = lerp(p2, p3, t);
+    const XY r0 = lerp(q0, q1, t), r1 = lerp(q1, q2, t);
+    const XY m = lerp(r0, r1, t);
+    const bool curved = !straight(a, b);
+    PathPoint mid = corner_point(m.x, m.y);
+    if (curved) {
+        a.ox = q0.x; a.oy = q0.y;
+        b.ix = q2.x; b.iy = q2.y;
+        mid.ix = r0.x; mid.iy = r0.y;
+        mid.ox = r1.x; mid.oy = r1.y;
+        mid.smooth = true;
+    }
+    P.insert(P.begin() + k + 1, mid);
+    return put_path(j, d, id, P, open, "Add point");
+}
+
+bool path_delete_point(DocJournal& j, Doc& d, const Doc::Id& id, int k) {
+    const auto* f = d.as<Frame>(id);
+    if (!f || f->kind != FrameKind::Shape) return false;
+    bool open = false;
+    auto P = shape_points(*f, open);
+    if (k < 0 || k >= static_cast<int>(P.size()) || static_cast<int>(P.size()) <= (open ? 2 : 3)) return false;
+    P.erase(P.begin() + k);
+    return put_path(j, d, id, P, open, "Delete point");
+}
+
+bool path_toggle_point(DocJournal& j, Doc& d, const Doc::Id& id, int k) {
+    const auto* f = d.as<Frame>(id);
+    if (!f || f->kind != FrameKind::Shape) return false;
+    bool open = false;
+    auto P = shape_points(*f, open);
+    const int n = static_cast<int>(P.size());
+    if (k < 0 || k >= n) return false;
+    auto& p = P[static_cast<std::size_t>(k)];
+    const bool has = !(p.ix == p.x && p.iy == p.y && p.ox == p.x && p.oy == p.y);
+    if (has) {
+        p.ix = p.ox = p.x;
+        p.iy = p.oy = p.y;
+        p.smooth = false;
+    } else {
+        // Neighbours (an open path's end: itself on that side).
+        const auto& prev = (k > 0 || !open) ? P[static_cast<std::size_t>((k - 1 + n) % n)] : p;
+        const auto& next = (k < n - 1 || !open) ? P[static_cast<std::size_t>((k + 1) % n)] : p;
+        double dx = next.x - prev.x, dy = next.y - prev.y;
+        const double len = std::hypot(dx, dy);
+        if (len < 1e-9) return false;
+        dx /= len; dy /= len;
+        const double din = std::hypot(p.x - prev.x, p.y - prev.y) / 3, dout = std::hypot(next.x - p.x, next.y - p.y) / 3;
+        const double wi = din > 0 ? din : dout, wo = dout > 0 ? dout : din;
+        p.ix = p.x - dx * wi; p.iy = p.y - dy * wi;
+        p.ox = p.x + dx * wo; p.oy = p.y + dy * wo;
+        p.smooth = true;
+    }
+    return put_path(j, d, id, P, open, has ? "Corner point" : "Smooth point");
 }
 
 bool set_shows_on(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, int choice) {   // s155
@@ -3358,6 +3638,50 @@ Doc::Id add_swatch(DocJournal& j, Doc& d, Swatch s) {
     return made;
 }
 
+Doc::Id take_colour_onto(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, std::uint32_t rgb, bool stroke) {
+    rgb &= 0xFFFFFFu;
+    const auto ch = [](std::uint32_t c, int k) { return static_cast<int>((c >> k) & 0xFF); };
+    Doc::Id sw;
+    int best = 4;   // at most 1 a channel (3 in all) counts as the same colour
+    for (const auto& id : d.ids_of<Swatch>()) {
+        const auto c = doc::screen_rgb(*d.as<Swatch>(id));
+        const int diff = std::abs(ch(c, 16) - ch(rgb, 16)) + std::abs(ch(c, 8) - ch(rgb, 8)) + std::abs(ch(c, 0) - ch(rgb, 0));
+        if (std::max({std::abs(ch(c, 16) - ch(rgb, 16)), std::abs(ch(c, 8) - ch(rgb, 8)), std::abs(ch(c, 0) - ch(rgb, 0))}) <= 1 &&
+            diff < best) { best = diff; sw = id; }
+    }
+    std::vector<Doc::Id> touch;
+    for (const auto& id : frames) {
+        const auto* f = d.as<Frame>(id);
+        if (f && (sw.empty() || (stroke ? f->stroke : f->fill) != sw)) touch.push_back(id);
+    }
+    if (!sw.empty() && touch.empty()) return sw;
+    char name[16];
+    std::snprintf(name, sizeof name, "#%06X", rgb);
+    const bool fresh = sw.empty();
+    j.run(touch.empty() ? std::string("New swatch ") + name : stroke ? "Stroke from page" : "Fill from page", touch,
+          [&]() -> std::vector<Doc::Id> {
+              std::vector<Doc::Id> made;
+              if (fresh) {
+                  Swatch s{name, 0, ColorModel::RGB, {double(ch(rgb, 16)), double(ch(rgb, 8)), double(ch(rgb, 0)), 0}};
+                  s.preview = swatch_preview(s);
+                  double pos = 0;
+                  for (const auto& id : d.ids_of<Swatch>()) pos = std::max(pos, d.as<Swatch>(id)->pos);
+                  s.pos = pos + 1;
+                  sw = d.fresh_id("swatch");
+                  d.put(sw, s);
+                  made.push_back(sw);
+              }
+              for (const auto& id : touch) {
+                  Frame f = *d.as<Frame>(id);
+                  (stroke ? f.stroke : f.fill) = sw;
+                  if (stroke && f.stroke_w <= 0) f.stroke_w = 1;
+                  d.put(id, f);
+              }
+              return made;
+          });
+    return sw;
+}
+
 bool edit_swatch(DocJournal& j, Doc& d, const Doc::Id& id, Swatch s) {
     const auto* cur = d.as<Swatch>(id);
     if (!cur) return false;
@@ -4129,6 +4453,10 @@ const std::vector<Verb>& verbs() {
         {"add_text_frame", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Text, {54, 54, 200, 100}); }},
         {"add_image_frame", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Image, {54, 200, 200, 100}); }},
         {"add_shape", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Shape, {54, 400, 50, 50}); }},
+        {"add_oval", [](DocJournal& j, Doc& d) { add_frame(j, d, "page.8", FrameKind::Shape, {54, 400, 50, 30}, 1, 12, false, ShapeKind::Oval); }},   // s197
+        {"add_line", [](DocJournal& j, Doc& d) { add_path(j, d, "page.8", {corner_point(54, 300), corner_point(200, 300)}, true); }},
+        {"add_path", [](DocJournal& j, Doc& d) {
+             add_path(j, d, "page.8", {{54, 300, 54, 300, 80, 250, true}, {200, 330, 170, 360, 200, 330, false}, corner_point(120, 400)}, false); }},
         {"delete_frames", [](DocJournal& j, Doc& d) { delete_frames(j, d, {"frame.2", "frame.4"}); }},  // mid-thread
         {"override_master_item", [](DocJournal& j, Doc& d) { override_master_item(j, d, "page.7", "frame.13"); }},   // s025
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
@@ -4543,8 +4871,8 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
             const double fx = f->x + (o != t->owner ? across_dx(d, *f, d.side_of(t->owner)) : 0.0);   // s155
             // s173: Shape -- the picture's traced outline, band by band, grown by the offsets.
             if (f->wrap == Wrap::Shape)
-                if (const auto* a = d.as<Asset>(f->asset); a && !a->shape.empty()) {
-                    const auto bands = shape_bands(*f, *a);
+                if (const auto* a = d.as<Asset>(f->asset); (a && !a->shape.empty()) || doc::has_outline(*f)) {
+                    const auto bands = a ? shape_bands(*f, *a) : outline_bands(*f, d);   // s200: a shape's own outline
                     if (!bands.empty()) {
                         for (const auto& b : bands) {
                             WrapRect r{fx + b.x0 - f->wrap_off.left - t->x, f->y + b.y0 - f->wrap_off.top - t->y,
@@ -4621,6 +4949,42 @@ std::vector<Band> shape_bands(const Frame& f, const Asset& a) {
         b.x0 = std::max(b.x0, 0.0); b.y0 = std::max(b.y0, 0.0);
         b.x1 = std::min(b.x1, f.w); b.y1 = std::min(b.y1, f.h);
         if (b.x1 > b.x0 && b.y1 > b.y0) out.push_back(b);
+    }
+    return out;
+}
+
+std::vector<Band> outline_bands(const Frame& f, const Doc& d, double step) {   // s200
+    std::vector<Band> out;
+    if (!doc::has_outline(f) || step <= 0) return out;
+    const double grow = d.as<Swatch>(f.stroke) && f.stroke_w > 0 ? f.stroke_w / 2 : 0;
+    const auto polys = doc::outline_polys(f, 0.25);
+    for (double y0 = f.y - grow; y0 < f.y + f.h + grow; y0 += step) {
+        const double y1 = std::min(y0 + step, f.y + f.h + grow);
+        double lo = 1e300, hi = -1e300;
+        for (const auto& poly : polys) {
+            const std::size_t n = poly.size();
+            const bool closed = !(f.shape == ShapeKind::Path && f.open);
+            const std::size_t segs = closed ? n : n - 1;
+            for (std::size_t i = 0; i < segs && n >= 2; ++i) {
+                const auto a = poly[i], b = poly[(i + 1) % n];
+                // The part of this edge inside the band (grown by the stroke).
+                const double ya = std::min(a.y, b.y) - grow, yb = std::max(a.y, b.y) + grow;
+                if (yb < y0 || ya > y1) continue;
+                const auto x_at = [&](double y) {
+                    if (std::abs(b.y - a.y) < 1e-12) return std::array<double, 2>{std::min(a.x, b.x), std::max(a.x, b.x)};
+                    const double t = std::clamp((y - a.y) / (b.y - a.y), 0.0, 1.0);
+                    const double x = a.x + (b.x - a.x) * t;
+                    return std::array<double, 2>{x, x};
+                };
+                for (const double y : {std::max(y0, std::min(a.y, b.y)), std::min(y1, std::max(a.y, b.y))}) {
+                    const auto xs = x_at(y);
+                    lo = std::min(lo, xs[0] - grow);
+                    hi = std::max(hi, xs[1] + grow);
+                }
+            }
+        }
+        if (hi < lo) continue;
+        out.push_back({lo - f.x, y0 - f.y, hi - f.x, y1 - f.y});
     }
     return out;
 }

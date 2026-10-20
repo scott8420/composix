@@ -90,7 +90,18 @@ bool draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
             cairo_set_source_rgba(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0, op);
             return true;
         };
-        if (paint(f.fill, f.fill_tint)) { cairo_rectangle(cr, f.x, f.y, f.w, f.h); cairo_fill(cr); }   // s016
+        // s197: the frame's outline -- its box, or a shape's oval / path.
+        const auto outline = [&] {
+            if (!core::doc::has_outline(f)) { cairo_rectangle(cr, f.x, f.y, f.w, f.h); return; }
+            cairo_new_path(cr);
+            for (const auto& o : core::doc::outline_ops(f)) {
+                if (o.op == 'M') cairo_move_to(cr, o.v[0], o.v[1]);
+                else if (o.op == 'L') cairo_line_to(cr, o.v[0], o.v[1]);
+                else if (o.op == 'C') cairo_curve_to(cr, o.v[0], o.v[1], o.v[2], o.v[3], o.v[4], o.v[5]);
+                else cairo_close_path(cr);
+            }
+        };
+        if (paint(f.fill, f.fill_tint)) { outline(); cairo_fill(cr); }   // s016
         if (op < 1) cairo_push_group(cr);
         switch (f.kind) {
         case core::FrameKind::Text:
@@ -113,7 +124,7 @@ bool draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
         if (op < 1) { cairo_pop_group_to_source(cr); cairo_paint_with_alpha(cr, op); }
         if (f.stroke_w > 0 && paint(f.stroke, f.stroke_tint)) {
             cairo_set_line_width(cr, f.stroke_w);
-            cairo_rectangle(cr, f.x, f.y, f.w, f.h);
+            outline();
             cairo_stroke(cr);
         }
         if (cut) cairo_restore(cr);   // s155

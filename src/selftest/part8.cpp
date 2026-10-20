@@ -1305,5 +1305,212 @@ void part8() {
             named = named && (s.model == core::ColorModel::CMYK ? s.name == "C0 M85 Y70 K5" : s.name.size() == 7 && s.name[0] == '#');
         check("svg: a library -- RGB by hex, CMYK by its values", named && lib.colors.front().name == "#1E6091");
     }
+    // ── s197: shapes -- rectangle, oval, line, path ──────────────────────
+    {
+        std::cout << "--- s197 shapes ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto ops_str = [](const core::Frame& f) {
+            std::string s;
+            for (const auto& o : D::outline_ops(f)) s += o.op;
+            return s;
+        };
+        const std::string before = core::to_json(d);
+        const auto oval = D::add_frame(j, d, page, core::FrameKind::Shape, {300, 20, 40, 30}, 1, 12, false, core::ShapeKind::Oval);
+        const auto* of = d.as<core::Frame>(oval);
+        check("oval: drawn, one step", of && of->shape == core::ShapeKind::Oval && j.undo_label() == "Draw oval");
+        check("oval: four curves, closed", of && ops_str(*of) == "MCCCCZ" && D::has_outline(*of));
+        {
+            const auto ops = D::outline_ops(*of);
+            check("oval: its top and right on the box", ops[0].v[0] == 320 && ops[0].v[1] == 20 && ops[1].v[4] == 340 && ops[1].v[5] == 35);
+        }
+        core::Frame rect;
+        rect.kind = core::FrameKind::Shape;
+        rect.x = 1; rect.y = 2; rect.w = 3; rect.h = 4;
+        check("rect: its box, four lines", ops_str(rect) == "MLLLZ" && !D::has_outline(rect));
+        // A level line: no height at all.
+        const auto line = D::add_path(j, d, page, {D::corner_point(100, 300), D::corner_point(250, 300)}, true);
+        const auto* lf = d.as<core::Frame>(line);
+        check("line: drawn though it has no height", lf && lf->h == 0 && lf->w == 150 && lf->open && j.undo_label() == "Draw line");
+        check("line: a move and a line, open", lf && ops_str(*lf) == "ML" && !lf->stroke.empty());
+        // A curve: (0,0) to (100,0), both handles 50 up -- its top is 3/4 of that.
+        std::vector<core::PathPoint> arc{{200, 400, 200, 400, 200, 350, false}, {300, 400, 300, 350, 300, 400, false}};
+        const auto b = D::path_bounds(arc, true);
+        check("path: bounds are the curve's, not its handles'", std::abs(b.y - 362.5) < 0.1 && b.h > 37.4 && b.h < 37.6 && b.w == 100);
+        const auto cur = D::add_path(j, d, page, arc, true);
+        const auto* cf = d.as<core::Frame>(cur);
+        check("path: one step, 'Draw path'", cf && j.undo_label() == "Draw path" && ops_str(*cf) == "MC");
+        {
+            const auto back = D::path_points(*cf);
+            bool same = back.size() == 2;
+            for (std::size_t i = 0; same && i < 2; ++i)
+                same = std::abs(back[i].x - arc[i].x) < 1e-9 && std::abs(back[i].y - arc[i].y) < 1e-9 &&
+                       std::abs(back[i].ox - arc[i].ox) < 1e-9 && std::abs(back[i].oy - arc[i].oy) < 1e-9 &&
+                       std::abs(back[i].iy - arc[i].iy) < 1e-9;
+            check("path: its points come back where they were drawn", same);
+        }
+        // Resized: the path scales with its frame.
+        D::edit_frames(j, d, {cur}, "Size", [](core::Frame& f) { f.w *= 2; });
+        check("path: resizing the frame scales it", std::abs(D::path_points(*d.as<core::Frame>(cur))[1].x - 400) < 1e-9);
+        j.undo();
+        check("path: too few points, or no size -- nothing",
+              D::add_path(j, d, page, {D::corner_point(5, 5)}, true).empty() &&
+              D::add_path(j, d, page, {D::corner_point(5, 5), D::corner_point(5.2, 5.2)}, true).empty());
+        // Rect <-> oval.
+        const auto box = D::add_frame(j, d, page, core::FrameKind::Shape, {60, 500, 50, 50});
+        check("shape kind: a rectangle made an oval", D::set_shape_kind(j, d, {box, cur}, core::ShapeKind::Oval) &&
+              d.as<core::Frame>(box)->shape == core::ShapeKind::Oval && d.as<core::Frame>(cur)->shape == core::ShapeKind::Path &&
+              j.undo_label() == "Make oval");
+        check("shape kind: a path isn't chosen", !D::set_shape_kind(j, d, {box}, core::ShapeKind::Path));
+        // JSON.
+        {
+            core::Doc e;
+            std::string err;
+            const auto text = core::to_json(d);
+            check("shapes: through JSON exactly", core::from_json(e, text, &err) && core::to_json(e) == text &&
+                  *e.as<core::Frame>(cur) == *d.as<core::Frame>(cur), err);
+        }
+        // Drawn as it prints: an oval's corner is paper, its middle its colour.
+        const auto sw = D::add_swatch(j, d, core::Swatch{"Brick", 0, core::ColorModel::RGB, {180, 60, 40, 0}});
+        D::edit_frames(j, d, {oval}, "Fill", [&](core::Frame& f) { f.fill = sw; f.stroke.clear(); f.z = 1e6; });
+        L::FlowCache flows;
+        const auto mid = L::sample_page(d, page, flows, {}, 320, 35, 1);
+        const auto corner = L::sample_page(d, page, flows, {}, 301.5, 21.5, 1);
+        check("oval: drawn round -- its middle filled, its corner not", mid == d.as<core::Swatch>(sw)->preview && corner != mid);
+        // Print: curves in the PDF.
+        {
+            namespace fs = std::filesystem;
+            const auto base = fs::temp_directory_path() / "composix_selftest_shapes";
+            std::error_code ec;
+            fs::create_directories(base, ec);
+            const auto out = (base / "shapes.pdf").string();
+            L::PdfOptions opt;
+            opt.compress = false;
+            L::PdfReport rep;
+            std::string err;
+            const bool ok = L::export_print_pdf(d, out, opt, {}, &rep, &err);
+            std::string pdf;
+            { std::ifstream f(out, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); pdf = ss.str(); }
+            check("print: the oval and the curve as curves", ok && pdf.find(" c\n") != std::string::npos, err);
+            fs::remove_all(base, ec);
+        }
+        while (j.can_undo()) j.undo();
+        check("shapes: all undone exactly", core::to_json(d) == before);
+    }
+    // ── s198: the Eyedropper tool -- a colour onto fills / strokes ────────
+    {
+        std::cout << "--- s198 eyedropper tool ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const std::string before = core::to_json(d);
+        const auto a = D::add_frame(j, d, page, core::FrameKind::Shape, {60, 60, 40, 40});
+        const auto b = D::add_frame(j, d, page, core::FrameKind::Shape, {120, 60, 40, 40}, 1, 12, false, core::ShapeKind::Oval);
+        const auto nsw = d.ids_of<core::Swatch>().size();
+        const auto sw = D::take_colour_onto(j, d, {a, b}, 0x3A7D44u, false);
+        check("eyedropper: a new colour -- a swatch by its hex, both fills, one step",
+              d.ids_of<core::Swatch>().size() == nsw + 1 && d.as<core::Swatch>(sw)->name == "#3A7D44" &&
+              d.as<core::Frame>(a)->fill == sw && d.as<core::Frame>(b)->fill == sw && j.undo_label() == "Fill from page");
+        const auto sw2 = D::take_colour_onto(j, d, {a}, 0x3B7D44u, true);
+        check("eyedropper: a step away -- the same swatch, onto the stroke",
+              sw2 == sw && d.as<core::Frame>(a)->stroke == sw && d.ids_of<core::Swatch>().size() == nsw + 1 &&
+              j.undo_label() == "Stroke from page");
+        const auto black = d.as<core::Frame>(b)->stroke;   // a new shape's
+        const auto bc = D::screen_rgb(*d.as<core::Swatch>(black));
+        const auto steps = j.undo_label();
+        check("eyedropper: an existing swatch's colour -- that swatch, no new one",
+              D::take_colour_onto(j, d, {}, bc, false) == black && j.undo_label() == steps);
+        const auto sw3 = D::take_colour_onto(j, d, {}, 0x112233u, false);
+        check("eyedropper: nothing picked -- just the swatch", !sw3.empty() && j.undo_label() == "New swatch #112233" &&
+              d.as<core::Frame>(a)->fill == sw);
+        check("eyedropper: already that colour -- no step", D::take_colour_onto(j, d, {a, b}, 0x3A7D44u, false) == sw &&
+              j.undo_label() == "New swatch #112233");
+        while (j.can_undo()) j.undo();
+        check("eyedropper: all undone exactly", core::to_json(d) == before);
+    }
+    // ── s200: Direct on a shape's points; a shape's own wrap ─────────────
+    {
+        std::cout << "--- s200 path points ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const std::string before = core::to_json(d);
+        const auto box = D::add_frame(j, d, page, core::FrameKind::Shape, {100, 100, 80, 60});
+        bool open = true;
+        auto P = D::shape_points(*d.as<core::Frame>(box), open);
+        check("points: a rectangle's four corners, closed", P.size() == 4 && !open && P[2].x == 180 && P[2].y == 160);
+        // A point added on the top edge, halfway: still the same outline.
+        const auto h = D::outline_nearest(*d.as<core::Frame>(box), 140, 99);
+        check("points: the nearest place on the outline", h.k == 0 && std::abs(h.t - 0.5) < 0.02 && std::abs(h.dist - 1) < 0.01);
+        check("points: added -- the rectangle a path of five, same box",
+              D::path_add_point(j, d, box, h.k, 0.5) && j.undo_label() == "Add point" &&
+              d.as<core::Frame>(box)->shape == core::ShapeKind::Path && d.as<core::Frame>(box)->path.size() == 5 &&
+              core::frame_rect(*d.as<core::Frame>(box)) == core::Rect{100, 100, 80, 60});
+        // Dragged up 20: the box grows to hold it.
+        P = D::shape_points(*d.as<core::Frame>(box), open);
+        P[1].y -= 20; P[1].iy -= 20; P[1].oy -= 20;
+        D::frames_begin(j, d, {box}, "Move point");
+        D::edit_frames(j, d, {box}, "Edit path", [&](core::Frame& f) { D::set_path(f, P, open); });
+        D::frames_end(j);
+        check("points: a point moved -- one step, the box follows", j.undo_label() == "Move point" &&
+              d.as<core::Frame>(box)->y == 80 && d.as<core::Frame>(box)->h == 80);
+        check("points: smooth -- handles along its neighbours' line", D::path_toggle_point(j, d, box, 1) &&
+              j.undo_label() == "Smooth point" && [&] {
+                  const auto Q = D::path_points(*d.as<core::Frame>(box));
+                  return Q[1].smooth && std::abs(Q[1].iy - 80) < 1e-6 && Q[1].ix < 140 && Q[1].ox > 140;
+              }());
+        check("points: back to a corner", D::path_toggle_point(j, d, box, 1) && j.undo_label() == "Corner point" &&
+              !D::path_points(*d.as<core::Frame>(box))[1].smooth);
+        check("points: one taken out", D::path_delete_point(j, d, box, 1) && d.as<core::Frame>(box)->path.size() == 4 &&
+              j.undo_label() == "Delete point" && d.as<core::Frame>(box)->y == 100);
+        D::path_delete_point(j, d, box, 0);
+        check("points: a closed path keeps three", !D::path_delete_point(j, d, box, 0) && d.as<core::Frame>(box)->path.size() == 3);
+        // An oval split on a curve keeps its look.
+        const auto ov = D::add_frame(j, d, page, core::FrameKind::Shape, {200, 300, 100, 60}, 1, 12, false, core::ShapeKind::Oval);
+        const auto polys0 = D::outline_polys(*d.as<core::Frame>(ov));
+        D::path_add_point(j, d, ov, 0, 0.3);
+        const auto* of = d.as<core::Frame>(ov);
+        bool same = of->path.size() == 5 && std::abs(of->w - 100) < 0.01 && std::abs(of->h - 60) < 0.01;
+        const auto polys1 = D::outline_polys(*of);
+        for (const auto& q : polys1.front()) {   // every point still on the ellipse
+            const double ex = (q.x - 250) / 50, ey = (q.y - 330) / 30;
+            same = same && std::abs(std::hypot(ex, ey) - 1) < 0.01;
+        }
+        check("points: an oval's curve split -- the same ellipse", same && !polys0.empty());
+        // Wrap to the shape: an oval pushes text by its own outline.
+        {
+            core::Frame o;
+            o.kind = core::FrameKind::Shape;
+            o.shape = core::ShapeKind::Oval;
+            o.x = 0; o.y = 0; o.w = 100; o.h = 60;
+            const auto bands = D::has_outline(o) ? core::outline_bands(o, d, 3) : std::vector<core::Band>{};
+            bool narrow_top = !bands.empty() && bands.front().x0 > 20 && bands.front().x1 < 80;
+            bool wide_mid = false;
+            for (const auto& b : bands) if (b.y0 <= 30 && b.y1 >= 30) wide_mid = b.x0 < 1 && b.x1 > 99;
+            check("wrap: an oval's bands -- narrow at its top, full at its middle", narrow_top && wide_mid && bands.size() == 20);
+        }
+        {   // ... and in place: over a text frame, set to Shape, it pushes by bands
+            const auto* t = d.as<core::Frame>("frame.1");
+            const auto o2 = D::add_frame(j, d, t->owner, core::FrameKind::Shape, {t->x + 20, t->y + 20, 80, 60}, 1, 12, false,
+                                         core::ShapeKind::Oval);
+            D::edit_frames(j, d, {o2}, "Text wrap", [](core::Frame& f) { f.wrap = core::Wrap::Shape; });
+            const auto rs = core::wrap_rects(d, "frame.1");
+            check("wrap: a shape set to Shape pushes text by its outline", rs.size() > 10, std::to_string(rs.size()));
+        }
+        while (j.can_undo()) j.undo();
+        check("points: all undone exactly", core::to_json(d) == before);
+    }
 }
 }  // namespace cxtest

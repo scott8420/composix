@@ -25,6 +25,7 @@
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/eventcontrollerscroll.h>
 #include <gtkmm/gesturedrag.h>
+#include <gtkmm/popover.h>
 #include <sigc++/signal.h>
 
 #include <atomic>
@@ -44,7 +45,12 @@ public:
     // s008: what a drag on empty space does.
     // s186 (G2): Direct -- a picture inside its frame (InDesign's Direct
     // Selection, A): the whole picture shown, moved and scaled by hand.
-    enum class Tool { Select, Direct, Text, Image, Shape };
+    // s198 (Scott): the Eyedropper as a tool (I) -- a click takes the colour
+    // on the page onto the picked frames' fill (Shift: stroke; Alt: just the
+    // swatch). One Shape tool draws rectangles (M), ovals (L) or lines (\);
+    // s199: the Pen (P) draws any other path.
+    enum class Tool { Select, Direct, Text, Image, Shape, Pen, Eyedropper };
+    enum class ShapeTool { Rect, Oval, Line };
     Canvas(core::Doc& d, core::DocJournal& j);
     const core::Doc& doc() const { return m_doc; }   // s073: the rulers read its unit
     ~Canvas() override;
@@ -79,6 +85,8 @@ public:
     void set_snap(bool on) { m_snap = on; }
     void set_tool(Tool t);
     Tool tool() const { return m_tool; }
+    void set_shape_tool(ShapeTool k) { m_shape = k; set_tool(Tool::Shape); }   // s198
+    ShapeTool shape_tool() const { return m_shape; }
     void delete_selection();
     void set_show_guides(bool on) { m_show_guides = on; queue_draw(); }
     // s153: guides locked -- not picked, moved or pulled off (new ones still
@@ -166,7 +174,7 @@ public:
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint };
     // s035: Alt+drag a picture inside its frame -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
@@ -176,6 +184,14 @@ private:
     std::string  m_direct;
     core::Handle m_pic_handle = core::Handle::None;
     bool direct_pic(const std::string& frame, core::Rect& frame_l, core::Rect& pic_l) const;
+    // s200: Direct on a shape -- its points shown, dragged, added, taken out.
+    // A shape we can show (not turned, on a shown page); where its owner's
+    // coordinates sit in the layout (dx, dy).
+    bool direct_shape(const std::string& frame, double& dx, double& dy) const;
+    int  m_pt = -1;                          // the point picked (-1: none)
+    int  m_pt_part = 0;                      // dragging: 0 the anchor, 1 its handle in, 2 out
+    std::vector<core::PathPoint> m_pts0;     // the points at the press (owner coordinates)
+    bool m_pts_open = false;
 
     // s034: the tab ruler -- a strip over the column being typed in, its
     // zero at the text's left edge; the stops of the caret's paragraph style.
@@ -322,6 +338,15 @@ private:
     std::string m_draw_page;                 // the page a frame is being drawn on
     double      m_dx0 = 0, m_dy0 = 0;        // its first corner (layout)
     core::Rect  m_draw;                      // the frame being drawn (layout)
+    ShapeTool   m_shape = ShapeTool::Rect;   // s198: what the Shape tool draws
+    double      m_lx1 = 0, m_ly1 = 0;        // s198: a line's far end (layout)
+    // s199: the Pen -- the path so far (layout), on the page it was started
+    // on (its owner, and where that panel sits in the layout).
+    std::vector<core::PathPoint> m_pen;
+    std::string m_pen_owner;
+    double      m_pen_ox = 0, m_pen_oy = 0;
+    void pen_finish(bool keep, bool closed = false);   // Enter / Esc / another tool: drawn (two points or more)
+    bool pen_near_first(double sx, double sy) const;   // the pointer on the first point (screen): it closes
     std::string m_thread_from;               // "loaded": the next click threads into a frame
 
     // s009
@@ -381,6 +406,7 @@ private:
     widgets::Label  m_count;
     widgets::Box    m_tools;    // s008: Select / Text / Image / Shape
     std::vector<Gtk::ToggleButton*> m_tool_buttons;
+    Gtk::Popover*   m_shape_pop = nullptr;   // s198: rectangle / oval / line / pen (unparented when we go)
     widgets::Button m_fit;
     widgets::Label  m_zoom;
     Gtk::Label*     m_proof_pill = nullptr;   // s099

@@ -94,6 +94,7 @@ public:
     void set_alpha(double fill, double stroke);
     void move_to(double x, double y);
     void line_to(double x, double y);
+    void curve_to(double x1, double y1, double x2, double y2, double x, double y);   // s197: a cubic Bezier
     void rect(const Rect& r);
     void close_path();       // s189
     void clip_even_odd();    // s189: the path built so far clips what follows (even-odd), and is ended

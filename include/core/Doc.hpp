@@ -55,6 +55,9 @@ enum class Side      { Any, Right, Left };
 // spine (left of it negative; fixed -- not dragged).
 enum class RulerOrigin { Spread, Page, Spine };
 enum class FrameKind { Text, Image, Shape };
+// s197 (Scott: rect, oval, line, and a pen for every other path): a shape
+// frame's outline. A line is a Path of two points, open.
+enum class ShapeKind { Rect, Oval, Path };
 enum class StyleKind { Paragraph, Character };
 enum class Align     { Left, Center, Right, Justify };
 enum class ColorModel{ CMYK, RGB, Gray, Spot };
@@ -206,6 +209,18 @@ struct ColumnRule {
     bool operator==(const ColumnRule&) const = default;
 };
 
+// s197: one anchor of a path and the handles that bend the curves either
+// side of it -- all in the FRAME's box, 0..1 across and down, so resizing
+// the frame scales its path. A handle sitting on its anchor: that side is
+// straight.
+struct PathPoint {
+    double x = 0, y = 0;     // the anchor
+    double ix = 0, iy = 0;   // the handle in (the curve from the previous point)
+    double ox = 0, oy = 0;   // the handle out (the curve to the next)
+    bool   smooth = false;   // the handles kept in line (a pen drag; Direct keeps them so)
+    bool operator==(const PathPoint&) const = default;
+};
+
 struct Frame {
     std::string owner;                   // page or master id
     FrameKind   kind = FrameKind::Text;
@@ -241,6 +256,11 @@ struct Frame {
     // x from the left page's left edge; shown on both pages, each its part
     // (cut at the spine). `side` stays Any.
     bool        across = false;
+    // s197: a shape frame's outline (kind Shape only -- text and image
+    // frames stay rectangles). Path: its points, in the frame's box.
+    ShapeKind   shape = ShapeKind::Rect;
+    std::vector<PathPoint> path;
+    bool        open = false;            // Path: not closed (a line, an open curve)
     bool operator==(const Frame&) const = default;
 };
 
@@ -839,8 +859,59 @@ void frames_cancel(DocJournal& j);
 // gets a story of its own (one empty paragraph in the first paragraph style).
 // s014: `columns` / `gutter` for a text frame (one drawn across the margins
 // takes the page's columns).
+// ── s197: shapes -- rectangles, ovals, paths ──────────────────────────────
+// A point in the owner's coordinates (a path's anchor / handle, absolute).
+struct XY { double x = 0, y = 0; bool operator==(const XY&) const = default; };
+// One step of an outline: 'M' move (v[0..1]), 'L' line, 'C' curve (two
+// handles, then the point), 'Z' close. Screen, PDF and print all draw these.
+struct OutlineOp { char op = 'M'; double v[6] = {}; };
+// The frame's outline in its owner's coordinates (moved by dx, dy): its box
+// for a text / image frame or a Rect shape; four quarter-curves for an Oval;
+// the points for a Path (a straight side drawn as a line).
+std::vector<OutlineOp> outline_ops(const Frame& f, double dx = 0, double dy = 0);
+// Drawn other than as its box (an oval or a path).
+bool has_outline(const Frame& f);
+// A path's points with the frame's box applied (owner coordinates).
+std::vector<PathPoint> path_points(const Frame& f);
+// The outline flattened to polygons (owner coordinates), each segment cut
+// to within `tol` points. A closed shape's polygon closes itself.
+std::vector<std::vector<XY>> outline_polys(const Frame& f, double tol = 0.25);
+// The curves' own bounds (not their handles') of points in owner coordinates.
+Rect path_bounds(const std::vector<PathPoint>& abs, bool open);
+// Make f a Path through `abs` (owner coordinates): its box becomes the
+// curves' bounds and the points are stored within it.
+void set_path(Frame& f, const std::vector<PathPoint>& abs, bool open);
+// A straight point (both handles on the anchor).
+PathPoint corner_point(double x, double y);
+// Draw a path on a page or master: one undo step ("Draw line" for two
+// straight points, open; "Draw path" otherwise). Outlined in Black, like
+// any new shape. Fewer than two points, or no size at all: nothing.
+Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<PathPoint>& abs, bool open,
+                 bool across = false);
+// Change shapes between Rect and Oval (a Path keeps its points). One step.
+bool set_shape_kind(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ShapeKind k);
+// s200: Direct on a shape -- its points to edit (owner coordinates): a
+// path's own; an oval's four, a rectangle's corners (the first edit makes
+// either a path). `open` says whether the outline is closed.
+std::vector<PathPoint> shape_points(const Frame& f, bool& open);
+// Where on a shape's outline a point is nearest: the segment (from point
+// k to k + 1) and how far along it (0..1, of the curve's own parameter),
+// and the distance. k < 0: no outline.
+struct OutlineHit { int k = -1; double t = 0, dist = 1e300; };
+OutlineHit outline_nearest(const Frame& f, double x, double y);
+// The point on segment k at t, its curve split there (de Casteljau) -- the
+// outline's look unchanged. One step: "Add point". A rectangle or oval is
+// made a path first.
+bool path_add_point(DocJournal& j, Doc& d, const Doc::Id& frame, int k, double t);
+// Point k taken out (a closed path keeps three, an open one two). "Delete point".
+bool path_delete_point(DocJournal& j, Doc& d, const Doc::Id& frame, int k);
+// Point k smooth <-> corner: a corner gets handles along its neighbours'
+// line, a third of the way to each; a smooth point loses them. One step.
+bool path_toggle_point(DocJournal& j, Doc& d, const Doc::Id& frame, int k);
+
 Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, const Rect& r,
-                  int columns = 1, double gutter = 12, bool across = false);
+                  int columns = 1, double gutter = 12, bool across = false,
+                  ShapeKind shape = ShapeKind::Rect);   // s197: a shape's outline (Rect / Oval)
 // s155: where master items show -- 0 every page, 1 right pages, 2 left
 // pages, 3 across the spine (a facing master's only). Each item keeps its
 // place on the spread: into Across a right-side item's x gains the page
@@ -1216,6 +1287,12 @@ void swatch_from_rgb(Swatch& s, std::uint32_t rgb);
 // duplicated ("<name> copy"); each one step. Delete: only swatches nothing
 // uses (false if any is used, nothing changed).
 Doc::Id add_swatch(DocJournal& j, Doc& d, Swatch s);
+// s198: the Eyedropper tool -- a colour taken from the page (0xRRGGBB, as
+// it prints) onto frames' fill, or their stroke: the swatch already showing
+// it (within a step of each channel), else a new RGB swatch named by its
+// hex. No frames: just the swatch (found or made). One step (none when
+// nothing changes). Returns the swatch.
+Doc::Id take_colour_onto(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, std::uint32_t rgb, bool stroke);
 bool    edit_swatch(DocJournal& j, Doc& d, const Doc::Id& id, Swatch s);
 Doc::Id duplicate_swatch(DocJournal& j, Doc& d, const Doc::Id& id);
 bool    delete_swatch(DocJournal& j, Doc& d, const Doc::Id& id);
@@ -1458,6 +1535,9 @@ std::vector<std::vector<std::array<double, 2>>> clip_polys(const Asset& a, const
 // the asset has no shape.
 struct Band { double x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
 std::vector<Band> shape_bands(const Frame& f, const Asset& a);
+// s200: a shape's outline as wrap bands (frame coordinates), each `step`
+// points tall, grown by half its stroke -- for a Shape wrap.
+std::vector<Band> outline_bands(const Frame& f, const Doc& d, double step = 3);
 // s027: spreads -- facing pages pair a left page with the right one after
 // it (a book's first page stands alone on the right); without facing
 // pages each page is its own. In page order.

@@ -282,9 +282,19 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core
             }
         }
         if (f.opacity < 1) pg.set_alpha(f.opacity, f.opacity);   // s021: fill, content and stroke alike
+        // s197: the frame's outline -- its box, or a shape's oval / path.
+        const auto outline = [&] {
+            if (!core::doc::has_outline(f)) { pg.rect({f.x, f.y, f.w, f.h}); return; }
+            for (const auto& o : core::doc::outline_ops(f)) {
+                if (o.op == 'M') pg.move_to(o.v[0], o.v[1]);
+                else if (o.op == 'L') pg.line_to(o.v[0], o.v[1]);
+                else if (o.op == 'C') pg.curve_to(o.v[0], o.v[1], o.v[2], o.v[3], o.v[4], o.v[5]);
+                else pg.close_path();
+            }
+        };
         if (c.d.as<core::Swatch>(f.fill)) {   // s016: the frame's background
             pg.set_fill(ink_of(c.d, f.fill, f.fill_tint));
-            pg.rect({f.x, f.y, f.w, f.h});
+            outline();
             pg.fill();
         }
         if (f.kind == core::FrameKind::Text && !f.story.empty()) draw_text(c, pg, f, fid, on_page);
@@ -292,7 +302,7 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core
         if (c.d.as<core::Swatch>(f.stroke) && f.stroke_w > 0) {
             pg.set_stroke(ink_of(c.d, f.stroke, f.stroke_tint));
             pg.set_line_width(f.stroke_w);
-            pg.rect({f.x, f.y, f.w, f.h});
+            outline();
             pg.stroke();
         }
         pg.restore();

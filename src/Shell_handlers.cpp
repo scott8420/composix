@@ -1300,8 +1300,19 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             const double v = std::stod(colon == std::string::npos ? choice : choice.substr(colon + 1));
             did = core::doc::set_side(m_journal, m_doc, m_inspected,
                                       key == "inset" ? core::doc::SideOf::Inset : core::doc::SideOf::Wrap, side, v);
+        } else if (key == "shape") {   // s197: rectangle <-> oval
+            did = core::doc::set_shape_kind(m_journal, m_doc, m_inspected, static_cast<core::ShapeKind>(std::stoi(choice)));
         } else if (key == "wrap" && choice == "3") {   // s173: the pictures' outlines
-            did = wrap_to_shape(m_inspected);
+            std::vector<std::string> pics, shapes;   // s200: a shape wraps to its own outline
+            for (const auto& id : m_inspected)
+                if (const auto* f = m_doc.as<core::Frame>(id)) (f->kind == core::FrameKind::Image ? pics : shapes).push_back(id);
+            if (!pics.empty()) did = wrap_to_shape(pics);
+            if (!shapes.empty())
+                did = core::doc::edit_frames(m_journal, m_doc, shapes, "Text wrap", [&](core::Frame& f) {
+                    if (!core::doc::has_outline(f)) return;
+                    if (f.wrap == core::Wrap::None && f.wrap_off == core::Sides{}) f.wrap_off = {9, 9, 9, 9};
+                    f.wrap = core::Wrap::Shape;
+                }) || did;
         } else if (key == "wrap") {   // s018: text wrap
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Text wrap", [&](core::Frame& f) {
                 const auto w = static_cast<core::Wrap>(std::stoi(choice));
