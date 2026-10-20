@@ -339,6 +339,10 @@ int hyphen_cut(const core::Doc& d, const core::Para& para, const core::Style& st
     const auto shy = [&](int i) { return i >= 0 && i + 1 < n && static_cast<unsigned char>(t[static_cast<std::size_t>(i)]) == 0xC2 &&
                                          static_cast<unsigned char>(t[static_cast<std::size_t>(i + 1)]) == 0xAD; };
     if (!(letter(a) || shy(a)) || t[static_cast<std::size_t>(a - 1)] != ' ') return 0;   // not a break before a word
+    // s226: the word's language -- its character style's, else the paragraph's.
+    std::string lang = style.lang;
+    if (const auto* cs = d.as<core::Style>(core::char_style_at(para, a + 1)); cs && !cs->lang.empty()) lang = cs->lang;
+    const bool no_lang = lang == "none";
     int b = a, letters = 0;
     std::vector<int> typed;   // after each discretionary hyphen (offsets in the word)
     while (letter(b) || shy(b)) {
@@ -346,7 +350,7 @@ int hyphen_cut(const core::Doc& d, const core::Para& para, const core::Style& st
         else { b += letter_len(b); ++letters; }
     }
     // s190: a French word runs on past an apostrophe (l'eau, aujourd'hui).
-    if (core::hyphen_language(style.lang).code == std::string_view("fr"))
+    if (!no_lang && core::hyphen_language(lang).code == std::string_view("fr"))
         while (b < n && (t[static_cast<std::size_t>(b)] == '\'' || t.compare(static_cast<std::size_t>(b), 3, "\xE2\x80\x99") == 0) && letter(b + (t[static_cast<std::size_t>(b)] == '\'' ? 1 : 3))) {
             b += t[static_cast<std::size_t>(b)] == '\'' ? 1 : 3;
             while (letter(b)) { b += letter_len(b); ++letters; }
@@ -361,6 +365,7 @@ int hyphen_cut(const core::Doc& d, const core::Para& para, const core::Style& st
         at = typed;
         at.erase(std::remove_if(at.begin(), at.end(), [&](int k) { return a + k >= b; }), at.end());   // not after its last letter
     } else {
+        if (no_lang) return 0;   // s226: No language -- only typed hyphens break it
         if (letters < std::max(1, style.hyph_shortest)) return 0;
         if (!style.hyph_last_word) {   // the paragraph's last word stays whole
             int e = b;
@@ -368,7 +373,7 @@ int hyphen_cut(const core::Doc& d, const core::Para& para, const core::Style& st
             if (e >= n) return 0;
         }
         at = core::hyphen_points(std::string_view(t).substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a)), -1, -1,
-                                 style.lang);   // s190: in its style's language
+                                 lang);   // s190: in its style's language (s226: or its character style's)
     }
     for (auto k = at.rbegin(); k != at.rend(); ++k) {
         std::string s = t.substr(static_cast<std::size_t>(pos), static_cast<std::size_t>(a + *k - pos)) + "-";
@@ -2226,7 +2231,7 @@ void show_line_on_path(cairo_t* cr, PangoLayoutLine* line, double x0, const core
             const double mid = x0 + (run_x + g.geometry.width / 2.0) / PANGO_SCALE;
             run_x += g.geometry.width;
             if (g.glyph == PANGO_GLYPH_EMPTY || (g.glyph & PANGO_GLYPH_UNKNOWN_FLAG)) continue;
-            const double s = from + mid;
+            const double s = tr.text_s(from, mid);   // s225: corner spacing
             if (s < 0 || s > tr.length()) continue;   // off the path's ends: not set
             double px, py, ang;
             tr.at(s, px, py, ang);
@@ -2237,7 +2242,7 @@ void show_line_on_path(cairo_t* cr, PangoLayoutLine* line, double x0, const core
             one->log_clusters[0] = 0;
             cairo_save(cr);
             {   // s223: the effect's axes (Rainbow: turned with the path)
-                const auto m = core::doc::path_axes(f, ang);
+                const auto m = core::doc::path_axes(f, ang, px, py);
                 cairo_matrix_t mx;
                 cairo_matrix_init(&mx, m.xx, m.yx, m.xy, m.yy, dx + px, dy + py);
                 cairo_transform(cr, &mx);

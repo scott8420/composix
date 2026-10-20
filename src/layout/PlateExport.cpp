@@ -161,7 +161,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
         for (const auto& g : run.glyphs) {
             const double mid = pen - f.x + g.advance / 2;
             pen += g.advance;
-            const double s = std::max(0.0, f.path_from) + mid;
+            const double s = tr.text_s(std::max(0.0, f.path_from), mid);   // s225
             if (s < 0 || s > tr.length()) continue;
             double px, py, ang;
             tr.at(s, px, py, ang);
@@ -170,7 +170,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             one.baseline = shift;   // s218: below the path by the alignment
             one.glyphs = {g};
             pg.save();
-            const auto m = core::doc::path_axes(f, ang);   // s223: the effect
+            const auto m = core::doc::path_axes(f, ang, px, py);   // s223: the effect
             pg.concat(m.xx, m.yx, m.xy, m.yy, px, py);
             plate::pango::show(c.doc, pg, one);
             pg.restore();
@@ -245,7 +245,7 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
         }
         pg.clip_even_odd();
     }
-    if (const auto polys = core::clip_polys(*a, r); !polys.empty()) {   // s189: its clipping path
+    if (const auto polys = core::clip_polys(f, *a, r); !polys.empty()) {   // s189: its clipping path
         for (const auto& poly : polys) {
             pg.move_to(poly[0][0], poly[0][1]);
             for (std::size_t i = 1; i < poly.size(); ++i) pg.line_to(poly[i][0], poly[i][1]);

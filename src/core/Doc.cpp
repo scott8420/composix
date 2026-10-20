@@ -1418,7 +1418,46 @@ PathTrack path_track(const Frame& f) {
         if (i) run += std::hypot(t.pts[i].x - t.pts[i - 1].x, t.pts[i].y - t.pts[i - 1].y);
         t.cum.push_back(run);
     }
+    if (f.path_spacing > 0 && t.pts.size() > 2) {   // s225: the text's own measure, round inside turns
+        const double h = f.path_spacing;
+        t.wa.assign(t.pts.size(), 0);
+        double prev = NAN;   // the heading arriving at point i
+        double w = 0;
+        for (std::size_t i = 0; i + 1 < t.pts.size(); ++i) {
+            const double len = t.cum[i + 1] - t.cum[i];
+            if (len < 1e-9) { t.wa[i] = w; continue; }
+            const double a = std::atan2(t.pts[i + 1].y - t.pts[i].y, t.pts[i + 1].x - t.pts[i].x);
+            if (!std::isnan(prev)) {
+                double turn = a - prev;
+                while (turn > M_PI) turn -= 2 * M_PI;
+                while (turn <= -M_PI) turn += 2 * M_PI;
+                // the words are on the left of travel (y down: up is (sin, -cos));
+                // a negative turn bends toward them
+                if (turn < 0) w -= h * -turn;
+            }
+            t.wa[i] = w;
+            w += len;
+            prev = a;
+        }
+        t.wa.back() = w;
+    }
     return t;
+}
+
+double PathTrack::to_w(double s) const {   // s225
+    if (wa.empty() || cum.size() < 2) return s;
+    if (s <= 0) return wa[0] + s;
+    std::size_t i = static_cast<std::size_t>(std::upper_bound(cum.begin(), cum.end(), s) - cum.begin());
+    if (i >= cum.size()) return wa.back() + (s - cum.back());
+    return wa[i - 1] + (s - cum[i - 1]);
+}
+
+double PathTrack::to_s(double t) const {
+    if (wa.empty() || cum.size() < 2) return t;
+    if (t <= wa[0]) return t - wa[0];
+    for (std::size_t j = 1; j < cum.size(); ++j)   // the first stretch that reaches it
+        if (t <= wa[j - 1] + (cum[j] - cum[j - 1])) return cum[j - 1] + std::max(0.0, t - wa[j - 1]);
+    return cum.back() + (t - wa.back());
 }
 
 void PathTrack::at(double s, double& x, double& y, double& angle) const {
@@ -1449,9 +1488,20 @@ double PathTrack::nearest(double x, double y, double* dist) const {
     return at_s;
 }
 
-PathAxes path_axes(const Frame& f, double a) {   // s223
+PathAxes path_axes(const Frame& f, double a, double x, double y) {   // s223
     const double c = std::cos(a), s = std::sin(a);
     const double turn = c < 0 ? -1 : 1;   // running leftward: over, not mirrored
+    if (f.path_effect == 4) {   // s224: Gravity -- up away from the centre, on the side Rainbow's up is
+        double ux = x - (f.x + f.w / 2), uy = y - (f.y + f.h / 2);
+        const double n = std::hypot(ux, uy);
+        if (n > 1e-6) {
+            ux /= n;
+            uy /= n;
+            if (ux * s - uy * c < 0) { ux = -ux; uy = -uy; }   // Rainbow's up is (sin, -cos)
+            return {-uy, ux, -ux, -uy};
+        }
+        return {c, s, -s, c};   // at the centre itself: as Rainbow
+    }
     switch (f.path_effect) {
     case 1: return {c, s, 0, turn};       // Skew: its verticals stay vertical
     case 2: return {turn, 0, -s, c};      // 3D Ribbon: its horizontals stay level
@@ -1462,9 +1512,9 @@ PathAxes path_axes(const Frame& f, double a) {   // s223
 
 void path_point(const PathTrack& tr, const Frame& f, double bx, double by, double base, double shift, double& x, double& y) {   // s218
     double px, py, a;
-    tr.at(std::max(0.0, f.path_from) + bx, px, py, a);
+    tr.at(tr.text_s(std::max(0.0, f.path_from), bx), px, py, a);   // s225: along the text's measure
     const double v = by - base + shift;   // below the path, along the glyph's down (s223: the effect's)
-    const PathAxes m = path_axes(f, a);
+    const PathAxes m = path_axes(f, a, px, py);
     x = px + m.xy * v;
     y = py + m.yy * v;
 }
@@ -1477,7 +1527,7 @@ void path_unpoint(const PathTrack& tr, const Frame& f, double x, double y, doubl
     for (int it = 0; it < 6; ++it) {
         double px, py, a;
         tr.at(s, px, py, a);
-        const PathAxes m = path_axes(f, a);
+        const PathAxes m = path_axes(f, a, px, py);
         const double tx = std::cos(a), ty = std::sin(a);
         const double det = tx * m.yy - ty * m.xy;
         const double rx = x - px, ry = y - py;
@@ -1490,7 +1540,7 @@ void path_unpoint(const PathTrack& tr, const Frame& f, double x, double y, doubl
         if (std::abs(da) < 1e-7) break;
         s = std::clamp(s + da, 0.0, tr.length());
     }
-    bx = s - std::max(0.0, f.path_from);
+    bx = tr.to_w(s) - tr.to_w(std::max(0.0, f.path_from));   // s225
     by = base + v - shift;
 }
 
@@ -1520,7 +1570,8 @@ double path_to_for(const Frame& f, const PathTrack& tr, double s) {   // s221
 Frame text_box(const Frame& f) {
     if (!f.on_path || f.kind != FrameKind::Text) return f;
     Frame g = f;
-    g.w = std::max(1.0, path_end(f, path_track(f)) - std::max(0.0, f.path_from));   // s221: to its end mark
+    const PathTrack tr = path_track(f);   // s225: the room in the text's measure
+    g.w = std::max(1.0, tr.to_w(path_end(f, tr)) - tr.to_w(std::max(0.0, f.path_from)));   // s221: to its end mark
     g.h = 1e5;   // one line is drawn; the rest would be overset
     g.columns = 1;
     g.widths.clear();
@@ -3336,7 +3387,7 @@ std::string style_edit_label(const std::string& key) {   // s164
         {"list_type", "List"}, {"list_bullet", "Bullet"}, {"list_num", "Numbers"}, {"list_hang", "Hang"},
         {"pstart", "Start"}, {"keep_next", "Keep with next"}, {"keep_lines", "Keep lines"},
         {"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"}, {"hyph_last_word", "Hyphenate last word"},
-        {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}, {"span", "Span columns"}, {"lang", "Language"},
+        {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}, {"span", "Span columns"}, {"lang", "Language"}, {"clang", "Language"},
         {"split_gutter", "Split gutter"}};
     if (const auto it = labels.find(key); it != labels.end()) return it->second;
     if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {
@@ -3368,6 +3419,7 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
     if (key == "color") { st.color = choice; return; }
     if (key == "color_tint") { st.color_tint = std::stod(choice) / 100; return; }
     if (key == "nobreak") { if (!para) st.no_break = choice == "1"; return; }
+    if (key == "clang") { if (!para) st.lang = choice; return; }   // s226: "" the paragraph's, "none" no language
     if (!para) return;   // the rest: paragraph styles'
     if (key == "lindent") st.left_indent = std::stod(choice);
     else if (key == "rindent") st.right_indent = std::stod(choice);
@@ -3449,7 +3501,7 @@ std::string style_key_of_edit(const std::string& e) {   // s092
         {"nobreak", "no_break"}, {"color", "color"}, {"color_tint", "color_tint"}, {"align", "align"},
         {"before", "space_before"}, {"after", "space_after"}, {"lindent", "left_indent"}, {"rindent", "right_indent"},
         {"findent", "first_indent"}, {"indent_after", "skip_after_heading"}, {"tabs", "tabs"}, {"drop_lines", "drop_lines"},
-        {"drop_chars", "drop_chars"}, {"span", "span"}, {"split_gutter", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"lang", "lang"}, {"hyph_limit", "hyph_limit"},
+        {"drop_chars", "drop_chars"}, {"span", "span"}, {"split_gutter", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"lang", "lang"}, {"clang", "lang"}, {"hyph_limit", "hyph_limit"},
         {"hyph_shortest", "hyph_shortest"}, {"hyph_last_word", "hyph_last_word"}, {"keep_next", "keep_next"},
         {"keep_lines", "keep_lines"}, {"pstart", "start"}};
     if (const auto it = m.find(e); it != m.end()) return it->second;
@@ -4284,6 +4336,9 @@ Asset asset_from(const ImageFile& f, double pos) {
     a.stamp = f.stamp;
     a.shape = f.shape;   // s173
     a.clip = f.clip;     // s189
+    a.path_names = f.path_names;   // s227
+    a.path_clips = f.path_clips;
+    a.path_shapes = f.path_shapes;
     return a;
 }
 Doc::Id existing_asset(const Doc& d, const ImageFile& f) {
@@ -4436,19 +4491,10 @@ std::string photoshop_resources(const ReadAt& read) {
 }
 }  // namespace
 
-ClipPath clipping_path(const ReadAt& read) {
-    ClipPath out;
-    const auto blocks = resource_blocks(photoshop_resources(read));
-    std::string want;
-    for (const auto& r : blocks)
-        if (r.id == 2999 && !r.data.empty()) want = r.data.substr(1, cp_u8(r.data, 0));   // its name, a pascal string
-    if (want.empty()) return out;
-    const Res* path = nullptr;
-    for (const auto& r : blocks)
-        if (r.id >= 2000 && r.id <= 2997 && r.name == want) { path = &r; break; }
-    if (!path) return out;
-    out.name = want;
-    const auto fixed = [&](std::size_t i) { return static_cast<double>(static_cast<std::int32_t>(cp_be32(path->data, i))) / 16777216.0; };
+namespace {
+// s227: one path resource's knots, flattened -- closed subpaths as polygons.
+void read_path(const std::string& data, ClipPath& out) {
+    const auto fixed = [&](std::size_t i) { return static_cast<double>(static_cast<std::int32_t>(cp_be32(data, i))) / 16777216.0; };
     struct Knot { double px, py, ax, ay, lx, ly; };   // preceding control, anchor, leaving control
     std::vector<Knot> knots;
     int left = 0;
@@ -4469,18 +4515,46 @@ ClipPath clipping_path(const ReadAt& read) {
         }
         knots.clear();
     };
-    for (std::size_t at = 0; at + 26 <= path->data.size(); at += 26) {
-        const unsigned sel = cp_be16(path->data, at);
+    for (std::size_t at = 0; at + 26 <= data.size(); at += 26) {
+        const unsigned sel = cp_be16(data, at);
         if (sel == 0 || sel == 3) {   // a subpath's length record
             finish();
             closed = sel == 0;
-            left = static_cast<int>(cp_be16(path->data, at + 2));
+            left = static_cast<int>(cp_be16(data, at + 2));
         } else if ((sel == 1 || sel == 2 || sel == 4 || sel == 5) && left > 0) {
             knots.push_back({fixed(at + 6), fixed(at + 2), fixed(at + 14), fixed(at + 10), fixed(at + 22), fixed(at + 18)});   // (vert, horiz) pairs
             --left;
         }
     }
     finish();
+}
+}  // namespace
+
+ClipPath clipping_path(const ReadAt& read) {
+    ClipPath out;
+    const auto blocks = resource_blocks(photoshop_resources(read));
+    std::string want;
+    for (const auto& r : blocks)
+        if (r.id == 2999 && !r.data.empty()) want = r.data.substr(1, cp_u8(r.data, 0));   // its name, a pascal string
+    if (want.empty()) return out;
+    for (const auto& r : blocks)
+        if (r.id >= 2000 && r.id <= 2997 && r.name == want) {
+            out.name = want;
+            read_path(r.data, out);
+            break;
+        }
+    return out;
+}
+
+std::vector<ClipPath> picture_paths(const ReadAt& read) {   // s227
+    std::vector<ClipPath> out;
+    for (const auto& r : resource_blocks(photoshop_resources(read))) {
+        if (r.id < 2000 || r.id > 2997) continue;
+        ClipPath p;
+        p.name = r.name.empty() ? "Path " + std::to_string(out.size() + 1) : r.name;
+        read_path(r.data, p);
+        if (!p.polys.empty()) out.push_back(std::move(p));
+    }
     return out;
 }
 
@@ -4521,17 +4595,44 @@ std::vector<float> pack_clip(const ClipPath& p) {   // s189
     return out;
 }
 
-std::vector<std::vector<std::array<double, 2>>> clip_polys(const Asset& a, const Rect& pr) {   // s189
+namespace {
+std::vector<std::vector<std::array<double, 2>>> unpack_clip(const std::vector<float>& c, const Rect& pr) {
     std::vector<std::vector<std::array<double, 2>>> out;
     std::size_t i = 0;
-    while (i < a.clip.size()) {
-        const auto n = static_cast<std::size_t>(a.clip[i++]);
-        if (n == 0 || i + 2 * n > a.clip.size()) break;
+    while (i < c.size()) {
+        const auto n = static_cast<std::size_t>(c[i++]);
+        if (n == 0 || i + 2 * n > c.size()) break;
         std::vector<std::array<double, 2>> poly;
-        for (std::size_t k = 0; k < n; ++k, i += 2) poly.push_back({pr.x + a.clip[i] * pr.w, pr.y + a.clip[i + 1] * pr.h});
+        for (std::size_t k = 0; k < n; ++k, i += 2) poly.push_back({pr.x + c[i] * pr.w, pr.y + c[i + 1] * pr.h});
         out.push_back(std::move(poly));
     }
     return out;
+}
+const std::vector<float> kNoFloats;
+}  // namespace
+
+std::vector<std::vector<std::array<double, 2>>> clip_polys(const Asset& a, const Rect& pr) {   // s189
+    return unpack_clip(a.clip, pr);
+}
+
+const std::vector<float>& frame_clip(const Frame& f, const Asset& a) {   // s227
+    if (f.clip_path.empty()) return a.clip;
+    if (f.clip_path == "none") return kNoFloats;
+    for (std::size_t k = 0; k < a.path_names.size() && k < a.path_clips.size(); ++k)
+        if (a.path_names[k] == f.clip_path) return a.path_clips[k];
+    return a.clip;   // a name the picture no longer has: its own
+}
+
+const std::vector<float>& frame_shape(const Frame& f, const Asset& a) {
+    if (f.clip_path.empty()) return a.shape;
+    if (f.clip_path == "none") return a.clip.empty() ? a.shape : kNoFloats;   // (its shape was its path's: none to wrap now)
+    for (std::size_t k = 0; k < a.path_names.size() && k < a.path_shapes.size(); ++k)
+        if (a.path_names[k] == f.clip_path) return a.path_shapes[k];
+    return a.shape;
+}
+
+std::vector<std::vector<std::array<double, 2>>> clip_polys(const Frame& f, const Asset& a, const Rect& pr) {
+    return unpack_clip(frame_clip(f, a), pr);
 }
 
 // ── s184 (G5): a picture's colour space from its header ──────────────────────
@@ -5374,7 +5475,7 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
             const double fx = f->x + (o != t->owner ? across_dx(d, *f, d.side_of(t->owner)) : 0.0);   // s155
             // s173: Shape -- the picture's traced outline, band by band, grown by the offsets.
             if (f->wrap == Wrap::Shape)
-                if (const auto* a = d.as<Asset>(f->asset); (a && !a->shape.empty()) || doc::has_outline(*f)) {
+                if (const auto* a = d.as<Asset>(f->asset); (a && !frame_shape(*f, *a).empty()) || doc::has_outline(*f)) {   // s227: its chosen path's
                     const auto bands = doc::has_outline(*f) ? outline_bands(*f, d) : shape_bands(*f, *a);   // s200: a shape's own outline (s209: a shaped picture's too)
                     if (!bands.empty()) {
                         for (const auto& b : bands) {
@@ -5438,13 +5539,14 @@ std::vector<float> trace_shape(const std::uint32_t* px, int w, int h, int stride
 
 std::vector<Band> shape_bands(const Frame& f, const Asset& a) {
     std::vector<Band> out;
-    if (a.shape.size() < 3 || a.shape[0] <= 0) return out;
-    const double aspect = a.shape[0];
+    const auto& sh = frame_shape(f, a);   // s227: the frame's choice of path
+    if (sh.size() < 3 || sh[0] <= 0) return out;
+    const double aspect = sh[0];
     const Rect pr = picture_rect({0, 0, f.w, f.h}, f, aspect, 1.0);
-    const std::size_t n = (a.shape.size() - 1) / 2;
+    const std::size_t n = (sh.size() - 1) / 2;
     if (pr.w <= 0 || pr.h <= 0 || n == 0) return out;
     for (std::size_t i = 0; i < n; ++i) {
-        const double s0 = a.shape[1 + 2 * i], s1 = a.shape[2 + 2 * i];
+        const double s0 = sh[1 + 2 * i], s1 = sh[2 + 2 * i];
         if (s1 <= s0) continue;
         Band b{pr.x + s0 * pr.w, pr.y + pr.h * static_cast<double>(i) / static_cast<double>(n),
                pr.x + s1 * pr.w, pr.y + pr.h * static_cast<double>(i + 1) / static_cast<double>(n)};

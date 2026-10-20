@@ -192,14 +192,21 @@ std::optional<core::ImageFile> probe(const std::string& path) {
         });
         f.color = c.empty() || f.vector ? "RGB" : c;
         // s189: its clipping path, if Photoshop gave it one
-        f.clip = core::pack_clip(core::clipping_path([&in](std::uint64_t off, std::size_t n) {
+        const auto read_at = [&in](std::uint64_t off, std::size_t n) {
             std::string b(n, '\0');
             in.clear();
             in.seekg(static_cast<std::streamoff>(off));
             in.read(b.data(), static_cast<std::streamsize>(n));
             b.resize(static_cast<std::size_t>(std::max<std::streamsize>(0, in.gcount())));
             return b;
-        }));
+        };
+        f.clip = core::pack_clip(core::clipping_path(read_at));
+        // s227 (G3): all its paths, each with its wrap outline, for a frame to choose from
+        for (const auto& p : core::picture_paths(read_at)) {
+            f.path_names.push_back(p.name);
+            f.path_clips.push_back(core::pack_clip(p));
+            f.path_shapes.push_back(f.px_w > 0 && f.px_h > 0 ? core::clip_shape(p, f.px_w, f.px_h) : std::vector<float>{});
+        }
     }
     f.stamp = core::file_stamp(f.path);
     return f;

@@ -2241,22 +2241,22 @@ void part8() {
         f.kind = core::FrameKind::Text;
         f.on_path = true;
         const double a = M_PI / 6, c = std::cos(a), s = std::sin(a);
-        auto m = D::path_axes(f, a);
+        auto m = D::path_axes(f, a, 0, 0);
         check("effect: Rainbow -- turned with the path", near(m.xx, c) && near(m.yx, s) && near(m.xy, -s) && near(m.yy, c));
         f.path_effect = 1;
-        m = D::path_axes(f, a);
+        m = D::path_axes(f, a, 0, 0);
         check("effect: Skew -- along it, its verticals vertical", near(m.xx, c) && near(m.yx, s) && near(m.xy, 0) && near(m.yy, 1));
         f.path_effect = 2;
-        m = D::path_axes(f, a);
+        m = D::path_axes(f, a, 0, 0);
         check("effect: 3D Ribbon -- level, leaning with it", near(m.xx, 1) && near(m.yx, 0) && near(m.xy, -s) && near(m.yy, c));
         f.path_effect = 3;
-        m = D::path_axes(f, a);
+        m = D::path_axes(f, a, 0, 0);
         check("effect: Stair Step -- as set", near(m.xx, 1) && near(m.yx, 0) && near(m.xy, 0) && near(m.yy, 1));
         bool unmirrored = true;
         for (int e = 0; e < 4; ++e)
             for (double ang : {0.3, 1.2, 2.0, 3.0, -2.5, -0.7}) {
                 f.path_effect = e;
-                const auto k = D::path_axes(f, ang);
+                const auto k = D::path_axes(f, ang, 0, 0);
                 if (k.xx * k.yy - k.yx * k.xy <= 0) unmirrored = false;
             }
         check("effect: never mirrored, any heading, any effect", unmirrored);
@@ -2323,6 +2323,276 @@ void part8() {
         }
         while (j.can_undo()) j.undo();
         check("effect: all undone exactly", core::to_json(d) == before);
+    }
+    // ── s224: Gravity -- each glyph's upright through the path's centre ────
+    {
+        std::cout << "--- s224 gravity ---\n";
+        namespace D = core::doc;
+        core::Frame f;
+        f.kind = core::FrameKind::Text;
+        f.on_path = true;
+        f.shape = core::ShapeKind::Oval;
+        f.x = 100; f.y = 100; f.w = 200; f.h = 200;   // a circle: Gravity is Rainbow
+        auto tr = D::path_track(f);
+        bool same = true, unmirrored = true;
+        for (double sp = 5; sp < tr.length(); sp += tr.length() / 17) {
+            double px, py, a;
+            tr.at(sp, px, py, a);
+            core::Frame r = f;
+            r.path_effect = 0;
+            f.path_effect = 4;
+            const auto g = D::path_axes(f, a, px, py), k = D::path_axes(r, a, px, py);
+            if (std::abs(g.xx - k.xx) > 0.02 || std::abs(g.yx - k.yx) > 0.02 || std::abs(g.xy - k.xy) > 0.02 || std::abs(g.yy - k.yy) > 0.02)
+                same = false;
+            if (g.xx * g.yy - g.yx * g.xy <= 0) unmirrored = false;
+        }
+        check("gravity: round a circle -- as Rainbow", same);
+        f.h = 80;   // a wide oval: fanned from the centre, not turned with the edge
+        tr = D::path_track(f);
+        double px, py, a;
+        tr.at(tr.length() * 0.06, px, py, a);   // up its right side, off the axes
+        const auto g = D::path_axes(f, a, px, py);
+        const double ux = -g.xy, uy = -g.yy, cx = px - 200, cy = py - 140, n = std::hypot(cx, cy);
+        check("gravity: upright away from the centre", std::abs(ux - cx / n) < 1e-9 && std::abs(uy - cy / n) < 1e-9);
+        check("gravity: ... not along the edge's normal there", std::abs(g.xx - std::cos(a)) > 0.02);
+        for (double ang : {0.2, 1.4, 2.9, -1.0}) {
+            const auto k = D::path_axes(f, ang, 230, 90);
+            if (k.xx * k.yy - k.yx * k.xy <= 0) unmirrored = false;
+        }
+        check("gravity: never mirrored", unmirrored);
+        {   // out and back
+            f.path_from = 0;
+            double x, y, bx, by;
+            D::path_point(tr, f, 40, 5, 12, 0, x, y);
+            D::path_unpoint(tr, f, x, y, 12, 0, bx, by);
+            check("gravity: a place maps out and back", std::abs(bx - 40) < 0.05 && std::abs(by - 5) < 0.05,
+                  std::to_string(bx) + ", " + std::to_string(by));
+        }
+        core::Doc d, e;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::edit_frames(j, d, {"frame.1"}, "fx", [](core::Frame& h) { h.on_path = true; h.path_effect = 4; });
+        std::string err;
+        const auto text = core::to_json(d);
+        check("gravity: through JSON", core::from_json(e, text, &err) && e.as<core::Frame>("frame.1")->path_effect == 4, err);
+    }
+    // ── s225: corner spacing -- room round turns toward the words ──────────
+    {
+        std::cout << "--- s225 corner spacing ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Frame f;
+        D::set_path(f, {D::corner_point(100, 300), D::corner_point(200, 300), D::corner_point(200, 200)}, true);   // east, then north: toward the words
+        f.kind = core::FrameKind::Text;
+        f.on_path = true;
+        check("spacing: none -- the text's measure is the path's", D::path_track(f).wa.empty() && D::path_track(f).to_s(150) == 150);
+        f.path_spacing = 10;
+        auto tr = D::path_track(f);
+        const double q = 10 * M_PI / 2;   // h x the turn
+        check("spacing: past an inside corner, h x its angle less text room", std::abs(tr.to_w(150) - (150 - q)) < 1e-9);
+        check("spacing: before it, none", std::abs(tr.to_w(60) - 60) < 1e-9 && std::abs(tr.to_s(60) - 60) < 1e-9);
+        check("spacing: the text just past the corner goes up the next leg by the room", std::abs(tr.to_s(100.5) - (100.5 + q)) < 1e-9);
+        check("spacing: back and forth past it", std::abs(tr.to_s(tr.to_w(170)) - 170) < 1e-9);
+        check("spacing: the box shorter by the room", std::abs(D::text_box(f).w - (200 - q)) < 1e-9);
+        {   // a glyph's place 1 pt into the text past the corner: up the second leg, clear of the first leg's words
+            double x, y;
+            D::path_point(tr, f, 101, 12, 12, 0, x, y);
+            check("spacing: past the corner, clear of the words before it", std::abs(x - 200) < 1e-9 && y < 300 - 10, std::to_string(y));
+            double bx, by;
+            D::path_unpoint(tr, f, x, y, 12, 0, bx, by);
+            check("spacing: maps back", std::abs(bx - 101) < 1e-9 && std::abs(by - 12) < 1e-9);
+        }
+        {   // turning away from the words: no change
+            core::Frame g = f;
+            D::set_path(g, {D::corner_point(100, 300), D::corner_point(200, 300), D::corner_point(200, 400)}, true);
+            g.kind = core::FrameKind::Text;
+            g.on_path = true;
+            g.path_spacing = 10;
+            check("spacing: a turn away from the words -- left alone", std::abs(D::path_track(g).to_w(150) - 150) < 1e-9);
+            g.path_flip = true;   // the other way round: now toward them
+            check("spacing: flipped, that turn is toward them", D::path_track(g).to_w(150) < 150 - 1);
+        }
+        {   // a circle, words outside: no inside turns; words inside (flipped): the room taken all round
+            core::Frame c;
+            c.kind = core::FrameKind::Text;
+            c.on_path = true;
+            c.shape = core::ShapeKind::Oval;
+            c.x = 0; c.y = 0; c.w = 200; c.h = 200;
+            c.path_spacing = 6;
+            const auto t0 = D::path_track(c);
+            c.path_flip = true;
+            const auto t1 = D::path_track(c);
+            const double out = t0.to_w(t0.length()), in = t1.to_w(t1.length());
+            check("spacing: a circle -- outside untouched, inside 2 pi h less (the inner circle's length)",
+                  std::abs(out - t0.length()) < 1e-6 && std::abs(in - (t1.length() - 2 * M_PI * 6)) < 0.5,
+                  std::to_string(out) + " / " + std::to_string(in));
+        }
+        // In a document: one step, JSON, drawn.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = core::to_json(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto ln = D::add_path(j, d, page, {D::corner_point(60, 160), D::corner_point(200, 160), D::corner_point(200, 60)}, true);
+        D::set_text_on_path(j, d, {ln}, true, 0);
+        {
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>(d.as<core::Frame>(ln)->story);
+            st.paras[0].text = "Round the corner";
+            d.put(d.as<core::Frame>(ln)->story, st);
+        }
+        check("spacing: one step", D::edit_frames(j, d, {ln}, "Corner spacing", [](core::Frame& g) { g.path_spacing = 9; }) &&
+              j.undo_label() == "Corner spacing");
+        core::Doc e;
+        std::string err;
+        const auto text = core::to_json(d);
+        check("spacing: through JSON", core::from_json(e, text, &err) && e.as<core::Frame>(ln)->path_spacing == 9 && core::to_json(e) == text, err);
+        while (j.can_undo()) j.undo();
+        check("spacing: all undone exactly", core::to_json(d) == before);
+    }
+    // ── s226: a character style's language ──────────────────────────────
+    {
+        std::cout << "--- s226 character language ---\n";
+        namespace L = composix::layout;
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        std::string words;
+        for (int k = 0; k < 10; ++k) words += "Stra\xC3\x9F" "enbahnhaltestelle Donaudampfschifffahrtsgesellschaft Fu\xC3\x9Fg\xC3\xA4nger\xC3\xBC" "berg\xC3\xA4nge ";
+        words.pop_back();
+        D::edit_text(j, d, "story.1", {2, 0}, {2, static_cast<int>(d.as<core::Story>("story.1")->paras[2].text.size())}, words);
+        const auto sid = d.as<core::Story>("story.1")->paras[2].style;
+        D::edit_styles(j, d, {sid}, "Hyphenate", [&](core::Style& st) { st.hyphenate = true; st.lang.clear(); });   // the paragraph: US English
+        const int n = static_cast<int>(d.as<core::Story>("story.1")->paras[2].text.size());
+        check("character language: a character style setting (Text)", D::style_edit_label("clang") == "Language" &&
+              D::edit_styles(j, d, {"style.5"}, "Language", [&](core::Style& st) { D::style_edit(d, st, "clang", "de"); }) &&
+              d.as<core::Style>("style.5")->lang == "de");
+        {   // the whole paragraph in it
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>("story.1");
+            st.paras[2].runs = {core::Run{0, n, "style.5", {}}};
+            d.put("story.1", st);
+        }
+        const auto breaks = [&](const char* lang, int& hy) {
+            bool ok = true;
+            hy = 0;
+            const auto& txt = d.as<core::Story>("story.1")->paras[2].text;
+            const auto flow = L::flow_story(d, "story.1");
+            for (const auto& f : flow.frames)
+                for (const auto& l : f.lines)
+                    if (l.para == 2 && l.hyphen) {
+                        ++hy;
+                        int a = l.end;
+                        while (a > 0 && txt[static_cast<std::size_t>(a - 1)] != ' ') --a;
+                        int e = l.end;
+                        while (e < static_cast<int>(txt.size()) && txt[static_cast<std::size_t>(e)] != ' ') ++e;
+                        const auto pts = core::hyphen_points(std::string_view(txt).substr(static_cast<std::size_t>(a), static_cast<std::size_t>(e - a)), -1, -1, lang);
+                        ok = ok && std::find(pts.begin(), pts.end(), l.end - a) != pts.end();
+                    }
+            return ok;
+        };
+        int hy = 0;
+        check("character language: the words break at German points in an English paragraph", breaks("de", hy) && hy > 0, std::to_string(hy));
+        D::edit_styles(j, d, {"style.5"}, "Language", [&](core::Style& st) { D::style_edit(d, st, "clang", "none"); });
+        breaks("de", hy);
+        check("character language: No language -- its words don't hyphenate", hy == 0, std::to_string(hy));
+        D::edit_styles(j, d, {"style.5"}, "Language", [&](core::Style& st) { D::style_edit(d, st, "clang", ""); });
+        check("character language: Inherit -- the paragraph's again", d.as<core::Style>("style.5")->lang.empty() && breaks("en-US", hy) && hy > 0);
+        {   // a paragraph style can't be set by the character key
+            core::Style ps = *d.as<core::Style>(sid);
+            D::style_edit(d, ps, "clang", "de");
+            check("character language: a paragraph style ignores it", ps.lang.empty());
+        }
+        D::edit_styles(j, d, {"style.5"}, "Language", [&](core::Style& st) { D::style_edit(d, st, "clang", "none"); });
+        core::Doc e;
+        check("character language: saved with the style", core::from_json(e, core::to_json(d)) && e.as<core::Style>("style.5")->lang == "none");
+    }
+    // ── s227 (G3): a frame chooses its clipping path ─────────────────────
+    {
+        std::cout << "--- s227 clipping path chooser ---\n";
+        namespace D = core::doc;
+        using B = std::string;
+        const auto be16 = [](unsigned v) { return B{static_cast<char>(v >> 8), static_cast<char>(v & 0xFF)}; };
+        const auto be32 = [&](unsigned v) { return be16(v >> 16) + be16(v & 0xFFFF); };
+        const auto fx = [&](double v) { return be32(static_cast<unsigned>(static_cast<std::int32_t>(std::lround(v * 16777216.0)))); };
+        const auto subpath = [&](std::initializer_list<std::array<double, 2>> pts) {
+            B s = be16(0) + be16(static_cast<unsigned>(pts.size())) + B(22, '\0');
+            for (const auto& p : pts) { const B yx = fx(p[1]) + fx(p[0]); s += be16(2) + yx + yx + yx; }
+            return s;
+        };
+        const auto block = [&](unsigned id, const B& name, const B& data) {
+            B s = B("8BIM") + be16(id) + static_cast<char>(name.size()) + name;
+            if ((name.size() + 1) % 2) s += '\0';
+            s += be32(static_cast<unsigned>(data.size())) + data;
+            if (data.size() % 2) s += '\0';
+            return s;
+        };
+        const auto pascal = [](const B& n) { return static_cast<char>(n.size()) + n; };
+        const B res = block(2000, "Outline", be16(6) + B(24, '\0') + subpath({{0.5, 0.0}, {1.0, 1.0}, {0.0, 1.0}})) +
+                      block(2001, "Corner", subpath({{0, 0}, {0.3, 0}, {0.3, 0.3}, {0, 0.3}})) + block(2999, "", pascal("Outline") + be16(0x0100));
+        const B app13 = B("Photoshop 3.0") + B(1, '\0') + res;
+        const B jpeg = B{'\xFF', '\xD8', '\xFF', '\xED'} + be16(static_cast<unsigned>(app13.size() + 2)) + app13 + B{'\xFF', '\xD9'};
+        const core::ReadAt rd([jpeg](std::uint64_t off, std::size_t n) { return off >= jpeg.size() ? B{} : jpeg.substr(static_cast<std::size_t>(off), n); });
+        const auto paths = core::picture_paths(rd);
+        check("paths: all of them, in order, named", paths.size() == 2 && paths[0].name == "Outline" && paths[1].name == "Corner" &&
+              paths[1].polys.size() == 1);
+        // Placed as the app probes it: the marked one as clip, all of them listed.
+        core::ImageFile f;
+        f.path = "/x/two_paths.jpg";
+        f.name = "two_paths.jpg";
+        f.px_w = 400;
+        f.px_h = 400;
+        f.clip = core::pack_clip(core::clipping_path(rd));
+        f.shape = core::clip_shape(core::clipping_path(rd), 400, 400);
+        for (const auto& p : paths) {
+            f.path_names.push_back(p.name);
+            f.path_clips.push_back(core::pack_clip(p));
+            f.path_shapes.push_back(core::clip_shape(p, 400, 400));
+        }
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto frame = D::add_frame(j, d, d.as<core::Frame>("frame.1")->owner, core::FrameKind::Image, {300, 20, 100, 100});
+        check("chooser: placed with its paths", D::place_image(j, d, frame, f) &&
+              d.as<core::Asset>(d.as<core::Frame>(frame)->asset)->path_names.size() == 2);
+        const auto& a = *d.as<core::Asset>(d.as<core::Frame>(frame)->asset);
+        core::Frame fr = *d.as<core::Frame>(frame);
+        check("chooser: unset -- the one Photoshop marked", &core::frame_clip(fr, a) == &a.clip && a.clip == a.path_clips[0]);
+        fr.clip_path = "Corner";
+        check("chooser: another of its paths", core::frame_clip(fr, a) == a.path_clips[1] && core::frame_shape(fr, a) == a.path_shapes[1]);
+        {   // drawn and wrapped by it: the corner square's polygons, its bands only in the top left
+            const auto polys = core::clip_polys(fr, a, {0, 0, 100, 100});
+            double mx = 0;
+            for (const auto& q : polys) for (const auto& v : q) mx = std::max(mx, v[0]);
+            const auto bands = core::shape_bands(fr, a);
+            bool corner = !bands.empty();
+            for (const auto& b : bands) corner = corner && b.x1 <= 31 && b.y1 <= 31;
+            check("chooser: drawn and wrapped by the path chosen", polys.size() == 1 && std::abs(mx - 30) < 0.5 && corner);
+        }
+        fr.clip_path = "none";
+        check("chooser: None -- not clipped, nothing to wrap by", core::frame_clip(fr, a).empty() && core::frame_shape(fr, a).empty());
+        fr.clip_path = "Gone";
+        check("chooser: a name the picture lost -- its own again", core::frame_clip(fr, a) == a.clip);
+        {
+            const auto items = core::frame_items(d, {frame}, "");
+            const core::Field* cf = nullptr;
+            for (const auto& fld : items.front().fields) if (fld.edit == "clip_path") cf = &fld;
+            check("inspector: Clipping path -- as saved, each path, None", cf && cf->choices.size() == 4 &&
+                  cf->value == "As saved (Outline)" && cf->choices[2].id == "Corner" && cf->choices[3].id == "none");
+        }
+        check("chooser: one step", D::edit_frames(j, d, {frame}, "Clipping path", [](core::Frame& g) { g.clip_path = "Corner"; }) &&
+              j.undo_label() == "Clipping path");
+        core::Doc e;
+        std::string err;
+        const auto text = core::to_json(d);
+        check("chooser: through JSON -- the frame's choice, the picture's paths",
+              core::from_json(e, text, &err) && e.as<core::Frame>(frame)->clip_path == "Corner" &&
+              e.as<core::Asset>(e.as<core::Frame>(frame)->asset)->path_names == a.path_names && core::to_json(e) == text, err);
     }
 }
 }  // namespace cxtest

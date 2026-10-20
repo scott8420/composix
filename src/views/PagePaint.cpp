@@ -387,7 +387,7 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
                 else cr->rectangle(r.x, r.y, r.w, r.h);
                 cr->clip();
                 const Rect ir = core::picture_rect(r, f, iw, ih, s);   // s035: Custom placement too
-                if (const auto polys = core::clip_polys(*asset, ir); !polys.empty()) {   // s189: its clipping path
+                if (const auto polys = core::clip_polys(f, *asset, ir); !polys.empty()) {   // s189: its clipping path
                     cr->set_fill_rule(Cairo::Context::FillRule::EVEN_ODD);
                     for (const auto& poly : polys) {
                         cr->move_to(poly[0][0], poly[0][1]);

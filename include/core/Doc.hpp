@@ -288,8 +288,16 @@ struct Frame {
     double      path_to = 0;
     // s223: how each glyph sits on the path (InDesign's effects): 0 Rainbow
     // (turned with it), 1 Skew (upright, slanted along it), 2 3D Ribbon
-    // (level, leaning with it), 3 Stair Step (upright and level).
+    // (level, leaning with it), 3 Stair Step (upright and level), s224:
+    // 4 Gravity (its upright through the path's centre -- fanned).
     int         path_effect = 0;
+    // s225: room round turns toward the words, points (about their height
+    // at the turn): 0 none.
+    double      path_spacing = 0;
+    // s227 (G3): a picture frame's clipping path -- "" the picture's own
+    // (the one Photoshop marked), "none" none, else one of its paths by
+    // name (Asset::path_names).
+    std::string clip_path;
     bool operator==(const Frame&) const = default;
 };
 
@@ -511,7 +519,9 @@ struct Style {
     int         split = 0;
     double      split_gutter = 12;
     // s190 (G4): the language its words hyphenate by (core::hyphen_languages:
-    // "en-US", "de", "fr"...; "" = US English).
+    // "en-US", "de", "fr"...; "" = US English). s226: a CHARACTER style's
+    // too -- its words in that language; "" = the paragraph's, "none" = No
+    // language (they don't hyphenate; typed hyphens still do).
     std::string lang;
     bool operator==(const Style&) const = default;
 };
@@ -545,6 +555,11 @@ struct Asset {
     // subpath as its point count then x, y pairs (0..1 of the picture).
     // The picture is drawn clipped to it (even-odd); empty = none.
     std::vector<float> clip;
+    // s227 (G3): ALL its Photoshop paths -- their names, each packed as
+    // `clip`, and each traced as `shape` for a Shape wrap -- for a frame
+    // to pick from (Frame::clip_path). Empty before s227 (Update reads them).
+    std::vector<std::string>        path_names;
+    std::vector<std::vector<float>> path_clips, path_shapes;
     double      vec_w = 0, vec_h = 0;    // s188: a vector's own size, points (0: not known -- placed before s188)
     bool operator==(const Asset&) const = default;
 };
@@ -752,6 +767,8 @@ struct ImageFile {
     std::int64_t stamp = 0;
     std::vector<float> shape;            // s173: traced (Asset::shape), when the UI traced it
     std::vector<float> clip;             // s189: its clipping path (Asset::clip), when it has one
+    std::vector<std::string>        path_names;               // s227: all its paths (Asset::path_*)
+    std::vector<std::vector<float>> path_clips, path_shapes;
 };
 // s184 (G5): a picture's colour space from its file's own header -- "CMYK",
 // "Gray", "RGB" or "Lab"; "" when the bytes aren't a format read here. JPEG:
@@ -947,6 +964,14 @@ struct PathTrack {
     double length() const { return cum.empty() ? 0 : cum.back(); }
     void at(double s, double& x, double& y, double& angle) const;
     double nearest(double x, double y, double* dist = nullptr) const;   // how far along the closest point is
+    // s225: corner spacing -- the text measured `h` above the path, on its
+    // side: each turn TOWARD the words takes h x its angle off the text's
+    // length there (turns away are left alone). wa[i]: the text distance
+    // leaving point i; empty = none (text distance = path distance).
+    std::vector<double> wa;
+    double to_w(double s) const;   // path distance -> text distance
+    double to_s(double t) const;   // and back (round an inside turn: just past it, the room left)
+    double text_s(double from, double bx) const { return to_s(to_w(from) + bx); }   // bx along the text from `from`
 };
 PathTrack path_track(const Frame& f);
 // s218: the text box's coordinates (bx along, by down; `base` its first
@@ -968,8 +993,10 @@ double path_to_for(const Frame& f, const PathTrack& tr, double s);
 // x (along) and y (down) go, for the frame's effect: x' = xx x + xy y,
 // y' = yx x + yy y (cairo's / PDF's cm order: xx yx xy yy). Never mirrored:
 // running leftward, Skew and 3D Ribbon turn the glyph over as Rainbow does.
+// s224: (x, y) the place on the path (owner coordinates) -- Gravity turns
+// the glyph's upright to point away from the frame's centre through it.
 struct PathAxes { double xx = 1, yx = 0, xy = 0, yy = 1; };
-PathAxes path_axes(const Frame& f, double angle);
+PathAxes path_axes(const Frame& f, double angle, double x, double y);
 // The box the frame's text is flowed in: itself -- or, for text on a path,
 // one long line as long as the path (from path_from), its shape a box.
 Frame text_box(const Frame& f);
@@ -1644,6 +1671,9 @@ struct ClipPath {
     std::vector<std::vector<std::array<double, 2>>> polys;   // closed, (x, y) 0..1
 };
 ClipPath clipping_path(const ReadAt& read);
+// s227 (G3): every path its resources hold (2000 - 2997), in their order,
+// named -- the clipping path among them.
+std::vector<ClipPath> picture_paths(const ReadAt& read);
 // The clipping path as a Shape wrap's outline (the Asset::shape layout):
 // filled even-odd into a mask of the picture's proportions (w x h, any
 // unit), then traced as trace_shape traces. Empty when there's no path.
@@ -1652,6 +1682,11 @@ std::vector<float> clip_shape(const ClipPath& p, double w, double h, int bands =
 // the picture's rect `pr` (whatever its units).
 std::vector<float> pack_clip(const ClipPath& p);
 std::vector<std::vector<std::array<double, 2>>> clip_polys(const Asset& a, const Rect& pr);
+// s227: the frame's choice of path -- its packed points (empty: none), its
+// wrap shape (Asset::shape's layout; empty: none), and the polygons placed.
+const std::vector<float>& frame_clip(const Frame& f, const Asset& a);
+const std::vector<float>& frame_shape(const Frame& f, const Asset& a);
+std::vector<std::vector<std::array<double, 2>>> clip_polys(const Frame& f, const Asset& a, const Rect& pr);
 // s173: a frame's traced picture as placed in it (fit / crop), in the
 // frame's coordinates, cut to the frame: each band's solid span. Empty when
 // the asset has no shape.

@@ -1348,7 +1348,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                                              if (!f.on_path) return;
                                              if (key == "path_flip") f.path_flip = v != 0;
                                              else if (key == "path_align") f.path_align = std::clamp(v, 0, 3);
-                                             else f.path_effect = std::clamp(v, 0, 3);
+                                             else f.path_effect = std::clamp(v, 0, 4);
                                          });
         } else if (key == "path_from") {   // s217
             const double v = std::max(0.0, std::stod(choice));
@@ -1357,6 +1357,14 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 // s221: never past its end mark
                 f.path_from = f.path_to > 0 ? std::min(v, std::max(0.0, f.path_to - 1)) : v;
             });
+        } else if (key == "clip_path") {   // s227 (G3): which of the picture's paths clips it
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Clipping path", [&](core::Frame& f) {
+                if (f.kind == core::FrameKind::Image) f.clip_path = choice;
+            });
+        } else if (key == "path_spacing") {   // s225
+            double v = 0;
+            try { v = std::clamp(std::stod(choice), 0.0, 144.0); } catch (const std::exception&) { v = 0; }
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Corner spacing", [&](core::Frame& f) { if (f.on_path) f.path_spacing = v; });
         } else if (key == "path_to") {   // s221: where it stops (0, or a word typed: End of path)
             double v = 0;
             try { v = std::max(0.0, std::stod(choice)); } catch (const std::exception&) { v = 0; }

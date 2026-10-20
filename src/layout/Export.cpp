@@ -53,7 +53,7 @@ void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const Ima
         cairo_rectangle(cr, f.x, f.y, f.w, f.h);
     }
     cairo_clip(cr);
-    if (const auto polys = core::clip_polys(*a, r); !polys.empty()) {   // s189: its clipping path
+    if (const auto polys = core::clip_polys(f, *a, r); !polys.empty()) {   // s189: its clipping path
         cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
         for (const auto& poly : polys) {
             cairo_move_to(cr, poly[0][0], poly[0][1]);

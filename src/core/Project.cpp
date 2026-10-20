@@ -140,7 +140,7 @@ std::string pts(double v) {
 std::string style_group(const Field& f) {
     static const std::map<std::string, std::string> by_edit{
         {"font", "Text"}, {"ssize", "Text"}, {"leading", "Text"}, {"bold", "Text"}, {"italic", "Text"}, {"nobreak", "Text"},
-        {"color", "Text"}, {"color_tint", "Text"},
+        {"color", "Text"}, {"color_tint", "Text"}, {"clang", "Text"},
         {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
         {"findent", "Paragraph"}, {"indent_after", "Paragraph"}, {"tabs", "Paragraph"}, {"drop_lines", "Paragraph"},
         {"drop_chars", "Paragraph"}, {"span", "Paragraph"}, {"split_gutter", "Paragraph"},
@@ -473,6 +473,11 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             f.push_back({"Weight", s.bold ? "Bold" : "Regular", "bold", {{"0", "Regular"}, {"1", "Bold"}}});
             f.push_back({"Slant", s.italic ? "Italic" : "Roman", "italic", {{"0", "Roman"}, {"1", "Italic"}}});
             if (!para) f.push_back({"No break", s.no_break ? "On" : "Off", "nobreak", {{"0", "Off"}, {"1", "On"}}});   // s075
+            if (!para) {   // s226: its words' language -- for hyphenation
+                std::vector<Choice> langs{{"", "Inherit"}, {"none", "No language"}};
+                for (const auto& l : hyphen_languages()) langs.push_back({l.code, l.name});
+                f.push_back({"Language", s.lang.empty() ? "Inherit" : s.lang == "none" ? "No language" : hyphen_language(s.lang).name, "clang", langs});
+            }
             // s015: its colour, a swatch.
             {
                 std::vector<Choice> col{{"", para ? "Black" : "Inherit"}};
@@ -878,9 +883,12 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             static const char* on[] = {"Baseline", "Middle", "Top", "Bottom"};
             fields.push_back({"On the path", on[std::clamp(f->path_align, 0, 3)], "path_align",
                               {{"0", "Baseline"}, {"1", "Middle"}, {"2", "Top"}, {"3", "Bottom"}}});
-            static const char* fx[] = {"Rainbow", "Skew", "3D Ribbon", "Stair Step"};   // s223
-            fields.push_back({"Effect", fx[std::clamp(f->path_effect, 0, 3)], "path_effect",
-                              {{"0", "Rainbow"}, {"1", "Skew"}, {"2", "3D Ribbon"}, {"3", "Stair Step"}}});
+            static const char* fx[] = {"Rainbow", "Skew", "3D Ribbon", "Stair Step", "Gravity"};   // s223 (s224 Gravity)
+            fields.push_back({"Effect", fx[std::clamp(f->path_effect, 0, 4)], "path_effect",
+                              {{"0", "Rainbow"}, {"1", "Skew"}, {"2", "3D Ribbon"}, {"3", "Stair Step"}, {"4", "Gravity"}}});
+            // s225: room round turns toward the words
+            fields.push_back({"Corner spacing", f->path_spacing > 0 ? pts(f->path_spacing) + " pt" : std::string("None"), "path_spacing",
+                              {{"0", "None"}, {"3", "3 pt"}, {"6", "6 pt"}, {"9", "9 pt"}, {"12", "12 pt"}}});
         }
         {   // s197: its outline -- a rectangle and an oval trade places (s210: any frame's)
             if (f->shape == ShapeKind::Path) {
@@ -1047,6 +1055,21 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                     off.cols = {"X", "Y"};
                     off.edit = "pic_off";
                     fields.push_back(off);
+                }
+                if (!a->clip.empty() || !a->path_names.empty()) {   // s227 (G3): which of its paths clips it
+                    std::string marked;
+                    for (std::size_t k = 0; k < a->path_names.size() && k < a->path_clips.size(); ++k)
+                        if (!a->clip.empty() && a->path_clips[k] == a->clip) marked = a->path_names[k];
+                    const std::string own = a->clip.empty() ? std::string("None (as saved)")
+                                            : marked.empty() ? std::string("As saved") : "As saved (" + marked + ")";
+                    std::vector<Choice> pc{{"", own}};
+                    for (const auto& n : a->path_names) pc.push_back({n, n});
+                    if (!a->clip.empty()) pc.push_back({"none", "None"});
+                    std::string cur = own;
+                    if (f->clip_path == "none") cur = "None";
+                    else if (!f->clip_path.empty() && std::find(a->path_names.begin(), a->path_names.end(), f->clip_path) != a->path_names.end())
+                        cur = f->clip_path;
+                    fields.push_back({"Clipping path", cur, "clip_path", pc});
                 }
                 const double p = effective_ppi(*f, *a);
                 fields.push_back({"Effective ppi", a->px_w == 0 ? "Vector"

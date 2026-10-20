@@ -110,6 +110,8 @@ json to(const Record& r) {
             if (v.path_align) j["path_align"] = v.path_align;
             if (v.path_to > 0) j["path_to"] = v.path_to;     // s221
             if (v.path_effect) j["path_effect"] = v.path_effect;   // s223
+            if (v.path_spacing > 0) j["path_spacing"] = v.path_spacing;   // s225
+            if (!v.clip_path.empty()) j["clip_path"] = v.clip_path;       // s227
             if (!v.path.empty()) {
                 json pts = json::array();
                 for (const auto& p : v.path) pts.push_back({p.x, p.y, p.ix, p.iy, p.ox, p.oy, p.smooth ? 1 : 0});
@@ -251,6 +253,16 @@ json to(const Record& r) {
                 json s = json::array();
                 for (float f : v.shape) s.push_back(std::round(f * 10000.0) / 10000.0);
                 j["shape"] = s;
+            }
+            if (!v.path_names.empty()) {   // s227: all its paths -- name, points (as clip), wrap outline (as shape)
+                json ps = json::array();
+                for (std::size_t k = 0; k < v.path_names.size(); ++k) {
+                    json c = json::array(), s = json::array();
+                    if (k < v.path_clips.size()) for (float f : v.path_clips[k]) c.push_back(std::round(f * 100000.0) / 100000.0);
+                    if (k < v.path_shapes.size()) for (float f : v.path_shapes[k]) s.push_back(std::round(f * 10000.0) / 10000.0);
+                    ps.push_back({{"name", v.path_names[k]}, {"clip", c}, {"shape", s}});
+                }
+                j["paths"] = ps;
             }
         } else if constexpr (std::is_same_v<T, Guide>) {
             j = {{"kind", "guide"}, {"owner", v.owner}, {"vertical", v.vertical}, {"pos", v.pos}};
@@ -396,7 +408,9 @@ std::optional<Record> from(const json& j) {
         v.on_path = val(j, "on_path", false); v.path_from = val(j, "path_from", 0.0);   // s216
         v.path_flip = val(j, "path_flip", false); v.path_align = val(j, "path_align", 0);   // s218
         v.path_to = val(j, "path_to", 0.0);   // s221
-        v.path_effect = std::clamp(val(j, "path_effect", 0), 0, 3);   // s223
+        v.path_effect = std::clamp(val(j, "path_effect", 0), 0, 4);
+        v.path_spacing = std::max(0.0, val(j, "path_spacing", 0.0));   // s225
+        v.clip_path = val(j, "clip_path", std::string{});   // s227   // s223
         if (j.contains("path") && j["path"].is_array())
             for (const auto& a : j["path"])
                 if (a.is_array() && a.size() >= 6)
@@ -567,6 +581,15 @@ std::optional<Record> from(const json& j) {
             for (const auto& e : j["clip"]) if (e.is_number()) v.clip.push_back(e.get<float>());
         if (j.contains("shape") && j["shape"].is_array())   // s173
             for (const auto& e : j["shape"]) if (e.is_number()) v.shape.push_back(e.get<float>());
+        if (j.contains("paths") && j["paths"].is_array())   // s227
+            for (const auto& p : j["paths"]) {
+                if (!p.is_object()) continue;
+                v.path_names.push_back(val<std::string>(p, "name", ""));
+                auto& c = v.path_clips.emplace_back();
+                auto& s = v.path_shapes.emplace_back();
+                if (p.contains("clip") && p["clip"].is_array()) for (const auto& e : p["clip"]) if (e.is_number()) c.push_back(e.get<float>());
+                if (p.contains("shape") && p["shape"].is_array()) for (const auto& e : p["shape"]) if (e.is_number()) s.push_back(e.get<float>());
+            }
         return v;
     }
     if (k == "guide") {
