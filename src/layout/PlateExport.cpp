@@ -204,6 +204,15 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
     const core::Rect r = core::picture_rect({f.x, f.y, f.w, f.h}, f, iw, ih);
     pg.save();
     pg.clip_rect({f.x, f.y, f.w, f.h});
+    if (f.radius > 0) {   // s205: cut by its rounded corners
+        for (const auto& o : core::doc::outline_ops(f)) {
+            if (o.op == 'M') pg.move_to(o.v[0], o.v[1]);
+            else if (o.op == 'L') pg.line_to(o.v[0], o.v[1]);
+            else if (o.op == 'C') pg.curve_to(o.v[0], o.v[1], o.v[2], o.v[3], o.v[4], o.v[5]);
+            else pg.close_path();
+        }
+        pg.clip_even_odd();
+    }
     if (const auto polys = core::clip_polys(*a, r); !polys.empty()) {   // s189: its clipping path
         for (const auto& poly : polys) {
             pg.move_to(poly[0][0], poly[0][1]);
@@ -284,7 +293,7 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core
         if (f.opacity < 1) pg.set_alpha(f.opacity, f.opacity);   // s021: fill, content and stroke alike
         // s197: the frame's outline -- its box, or a shape's oval / path.
         const auto outline = [&] {
-            if (!core::doc::has_outline(f)) { pg.rect({f.x, f.y, f.w, f.h}); return; }
+            if (!core::doc::has_outline(f) && f.radius <= 0) { pg.rect({f.x, f.y, f.w, f.h}); return; }   // s205: or rounded
             for (const auto& o : core::doc::outline_ops(f)) {
                 if (o.op == 'M') pg.move_to(o.v[0], o.v[1]);
                 else if (o.op == 'L') pg.line_to(o.v[0], o.v[1]);

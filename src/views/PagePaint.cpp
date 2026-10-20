@@ -137,7 +137,7 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
     const double op = std::clamp(f.opacity, 0.0, 1.0);   // s021: on fill, content and stroke alike
     // s197: the frame's outline on screen -- its box, or a shape's oval / path.
     const auto outline = [&cr, &f, r, s] {
-        if (!core::doc::has_outline(f)) { cr->rectangle(r.x, r.y, r.w, r.h); return; }
+        if (!core::doc::has_outline(f) && f.radius <= 0) { cr->rectangle(r.x, r.y, r.w, r.h); return; }   // s205: or rounded
         cr->begin_new_path();
         const auto X = [&](double v) { return r.x + (v - f.x) * s; };
         const auto Y = [&](double v) { return r.y + (v - f.y) * s; };
@@ -379,7 +379,8 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
             int iw = 0, ih = 0;
             if (auto pic = images::peek(file, core::file_stamp(file), &iw, &ih, &pending)) {
                 cr->save();
-                cr->rectangle(r.x, r.y, r.w, r.h);
+                if (f.radius > 0) outline();   // s205: its rounded corners
+                else cr->rectangle(r.x, r.y, r.w, r.h);
                 cr->clip();
                 const Rect ir = core::picture_rect(r, f, iw, ih, s);   // s035: Custom placement too
                 if (const auto polys = core::clip_polys(*asset, ir); !polys.empty()) {   // s189: its clipping path

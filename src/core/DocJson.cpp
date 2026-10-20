@@ -103,6 +103,7 @@ json to(const Record& r) {
             if (v.dash) j["dash"] = v.dash;
             if (v.end_a) j["end_a"] = v.end_a;
             if (v.end_b) j["end_b"] = v.end_b;
+            if (v.radius > 0) j["radius"] = v.radius;   // s205
             if (!v.path.empty()) {
                 json pts = json::array();
                 for (const auto& p : v.path) pts.push_back({p.x, p.y, p.ix, p.iy, p.ox, p.oy, p.smooth ? 1 : 0});
@@ -384,6 +385,7 @@ std::optional<Record> from(const json& j) {
         v.open = val(j, "open", false);
         v.cap = val(j, "cap", 0); v.join = val(j, "join", 0); v.dash = val(j, "dash", 0);   // s204
         v.end_a = val(j, "end_a", 0); v.end_b = val(j, "end_b", 0);
+        v.radius = val(j, "radius", 0.0);   // s205
         if (j.contains("path") && j["path"].is_array())
             for (const auto& a : j["path"])
                 if (a.is_array() && a.size() >= 6)

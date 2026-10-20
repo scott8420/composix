@@ -20,6 +20,7 @@
     <file preprocess="xml-stripblanks" alias="composix-tool-oval-symbolic.svg">icons/scalable/apps/composix-tool-oval-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="composix-tool-line-symbolic.svg">icons/scalable/apps/composix-tool-line-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="composix-tool-pen-symbolic.svg">icons/scalable/apps/composix-tool-pen-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="composix-tool-polygon-symbolic.svg">icons/scalable/apps/composix-tool-polygon-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="composix-tool-eyedropper-symbolic.svg">icons/scalable/apps/composix-tool-eyedropper-symbolic.svg</file>
     <!-- s186: the Direct tool (a hollow pointer) -->
     <file preprocess="xml-stripblanks" alias="composix-tool-direct-symbolic.svg">icons/scalable/apps/composix-tool-direct-symbolic.svg</file>

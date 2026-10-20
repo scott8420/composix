@@ -1223,6 +1223,13 @@ std::vector<OutlineOp> outline_ops(const Frame& f, double dx, double dy) {
         return ops_of(P, f.open);
     }
     const double x = f.x + dx, y = f.y + dy;
+    if (const double r = std::min({f.radius, f.w / 2, f.h / 2}); r > 0) {   // s205: rounded corners
+        const double k = r * (1 - kKappa), X = x + f.w, Y = y + f.h;
+        return {{'M', {x + r, y}}, {'L', {X - r, y}}, {'C', {X - k, y, X, y + k, X, y + r}},
+                {'L', {X, Y - r}}, {'C', {X, Y - k, X - k, Y, X - r, Y}},
+                {'L', {x + r, Y}}, {'C', {x + k, Y, x, Y - k, x, Y - r}},
+                {'L', {x, y + r}}, {'C', {x, y + k, x + k, y, x + r, y}}, {'Z', {}}};
+    }
     return {{'M', {x, y}}, {'L', {x + f.w, y}}, {'L', {x + f.w, y + f.h}}, {'L', {x, y + f.h}}, {'Z', {}}};
 }
 
@@ -1280,7 +1287,8 @@ void set_path(Frame& f, const std::vector<PathPoint>& abs, bool open) {
 
 PathPoint corner_point(double x, double y) { return {x, y, x, y, x, y, false}; }
 
-Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<PathPoint>& abs, bool open, bool across) {
+Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<PathPoint>& abs, bool open, bool across,
+                 const std::string& label) {
     if (!d.as<Page>(owner) && !d.as<Master>(owner)) return {};
     if (abs.size() < 2) return {};
     const Rect b = path_bounds(abs, open);
@@ -1288,7 +1296,7 @@ Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<
     bool line = open && abs.size() == 2;
     for (const auto& p : abs) if (!(p.ix == p.x && p.iy == p.y && p.ox == p.x && p.oy == p.y)) line = false;
     Doc::Id made;
-    j.run(line ? "Draw line" : "Draw path", {}, [&] {
+    j.run(!label.empty() ? label : line ? "Draw line" : "Draw path", {}, [&] {
         Frame f;
         f.owner = owner;
         set_path(f, abs, open);
@@ -1412,6 +1420,29 @@ bool shape_hit(const Frame& f, double x, double y, double tol) {   // s203
     return inside;
 }
 
+std::vector<PathPoint> polygon_points(double cx, double cy, double r, int sides, double inner, double angle) {   // s206
+    sides = std::clamp(sides, 3, 100);
+    inner = std::clamp(inner, 0.01, 1.0);
+    const bool star = inner < 0.9999;
+    const int n = star ? sides * 2 : sides;
+    std::vector<PathPoint> out;
+    for (int i = 0; i < n; ++i) {
+        const double a = angle + i * (star ? M_PI / sides : 2 * M_PI / sides);
+        const double rr = star && (i % 2) ? r * inner : r;
+        out.push_back(corner_point(cx + rr * std::cos(a), cy + rr * std::sin(a)));
+    }
+    return out;
+}
+
+double perfect_star(int sides) { return sides >= 5 ? std::cos(2 * M_PI / sides) / std::cos(M_PI / sides) : -1.0; }
+
+Doc::Id add_polygon(DocJournal& j, Doc& d, const Doc::Id& owner, double cx, double cy, double r, int sides, double inner,
+                    double angle) {
+    if (r < 1) return {};
+    return add_path(j, d, owner, polygon_points(cx, cy, r, sides, inner, angle), false, false,
+                    inner < 0.9999 ? "Draw star" : "Draw polygon");
+}
+
 bool set_shape_kind(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ShapeKind k) {
     if (k == ShapeKind::Path) return false;   // a path is drawn, not chosen
     std::vector<std::pair<Doc::Id, Frame>> plan;
@@ -1509,6 +1540,51 @@ bool path_delete_point(DocJournal& j, Doc& d, const Doc::Id& id, int k) {
     if (k < 0 || k >= static_cast<int>(P.size()) || static_cast<int>(P.size()) <= (open ? 2 : 3)) return false;
     P.erase(P.begin() + k);
     return put_path(j, d, id, P, open, "Delete point");
+}
+
+bool set_path_points(DocJournal& j, Doc& d, const Doc::Id& id, const std::vector<PathPoint>& abs, bool open,
+                     const std::string& label) {   // s208
+    const auto* f = d.as<Frame>(id);
+    if (!f || f->kind != FrameKind::Shape || abs.size() < 2) return false;
+    return put_path(j, d, id, abs, open, label);
+}
+
+std::vector<PathPoint> reversed_path(std::vector<PathPoint> P) {   // s208
+    std::reverse(P.begin(), P.end());
+    for (auto& p : P) { std::swap(p.ix, p.ox); std::swap(p.iy, p.oy); }
+    return P;
+}
+
+bool path_delete_points(DocJournal& j, Doc& d, const Doc::Id& id, const std::set<int>& ks) {   // s207
+    const auto* f = d.as<Frame>(id);
+    if (!f || f->kind != FrameKind::Shape || ks.empty()) return false;
+    bool open = false;
+    auto P = shape_points(*f, open);
+    std::vector<PathPoint> keep;
+    for (int i = 0; i < static_cast<int>(P.size()); ++i)
+        if (!ks.count(i)) keep.push_back(P[static_cast<std::size_t>(i)]);
+    if (keep.size() == P.size() || static_cast<int>(keep.size()) < (open ? 2 : 3)) return false;
+    return put_path(j, d, id, keep, open, ks.size() == 1 ? "Delete point" : "Delete points");
+}
+
+bool path_move_points(DocJournal& j, Doc& d, const Doc::Id& id, const std::set<int>& ks, double dx, double dy,
+                      const std::string& merge_key, std::chrono::steady_clock::time_point now) {   // s207
+    const auto* f = d.as<Frame>(id);
+    if (!f || f->kind != FrameKind::Shape || ks.empty() || (dx == 0 && dy == 0)) return false;
+    bool open = false;
+    auto P = shape_points(*f, open);
+    bool any = false;
+    for (const int k : ks)
+        if (k >= 0 && k < static_cast<int>(P.size())) {
+            auto& p = P[static_cast<std::size_t>(k)];
+            p.x += dx; p.ix += dx; p.ox += dx;
+            p.y += dy; p.iy += dy; p.oy += dy;
+            any = true;
+        }
+    if (!any) return false;
+    Frame g = *f;
+    set_path(g, P, open);
+    return j.run(ks.size() == 1 ? "Move point" : "Move points", {id}, [&] { d.put(id, g); }, merge_key, now);
 }
 
 bool path_toggle_point(DocJournal& j, Doc& d, const Doc::Id& id, int k) {

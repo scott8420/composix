@@ -40,6 +40,8 @@
 #include <map>
 #include <optional>
 #include <string_view>
+#include <chrono>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -266,6 +268,7 @@ struct Frame {
     // dotted), and an open path's ends (0 none, 1 arrow, 2 circle, 3 bar).
     int         cap = 0, join = 0, dash = 0;
     int         end_a = 0, end_b = 0;    // its first point's end, its last's
+    double      radius = 0;              // s205: rounded corners, points (any frame drawn as its box)
     bool operator==(const Frame&) const = default;
 };
 
@@ -896,7 +899,17 @@ PathPoint corner_point(double x, double y);
 // straight points, open; "Draw path" otherwise). Outlined in Black, like
 // any new shape. Fewer than two points, or no size at all: nothing.
 Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<PathPoint>& abs, bool open,
-                 bool across = false);
+                 bool across = false, const std::string& label = {});
+// s206 (as Curvz's): a polygon's or star's corners around (cx, cy) --
+// `sides` points `r` out, the first at `angle` (radians; -pi/2 = straight
+// up, the page's y down); `inner` below 1 makes a star: a point between
+// each pair at r * inner (perfect_star gives straight-sided stars).
+std::vector<PathPoint> polygon_points(double cx, double cy, double r, int sides, double inner, double angle);
+// The star depth a drawn one snaps to: straight sides (5 points or more), else -1.
+double perfect_star(int sides);
+// Draw one: "Draw polygon" / "Draw star". A closed path (Direct edits its points).
+Doc::Id add_polygon(DocJournal& j, Doc& d, const Doc::Id& owner, double cx, double cy, double r, int sides, double inner,
+                    double angle);
 // s204: what a stroke draws -- the outline with an open path's ends drawn
 // back under their arrowheads (so the line's end doesn't show past the
 // tip); the dash pattern in points (empty: solid); the ends' shapes, filled
@@ -923,8 +936,21 @@ OutlineHit outline_nearest(const Frame& f, double x, double y);
 // outline's look unchanged. One step: "Add point". A rectangle or oval is
 // made a path first.
 bool path_add_point(DocJournal& j, Doc& d, const Doc::Id& frame, int k, double t);
+// s208: a shape's points replaced (owner coordinates) -- the Pen carrying on
+// from an open path's end ("Extend path"), or closing it ("Close path").
+bool set_path_points(DocJournal& j, Doc& d, const Doc::Id& frame, const std::vector<PathPoint>& abs, bool open,
+                     const std::string& label);
+// The same points the other way round (each point's handles swap sides).
+std::vector<PathPoint> reversed_path(std::vector<PathPoint> P);
 // Point k taken out (a closed path keeps three, an open one two). "Delete point".
 bool path_delete_point(DocJournal& j, Doc& d, const Doc::Id& frame, int k);
+// s207: several at once ("Delete points"); none if too few would be left.
+bool path_delete_points(DocJournal& j, Doc& d, const Doc::Id& frame, const std::set<int>& ks);
+// s207: points moved by (dx, dy) with their handles -- the arrow keys
+// (presses within the journal's window merge on `merge_key`).
+bool path_move_points(DocJournal& j, Doc& d, const Doc::Id& frame, const std::set<int>& ks, double dx, double dy,
+                      const std::string& merge_key = {},
+                      std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 // Point k smooth <-> corner: a corner gets handles along its neighbours'
 // line, a third of the way to each; a smooth point loses them. One step.
 bool path_toggle_point(DocJournal& j, Doc& d, const Doc::Id& frame, int k);

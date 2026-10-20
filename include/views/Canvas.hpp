@@ -33,6 +33,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -50,7 +51,7 @@ public:
     // swatch). One Shape tool draws rectangles (M), ovals (L) or lines (\);
     // s199: the Pen (P) draws any other path.
     enum class Tool { Select, Direct, Text, Image, Shape, Pen, Eyedropper };
-    enum class ShapeTool { Rect, Oval, Line };
+    enum class ShapeTool { Rect, Oval, Line, Polygon };   // s206: Polygon / star
     Canvas(core::Doc& d, core::DocJournal& j);
     const core::Doc& doc() const { return m_doc; }   // s073: the rulers read its unit
     ~Canvas() override;
@@ -87,6 +88,11 @@ public:
     Tool tool() const { return m_tool; }
     void set_shape_tool(ShapeTool k) { m_shape = k; set_tool(Tool::Shape); }   // s198
     ShapeTool shape_tool() const { return m_shape; }
+    // s206: the next polygon -- its sides (3..64) and star depth (1 = none,
+    // below: the inner points that far out).
+    void set_polygon(int sides, double inner) { m_poly_sides = std::clamp(sides, 3, 64); m_poly_inner = std::clamp(inner, 0.01, 1.0); }
+    int polygon_sides() const { return m_poly_sides; }
+    double polygon_inner() const { return m_poly_inner; }
     void delete_selection();
     void set_show_guides(bool on) { m_show_guides = on; queue_draw(); }
     // s153: guides locked -- not picked, moved or pulled off (new ones still
@@ -174,7 +180,7 @@ public:
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee };
     // s035: Alt+drag a picture inside its frame -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
@@ -188,7 +194,8 @@ private:
     // A shape we can show (not turned, on a shown page); where its owner's
     // coordinates sit in the layout (dx, dy).
     bool direct_shape(const std::string& frame, double& dx, double& dy) const;
-    int  m_pt = -1;                          // the point picked (-1: none)
+    int  m_pt = -1;                          // the point picked (-1: none) -- its handles show
+    std::set<int> m_pts_sel;                 // s207: every point picked (Shift-click, a marquee); m_pt among them
     int  m_pt_part = 0;                      // dragging: 0 the anchor, 1 its handle in, 2 out
     std::vector<core::PathPoint> m_pts0;     // the points at the press (owner coordinates)
     bool m_pts_open = false;
@@ -340,10 +347,17 @@ private:
     core::Rect  m_draw;                      // the frame being drawn (layout)
     ShapeTool   m_shape = ShapeTool::Rect;   // s198: what the Shape tool draws
     double      m_lx1 = 0, m_ly1 = 0;        // s198: a line's far end (layout)
+    int         m_poly_sides = 6;            // s206
+    double      m_poly_inner = 1.0;
+    // s206: a polygon being drawn from its centre (m_dx0, m_dy0) to a tip at
+    // (m_lx1, m_ly1): its corners (layout), the depth snapped as drawn.
+    std::vector<core::PathPoint> drawn_polygon(double& inner) const;
     // s199: the Pen -- the path so far (layout), on the page it was started
     // on (its owner, and where that panel sits in the layout).
     std::vector<core::PathPoint> m_pen;
     std::string m_pen_owner;
+    std::string m_pen_cont;                  // s208: carrying on from this open path's end ("" a new path)
+    bool        m_pen_rev = false;           // ... from its first point (the points held reversed)
     double      m_pen_ox = 0, m_pen_oy = 0;
     void pen_finish(bool keep, bool closed = false);   // Enter / Esc / another tool: drawn (two points or more)
     bool pen_near_first(double sx, double sy) const;   // the pointer on the first point (screen): it closes

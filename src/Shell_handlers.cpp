@@ -1307,6 +1307,11 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Frame& f) {
                 (key == "dash" ? f.dash : key == "cap" ? f.cap : key == "join" ? f.join : key == "end_a" ? f.end_a : f.end_b) = v;
             });
+        } else if (key == "radius") {   // s205: rounded corners
+            const double v = std::max(0.0, std::stod(choice));
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Corner radius", [&](core::Frame& f) {
+                if (!(f.kind == core::FrameKind::Shape && f.shape != core::ShapeKind::Rect)) f.radius = v;
+            });
         } else if (key == "shape") {   // s197: rectangle <-> oval
             did = core::doc::set_shape_kind(m_journal, m_doc, m_inspected, static_cast<core::ShapeKind>(std::stoi(choice)));
         } else if (key == "wrap" && choice == "3") {   // s173: the pictures' outlines

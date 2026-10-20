@@ -1639,5 +1639,107 @@ void part8() {
         }
         while (j.can_undo()) j.undo();
     }
+    // ── s205: rounded corners; a saved web page isn't a swatch file ────────
+    {
+        std::cout << "--- s205 rounded corners ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        namespace SW = core::swatches;
+        std::string err;
+        check("swatches: a saved web page -- said so", !SW::parse("<!DOCTYPE html><html lang=\"en\">", SW::Format::Unknown, &err) &&
+              err.find("web page") != std::string::npos, err);
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto box = D::add_frame(j, d, page, core::FrameKind::Shape, {300, 20, 60, 40});
+        const auto sw = D::add_swatch(j, d, core::Swatch{"Brick", 0, core::ColorModel::RGB, {180, 60, 40, 0}});
+        D::edit_frames(j, d, {box}, "Round", [&](core::Frame& f) { f.radius = 12; f.fill = sw; f.stroke.clear(); f.z = 1e6; });
+        const auto* f = d.as<core::Frame>(box);
+        std::string ops;
+        for (const auto& o : D::outline_ops(*f)) ops += o.op;
+        check("round: four lines, four quarter-curves", ops == "MLCLCLCLCZ" && !D::has_outline(*f));
+        core::Frame big = *f;
+        big.radius = 500;
+        check("round: the radius held to half the short side", D::outline_ops(big)[0].v[0] == 320);
+        L::FlowCache flows;
+        const auto mid = L::sample_page(d, page, flows, {}, 330, 40, 1), corner = L::sample_page(d, page, flows, {}, 301, 21, 1);
+        check("round: drawn -- the middle filled, the corner paper", mid == d.as<core::Swatch>(sw)->preview && corner != mid);
+        core::Doc e;
+        const auto text = core::to_json(d);
+        check("round: through JSON", core::from_json(e, text, &err) && e.as<core::Frame>(box)->radius == 12 && core::to_json(e) == text, err);
+        while (j.can_undo()) j.undo();
+    }
+    // ── s206: polygon / star (as Curvz's) ─────────────────────────────────
+    {
+        std::cout << "--- s206 polygon ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto hex = D::polygon_points(100, 100, 50, 6, 1, -M_PI / 2);
+        check("polygon: six corners, the first straight up", hex.size() == 6 && std::abs(hex[0].x - 100) < 1e-9 && std::abs(hex[0].y - 50) < 1e-9 &&
+              std::abs(hex[3].y - 150) < 1e-9);
+        const double ps = D::perfect_star(5);
+        check("star: a five-point star's straight-sided depth (0.382)", std::abs(ps - 0.381966) < 1e-5 && D::perfect_star(4) < 0);
+        const auto star = D::polygon_points(0, 0, 10, 5, ps, -M_PI / 2);
+        check("star: ten points, inner ones at the depth", star.size() == 10 && std::abs(std::hypot(star[1].x, star[1].y) - 10 * ps) < 1e-9);
+        const auto id = D::add_polygon(j, d, page, 200, 200, 40, 5, ps, -M_PI / 2);
+        const auto* f = d.as<core::Frame>(id);
+        check("star: drawn -- a closed path of ten, one step", f && f->shape == core::ShapeKind::Path && !f->open && f->path.size() == 10 &&
+              j.undo_label() == "Draw star");
+        check("polygon: drawn -- 'Draw polygon'", !D::add_polygon(j, d, page, 300, 300, 30, 8, 1, 0).empty() && j.undo_label() == "Draw polygon");
+        check("polygon: too small -- nothing", D::add_polygon(j, d, page, 300, 300, 0.5, 8, 1, 0).empty());
+        while (j.can_undo()) j.undo();
+    }
+    // ── s207: Direct on several points ────────────────────────────────────
+    {
+        std::cout << "--- s207 several points ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto hex = D::add_polygon(j, d, page, 200, 200, 50, 6, 1, -M_PI / 2);
+        const auto before = D::path_points(*d.as<core::Frame>(hex));
+        const auto t0 = std::chrono::steady_clock::now();
+        D::path_move_points(j, d, hex, {0, 3}, 0, -10, "nudge:t", t0);
+        D::path_move_points(j, d, hex, {0, 3}, 0, -10, "nudge:t", t0 + std::chrono::milliseconds(100));
+        const auto after = D::path_points(*d.as<core::Frame>(hex));
+        check("points: two nudged together, twice -- one step", std::abs(after[0].y - (before[0].y - 20)) < 1e-9 &&
+              std::abs(after[3].y - (before[3].y - 20)) < 1e-9 && std::abs(after[1].y - before[1].y) < 1e-9 && j.undo_label() == "Move points");
+        j.undo();
+        check("points: undone in one", std::abs(D::path_points(*d.as<core::Frame>(hex))[0].y - before[0].y) < 1e-9);
+        check("points: three taken out together", D::path_delete_points(j, d, hex, {1, 2, 4}) && d.as<core::Frame>(hex)->path.size() == 3 &&
+              j.undo_label() == "Delete points");
+        check("points: not if fewer than three would be left", !D::path_delete_points(j, d, hex, {0, 1}));
+        while (j.can_undo()) j.undo();
+    }
+    // ── s208: the Pen carries on from an open path's end ──────────────────
+    {
+        std::cout << "--- s208 extend path ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto ln = D::add_path(j, d, page, {{100, 100, 100, 100, 130, 80, true}, D::corner_point(200, 100)}, true);
+        auto P = D::path_points(*d.as<core::Frame>(ln));
+        const auto R = D::reversed_path(P);
+        check("reversed: the order and each point's handles swapped", R.size() == 2 && R[1].x == 100 && R[1].ix == 130 && R[1].iy == 80 &&
+              D::reversed_path(R) == P);
+        P.push_back(D::corner_point(200, 200));
+        check("extend: a third point, one step", D::set_path_points(j, d, ln, P, true, "Extend path") &&
+              d.as<core::Frame>(ln)->path.size() == 3 && d.as<core::Frame>(ln)->open && j.undo_label() == "Extend path");
+        check("close: the same points, closed", D::set_path_points(j, d, ln, P, false, "Close path") && !d.as<core::Frame>(ln)->open &&
+              j.undo_label() == "Close path");
+        check("unchanged: no step", !D::set_path_points(j, d, ln, P, false, "Close path"));
+        while (j.can_undo()) j.undo();
+    }
 }
 }  // namespace cxtest

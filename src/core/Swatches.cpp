@@ -683,6 +683,15 @@ std::optional<Library> parse_any(const std::string& bytes, Format f, std::string
 // s202 (C5): real files leave colours unnamed (Adobe Color's ASE exports):
 // those are named by their hex, as a GIMP palette's are.
 std::optional<Library> parse(const std::string& bytes, Format f, std::string* err) {
+    if (f == Format::Unknown) {   // s205: a page saved from a browser (GitHub's "Save link as") -- say so
+        std::size_t i = 0;
+        while (i < bytes.size() && i < 64 && std::isspace(static_cast<unsigned char>(bytes[i]))) ++i;
+        const std::string head = lower(bytes.substr(i, 256));
+        if (head.rfind("<!doctype html", 0) == 0 || head.rfind("<html", 0) == 0) {
+            if (err) *err = "a web page saved from a browser, not a swatch file -- download the file itself (GitHub: Download raw file)";
+            return std::nullopt;
+        }
+    }
     auto lib = parse_any(bytes, f, err);
     if (lib)
         for (auto& c : lib->colors)

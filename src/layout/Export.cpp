@@ -42,7 +42,16 @@ void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const Ima
     const double iw = a->px_w > 0 ? a->px_w : pw, ih = a->px_h > 0 ? a->px_h : ph;
     const core::Rect r = core::picture_rect({f.x, f.y, f.w, f.h}, f, iw, ih);
     cairo_save(cr);
-    cairo_rectangle(cr, f.x, f.y, f.w, f.h);
+    if (f.radius > 0) {   // s205: cut by its rounded corners
+        for (const auto& o : core::doc::outline_ops(f)) {
+            if (o.op == 'M') cairo_move_to(cr, o.v[0], o.v[1]);
+            else if (o.op == 'L') cairo_line_to(cr, o.v[0], o.v[1]);
+            else if (o.op == 'C') cairo_curve_to(cr, o.v[0], o.v[1], o.v[2], o.v[3], o.v[4], o.v[5]);
+            else cairo_close_path(cr);
+        }
+    } else {
+        cairo_rectangle(cr, f.x, f.y, f.w, f.h);
+    }
     cairo_clip(cr);
     if (const auto polys = core::clip_polys(*a, r); !polys.empty()) {   // s189: its clipping path
         cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
@@ -92,7 +101,7 @@ bool draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
         };
         // s197: the frame's outline -- its box, or a shape's oval / path.
         const auto outline = [&] {
-            if (!core::doc::has_outline(f)) { cairo_rectangle(cr, f.x, f.y, f.w, f.h); return; }
+            if (!core::doc::has_outline(f) && f.radius <= 0) { cairo_rectangle(cr, f.x, f.y, f.w, f.h); return; }   // s205: or rounded
             cairo_new_path(cr);
             for (const auto& o : core::doc::outline_ops(f)) {
                 if (o.op == 'M') cairo_move_to(cr, o.v[0], o.v[1]);

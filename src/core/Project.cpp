@@ -906,6 +906,11 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 }
             }
         }
+        if (!(f->kind == FrameKind::Shape && f->shape != ShapeKind::Rect)) {   // s205: rounded corners (a box's)
+            std::vector<Choice> rc;
+            for (double v : {0.0, 3.0, 6.0, 9.0, 12.0, 18.0, 24.0, 36.0}) rc.push_back({pts(v), v > 0 ? pts(v) + " pt" : std::string("Square")});
+            fields.push_back({"Corner radius", f->radius > 0 ? pts(f->radius) + " pt" : std::string("Square"), "radius", rc});
+        }
         fields.push_back({"Opacity", tint_text(f->opacity), "opacity", tint_choices(0)});   // s021
         // s025: a master's item shows on both sides, or one; a page's copy
         // of one says so and can go back.

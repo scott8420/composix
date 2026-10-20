@@ -9,6 +9,9 @@
 
 #include <gdkmm/cursor.h>
 #include <glibmm/main.h>
+#include <gtkmm/grid.h>
+#include <gtkmm/separator.h>
+#include <gtkmm/spinbutton.h>
 #include <gtkmm/image.h>
 #include <gtkmm/gesturelongpress.h>
 #include <gtkmm/overlay.h>
@@ -714,6 +717,15 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
             m_vp.to_screen(m_lx1, m_ly1, bx, by);
             cr->move_to(ax, ay);
             cr->line_to(bx, by);
+        } else if (shape && m_shape == ShapeTool::Polygon) {   // s206
+            double inner = 1;
+            const auto P = drawn_polygon(inner);
+            for (std::size_t i = 0; i < P.size(); ++i) {
+                double sx, sy;
+                m_vp.to_screen(P[i].x, P[i].y, sx, sy);
+                if (i) cr->line_to(sx, sy); else cr->move_to(sx, sy);
+            }
+            if (!P.empty()) cr->close_path();
         } else if (shape && m_shape == ShapeTool::Oval && r.w > 0 && r.h > 0) {
             cr->save();
             cr->translate(r.x + r.w / 2, r.y + r.h / 2);
@@ -929,7 +941,7 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
             const auto c = S(p.x, p.y);
             if (p.smooth) cr->arc(c[0], c[1], 3.5, 0, 2 * M_PI);
             else cr->rectangle(std::round(c[0]) - 3.5, std::round(c[1]) - 3.5, 7, 7);
-            if (i == m_pt) cr->fill();
+            if (i == m_pt || m_pts_sel.count(i)) cr->fill();   // s207: every picked one
             else {
                 cr->set_source_rgba(1, 1, 1, 1);
                 cr->fill_preserve();
@@ -1009,7 +1021,7 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->move_to(tx, ty);
         lay->show_in_cairo_context(cr);
     }
-    if (m_drag == Drag::Marquee) {
+    if (m_drag == Drag::Marquee || m_drag == Drag::PointMarquee) {   // s207: the points' too
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.12);
         cr->rectangle(m_marquee.x, m_marquee.y, m_marquee.w, m_marquee.h);
         cr->fill_preserve();
@@ -1091,6 +1103,42 @@ void Canvas::on_drag_begin(double x, double y) {
         m_drag = Drag::None;
         if (m_pen.size() >= 2 && pen_near_first(x, y)) { pen_finish(true, true); return; }
         if (!m_pen.empty() && m_clicks >= 2) { pen_finish(true); return; }
+        if (m_pen.empty()) {   // s208: on an open path's end -- carry on from it
+            m_pen_cont.clear();
+            m_pen_rev = false;
+            for (const auto& p : m_placed) {
+                if (!m_pen_cont.empty()) break;
+                for (const auto& fid : m_doc.frames_on(p.id)) {
+                    const auto* f = m_doc.as<core::Frame>(fid);
+                    if (!f || f->kind != core::FrameKind::Shape || f->shape != core::ShapeKind::Path || !f->open || f->across ||
+                        f->path.size() < 2 || !core::on_panel(m_doc, p, fid))
+                        continue;
+                    auto P = core::doc::path_points(*f);
+                    for (auto& q : P) { q.x += p.r.x; q.ix += p.r.x; q.ox += p.r.x; q.y += p.r.y; q.iy += p.r.y; q.oy += p.r.y; }
+                    const auto near = [&](const core::PathPoint& q) {
+                        double sx, sy;
+                        m_vp.to_screen(q.x, q.y, sx, sy);
+                        return std::hypot(sx - x, sy - y) <= 6;
+                    };
+                    if (!near(P.back()) && !near(P.front())) continue;
+                    m_pen_rev = !near(P.back());
+                    m_pen = m_pen_rev ? core::doc::reversed_path(P) : P;
+                    m_pen_cont = fid;
+                    m_pen_owner = p.id;
+                    m_pen_ox = p.r.x;
+                    m_pen_oy = p.r.y;
+                    break;
+                }
+            }
+            if (!m_pen_cont.empty()) {   // a drag from the end pulls its handle out
+                m_dx0 = m_pen.back().x;
+                m_dy0 = m_pen.back().y;
+                m_drag = Drag::PenHandle;
+                pick({m_pen_cont});
+                queue_draw();
+                return;
+            }
+        }
         if (m_pen.empty()) {
             const core::Placed* at = nullptr;
             for (const auto& p : m_placed)
@@ -1232,6 +1280,16 @@ void Canvas::on_drag_begin(double x, double y) {
             for (int i = 0; part < 0 && i < static_cast<int>(P.size()); ++i)
                 if (near(P[static_cast<std::size_t>(i)].x, P[static_cast<std::size_t>(i)].y)) { part = 0; at = i; }
             if (part >= 0) {
+                if (part == 0 && m_mods_shift && !m_mods_alt) {   // s207: Shift-click -- one more point picked (or one less)
+                    if (m_pts_sel.erase(at)) {
+                        if (m_pt == at) m_pt = m_pts_sel.empty() ? -1 : *m_pts_sel.begin();
+                        queue_draw();
+                        return;
+                    }
+                    m_pts_sel.insert(at);
+                } else if (part == 0 && !m_pts_sel.count(at)) {
+                    m_pts_sel = {at};
+                }
                 m_pt = at;
                 if (part == 0 && m_mods_alt) {   // Alt-click a point: smooth <-> corner
                     if (core::doc::path_toggle_point(m_journal, m_doc, m_direct, at)) m_sig_edited.emit();
@@ -1253,6 +1311,7 @@ void Canvas::on_drag_begin(double x, double y) {
                 const auto h = core::doc::outline_nearest(*f, px0 - odx, py0 - ody);
                 if (h.k >= 0 && h.dist * m_vp.scale() <= 6 && core::doc::path_add_point(m_journal, m_doc, m_direct, h.k, h.t)) {
                     m_pt = h.k + 1;
+                    m_pts_sel = {m_pt};
                     m_sig_edited.emit();
                     queue_draw();
                     return;
@@ -1261,8 +1320,22 @@ void Canvas::on_drag_begin(double x, double y) {
         }
         {   // a shape: its points on show
             const auto hit = core::hit_frame(m_doc, m_placed, px0, py0, 3 / m_vp.scale());
+            // s207: on the shown shape (or nothing) -- a marquee picks its points
+            // (a text frame under it doesn't stop it -- only another shape or a picture is picked instead)
+            Rect hfl, hpl;
+            double hdx = 0, hdy = 0;
+            const bool other = !hit.empty() && hit != m_direct && (direct_shape(hit, hdx, hdy) || direct_pic(hit, hfl, hpl));
+            if (!m_direct.empty() && !other && direct_shape(m_direct, odx, ody) && m_clicks < 2) {
+                if (!m_mods_shift) { m_pts_sel.clear(); m_pt = -1; }
+                m_pts0.clear();
+                for (const int k : m_pts_sel) m_pts0.push_back(core::PathPoint{static_cast<double>(k)});   // the picks before it
+                m_marquee = {x, y, 0, 0};
+                m_drag = Drag::PointMarquee;
+                queue_draw();
+                return;
+            }
             if (!hit.empty() && direct_shape(hit, odx, ody)) {
-                if (hit != m_direct) m_pt = -1;
+                if (hit != m_direct) { m_pt = -1; m_pts_sel.clear(); }
                 m_direct = hit;
                 pick({hit});
                 queue_draw();
@@ -1439,9 +1512,15 @@ void Canvas::on_drag_update(double ox, double oy) {
         auto P = m_pts0;
         auto& p = P[static_cast<std::size_t>(m_pt)];
         const double ddx = ox / s, ddy = oy / s;
-        if (m_pt_part == 0) {
-            p.x += ddx; p.ix += ddx; p.ox += ddx;
-            p.y += ddy; p.iy += ddy; p.oy += ddy;
+        if (m_pt_part == 0) {   // s207: every picked point moves with it
+            std::set<int> move = m_pts_sel;
+            move.insert(m_pt);
+            for (const int k : move) {
+                if (k < 0 || k >= static_cast<int>(P.size())) continue;
+                auto& q = P[static_cast<std::size_t>(k)];
+                q.x += ddx; q.ix += ddx; q.ox += ddx;
+                q.y += ddy; q.iy += ddy; q.oy += ddy;
+            }
         } else {
             double& hx = m_pt_part == 1 ? p.ix : p.ox;
             double& hy = m_pt_part == 1 ? p.iy : p.oy;
@@ -1460,14 +1539,35 @@ void Canvas::on_drag_update(double ox, double oy) {
         queue_draw();
         return;
     }
+    case Drag::PointMarquee: {   // s207: the shape's points inside it picked (with those before, Shift)
+        m_marquee = Rect::from_corners(m_px, m_py, m_px + ox, m_py + oy);
+        double odx = 0, ody = 0;
+        if (!direct_shape(m_direct, odx, ody)) return;
+        bool open = false;
+        const auto P = core::doc::shape_points(*m_doc.as<core::Frame>(m_direct), open);
+        m_pts_sel.clear();
+        for (const auto& q : m_pts0) m_pts_sel.insert(static_cast<int>(q.x));
+        for (int i = 0; i < static_cast<int>(P.size()); ++i) {
+            double sx, sy;
+            m_vp.to_screen(P[static_cast<std::size_t>(i)].x + odx, P[static_cast<std::size_t>(i)].y + ody, sx, sy);
+            if (m_marquee.contains(sx, sy)) m_pts_sel.insert(i);
+        }
+        m_pt = m_pts_sel.size() == 1 ? *m_pts_sel.begin() : -1;
+        queue_draw();
+        return;
+    }
     case Drag::PenHandle: {   // s199: the handles out of the point just put down (and in, mirrored)
         if (m_pen.empty() || std::hypot(ox, oy) < 3) return;
         auto& p = m_pen.back();
         p.ox = m_dx0 + ox / s;
         p.oy = m_dy0 + oy / s;
-        p.ix = 2 * p.x - p.ox;
-        p.iy = 2 * p.y - p.oy;
-        p.smooth = true;
+        if (m_mods_alt) {   // s208 (as Curvz): Alt -- the out handle alone, a sharp turn here
+            p.smooth = false;
+        } else {
+            p.ix = 2 * p.x - p.ox;
+            p.iy = 2 * p.y - p.oy;
+            p.smooth = true;
+        }
         queue_draw();
         return;
     }
@@ -1579,7 +1679,13 @@ void Canvas::on_drag_update(double ox, double oy) {
     case Drag::Draw: {
         double x1 = m_dx0 + ox / s, y1 = m_dy0 + oy / s;
         const bool line = m_tool == Tool::Shape && m_shape == ShapeTool::Line && m_load.empty();
-        if (m_mods_shift && line) {   // s198: Shift -- a line at 45-degree steps
+        const bool poly = m_tool == Tool::Shape && m_shape == ShapeTool::Polygon && m_load.empty();   // s206
+        if (m_mods_shift && poly) {   // Shift: its turn at 15-degree steps
+            const double a = std::round(std::atan2(y1 - m_dy0, x1 - m_dx0) / (M_PI / 12)) * (M_PI / 12);
+            const double len = std::hypot(x1 - m_dx0, y1 - m_dy0);
+            x1 = m_dx0 + len * std::cos(a);
+            y1 = m_dy0 + len * std::sin(a);
+        } else if (m_mods_shift && line) {   // s198: Shift -- a line at 45-degree steps
             const double a = std::round(std::atan2(y1 - m_dy0, x1 - m_dx0) / (M_PI / 4)) * (M_PI / 4);
             const double len = std::hypot(x1 - m_dx0, y1 - m_dy0);
             x1 = m_dx0 + len * std::cos(a);
@@ -1730,6 +1836,23 @@ void Canvas::on_drag_end(double, double) {
         const bool line = m_tool == Tool::Shape && m_shape == ShapeTool::Line;   // s198
         const bool drawn = line ? std::hypot(m_lx1 - m_dx0, m_ly1 - m_dy0) * m_vp.scale() >= 4
                                 : m_draw.w * m_vp.scale() >= 4 && m_draw.h * m_vp.scale() >= 4;
+        if (m_tool == Tool::Shape && m_shape == ShapeTool::Polygon) {   // s206: from its centre
+            const double rr = std::hypot(m_lx1 - m_dx0, m_ly1 - m_dy0);
+            if (rr * m_vp.scale() >= 4)
+                for (const auto& p : m_placed)
+                    if (p.id == m_draw_page && p.r.contains(m_dx0, m_dy0)) {
+                        double inner = 1;
+                        (void)drawn_polygon(inner);
+                        const auto id = core::doc::add_polygon(m_journal, m_doc, p.id, m_dx0 - p.r.x, m_dy0 - p.r.y, rr, m_poly_sides, inner,
+                                                               std::atan2(m_ly1 - m_dy0, m_lx1 - m_dx0));
+                        if (!id.empty()) { relayout(); pick({id}); m_sig_edited.emit(); }
+                        break;
+                    }
+            m_draw = {};
+            m_snap_x = m_snap_y = NAN;
+            queue_draw();
+            return;
+        }
         if (drawn && line) {
             for (const auto& p : m_placed)
                 if (p.id == m_draw_page && p.r.contains(m_dx0, m_dy0)) {
@@ -1866,9 +1989,24 @@ bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
     }
     const bool alt = (st & Gdk::ModifierType::ALT_MASK) == Gdk::ModifierType::ALT_MASK;
     // s200: Direct -- Delete takes out the shape's picked point.
-    if (m_tool == Tool::Direct && m_pt >= 0 && !m_direct.empty() && (kv == GDK_KEY_Delete || kv == GDK_KEY_BackSpace)) {
-        if (core::doc::path_delete_point(m_journal, m_doc, m_direct, m_pt)) m_sig_edited.emit();
+    if (m_tool == Tool::Direct && (m_pt >= 0 || !m_pts_sel.empty()) && !m_direct.empty() &&
+        (kv == GDK_KEY_Delete || kv == GDK_KEY_BackSpace)) {   // s207: every picked point
+        auto ks = m_pts_sel;
+        if (m_pt >= 0) ks.insert(m_pt);
+        if (core::doc::path_delete_points(m_journal, m_doc, m_direct, ks)) m_sig_edited.emit();
         m_pt = -1;
+    m_pts_sel.clear();
+        m_pts_sel.clear();
+        queue_draw();
+        return true;
+    }
+    // s207: Direct -- the arrows nudge the picked points (Shift: 10 pt), one step while they're pressed.
+    if (m_tool == Tool::Direct && !m_pts_sel.empty() && !m_direct.empty() &&
+        (kv == GDK_KEY_Left || kv == GDK_KEY_Right || kv == GDK_KEY_Up || kv == GDK_KEY_Down)) {
+        const double step = shift ? 10 : 1;
+        const double ddx = kv == GDK_KEY_Left ? -step : kv == GDK_KEY_Right ? step : 0;
+        const double ddy = kv == GDK_KEY_Up ? -step : kv == GDK_KEY_Down ? step : 0;
+        if (core::doc::path_move_points(m_journal, m_doc, m_direct, m_pts_sel, ddx, ddy, "nudge-points:" + m_direct)) m_sig_edited.emit();
         queue_draw();
         return true;
     }
@@ -2003,6 +2141,15 @@ void Canvas::set_tool(Tool t) {
     update_cursor();
 }
 
+std::vector<core::PathPoint> Canvas::drawn_polygon(double& inner) const {   // s206
+    inner = m_poly_inner;
+    if (const double perfect = core::doc::perfect_star(m_poly_sides); perfect > 0 && std::abs(inner - perfect) < 0.04) inner = perfect;
+    if (inner > 0.985) inner = 1;
+    const double rr = std::hypot(m_lx1 - m_dx0, m_ly1 - m_dy0);
+    if (rr <= 0) return {};
+    return core::doc::polygon_points(m_dx0, m_dy0, rr, m_poly_sides, inner, std::atan2(m_ly1 - m_dy0, m_lx1 - m_dx0));
+}
+
 bool Canvas::pen_near_first(double sx, double sy) const {   // s199
     if (m_pen.empty()) return false;
     double fx, fy;
@@ -2016,10 +2163,21 @@ void Canvas::pen_finish(bool keep, bool closed) {   // s199
     m_pen.clear();
     if (m_drag == Drag::PenHandle) m_drag = Drag::None;
     queue_draw();
+    const auto cont = std::move(m_pen_cont);
+    m_pen_cont.clear();
     if (!keep || pts.size() < 2) return;
     for (auto& p : pts) {   // into the page's own coordinates
         p.x -= m_pen_ox; p.ix -= m_pen_ox; p.ox -= m_pen_ox;
         p.y -= m_pen_oy; p.iy -= m_pen_oy; p.oy -= m_pen_oy;
+    }
+    if (!cont.empty()) {   // s208: the path carried on (or closed) -- one step
+        if (m_pen_rev) pts = core::doc::reversed_path(pts);
+        if (core::doc::set_path_points(m_journal, m_doc, cont, pts, !closed, closed ? "Close path" : "Extend path")) {
+            relayout();
+            pick({cont});
+            m_sig_edited.emit();
+        }
+        return;
     }
     const auto id = core::doc::add_path(m_journal, m_doc, m_pen_owner, pts, !closed);
     if (id.empty()) return;
@@ -2825,11 +2983,13 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
         {"composix-tool-rect-symbolic", "Rectangle", "M", Canvas::Tool::Shape, Canvas::ShapeTool::Rect, "Rectangle  (M) — drag on a page; Shift for a square"},
         {"composix-tool-oval-symbolic", "Oval", "L", Canvas::Tool::Shape, Canvas::ShapeTool::Oval, "Oval  (L) — drag on a page; Shift for a circle"},
         {"composix-tool-line-symbolic", "Line", "\\", Canvas::Tool::Shape, Canvas::ShapeTool::Line, "Line  (\\) — drag on a page; Shift at 45°"},
+        {"composix-tool-polygon-symbolic", "Polygon", "", Canvas::Tool::Shape, Canvas::ShapeTool::Polygon,
+         "Polygon / star \u2014 drag from its centre; Shift turns it in 15\u00b0 steps (sides and star depth in this menu)"},   // s206
         {"composix-tool-pen-symbolic", "Pen", "P", Canvas::Tool::Pen, Canvas::ShapeTool::Rect,
          "Pen  (P) — click for corners, drag for curves; click the first point to close, Enter to end"},
     };
     const auto shape_index = [this] {
-        if (m_canvas.tool() == Canvas::Tool::Pen) return 3;
+        if (m_canvas.tool() == Canvas::Tool::Pen) return 4;
         return static_cast<int>(m_canvas.shape_tool());
     };
     Gtk::ToggleButton* first = nullptr;
@@ -2838,7 +2998,7 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     const auto show_shape = [shape_btn_p, last_shape](int k) {
         *last_shape = k;
         (*shape_btn_p)->set_icon_name(shapes[k].icon);
-        (*shape_btn_p)->set_tooltip_text(std::string(shapes[k].tip) + "\nClick again (or right-click, or hold): rectangle, oval, line, pen");
+        (*shape_btn_p)->set_tooltip_text(std::string(shapes[k].tip) + "\nClick again (or right-click, or hold): rectangle, oval, line, polygon, pen");
     };
     const auto use_shape = [this, last_shape](int k) {
         if (shapes[k].tool == Canvas::Tool::Pen) m_canvas.set_tool(Canvas::Tool::Pen);
@@ -2873,7 +3033,7 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
         pop->set_has_arrow(true);
         pop->set_autohide(true);
         auto list = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
-        for (int k = 0; k < 4; ++k) {
+        for (int k = 0; k < 5; ++k) {
             auto row = Gtk::make_managed<Gtk::Button>();
             row->add_css_class("flat");
             row->set_name(std::string("canvas_view.tool.shapes.") + shapes[k].label);
@@ -2896,6 +3056,35 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
                 b->set_active(true);
             });
             list->append(*row);
+        }
+        {   // s206: the polygon's sides and star depth (the next one drawn)
+            auto grid = Gtk::make_managed<Gtk::Grid>();
+            grid->set_row_spacing(4);
+            grid->set_column_spacing(8);
+            grid->set_margin_top(6);
+            grid->set_margin_start(8);
+            grid->set_margin_end(8);
+            grid->set_margin_bottom(4);
+            const auto lab = [](const char* t) {
+                auto l = Gtk::make_managed<Gtk::Label>(t);
+                l->set_xalign(1);
+                l->add_css_class("dim-label");
+                return l;
+            };
+            auto sides = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(m_canvas.polygon_sides(), 3, 64, 1, 5), 1, 0);
+            sides->set_name("canvas_view.tool.polygon.sides");
+            auto star = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(m_canvas.polygon_inner() * 100, 1, 100, 1, 10), 1, 0);
+            star->set_name("canvas_view.tool.polygon.star");
+            star->set_tooltip_text("Star depth: 100% a plain polygon; lower, the inner points come in (a five-point star snaps to straight sides near 38%)");
+            const auto apply = [this, sides, star] { m_canvas.set_polygon(sides->get_value_as_int(), star->get_value() / 100); };
+            sides->signal_value_changed().connect(apply);
+            star->signal_value_changed().connect(apply);
+            grid->attach(*lab("Sides"), 0, 0);
+            grid->attach(*sides, 1, 0);
+            grid->attach(*lab("Star depth %"), 0, 1);
+            grid->attach(*star, 1, 1);
+            list->append(*Gtk::make_managed<Gtk::Separator>());
+            list->append(*grid);
         }
         pop->set_child(*list);
         auto ov = Gtk::make_managed<Gtk::Overlay>();
