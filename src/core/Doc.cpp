@@ -2050,6 +2050,29 @@ bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
     });
 }
 
+bool set_running(DocJournal& j, Doc& d, int slot, const std::string& style) {   // s240
+    if (!style.empty() && !d.as<Style>(style)) return false;
+    const auto& cur = slot == 0 ? d.settings().run_head : d.settings().run_sub;
+    if (cur == style) return false;
+    return j.run(slot == 0 ? "Running head" : "Running subhead", {"doc"}, [&] {
+        Settings s = d.settings();
+        (slot == 0 ? s.run_head : s.run_sub) = style;
+        d.put("doc", s);
+    });
+}
+
+bool set_author(DocJournal& j, Doc& d, const std::string& author) {   // s239
+    std::string t = author;
+    while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) t.pop_back();
+    while (!t.empty() && (t.front() == ' ' || t.front() == '\t')) t.erase(t.begin());
+    if (t == d.settings().author) return false;
+    return j.run(t.empty() ? std::string("No author") : "Author \u201c" + t + "\u201d", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.author = t;
+        d.put("doc", s);
+    });
+}
+
 bool set_title(DocJournal& j, Doc& d, const std::string& title) {
     std::string t = title;
     while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) t.pop_back();
@@ -5280,6 +5303,8 @@ const std::vector<Verb>& verbs() {
         {"rotate_frames", [](DocJournal& j, Doc& d) { rotate_frames(j, d, {"frame.4", "frame.5"}, 90, 200, 300); }},
         {"flip_frames", [](DocJournal& j, Doc& d) { flip_frames(j, d, {"frame.4"}, true, 200, 300); }},
         {"set_turn", [](DocJournal& j, Doc& d) { set_turn(j, d, {"frame.1", "frame.4"}, 12.5, 8, 0, "Rotation"); }},
+        {"set_author", [](DocJournal& j, Doc& d) { set_author(j, d, "Scott"); }},   // s239
+        {"set_running", [](DocJournal& j, Doc& d) { set_running(j, d, 0, d.ids_of<Style>().front()); }},   // s240
         {"scale_frames", [](DocJournal& j, Doc& d) { scale_frames(j, d, {"frame.4", "frame.5"}, 1.5, 0.75, 100, 100); }},   // s232
         {"set_scale", [](DocJournal& j, Doc& d) { set_scale(j, d, {"frame.1"}, 1.25, 1.25, 8); }},
         {"rotate_drag", [](DocJournal& j, Doc& d) {   // press .. turn .. release
@@ -5458,11 +5483,24 @@ std::vector<TabStop> tab_preset(const Doc& d, const std::string& id) {
     return {};
 }
 
+std::string running_style(const Doc& d, int slot) {   // s240
+    const auto& set = slot == 0 ? d.settings().run_head : d.settings().run_sub;
+    if (!set.empty() && d.as<Style>(set)) return set;
+    const auto named = [&](const char* n) -> std::string {
+        for (const auto& id : d.ids_of<Style>())
+            if (const auto* s = d.as<Style>(id); s->kind == StyleKind::Paragraph && s->name == n) return id;
+        return {};
+    };
+    if (slot == 0) return named("Heading 1");
+    auto s = named("Subtitle");
+    return s.empty() ? named("Heading 2") : s;
+}
+
 int marker_at(const std::string& t, std::size_t i) {
     if (i + 3 > t.size()) return -1;
     if (static_cast<unsigned char>(t[i]) != 0xEE || static_cast<unsigned char>(t[i + 1]) != 0x80) return -1;
     const int k = static_cast<unsigned char>(t[i + 2]) - 0x80;
-    return (k >= 0 && k <= 3) || k == 5 || k == 6 || k == 7 ? k : -1;   // s128: 5 a reference, 6 an anchor; s134: 7 an index entry
+    return (k >= 0 && k <= 3) || (k >= 5 && k <= 11) ? k : -1;   // s128: 5 a reference, 6 an anchor; s134: 7 an index entry; s239: 8 title, 9 author; s240: 10 chapter, 11 subtitle
 }
 
 const char* marker_sign(int k) {   // s128 (the signs were s023's, in two places)
@@ -5474,6 +5512,10 @@ const char* marker_sign(int k) {   // s128 (the signs were s023's, in two places
     case 5: return "\xE2\x86\x92";   // → a cross-reference
     case 6: return "\xE2\x81\xA0";   // word joiner: an anchor, unseen
     case 7: return "\xE2\x81\xA0";   // s134: and an index entry
+    case 8: return "\xE2\x93\x89";   // s239: (T) circled -- the title
+    case 9: return "\xE2\x92\xB6";   // (A) circled -- the author
+    case 10: return "\xE2\x92\xB8";  // s240: (C) circled -- the chapter's name
+    case 11: return "\xE2\x93\x88";  // (S) circled -- its subtitle
     default: return "\xEF\xBF\xBD";
     }
 }

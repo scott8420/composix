@@ -2434,6 +2434,8 @@ std::string marker_value(const core::Doc& d, int k, const std::string& page, con
     if (!d.as<core::Page>(page)) return {};
     switch (k) {
     case 0: return d.folio(page);
+    case 8: return d.settings().title;    // s239: the document's metadata
+    case 9: return d.settings().author;
     case 1: {
         const auto* sec = d.as<core::Section>(d.section_of(page));
         return sec ? sec->name : std::string{};
@@ -2659,7 +2661,65 @@ std::string ref_where(const core::Doc& d, const core::XRef& r, FlowCache& flows,
     return "Cross-reference: points at " + w;
 }
 
-Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page) {
+RunningHeads running_heads(const core::Doc& d, FlowCache& flows) {   // s240
+    RunningHeads out;
+    const std::array<std::string, 2> styles{core::running_style(d, 0), core::running_style(d, 1)};
+    const auto pages = d.pages();
+    if (pages.empty() || (styles[0].empty() && styles[1].empty())) return out;
+    std::map<std::string, std::size_t> at;
+    for (std::size_t i = 0; i < pages.size(); ++i) at[pages[i]] = i;
+    struct Hit { double y; std::string words; };
+    std::vector<std::array<std::vector<Hit>, 2>> hits(pages.size());
+    const auto words_of = [](const std::string& t) {   // its words: markers and notes out, to a tab, 120 bytes
+        std::string w;
+        for (std::size_t i = 0; i < t.size();) {
+            if (core::marker_at(t, i) >= 0 || core::note_at(t, i)) { i += 3; continue; }
+            if (t[i] == '\t' || t[i] == '\n') break;
+            w += t[i++];
+        }
+        if (w.size() > 120) { w.resize(120); while (!w.empty() && (static_cast<unsigned char>(w.back()) & 0xC0) == 0x80) w.pop_back(); if (!w.empty()) w.pop_back(); w += "\u2026"; }
+        return w;
+    };
+    for (const auto& sid : d.ids_of<core::Story>()) {
+        const auto* st = d.as<core::Story>(sid);
+        bool uses = false;
+        for (const auto& p : st->paras) uses = uses || p.style == styles[0] || p.style == styles[1];
+        if (!uses) continue;
+        const auto& fl = flows.get(d, sid);
+        for (const auto& ft : fl.frames) {
+            const auto* f = d.as<core::Frame>(ft.frame);
+            if (!f) continue;
+            const auto it = at.find(f->owner);
+            if (it == at.end()) continue;   // on a master: not a chapter
+            for (const auto& l : ft.lines) {
+                if (l.start != 0 || l.para < 0 || l.para >= static_cast<int>(st->paras.size())) continue;
+                const auto& p = st->paras[static_cast<std::size_t>(l.para)];
+                for (int k = 0; k < 2; ++k)
+                    if (!styles[static_cast<std::size_t>(k)].empty() && p.style == styles[static_cast<std::size_t>(k)])
+                        hits[it->second][static_cast<std::size_t>(k)].push_back({f->y + l.y, words_of(p.text)});
+            }
+        }
+    }
+    std::array<std::string, 2> carry;
+    for (std::size_t i = 0; i < pages.size(); ++i) {
+        for (auto& h : hits[i]) std::sort(h.begin(), h.end(), [](const Hit& a, const Hit& b) { return a.y < b.y; });
+        std::array<std::string, 2> shown = carry;
+        if (!hits[i][0].empty()) {   // a chapter starts here: its name; the old subtitle goes
+            shown[0] = hits[i][0].front().words;   // the first on the page
+            carry[0] = hits[i][0].back().words;    // the last goes on
+            shown[1].clear();
+            carry[1].clear();
+        }
+        if (!hits[i][1].empty()) {
+            shown[1] = hits[i][1].front().words;
+            carry[1] = hits[i][1].back().words;
+        }
+        out.by_page[pages[i]] = shown;
+    }
+    return out;
+}
+
+Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page, const RunningHeads* heads) {
     Resolved r;
     const auto* st = d.as<core::Story>(story);
     if (!st || !core::has_markers(*st)) return r;
@@ -2696,6 +2756,10 @@ Resolved resolve_story(const core::Doc& d, const std::string& story, const std::
                 r.refs.push_back({p, idx, static_cast<int>(out.size()), static_cast<int>(out.size() + v.size())});   // s131
             } else if (k == 6 || k == 7) {   // s134: an index entry -- nothing to see either
                 v.clear();   // an anchor: nothing to see
+            } else if (k == 10 || k == 11) {   // s240: a running head
+                if (heads && d.as<core::Page>(page))
+                    if (const auto it = heads->by_page.find(page); it != heads->by_page.end()) v = it->second[static_cast<std::size_t>(k - 10)];
+                if (!d.as<core::Page>(page)) v = src.substr(i, 3);
             } else {
                 v = d.as<core::Page>(page) ? marker_value(d, k, page, frame) : src.substr(i, 3);
             }
@@ -2956,6 +3020,7 @@ void FlowCache::check(const core::Doc& d) {
             }
     }
     m_resolved.clear();
+    m_heads.reset();   // s240
     m_rev = d.revision();
 }
 
@@ -2963,7 +3028,17 @@ const Resolved& FlowCache::resolved(const core::Doc& d, const std::string& story
     check(d);
     const std::string key = story + "|" + on_page;
     auto it = m_resolved.find(key);
-    if (it == m_resolved.end()) it = m_resolved.emplace(key, resolve_story(d, story, on_page)).first;
+    if (it == m_resolved.end()) {
+        const RunningHeads* heads = nullptr;
+        if (const auto* st = d.as<core::Story>(story))   // s240: worked out once a revision, only when a story asks
+            for (const auto& p : st->paras)
+                if (p.text.find(core::kMarkChapter) != std::string::npos || p.text.find(core::kMarkSubhead) != std::string::npos) {
+                    if (!m_heads) m_heads = std::make_shared<RunningHeads>(running_heads(d, *this));
+                    heads = m_heads.get();
+                    break;
+                }
+        it = m_resolved.emplace(key, resolve_story(d, story, on_page, heads)).first;
+    }
     return it->second;
 }
 
@@ -2994,6 +3069,7 @@ void FlowCache::complete(const core::Doc& d, const std::string& story, std::uint
         m_flows[story] = Entry{std::move(flow), std::move(text), nullptr, nullptr};
         m_prev.erase(story);
         m_resolved.clear();
+        m_heads.reset();   // s240
         return;
     }
     // The document moved on: if only text changed since `rev`, the whole

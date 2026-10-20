@@ -802,7 +802,14 @@ void Shell::bind_context_actions() {  // bindings
 void Shell::on_canvas_context(const views::Canvas::ContextHit& h) {  // handler
     m_ctx = h;
     auto menu = Gio::Menu::create();
-    if (!h.frame.empty()) {
+    if (h.zoom) {   // s241: the Zoom tool's levels
+        auto fit = Gio::Menu::create();
+        fit->append("Fit the Pages", "win.zoom-fit");
+        menu->append_section(fit);
+        auto lv = Gio::Menu::create();
+        for (int p : {50, 75, 100, 150, 200, 300, 400, 800}) lv->append(std::to_string(p) + "%", "win.zoom-at::" + std::to_string(p));
+        menu->append_section(lv);
+    } else if (!h.frame.empty()) {
         const auto& sel = m_canvas_view.canvas().selection();
         bool text = false, copy = false, ignoring = true;
         for (const auto& id : sel)
@@ -1060,6 +1067,10 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                                            static_cast<core::Numbering>(std::stoi(choice)));
         } else if (key == "dtitle") {   // s066: the document's settings
             did = core::doc::set_title(m_journal, m_doc, choice);
+        } else if (key == "dauthor") {   // s239
+            did = core::doc::set_author(m_journal, m_doc, choice);
+        } else if (key == "drun1" || key == "drun2") {   // s240
+            did = core::doc::set_running(m_journal, m_doc, key == "drun1" ? 0 : 1, choice);
         } else if (key == "dtrim") {   // "0:<points>" (W) or "1:<points>" (H)
             const auto colon = choice.find(':');
             const int k = std::stoi(choice.substr(0, colon));

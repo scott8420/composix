@@ -148,6 +148,11 @@ struct Settings {
     enum class NoteNum { Plain, Period, Paren, Raised };
     NoteNum     note_num   = NoteNum::Plain;
     std::string note_title = "Notes";        // s120: over the endnotes ("" none)
+    std::string author;                      // s239 (H1): the document's author (a header's kMarkAuthor)
+    // s240 (H2): the paragraph styles running heads take their words from --
+    // the chapter's name (kMarkChapter), its subtitle (kMarkSubhead); "" =
+    // found by name ("Heading 1"; "Subtitle", else "Heading 2").
+    std::string run_head, run_sub;
     // s154: the rulers' origin, and the zero point dragged from it (points,
     // from where the origin puts it; Spine: unused).
     RulerOrigin ruler_origin = RulerOrigin::Spread;
@@ -843,6 +848,10 @@ bool set_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const 
 // follows, its width (and a foldout's folds) in proportion; the bleed
 // (points, >= 0); facing pages on / off.
 bool set_title(DocJournal& j, Doc& d, const std::string& title);
+// s239: the document's author (may be empty). One step.
+bool set_author(DocJournal& j, Doc& d, const std::string& author);
+// s240: the style a running head follows (slot 0 chapter, 1 subtitle; "" by name). One step.
+bool set_running(DocJournal& j, Doc& d, int slot, const std::string& style);
 bool set_trim(DocJournal& j, Doc& d, double w, double h);
 // s147: a master's own page settings. Its size: the pages using it at its
 // old size follow (a page of its own size keeps it). One step each; false
@@ -1679,6 +1688,16 @@ inline constexpr const char* kMarkNote    = "\xEE\x80\x84";   // U+E004
 inline constexpr const char* kMarkRef     = "\xEE\x80\x85";   // U+E005: s128, a cross-reference (Para::refs)
 inline constexpr const char* kMarkAnchor  = "\xEE\x80\x86";   // U+E006: s128, a place references point at (Para::anchors)
 inline constexpr const char* kMarkIndex   = "\xEE\x80\x87";   // U+E007: s134, an index entry (Para::index)
+// s239 (H1): the document's metadata, filled in where it's drawn.
+inline constexpr const char* kMarkTitle   = "\xEE\x80\x88";   // U+E008: the document's title
+inline constexpr const char* kMarkAuthor  = "\xEE\x80\x89";   // U+E009: its author
+// s240 (H2): running heads -- the words of the chapter's heading (and its
+// subtitle) in force on the page: the first on the page, else the last before it.
+inline constexpr const char* kMarkChapter = "\xEE\x80\x8A";   // U+E00A: the chapter's name
+inline constexpr const char* kMarkSubhead = "\xEE\x80\x8B";   // U+E00B: the chapter's subtitle
+// s240: the paragraph style a running head (0 chapter, 1 subtitle) follows -- the
+// document's choice, else by name; "" when there's none.
+std::string running_style(const Doc& d, int slot);
 bool note_at(const std::string& text, std::size_t i);
 int  notes_in(const std::string& text, std::size_t from = 0, std::size_t to = std::string::npos);   // the marks in [from, to)
 // The number the k-th note of paragraph p takes (1-based, through the story).

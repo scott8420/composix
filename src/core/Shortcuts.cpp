@@ -196,6 +196,8 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"View", "win.zoom-out",         {"<Ctrl>minus"}, "", "Zoom out"},
         {"View", "win.zoom-fit",         {"<Ctrl>0"}, "", "Fit the pages"},
         {"View", "win.zoom-100",         {"<Ctrl>1"}, "", "Actual size (100%)"},
+        {"View", "win.zoom-200",         {"<Ctrl>2"}, "", "Zoom to 200%"},   // s241 (Scott)
+        {"View", "win.zoom-300",         {"<Ctrl>3"}, "", "Zoom to 300%"},
         {"View", "", {}, "Ctrl+scroll", "Zoom about the pointer"},
         {"View", "", {}, "Space+drag  /  middle-drag", "Pan the canvas"},
         {"View", "win.toggle-rulers",    {"<Ctrl>r"}, "", "Show / hide the rulers"},

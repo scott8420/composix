@@ -205,7 +205,19 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         title.text = true;
         const auto U = st.units;   // s073
         // s148 (Scott): the page settings -- trim, bleed, facing -- are each master's now (Masters).
-        std::vector<Field> f{title,
+        Field author{"Author", st.author, "dauthor"};   // s239: a header can show it
+        author.text = true;
+        // s240: the styles running heads follow
+        const auto run_row = [&](int slot) {
+            const std::string set = slot == 0 ? st.run_head : st.run_sub;
+            const auto* now = d.as<Style>(running_style(d, slot));
+            std::vector<Choice> ch{{"", std::string("Auto") + (set.empty() && now ? " (" + now->name + ")" : "")}};
+            for (const auto& sid : d.ids_of<Style>())
+                if (d.as<Style>(sid)->kind == StyleKind::Paragraph) ch.push_back({sid, d.as<Style>(sid)->name});
+            const auto* cur = d.as<Style>(set);
+            return Field{slot == 0 ? "Running head" : "Running subhead", cur ? cur->name : ch.front().label, slot == 0 ? "drun1" : "drun2", ch};
+        };
+        std::vector<Field> f{title, author, run_row(0), run_row(1),
                              {"Units", unit_label(U), "dunits",   // s073
                               {{"0", unit_label(Units::Inches)}, {"1", unit_label(Units::Millimetres)},
                                {"2", unit_label(Units::Picas)}, {"3", unit_label(Units::Points)}}},

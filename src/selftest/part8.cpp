@@ -3213,5 +3213,112 @@ void part8() {
             check("sections: the body's first page shows 1", d.folio(s2->start_page) == "1");
         }
     }
+    // ── s239: the document's title and author, in a header ───────────────────
+    {
+        std::cout << "--- s239 metadata in headers ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::NewDoc n;
+        core::new_document(d, n);
+        check("author: one step, trimmed; empty allowed", D::set_author(j, d, "  Scott  ") && d.settings().author == "Scott" &&
+              j.undo_label() == "Author “Scott”" && !D::set_author(j, d, "Scott"));
+        D::set_title(j, d, "Harbor Lights");
+        {   // a header story on the master: author / title
+            core::Doc::Loading ld(d);
+            d.put("story.9", core::Story{"Header", {{"style.5", std::string(core::kMarkAuthor) + " — " + core::kMarkTitle}}});
+            d.put("frame.99", core::Frame{"master.1", core::FrameKind::Text, 54, 20, 324, 14, 0, 1, "story.9", "", ""});
+        }
+        check("markers: title and author known as markers, signs the same length", core::marker_at(core::kMarkTitle, 0) == 8 &&
+              core::marker_at(core::kMarkAuthor, 0) == 9 && std::string(core::marker_sign(8)).size() == 3 && std::string(core::marker_sign(9)).size() == 3);
+        L::FlowCache flows;
+        const auto pg = d.pages()[2];
+        const auto& rs = flows.resolved(d, "story.9", pg);
+        check("on a page: the author and title filled in", rs.any && rs.text.paras[0].text == "Scott — Harbor Lights", rs.text.paras[0].text);
+        core::Doc e;
+        check("author: saved with the document", core::from_json(e, core::to_json(d)) && e.settings().author == "Scott");
+        // An ODT's author field and its meta author.
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:dc="dc" xmlns:meta="m")";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"},
+            {"content.xml", "<office:document-content" + ns + "><office:body><office:text><text:p>Body</text:p></office:text></office:body></office:document-content>"},
+            {"styles.xml", "<office:document-styles" + ns + R"(><office:master-styles><style:master-page style:name="Standard"><style:header><text:p><text:author-name>X</text:author-name> / <text:title>T</text:title></text:p></style:header></style:master-page></office:master-styles></office:document-styles>)"},
+            {"meta.xml", "<office:document-meta" + ns + "><office:meta><meta:initial-creator>Ann</meta:initial-creator></office:meta></office:document-meta>"}});
+        std::string err;
+        const auto b = core::odt::read(odt, &err);
+        check("odt: author / title fields -> the markers", b && b->masters.size() == 1 &&
+              b->masters[0].header[0].text == std::string(core::kMarkAuthor) + " / " + core::kMarkTitle, err);
+        core::Doc f;
+        check("odt import: the file's author kept as the document's", b && L::import_odt(f, *b, nullptr, {}, &err) && f.settings().author == "Ann", err);
+    }
+    // ── s240: running heads -- the chapter's name and subtitle ──────────────
+    {
+        std::cout << "--- s240 running heads ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        std::string body = R"(<text:p text:style-name="Standard">Title page</text:p>)";
+        const auto chapter = [&](const std::string& name, const std::string& sub, int paras) {
+            body += "<text:h text:style-name=\"Heading_20_1\" text:outline-level=\"1\">" + name + "</text:h>";
+            if (!sub.empty()) body += "<text:p text:style-name=\"Subtitle\">" + sub + "</text:p>";
+            for (int i = 0; i < paras; ++i) body += "<text:p text:style-name=\"Standard\">The ship came in, and nobody on the quay expected her that morning at all.</text:p>";
+        };
+        chapter("The Harbor", "In which a ship comes in", 40);
+        chapter("The Guild", "", 40);
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:default-style style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:default-style>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Subtitle" style:family="paragraph"/>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:paragraph-properties fo:break-before="page"/></style:style>
+</office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="1in" fo:margin-bottom="1in" fo:margin-left="1in" fo:margin-right="1in"/></style:page-layout></office:automatic-styles>
+<office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p><text:chapter text:display="name" text:outline-level="1"/> | <text:chapter text:display="name" text:outline-level="2"/></text:p></style:header></style:master-page></office:master-styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + "><office:body><office:text>" + body + "</office:text></office:body></office:document-content>";
+        std::string err;
+        const auto b = core::odt::read(core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}}), &err);
+        check("odt: chapter fields -> the running-head markers (level 1 the name, 2 the subtitle)", b && b->masters.size() == 1 &&
+              b->masters[0].header[0].text == std::string(core::kMarkChapter) + " | " + core::kMarkSubhead, err);
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        const bool ok = b && L::import_odt(d, *b, nullptr, {}, &err);
+        check("running heads: imported", ok, err);
+        if (ok) {
+            check("running style: found by name (Heading 1; Subtitle)", d.as<core::Style>(core::running_style(d, 0))->name == "Heading 1" &&
+                  d.as<core::Style>(core::running_style(d, 1))->name == "Subtitle");
+            std::string header;
+            for (const auto& fid : d.frames_on("master.1")) header = d.as<core::Frame>(fid)->story;
+            L::FlowCache flows;
+            const auto pages = d.pages();
+            std::vector<std::string> shown;
+            for (const auto& pg : pages) shown.push_back(flows.resolved(d, header, pg).text.paras[0].text);
+            std::size_t ch2 = 0;
+            for (std::size_t i = 0; i < shown.size(); ++i) if (shown[i] == "The Guild | " && !ch2) ch2 = i;
+            check("running heads: the front matter -- none yet", shown[0] == " | ", shown[0]);
+            check("running heads: chapter one's pages -- its name and subtitle, on into its later pages",
+                  shown[1] == "The Harbor | In which a ship comes in" && shown[2] == "The Harbor | In which a ship comes in", shown[1] + " / " + shown[2]);
+            check("running heads: chapter two -- its name; the old subtitle gone (it has none)", ch2 > 2 && shown.back() == "The Guild | ",
+                  std::to_string(ch2) + " " + shown.back());
+            check("running head: a style chosen -- one step", D::set_running(j, d, 0, core::running_style(d, 1)) && j.undo_label() == "Running head");
+            L::FlowCache f2;
+            check("running head: now the subtitle's words", f2.resolved(d, header, pages[1]).text.paras[0].text.rfind("In which", 0) == 0);
+            core::Doc e;
+            check("running heads: the choice saved", core::from_json(e, core::to_json(d)) && e.settings().run_head == d.settings().run_head);
+            check("markers: chapter / subtitle known, signs 3 bytes", core::marker_at(core::kMarkChapter, 0) == 10 && core::marker_at(core::kMarkSubhead, 0) == 11 &&
+                  std::string(core::marker_sign(10)).size() == 3 && std::string(core::marker_sign(11)).size() == 3);
+        }
+    }
+    // ── s241: Ctrl+2 / Ctrl+3 ────────────────────────────────────────────────
+    {
+        std::cout << "--- s241 zoom keys ---\n";
+        bool two = false, three = false;
+        for (const auto& sc : core::shortcut_registry()) {
+            for (const auto& k : sc.accels) {
+                if (k == "<Ctrl>2") two = sc.action == "win.zoom-200";
+                if (k == "<Ctrl>3") three = sc.action == "win.zoom-300";
+            }
+        }
+        check("shortcuts: Ctrl+2 zooms to 200%, Ctrl+3 to 300%", two && three);
+    }
 }
 }  // namespace cxtest

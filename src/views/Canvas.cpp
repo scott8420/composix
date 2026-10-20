@@ -81,6 +81,16 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
             if (m_take) { cancel_take(); return; }   // s180: the eyedropper put down
             if (editing() || m_drag != Drag::None) return;
             grab_focus();
+            if (m_tool == Tool::Zoom) {   // s241: the zoom levels, nothing picked
+                ContextHit z;
+                z.x = x;
+                z.y = y;
+                z.zoom = true;
+                m_zoom_x = x;
+                m_zoom_y = y;
+                m_sig_context.emit(z);
+                return;
+            }
             double lx = 0, ly = 0;
             m_vp.to_doc(x, y, lx, ly);
             front_panel(lx, ly);   // s150
@@ -386,6 +396,23 @@ void Canvas::zoom_fit() {
 
 void Canvas::zoom_to(double pct) {
     m_vp.set_percent(pct);
+    queue_draw();
+    m_sig_zoom.emit();
+}
+
+void Canvas::zoom_about(double pct, double sx, double sy) {   // s241
+    m_vp.set_scale_about(pct / 100.0 * core::Viewport::kTrue, sx, sy);
+    queue_draw();
+    m_sig_zoom.emit();
+}
+
+void Canvas::zoom_to_rect(const core::Rect& r) {   // s241: the rectangle filling the view (a margin round it)
+    if (r.w < 1 || r.h < 1 || m_vp.widget_w() <= 0) return;
+    const double k = std::min((m_vp.widget_w() - 40) / r.w, (m_vp.widget_h() - 40) / r.h);
+    m_vp.set_scale_about(std::clamp(k, core::Viewport::kMin, core::Viewport::kMax), m_vp.widget_w() / 2, m_vp.widget_h() / 2);
+    double sx, sy;   // the rectangle's centre to the view's
+    m_vp.to_screen(r.cx(), r.cy(), sx, sy);
+    m_vp.pan_by(m_vp.widget_w() / 2 - sx, m_vp.widget_h() / 2 - sy);
     queue_draw();
     m_sig_zoom.emit();
 }
@@ -1205,7 +1232,7 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->move_to(tx, ty);
         lay->show_in_cairo_context(cr);
     }
-    if (m_drag == Drag::Marquee || m_drag == Drag::PointMarquee) {   // s207: the points' too
+    if (m_drag == Drag::Marquee || m_drag == Drag::PointMarquee || m_drag == Drag::Zoom) {   // s207: the points' too (s241: the zoom box)
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.12);
         cr->rectangle(m_marquee.x, m_marquee.y, m_marquee.w, m_marquee.h);
         cr->fill_preserve();
@@ -1270,6 +1297,14 @@ void Canvas::on_drag_begin(double x, double y) {
     m_last_press = now;
     m_last_px = x;
     m_last_py = y;
+    // s241: the Zoom tool -- a click zooms in a step about the pointer (Alt: out); a drag zooms to its box.
+    if (m_tool == Tool::Zoom) {
+        m_dx0 = x;
+        m_dy0 = y;
+        m_marquee = {};
+        m_drag = Drag::Zoom;
+        return;
+    }
     // s198: the Eyedropper tool -- the colour here onto the picks' fill
     // (Shift: stroke); Alt, or nothing picked: just the swatch.
     if (m_tool == Tool::Eyedropper) {
@@ -2034,6 +2069,11 @@ void Canvas::on_drag_update(double ox, double oy) {
         queue_draw();
         return;
     }
+    case Drag::Zoom: {   // s241: the box to zoom to
+        m_marquee = Rect::from_corners(m_px, m_py, m_px + ox, m_py + oy);
+        queue_draw();
+        return;
+    }
     case Drag::Skew: {   // s233: the edge slides along itself, the opposite edge held
         const double dx = ox / s, dy = oy / s;
         if (!m_begun) {
@@ -2171,6 +2211,25 @@ void Canvas::on_drag_end(double, double) {
             pick(made);
             m_sig_edited.emit();
             if (auto lg = log::get(log::Area::View)) lg->info("override {} master item(s) by marquee", made.size());
+        }
+        queue_draw();
+        return;
+    }
+    if (was == Drag::Zoom) {   // s241: a click -- a step in (Alt: out) about it; a box -- fitted to it
+        const Rect box = m_marquee;
+        m_marquee = {};
+        if (box.w >= 6 && box.h >= 6) {
+            double x0, y0, x1, y1;
+            m_vp.to_doc(box.x, box.y, x0, y0);
+            m_vp.to_doc(box.r(), box.b(), x1, y1);
+            zoom_to_rect(Rect::from_corners(x0, y0, x1, y1));
+        } else {
+            static constexpr double steps[] = {12.5, 25, 33.3, 50, 66.7, 75, 100, 150, 200, 300, 400, 600, 800, 1200, 1600};
+            const double now = m_vp.percent();
+            double to = now;
+            if (m_mods_alt) { for (double v : steps) if (v < now - 0.5) to = v; if (to == now) to = now / 1.5; }
+            else { to = now * 1.5; for (auto it = std::rbegin(steps); it != std::rend(steps); ++it) if (*it > now + 0.5) to = *it; }
+            zoom_about(to, m_dx0, m_dy0);
         }
         queue_draw();
         return;
@@ -2417,6 +2476,7 @@ bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
         case GDK_KEY_backslash:         set_shape_tool(ShapeTool::Line); m_sig_tool.emit(); return true;
         case GDK_KEY_p: case GDK_KEY_P: set_tool(Tool::Pen);        m_sig_tool.emit(); return true;   // s199
         case GDK_KEY_i: case GDK_KEY_I: set_tool(Tool::Eyedropper); m_sig_tool.emit(); return true;   // s198
+        case GDK_KEY_z: case GDK_KEY_Z: set_tool(Tool::Zoom); m_sig_tool.emit(); return true;   // s241
         case GDK_KEY_Delete: case GDK_KEY_BackSpace:
             if (!m_sel.empty()) { delete_selection(); return true; }
             return false;
@@ -3412,6 +3472,7 @@ void Canvas::update_cursor() {
         set_cursor(Gdk::Cursor::create(m_drag == Drag::Picture ? "grabbing" : over ? "grab" : "default"));
         return;
     }
+    if (m_tool == Tool::Zoom) { set_cursor(Gdk::Cursor::create(m_mods_alt ? "zoom-out" : "zoom-in")); return; }   // s241
     if (m_tool != Tool::Select) { set_cursor(Gdk::Cursor::create("crosshair")); return; }
     if (!m_sel.empty()) {
         const auto h = pick_handle(m_mx, m_my);   // s229
@@ -3489,6 +3550,9 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
         {"composix-tool-eyedropper-symbolic", "canvas_view.tool.eyedropper",
          "Eyedropper  (I) — click the page: its colour onto the picked frames' fill; Shift: their stroke; Alt: just a swatch",
          Canvas::Tool::Eyedropper},
+        {"zoom-in-symbolic", "canvas_view.tool.zoom",
+         "Zoom  (Z) — click to zoom in, Alt+click out, drag round what to see; right-click: zoom levels",
+         Canvas::Tool::Zoom},   // s241
     };
     // s198 (Scott): the shapes share a button -- it draws what was picked
     // last; right-click (or hold) for the others. A small mark in its
@@ -3660,6 +3724,7 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
         case Canvas::Tool::Image: i = 3; break;
         case Canvas::Tool::Shape: case Canvas::Tool::Pen: i = 4; show_shape(shape_index()); break;
         case Canvas::Tool::Eyedropper: i = 5; break;
+        case Canvas::Tool::Zoom: i = 6; break;   // s241
         }
         m_tool_buttons[static_cast<std::size_t>(i)]->set_active(true);
     });

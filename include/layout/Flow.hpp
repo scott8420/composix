@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <array>
 #include <map>
 #include <memory>
 #include <string>
@@ -156,7 +157,12 @@ struct Resolved {
     struct RefSpan { int para = 0, k = 0, from = 0, to = 0; };
     std::vector<RefSpan> refs;
 };
-Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page);
+// s240: running heads -- for each page, the words of the chapter's heading
+// and subtitle in force there (the first on the page, else the last before).
+struct RunningHeads { std::map<std::string, std::array<std::string, 2>> by_page; };
+class FlowCache;
+RunningHeads running_heads(const core::Doc& d, FlowCache& flows);
+Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page, const RunningHeads* heads = nullptr);
 // s128: what a cross-reference shows -- its anchor's page number, its
 // paragraph's words, or both ("\u201cwords\u201d on page n"); "??" when the
 // anchor is gone or not set. `flows`: stories' flows, made as needed.
@@ -345,6 +351,7 @@ private:
     std::map<std::string, Entry>     m_flows;
     std::map<std::string, Entry>     m_prev;       // s105: flows of stories edited since -- re-flowed from
     std::map<std::string, Resolved>  m_resolved;   // story "|" page
+    std::shared_ptr<RunningHeads>    m_heads;      // s240: worked out as a story needs them, per revision
     How                              m_how = How::Whole;
     int                              m_budget = 0;
 };

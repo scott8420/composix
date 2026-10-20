@@ -44,6 +44,10 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     for (const auto& [name, mark, label] : std::initializer_list<std::tuple<const char*, const char*, const char*>>{
              {"insert-page-number", core::kMarkPage, "Insert page number"},
              {"insert-section-name", core::kMarkSection, "Insert section name"},
+             {"insert-doc-title", core::kMarkTitle, "Insert title"},     // s239
+             {"insert-doc-author", core::kMarkAuthor, "Insert author"},
+             {"insert-chapter-name", core::kMarkChapter, "Insert chapter name"},     // s240
+             {"insert-chapter-sub", core::kMarkSubhead, "Insert chapter subtitle"},
              {"insert-next-page", core::kMarkNext, "Insert next page number"},
              {"insert-prev-page", core::kMarkPrev, "Insert previous page number"},
              {"insert-shy", "\u00AD", "Discretionary hyphen"}}) {   // s065
@@ -101,6 +105,13 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     add_action("zoom-out",      [this] { m_canvas_view.canvas().zoom_step(-1); });
     add_action("zoom-fit",      [this] { m_canvas_view.canvas().zoom_fit(); });
     add_action("zoom-100",      [this] { m_canvas_view.canvas().zoom_to(100); });
+    add_action("zoom-200",      [this] { m_canvas_view.canvas().zoom_to(200); });   // s241 (Scott): Ctrl+2
+    add_action("zoom-300",      [this] { m_canvas_view.canvas().zoom_to(300); });   // Ctrl+3
+    add_action_with_parameter("zoom-at", Glib::Variant<Glib::ustring>::variant_type(), [this](const Glib::VariantBase& p) {   // s241: about where it was asked
+        auto& cv = m_canvas_view.canvas();
+        const double pct = std::stod(Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(p).get());
+        cv.zoom_about(pct, cv.zoom_click_x(), cv.zoom_click_y());
+    });
     // s006: what the canvas shows / does -- stateful, so the menu shows a check.
     const auto toggle = [this](const char* name, std::function<void(bool)> apply, bool initial = true) {
         add_action_bool(name, [this, name, apply] {

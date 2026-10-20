@@ -50,7 +50,7 @@ public:
     // on the page onto the picked frames' fill (Shift: stroke; Alt: just the
     // swatch). One Shape tool draws rectangles (M), ovals (L) or lines (\);
     // s199: the Pen (P) draws any other path.
-    enum class Tool { Select, Direct, Text, Image, Shape, Pen, Eyedropper };
+    enum class Tool { Select, Direct, Text, Image, Shape, Pen, Eyedropper, Zoom };   // s241: Zoom
     enum class ShapeTool { Rect, Oval, Line, Polygon };   // s206: Polygon / star
     Canvas(core::Doc& d, core::DocJournal& j);
     const core::Doc& doc() const { return m_doc; }   // s073: the rulers read its unit
@@ -175,12 +175,17 @@ public:
     struct ContextHit {
         std::string frame, master_item, page;
         double x = 0, y = 0;
+        bool zoom = false;   // s241: with the Zoom tool -- the zoom levels
     };
+    // s241: zoom to `pct` about a point on screen (the pointer's place kept).
+    void zoom_about(double pct, double sx, double sy);
+    // s241: the view fitted to a rectangle (doc / layout coordinates).
+    void zoom_to_rect(const core::Rect& r);
     sigc::signal<void(const ContextHit&)>& signal_context() { return m_sig_context; }
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew, Zoom };
     // s035: Alt+drag a picture inside its frame -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
@@ -390,7 +395,12 @@ private:
     core::Handle skew_zone(double x, double y) const;
     bool   m_skew_hover = false;
     bool   scale_corner(double x, double y) const;   // s234
-    bool   m_scale_hover = false;   // the pointer on the first point (screen): it closes
+    bool   m_scale_hover = false;
+public:
+    double zoom_click_x() const { return m_zoom_x; }   // s241: where the zoom levels were asked for
+    double zoom_click_y() const { return m_zoom_y; }
+private:
+    double m_zoom_x = 0, m_zoom_y = 0;   // the pointer on the first point (screen): it closes
     std::string m_thread_from;               // "loaded": the next click threads into a frame
 
     // s009

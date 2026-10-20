@@ -54,6 +54,9 @@ json to(const Record& r) {
             if (!v.note_cont.empty()) j["note_cont"] = v.note_cont;
             if (v.note_at != NoteAt::Foot) j["note_at"] = static_cast<int>(v.note_at);   // s120
             if (v.note_title != "Notes") j["note_title"] = v.note_title;
+            if (!v.author.empty()) j["author"] = v.author;   // s239
+            if (!v.run_head.empty()) j["run_head"] = v.run_head;   // s240
+            if (!v.run_sub.empty()) j["run_sub"] = v.run_sub;
             if (v.note_num != Settings::NoteNum::Plain) j["note_num"] = static_cast<int>(v.note_num);   // s126
             if (v.ruler_origin != RulerOrigin::Spread) j["ruler_origin"] = static_cast<int>(v.ruler_origin);   // s154
             if (v.zero_x != 0 || v.zero_y != 0) j["zero"] = {v.zero_x, v.zero_y};
@@ -309,6 +312,9 @@ std::optional<Record> from(const json& j) {
         v.note_cont = val(j, "note_cont", std::string{});
         v.note_at = static_cast<NoteAt>(std::clamp(val(j, "note_at", 0), 0, 2));   // s120
         v.note_title = val(j, "note_title", std::string("Notes"));
+        v.author = val(j, "author", std::string{});   // s239
+        v.run_head = val(j, "run_head", std::string{});   // s240
+        v.run_sub = val(j, "run_sub", std::string{});
         v.note_num = static_cast<Settings::NoteNum>(std::clamp(val(j, "note_num", 0), 0, 3));   // s126
         if (j.contains("export")) {   // s032
             const auto& e = j.at("export");

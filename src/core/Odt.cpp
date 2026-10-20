@@ -189,8 +189,12 @@ struct Gather {
                 p.notes.push_back(std::move(note));
             } else if (nm == "text:page-number") {
                 raw(kMarkPage);
-            } else if (nm == "text:chapter") {
-                raw(kMarkSection);
+            } else if (nm == "text:author-name" || nm == "text:initial-creator" || nm == "text:creator") {   // s239
+                raw(kMarkAuthor);
+            } else if (nm == "text:title") {
+                raw(kMarkTitle);
+            } else if (nm == "text:chapter") {   // s240: the chapter's (level 1) or its subtitle's (deeper) words
+                raw(std::atoi(k.attr_or("text:outline-level", "1").c_str()) <= 1 ? kMarkChapter : kMarkSubhead);
             } else if (nm == "draw:frame" || nm == "draw:image") {
                 ++b.pictures;
             } else if (nm == "text:bookmark" || nm == "text:bookmark-start" || nm == "text:bookmark-end" || nm == "text:soft-page-break" ||

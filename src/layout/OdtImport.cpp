@@ -248,6 +248,11 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     if (st.paras.empty()) st.paras.push_back({bl.para_for(""), ""});
     info.paragraphs = static_cast<int>(st.paras.size());
     d.put("story.1", st);
+    if (!b.author.empty()) {   // s239: its author, for a header's author field
+        auto s = d.settings();
+        s.author = b.author;
+        d.put("doc", s);
+    }
     if (any_end && !any_foot) {
         auto s = d.settings();
         s.note_at = core::NoteAt::StoryEnd;

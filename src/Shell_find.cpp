@@ -23,6 +23,10 @@ Glib::RefPtr<Gio::Menu> Shell::special_menu() {  // zone
     auto m = Gio::Menu::create();
     m->append("Page Number", "win.insert-page-number");
     m->append("Section Name", "win.insert-section-name");
+    m->append("Document Title", "win.insert-doc-title");     // s239
+    m->append("Author", "win.insert-doc-author");
+    m->append("Chapter Name", "win.insert-chapter-name");       // s240
+    m->append("Chapter Subtitle", "win.insert-chapter-sub");
     m->append("Next Page Number", "win.insert-next-page");
     m->append("Previous Page Number", "win.insert-prev-page");
     m->append("Discretionary Hyphen", "win.insert-shy");   // s065
