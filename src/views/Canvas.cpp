@@ -1,3 +1,4 @@
+#include <sstream>
 #include "views/Canvas.hpp"
 #include "views/BackButton.hpp"
 #include "views/Images.hpp"
@@ -296,8 +297,82 @@ void Canvas::pick(const std::vector<std::string>& ids, bool notify) {
 
 Rect Canvas::selection_box() const {
     Rect box;
-    for (const auto& id : m_sel) box = box.unite(core::frame_in_layout(m_doc, m_placed, id));
+    for (const auto& id : m_sel) box = box.unite(bounds_in_layout(id));   // s229: a turned frame's bounds
     return box;
+}
+
+Rect Canvas::bounds_in_layout(const std::string& id) const {   // s229
+    const auto* f = m_doc.as<core::Frame>(id);
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, id);
+    if (!f || !core::turned(*f) || (lr.w <= 0 && lr.h <= 0 && lr.x == 0 && lr.y == 0)) return lr;
+    const Rect b = core::frame_bounds(*f);
+    return {b.x + lr.x - f->x, b.y + lr.y - f->y, b.w, b.h};
+}
+
+bool Canvas::turned_pick(std::array<std::array<double, 2>, 8>& hs) const {   // s229: one turned frame -- its own box's handles, on screen
+    if (m_sel.size() != 1) return false;
+    const auto* f = m_doc.as<core::Frame>(m_sel.front());
+    if (!f || !core::turned(*f)) return false;
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, m_sel.front());
+    hs = core::turned_handles(*f);
+    for (auto& p : hs) {
+        const Rect sp = m_vp.to_screen(Rect{p[0] + lr.x - f->x, p[1] + lr.y - f->y, 0, 0});
+        p = {sp.x, sp.y};
+    }
+    return true;
+}
+
+bool Canvas::rotate_zone(double x, double y) const {   // s231: 8 - 22 px out from a corner, beyond the box
+    if (m_sel.empty() || m_tool != Tool::Select || editing()) return false;
+    std::array<std::array<double, 2>, 8> hs;
+    if (!turned_pick(hs)) hs = core::handle_points(m_vp.to_screen(selection_box()));
+    double cx = 0, cy = 0;
+    for (int k : {0, 2, 4, 6}) { cx += hs[static_cast<std::size_t>(k)][0] / 4; cy += hs[static_cast<std::size_t>(k)][1] / 4; }
+    for (int k : {0, 2, 4, 6}) {
+        const auto& c = hs[static_cast<std::size_t>(k)];
+        const double dd = std::hypot(x - c[0], y - c[1]);
+        if (dd > 7 && dd < 22 && std::hypot(x - cx, y - cy) > std::hypot(c[0] - cx, c[1] - cy)) return true;
+    }
+    return false;
+}
+
+core::Handle Canvas::skew_zone(double x, double y) const {   // s233: 7 - 22 px out from an edge's middle, beyond it
+    if (m_sel.empty() || m_tool != Tool::Select || editing()) return core::Handle::None;
+    std::array<std::array<double, 2>, 8> hs;
+    if (!turned_pick(hs)) hs = core::handle_points(m_vp.to_screen(selection_box()));
+    double cx = 0, cy = 0;
+    for (int k : {0, 2, 4, 6}) { cx += hs[static_cast<std::size_t>(k)][0] / 4; cy += hs[static_cast<std::size_t>(k)][1] / 4; }
+    static constexpr core::Handle mids[] = {core::Handle::N, core::Handle::E, core::Handle::S, core::Handle::W};
+    for (auto h : mids) {
+        const auto& m = hs[static_cast<std::size_t>(static_cast<int>(h) - 1)];
+        const double nx = m[0] - cx, ny = m[1] - cy, nl = std::hypot(nx, ny);
+        if (nl < 1e-6) continue;
+        const double out = ((x - m[0]) * nx + (y - m[1]) * ny) / nl;   // how far beyond the edge
+        if (std::hypot(x - m[0], y - m[1]) < 22 && out > 7) return h;
+    }
+    return core::Handle::None;
+}
+
+bool Canvas::scale_corner(double x, double y) const {   // s234: over a corner handle that would scale
+    const auto h = pick_handle(x, y);
+    if (h != core::Handle::NW && h != core::Handle::NE && h != core::Handle::SE && h != core::Handle::SW) return false;
+    if (m_mods_ctrl) return true;
+    for (const auto& id : m_sel)
+        if (const auto* f = m_doc.as<core::Frame>(id); f && f->kind == core::FrameKind::Text) return false;
+    return true;
+}
+
+core::Handle Canvas::pick_handle(double x, double y) const {   // s229
+    if (std::array<std::array<double, 2>, 8> hs; turned_pick(hs)) {
+        static constexpr core::Handle order[] = {core::Handle::NW, core::Handle::NE, core::Handle::SE, core::Handle::SW,
+                                                 core::Handle::N, core::Handle::E, core::Handle::S, core::Handle::W};
+        for (auto h : order) {
+            const auto& p = hs[static_cast<std::size_t>(static_cast<int>(h) - 1)];
+            if (std::abs(x - p[0]) <= 7 && std::abs(y - p[1]) <= 7) return h;
+        }
+        return core::Handle::None;
+    }
+    return core::handle_hit(m_vp.to_screen(selection_box()), x, y);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -798,7 +873,19 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
     for (const auto& id : m_sel) {
         const Rect r = m_vp.to_screen(core::frame_in_layout(m_doc, m_placed, id));
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
-        cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
+        if (const auto* tf = m_doc.as<core::Frame>(id); tf && core::turned(*tf)) {   // s229: its turned box
+            const Rect lr = core::frame_in_layout(m_doc, m_placed, id);
+            const double cx[] = {tf->x, tf->x + tf->w, tf->x + tf->w, tf->x}, cy[] = {tf->y, tf->y, tf->y + tf->h, tf->y + tf->h};
+            for (int k = 0; k < 4; ++k) {
+                double px = cx[k], py = cy[k];
+                core::from_box(*tf, px, py);
+                const Rect sp = m_vp.to_screen(Rect{px + lr.x - tf->x, py + lr.y - tf->y, 0, 0});
+                if (k) cr->line_to(sp.x, sp.y); else cr->move_to(sp.x, sp.y);
+            }
+            cr->close_path();
+        } else {
+            cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
+        }
         cr->stroke();
         // s018: a wrapping frame shows its wrap edge (the offsets), dotted.
         const auto* f = m_doc.as<core::Frame>(id);
@@ -897,7 +984,9 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
             cr->stroke();
             cr->unset_dash();
         }
-        for (const auto& p : core::handle_points(box)) {
+        std::array<std::array<double, 2>, 8> hs;
+        if (!turned_pick(hs)) hs = core::handle_points(box);   // s229: one turned frame -- on its own box
+        for (const auto& p : hs) {
             const double x = std::round(p[0]) - 3.5, y = std::round(p[1]) - 3.5;
             cr->set_source_rgb(1, 1, 1);
             cr->rectangle(x, y, 7, 7);
@@ -975,6 +1064,75 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->stroke();
         cr->rectangle(sx - 3.5, sy - 3.5, 7, 7);
         cr->fill();
+    }
+    // s234: the skew zone -- two arrows along the edge; the scale corner -- a diagonal one; and as they go, how much.
+    {
+        const bool skew = (m_skew_hover && m_drag == Drag::None) || (m_drag == Drag::Skew && m_begun);
+        const bool scale = (m_scale_hover && m_drag == Drag::None) || (m_drag == Drag::Resize && m_scaling && m_begun);
+        if (skew || scale) {
+            cr->save();
+            cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+            cr->set_line_width(1.6);
+            const double ax = std::round(m_mx + 14), ay = std::round(m_my - 14);
+            const auto arrow = [&](double x0, double y0, double x1, double y1) {
+                cr->move_to(x0, y0); cr->line_to(x1, y1);
+                const double a = std::atan2(y1 - y0, x1 - x0);
+                cr->move_to(x1 - 4 * std::cos(a - 0.6), y1 - 4 * std::sin(a - 0.6)); cr->line_to(x1, y1);
+                cr->line_to(x1 - 4 * std::cos(a + 0.6), y1 - 4 * std::sin(a + 0.6));
+            };
+            if (skew) { arrow(ax - 7, ay - 3, ax + 7, ay - 3); arrow(ax + 7, ay + 3, ax - 7, ay + 3); }
+            else { arrow(ax - 6, ay + 6, ax + 6, ay - 6); arrow(ax + 6, ay - 6, ax - 6, ay + 6); }
+            cr->stroke();
+            std::string label;
+            if (m_begun && m_sel.size() == 1)
+                if (const auto* f = m_doc.as<core::Frame>(m_sel.front())) {
+                    std::ostringstream o;
+                    if (m_drag == Drag::Skew) o << "Shear " << std::round(f->shear * 10) / 10 << "\u00B0";
+                    else if (m_drag == Drag::Resize) o << std::round(f->sx * 1000) / 10 << "% \u00D7 " << std::round(f->sy * 1000) / 10 << "%";
+                    label = o.str();
+                }
+            if (!label.empty()) {
+                auto lay = create_pango_layout(label);
+                lay->set_font_description(Pango::FontDescription("Sans 9"));
+                int lw, lh;
+                lay->get_pixel_size(lw, lh);
+                cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.92);
+                cr->rectangle(ax + 10, ay - lh / 2.0 - 2, lw + 8, lh + 4);
+                cr->fill();
+                cr->set_source_rgb(1, 1, 1);
+                cr->move_to(ax + 14, ay - lh / 2.0);
+                lay->show_in_cairo_context(cr);
+            }
+            cr->restore();
+        }
+    }
+    // s231: the rotate zone -- a curved arrow by the pointer; turning -- the angle so far.
+    if ((m_rot_hover && m_drag == Drag::None) || (m_drag == Drag::Rotate && m_begun)) {
+        cr->save();
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+        cr->set_line_width(1.6);
+        const double ax = std::round(m_mx + 14), ay = std::round(m_my - 14);
+        cr->begin_new_path();
+        cr->arc(ax, ay, 6, M_PI * 0.15, M_PI * 1.55);
+        cr->stroke();
+        const double ex = ax + 6 * std::cos(M_PI * 1.55), ey = ay + 6 * std::sin(M_PI * 1.55);
+        cr->move_to(ex + 3.5, ey - 1.5); cr->line_to(ex, ey); cr->line_to(ex + 1.5, ey + 3.5);
+        cr->stroke();
+        if (m_drag == Drag::Rotate) {
+            std::ostringstream o;
+            o << std::round(m_rot_deg * 10) / 10 << "\u00B0";
+            auto lay = create_pango_layout(o.str());
+            lay->set_font_description(Pango::FontDescription("Sans 9"));
+            int lw, lh;
+            lay->get_pixel_size(lw, lh);
+            cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.92);
+            cr->rectangle(ax + 10, ay - lh / 2.0 - 2, lw + 8, lh + 4);
+            cr->fill();
+            cr->set_source_rgb(1, 1, 1);
+            cr->move_to(ax + 14, ay - lh / 2.0);
+            lay->show_in_cairo_context(cr);
+        }
+        cr->restore();
     }
     // Loaded (s009): the file's name beside the pointer.
     if (!m_load.empty() && m_in) {
@@ -1473,19 +1631,59 @@ void Canvas::on_drag_begin(double x, double y) {
     }
     // Handles first (on the whole selection), then a frame, then empty space.
     if (!m_sel.empty()) {
-        m_handle = core::handle_hit(m_vp.to_screen(selection_box()), x, y);
+        m_handle = pick_handle(x, y);
         if (m_handle != core::Handle::None) {
             m_drag = Drag::Resize;
             m_box0 = selection_box();
             m_own0.clear();
             m_lay0.clear();
+            m_turn0.clear();
+            m_orig0.clear();
+            bool any_text = false;
             for (const auto& id : m_sel) {
-                m_own0[id] = core::frame_rect(*m_doc.as<core::Frame>(id));
-                m_lay0[id] = core::frame_in_layout(m_doc, m_placed, id);
+                const auto& fr = *m_doc.as<core::Frame>(id);
+                m_own0[id] = core::frame_rect(fr);
+                m_lay0[id] = bounds_in_layout(id);   // s229: its bounds (a turned frame's reach)
+                if (core::turned(fr)) m_turn0[id] = fr;
+                m_orig0[id] = fr;
+                any_text = any_text || fr.kind == core::FrameKind::Text;
             }
+            // s233 (Scott, after Curvz / Granjon): a corner scales -- a text frame only with Ctrl (else it's resized, its text reflowing)
+            const bool corner = m_handle == core::Handle::NW || m_handle == core::Handle::NE || m_handle == core::Handle::SE || m_handle == core::Handle::SW;
+            m_scaling = corner && (!any_text || m_mods_ctrl);
             m_targets = core::snap_targets(m_doc, m_placed, m_sel);
             return;
         }
+    }
+    // s233: just outside an edge's middle -- skew along that edge.
+    if (const auto sk = m_sel.empty() ? core::Handle::None : skew_zone(x, y); sk != core::Handle::None) {
+        m_skew_h = sk;
+        m_orig0.clear();
+        for (const auto& id : m_sel) if (const auto* f = m_doc.as<core::Frame>(id)) m_orig0[id] = *f;
+        m_box0 = selection_box();
+        m_drag = Drag::Skew;
+        return;
+    }
+    // s231: just outside a corner of the selection -- turn it, about its centre.
+    if (!m_sel.empty() && rotate_zone(x, y)) {
+        const Rect b = selection_box();
+        std::array<std::array<double, 2>, 8> hs;
+        double cx = b.cx(), cy = b.cy();
+        if (turned_pick(hs)) {   // one turned frame: its own centre
+            const Rect lr = core::frame_in_layout(m_doc, m_placed, m_sel.front());
+            cx = lr.cx();
+            cy = lr.cy();
+        }
+        m_rot_px = cx;
+        m_rot_py = cy;
+        double lx, ly;
+        m_vp.to_doc(x, y, lx, ly);
+        m_rot_a0 = std::atan2(ly - cy, lx - cx);
+        m_rot_deg = 0;
+        m_turn0.clear();
+        for (const auto& id : m_sel) if (const auto* f = m_doc.as<core::Frame>(id)) m_turn0[id] = *f;
+        m_drag = Drag::Rotate;
+        return;
     }
     double dx, dy;
     m_vp.to_doc(x, y, dx, dy);
@@ -1836,15 +2034,95 @@ void Canvas::on_drag_update(double ox, double oy) {
         queue_draw();
         return;
     }
+    case Drag::Skew: {   // s233: the edge slides along itself, the opposite edge held
+        const double dx = ox / s, dy = oy / s;
+        if (!m_begun) {
+            if (std::hypot(ox, oy) < 2) return;
+            core::doc::frames_begin(m_journal, m_doc, m_sel, "Skew");
+            m_begun = true;
+        }
+        if (m_sel.size() == 1) {
+            const core::Frame nf = core::skewed_by_edge(m_orig0.at(m_sel.front()), static_cast<int>(m_skew_h), dx, dy);
+            core::doc::edit_frames(m_journal, m_doc, {m_sel.front()}, "Skew", [&](core::Frame& g) { g = nf; });
+        } else {   // the bounds' edge, along the page's axes
+            const auto h = m_skew_h;
+            double xy = 0, yx = 0, px = m_box0.cx(), py = m_box0.cy();
+            if (h == core::Handle::N) { xy = dx / -std::max(1e-9, m_box0.h); py = m_box0.b(); }
+            else if (h == core::Handle::S) { xy = dx / std::max(1e-9, m_box0.h); py = m_box0.y; }
+            else if (h == core::Handle::E) { yx = dy / std::max(1e-9, m_box0.w); px = m_box0.x; }
+            else { yx = dy / -std::max(1e-9, m_box0.w); px = m_box0.r(); }
+            for (const auto& [id, f0] : m_orig0) {
+                const Rect lr = core::frame_in_layout(m_doc, m_placed, id);
+                const double odx = lr.x - m_doc.as<core::Frame>(id)->x, ody = lr.y - m_doc.as<core::Frame>(id)->y;
+                const core::Frame nf = core::transformed(f0, core::about(px - odx, py - ody, 1, yx, xy, 1));
+                core::doc::edit_frames(m_journal, m_doc, {id}, "Skew", [&](core::Frame& g) { g = nf; });
+            }
+        }
+        relayout();
+        queue_draw();
+        return;
+    }
+    case Drag::Rotate: {   // s231: the pointer's turn about the pivot; Shift: 15 degree steps
+        double lx, ly;
+        m_vp.to_doc(m_px + ox, m_py + oy, lx, ly);
+        double deg = -(std::atan2(ly - m_rot_py, lx - m_rot_px) - m_rot_a0) * 180 / M_PI;   // counter-clockwise on the page
+        deg = core::doc::norm_deg(deg);
+        if (m_mods_shift) deg = std::round(deg / 15) * 15;
+        if (!m_begun) {
+            if (std::abs(deg) < 0.5) return;
+            core::doc::frames_begin(m_journal, m_doc, m_sel, "Rotate");
+            m_begun = true;
+        }
+        m_rot_deg = deg;
+        for (const auto& [id, f0] : m_turn0) {
+            const Rect lr = core::frame_in_layout(m_doc, m_placed, id);
+            const double ox0 = lr.x - m_doc.as<core::Frame>(id)->x, oy0 = lr.y - m_doc.as<core::Frame>(id)->y;   // layout -> owner
+            const core::Frame nf = core::doc::rotated(f0, deg, m_rot_px - ox0, m_rot_py - oy0);
+            core::doc::edit_frames(m_journal, m_doc, {id}, "Rotate", [&](core::Frame& g) { g = nf; });
+        }
+        relayout();
+        queue_draw();
+        return;
+    }
     case Drag::Resize: {
         if (!m_begun) {
             if (std::hypot(ox, oy) < 2) return;
             core::doc::frames_begin(m_journal, m_doc, m_sel,
-                                    m_sel.size() == 1 ? "Resize frame" : "Resize " + std::to_string(m_sel.size()) + " frames");
+                                    m_scaling ? std::string("Scale")   // s233
+                                              : m_sel.size() == 1 ? "Resize frame" : "Resize " + std::to_string(m_sel.size()) + " frames");
             m_begun = true;
         }
         double dx = ox / s, dy = oy / s;
         m_snap_x = m_snap_y = NAN;
+        if (m_scaling) {   // s233: scaled, contents and all
+            if (m_sel.size() == 1) {
+                const auto& f0 = m_orig0.at(m_sel.front());
+                const core::Frame nf = core::scaled_by_handle(f0, static_cast<int>(m_handle), dx, dy, m_mods_shift, m_mods_alt);
+                core::doc::edit_frames(m_journal, m_doc, {m_sel.front()}, "Scale", [&](core::Frame& g) { g = nf; });
+            } else {   // the picks' bounds, its opposite corner (Alt: centre) held, along the page's axes
+                const Rect box = core::resize_rect(m_box0, m_handle, dx, dy, m_mods_shift, m_mods_alt, 1);
+                const double kx = box.w / std::max(1e-9, m_box0.w), ky = box.h / std::max(1e-9, m_box0.h);
+                const bool L = m_handle == core::Handle::NW || m_handle == core::Handle::SW, T = m_handle == core::Handle::NW || m_handle == core::Handle::NE;
+                const double ax = m_mods_alt ? m_box0.cx() : L ? m_box0.r() : m_box0.x;
+                const double ay = m_mods_alt ? m_box0.cy() : T ? m_box0.b() : m_box0.y;
+                for (const auto& [id, f0] : m_orig0) {
+                    const Rect lr = core::frame_in_layout(m_doc, m_placed, id);
+                    const double odx = lr.x - m_doc.as<core::Frame>(id)->x, ody = lr.y - m_doc.as<core::Frame>(id)->y;
+                    const core::Frame nf = core::transformed(f0, core::about(ax - odx, ay - ody, kx, 0, 0, ky));
+                    core::doc::edit_frames(m_journal, m_doc, {id}, "Scale", [&](core::Frame& g) { g = nf; });
+                }
+            }
+            relayout();
+            queue_draw();
+            return;
+        }
+        if (m_sel.size() == 1 && m_turn0.count(m_sel.front())) {   // s229: one turned frame -- along its own axes
+            const auto& f0 = m_turn0.at(m_sel.front());
+            core::doc::frames_set(m_journal, m_doc, m_sel.front(),
+                                  core::turned_resize(f0, static_cast<int>(m_handle), dx, dy, m_mods_shift, m_mods_alt));
+            queue_draw();
+            return;
+        }
         if (m_snap) {   // the edge(s) the handle moves, to the targets
             const auto h = m_handle;
             const bool L = h == core::Handle::NW || h == core::Handle::W || h == core::Handle::SW;
@@ -1865,6 +2143,10 @@ void Canvas::on_drag_update(double ox, double oy) {
         for (const auto& [id, lay] : m_lay0) {
             const Rect nl = core::map_rect(lay, m_box0, box);
             const Rect& own = m_own0[id];
+            if (m_turn0.count(id)) {   // s229: a turned frame among others -- carried with the box, not stretched
+                core::doc::frames_set(m_journal, m_doc, id, {own.x + nl.cx() - lay.cx(), own.y + nl.cy() - lay.cy(), own.w, own.h});
+                continue;
+            }
             // Back to the owner's coordinates: the same offset as at press.
             core::doc::frames_set(m_journal, m_doc, id,
                                   {nl.x - (lay.x - own.x), nl.y - (lay.y - own.y), nl.w, nl.h});
@@ -1894,7 +2176,7 @@ void Canvas::on_drag_end(double, double) {
         return;
     }
     if (was == Drag::Text) { queue_draw(); return; }
-    if (was == Drag::Picture || was == Drag::PicScale || was == Drag::PathPoint || was == Drag::PathStart || was == Drag::PathEnd) {   // s220: the start mark too (s221: the end)   // s035: the move (s186: or the scale; s200: a point), one step
+    if (was == Drag::Picture || was == Drag::PicScale || was == Drag::PathPoint || was == Drag::PathStart || was == Drag::PathEnd || was == Drag::Rotate || was == Drag::Skew) {   // s220: the start mark too (s221: the end; s231: a turn)   // s035: the move (s186: or the scale; s200: a point), one step
         m_begun = false;
         core::doc::frames_end(m_journal);
         m_sig_edited.emit();
@@ -2052,7 +2334,7 @@ void Canvas::on_drag_end(double, double) {
 // Escape mid-drag: everything back where it was, no step.
 void Canvas::cancel_drag() {
     if ((m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Guide || m_drag == Drag::Gutter ||
-         m_drag == Drag::Picture || m_drag == Drag::PicScale || m_drag == Drag::PathPoint || m_drag == Drag::PathStart || m_drag == Drag::PathEnd) && m_begun) {   // s200: a picture's / a point's drag too
+         m_drag == Drag::Picture || m_drag == Drag::PicScale || m_drag == Drag::PathPoint || m_drag == Drag::PathStart || m_drag == Drag::PathEnd || m_drag == Drag::Rotate || m_drag == Drag::Skew) && m_begun) {   // s200: a picture's / a point's drag too
         core::doc::frames_cancel(m_journal);
         m_sig_edited.emit();
     }
@@ -2224,6 +2506,9 @@ void Canvas::on_motion(double x, double y) {
     const auto h = core::hit_frame(m_doc, m_placed, dx, dy, 3 / m_vp.scale());
     if (h != m_hover) { m_hover = h; queue_draw(); }
     m_hover_gutter = gutter_hit(x, y);
+    if (const bool sz = m_drag == Drag::None && skew_zone(x, y) != core::Handle::None; sz != m_skew_hover) { m_skew_hover = sz; queue_draw(); }   // s234
+    if (const bool cz = m_drag == Drag::None && scale_corner(x, y); cz != m_scale_hover) { m_scale_hover = cz; queue_draw(); }
+    if (const bool rz = m_drag == Drag::None && rotate_zone(x, y); rz != m_rot_hover) { m_rot_hover = rz; queue_draw(); }   // s231
     update_cursor();
 }
 
@@ -2286,13 +2571,21 @@ bool Canvas::text_on_path(const std::string& frame) const {   // s219
     return f && f->on_path && f->kind == core::FrameKind::Text;
 }
 
+bool Canvas::mapped(const std::string& frame) const {   // s230: its text isn't set level in its box on the page
+    const auto* f = m_doc.as<core::Frame>(frame);
+    return f && (text_on_path(frame) || core::turned(*f));
+}
+
 void Canvas::box_to_layout(const std::string& frame, double bx, double by, double& lx, double& ly) const {   // s219
     const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
     const auto* f = m_doc.as<core::Frame>(frame);
-    if (!f || !text_on_path(frame)) { lx = lr.x + bx; ly = lr.y + by; return; }
-    const auto pl = layout::path_line(m_doc, f->story, flows().get(m_doc, f->story), frame);
-    double x, y;
-    core::doc::path_point(core::doc::path_track(*f), *f, bx, by, pl.base, pl.shift, x, y);
+    if (!f || !mapped(frame)) { lx = lr.x + bx; ly = lr.y + by; return; }
+    double x = f->x + bx, y = f->y + by;   // on its owner, before the turn
+    if (text_on_path(frame)) {
+        const auto pl = layout::path_line(m_doc, f->story, flows().get(m_doc, f->story), frame);
+        core::doc::path_point(core::doc::path_track(*f), *f, bx, by, pl.base, pl.shift, x, y);
+    }
+    core::from_box(*f, x, y);   // s230: through its turn
     lx = lr.x - f->x + x;
     ly = lr.y - f->y + y;
 }
@@ -2300,9 +2593,12 @@ void Canvas::box_to_layout(const std::string& frame, double bx, double by, doubl
 void Canvas::layout_to_box(const std::string& frame, double lx, double ly, double& bx, double& by) const {   // s219
     const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
     const auto* f = m_doc.as<core::Frame>(frame);
-    if (!f || !text_on_path(frame)) { bx = lx - lr.x; by = ly - lr.y; return; }
+    if (!f || !mapped(frame)) { bx = lx - lr.x; by = ly - lr.y; return; }
+    double x = lx - (lr.x - f->x), y = ly - (lr.y - f->y);
+    core::to_box(*f, x, y);   // s230: back through its turn
+    if (!text_on_path(frame)) { bx = x - f->x; by = y - f->y; return; }
     const auto pl = layout::path_line(m_doc, f->story, flows().get(m_doc, f->story), frame);
-    core::doc::path_unpoint(core::doc::path_track(*f), *f, lx - (lr.x - f->x), ly - (lr.y - f->y), pl.base, pl.shift, bx, by);
+    core::doc::path_unpoint(core::doc::path_track(*f), *f, x, y, pl.base, pl.shift, bx, by);
 }
 
 void Canvas::open_story_editor() {   // s217: the window's Story Editor action, for text on a path
@@ -2464,7 +2760,7 @@ Rect Canvas::caret_screen() const {   // s109
     if (!c.ok) return {};
     const Rect fr = core::frame_in_layout(m_doc, m_placed, c.frame);
     if (fr.w <= 0) return {};
-    if (text_on_path(c.frame)) {   // s219: the caret's ends along the path
+    if (mapped(c.frame)) {   // s219: the caret's ends along the path (s230: or through a turn)
         double x0, y0, x1, y1;
         box_to_layout(c.frame, c.x, c.y, x0, y0);
         box_to_layout(c.frame, c.x, c.y + c.h, x1, y1);
@@ -2519,7 +2815,7 @@ core::TextPos Canvas::hit_story(const std::string& frame, double lx, double ly) 
     const Rect lr = core::frame_in_layout(m_doc, m_placed, frame);
     const auto& flow = flows().get(m_doc, m_edit_story.empty() ? m_doc.as<core::Frame>(frame)->story : m_edit_story);
     const std::string story = m_edit_story.empty() ? m_doc.as<core::Frame>(frame)->story : m_edit_story;
-    if (text_on_path(frame)) {   // s219: along its path
+    if (mapped(frame)) {   // s219: along its path (s230: or through its turn)
         double bx, by;
         layout_to_box(frame, lx, ly, bx, by);
         return layout::hit_text(m_doc, story, flow, frame, bx, by);
@@ -2563,7 +2859,7 @@ void Canvas::follow_caret() {
         if (fr.w <= 0) return;
         if (auto lg = log::get(log::Area::View)) lg->info("caret: followed onto {}", f->owner);
     }
-    if (text_on_path(c.frame)) {   // s219
+    if (mapped(c.frame)) {   // s219 (s230: turned)
         double x0, y0;
         box_to_layout(c.frame, c.x, c.y + c.h / 2, x0, y0);
         if (m_vp.reveal({x0 - 2, y0 - c.h / 2, 4, c.h}, 48)) queue_draw();
@@ -2677,7 +2973,7 @@ bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {
 // ── s034: the tab ruler ─────────────────────────────────────────────────────
 Canvas::TabStrip Canvas::tab_strip() const {
     TabStrip t;
-    if (!editing() || text_on_path(m_edit_frame)) return t;   // s219: no tab stops along a path
+    if (!editing() || mapped(m_edit_frame)) return t;   // s219: no tab stops along a path (s230: nor on a turned frame)
     const auto* st = m_doc.as<core::Story>(m_edit_story);
     if (!st || st->paras.empty()) return t;
     const auto& para = st->paras[static_cast<std::size_t>(std::min<int>(m_caret.para, static_cast<int>(st->paras.size()) - 1))];
@@ -2836,7 +3132,7 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
         const Rect fr = m_vp.to_screen(lr);
         cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.6);
         cr->set_line_width(1);
-        if (text_on_path(ft.frame)) {   // s219: the selection follows the path, in slices
+        if (mapped(ft.frame)) {   // s219: the selection follows the path, in slices (s230: or the turn)
             for (const auto& r : layout::selection_rects(m_doc, m_edit_story, flow, ft.frame, lo, hi)) {
                 const int n = std::max(1, static_cast<int>(std::ceil(r.w / 3)));
                 std::vector<std::array<double, 2>> poly;
@@ -2896,7 +3192,7 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
     if (m_caret_on && lo == hi) {
         const auto c = layout::caret_at(m_doc, m_edit_story, flow, m_caret);
         const Rect lr = c.ok ? core::frame_in_layout(m_doc, m_placed, c.frame) : Rect{};
-        if (c.ok && lr.w > 0 && text_on_path(c.frame)) {   // s219: turned with the path
+        if (c.ok && lr.w > 0 && mapped(c.frame)) {   // s219: turned with the path (s230: or the frame)
             double x0, y0, x1, y1, a0, b0, a1, b1;
             box_to_layout(c.frame, c.x, c.y, x0, y0);
             box_to_layout(c.frame, c.x, c.y + c.h, x1, y1);
@@ -3118,8 +3414,13 @@ void Canvas::update_cursor() {
     }
     if (m_tool != Tool::Select) { set_cursor(Gdk::Cursor::create("crosshair")); return; }
     if (!m_sel.empty()) {
-        const auto h = core::handle_hit(m_vp.to_screen(selection_box()), m_mx, m_my);
+        const auto h = pick_handle(m_mx, m_my);   // s229
         if (h != core::Handle::None) { set_cursor(Gdk::Cursor::create(cursor_for(h))); return; }
+        if (m_drag == Drag::Rotate || rotate_zone(m_mx, m_my)) { set_cursor(Gdk::Cursor::create("crosshair")); return; }   // s231
+        if (const auto sk = m_drag == Drag::Skew ? m_skew_h : skew_zone(m_mx, m_my); sk != core::Handle::None) {   // s233
+            set_cursor(Gdk::Cursor::create(sk == core::Handle::N || sk == core::Handle::S ? "ew-resize" : "ns-resize"));
+            return;
+        }
     }
     if (m_hover_gutter >= 0 || m_drag == Drag::Gutter) { set_cursor(Gdk::Cursor::create("col-resize")); return; }
     if (!m_hover_guide.empty()) {

@@ -112,6 +112,11 @@ json to(const Record& r) {
             if (v.path_effect) j["path_effect"] = v.path_effect;   // s223
             if (v.path_spacing > 0) j["path_spacing"] = v.path_spacing;   // s225
             if (!v.clip_path.empty()) j["clip_path"] = v.clip_path;       // s227
+            if (v.rot != 0) j["rot"] = v.rot;                              // s228
+            if (v.shear != 0) j["shear"] = v.shear;
+            if (v.flip) j["flip"] = true;
+            if (v.sx != 1) j["sx"] = v.sx;   // s232
+            if (v.sy != 1) j["sy"] = v.sy;
             if (!v.path.empty()) {
                 json pts = json::array();
                 for (const auto& p : v.path) pts.push_back({p.x, p.y, p.ix, p.iy, p.ox, p.oy, p.smooth ? 1 : 0});
@@ -410,7 +415,12 @@ std::optional<Record> from(const json& j) {
         v.path_to = val(j, "path_to", 0.0);   // s221
         v.path_effect = std::clamp(val(j, "path_effect", 0), 0, 4);
         v.path_spacing = std::max(0.0, val(j, "path_spacing", 0.0));   // s225
-        v.clip_path = val(j, "clip_path", std::string{});   // s227   // s223
+        v.clip_path = val(j, "clip_path", std::string{});   // s227
+        v.rot = val(j, "rot", 0.0);   // s228
+        v.shear = std::clamp(val(j, "shear", 0.0), -85.0, 85.0);
+        v.flip = val(j, "flip", false);
+        v.sx = std::clamp(val(j, "sx", 1.0), 0.01, 100.0);   // s232
+        v.sy = std::clamp(val(j, "sy", 1.0), 0.01, 100.0);   // s223
         if (j.contains("path") && j["path"].is_array())
             for (const auto& a : j["path"])
                 if (a.is_array() && a.size() >= 6)

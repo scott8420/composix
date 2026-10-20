@@ -180,7 +180,7 @@ public:
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew };
     // s035: Alt+drag a picture inside its frame -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
@@ -367,9 +367,30 @@ private:
     void box_to_layout(const std::string& frame, double bx, double by, double& lx, double& ly) const;
     void layout_to_box(const std::string& frame, double lx, double ly, double& bx, double& by) const;
     bool text_on_path(const std::string& frame) const;
+    bool mapped(const std::string& frame) const;   // s230: on a path or turned
     // s220: the picked text on a path's start mark (layout coordinates); false: none to show.
     bool path_start_mark(double& x, double& y, double& angle) const;
-    bool path_end_mark(double& x, double& y, double& angle) const;     // s221: where it stops   // the pointer on the first point (screen): it closes
+    bool path_end_mark(double& x, double& y, double& angle) const;     // s221: where it stops
+    // s229: turned frames -- a frame's bounds in the layout, one turned
+    // pick's handles (screen), the handle under the pointer either way.
+    core::Rect bounds_in_layout(const std::string& id) const;
+    bool turned_pick(std::array<std::array<double, 2>, 8>& hs) const;
+    core::Handle pick_handle(double x, double y) const;
+    std::map<std::string, core::Frame> m_turn0;   // turned frames as a resize began (s231: every pick as a rotate began)
+    // s231: rotating by a drag just outside a corner -- the pivot (layout)
+    // and the pointer's angle at the press; the angle so far (degrees).
+    bool   rotate_zone(double x, double y) const;
+    double m_rot_px = 0, m_rot_py = 0, m_rot_a0 = 0, m_rot_deg = 0;
+    bool   m_rot_hover = false;
+    // s233: a corner handle scales (shapes, pictures; text with Ctrl); just
+    // outside an edge's middle a drag skews. The picks as the drag began.
+    bool   m_scaling = false;
+    core::Handle m_skew_h = core::Handle::None;
+    std::map<std::string, core::Frame> m_orig0;
+    core::Handle skew_zone(double x, double y) const;
+    bool   m_skew_hover = false;
+    bool   scale_corner(double x, double y) const;   // s234
+    bool   m_scale_hover = false;   // the pointer on the first point (screen): it closes
     std::string m_thread_from;               // "loaded": the next click threads into a frame
 
     // s009

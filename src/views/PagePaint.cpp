@@ -129,8 +129,27 @@ void paint_canvas_page(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook
 
 namespace {
 
+void paint_frame_body(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, const core::Frame& f, double ox, double oy,
+                      bool from_master, const std::string& id, const std::string& on_page);
+
+// s228: a turned frame -- all of it (fill, content, stroke, its marks) drawn
+// through its turn, about its centre on screen.
 void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, const core::Frame& f, double ox, double oy,
                  bool from_master, const std::string& id, const std::string& on_page) {
+    if (!core::turned(f)) { paint_frame_body(cr, P, f, ox, oy, from_master, id, on_page); return; }
+    const auto m = core::frame_xf(f);
+    double sx, sy;   // the frame's centre on screen; the turn's linear part is the same at any zoom
+    const Rect sc = P.to_screen(Rect{ox + f.x + f.w / 2, oy + f.y + f.h / 2, 0, 0});
+    sx = sc.x;
+    sy = sc.y;
+    cr->save();
+    cr->transform(Cairo::Matrix(m.xx, m.yx, m.xy, m.yy, sx - (m.xx * sx + m.xy * sy), sy - (m.yx * sx + m.yy * sy)));
+    paint_frame_body(cr, P, f, ox, oy, from_master, id, on_page);
+    cr->restore();
+}
+
+void paint_frame_body(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, const core::Frame& f, double ox, double oy,
+                      bool from_master, const std::string& id, const std::string& on_page) {
     const Rect r = P.to_screen(Rect{ox + f.x, oy + f.y, f.w, f.h});
     const double s = P.s;
     const double dim = from_master ? 0.45 : 1.0;

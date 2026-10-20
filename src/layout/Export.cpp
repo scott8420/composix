@@ -90,6 +90,15 @@ bool draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
             else                        cairo_rectangle(cr, 0, -1e5, 1e5, 2e5);
             cairo_clip(cr);
         }
+        // s228: turned -- everything it draws, through its turn.
+        const bool turn = core::turned(f);
+        if (turn) {
+            const auto m = core::frame_xf(f);
+            cairo_matrix_t cm;
+            cairo_matrix_init(&cm, m.xx, m.yx, m.xy, m.yy, m.x0, m.y0);
+            cairo_save(cr);
+            cairo_transform(cr, &cm);
+        }
         // s021: the swatch at its tint; the frame's opacity on each part.
         const double op = std::clamp(f.opacity, 0.0, 1.0);
         const auto paint = [&](const std::string& sw, double tint) {
@@ -164,6 +173,7 @@ bool draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
             }
             cairo_restore(cr);
         }
+        if (turn) cairo_restore(cr);   // s228
         if (cut) cairo_restore(cr);   // s155
         if (!how.stop_after.empty() && fid == how.stop_after) return true;   // s193
     }

@@ -852,6 +852,11 @@ std::vector<Choice> tint_choices(int least) {
     return c;
 }
 
+std::vector<Choice> turn_ref_choices() {   // s231: the nine places a turn is about
+    return {{"0", "Top left"}, {"1", "Top"}, {"2", "Top right"}, {"3", "Left"}, {"4", "Centre"}, {"5", "Right"},
+            {"6", "Bottom left"}, {"7", "Bottom"}, {"8", "Bottom right"}};
+}
+
 std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids, const std::string& dir) {
     std::vector<Item> out;
     for (const auto& id : ids) {
@@ -909,6 +914,34 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         box.cols = {"X", "Y", "W", "H"};
         box.edit = "bounds";   // s041: each typed
         fields.push_back(box);
+        {   // s231: its turn -- typed or picked; about the reference place (the Shell fills which)
+            const auto deg = [](double v) {
+                std::ostringstream o;
+                o << std::round(v * 100) / 100 << "\u00B0";
+                return o.str();
+            };
+            std::vector<Choice> rc;
+            for (int v : {0, 15, 30, 45, 90, 180, -15, -30, -45, -90}) rc.push_back({std::to_string(v), deg(v)});
+            fields.push_back({"Rotation", deg(f->rot), "rot", rc});
+            std::vector<Choice> shc;
+            for (int v : {0, 5, 10, 15, 20, 30, -5, -10, -15, -20, -30}) shc.push_back({std::to_string(v), deg(v)});
+            fields.push_back({"Shear", deg(f->shear), "shear", shc});
+            // s234: its scale with contents -- across and down
+            const auto pc = [](double v) {
+                std::ostringstream o;
+                o << std::round(v * 1000) / 10 << "%";
+                return o.str();
+            };
+            std::vector<Choice> scc;
+            for (int v : {25, 50, 75, 100, 125, 150, 200, 300, 400}) scc.push_back({std::to_string(v), std::to_string(v) + "%"});
+            fields.push_back({"Scale across", pc(f->sx), "scale_x", scc});
+            fields.push_back({"Scale down", pc(f->sy), "scale_y", scc});
+            fields.push_back({"Turn about", "Centre", "turn_ref", turn_ref_choices()});
+            Field act{"", "", "turn", {{"ccw", "\u21BA 90\u00B0"}, {"cw", "\u21BB 90\u00B0"}, {"fliph", "Flip \u2194"}, {"flipv", "Flip \u2195"},
+                                       {"unscale", "100%"}}};
+            act.buttons = true;
+            fields.push_back(act);
+        }
         std::string title = std::string(kind) + " frame";
         if (f->kind == FrameKind::Shape && f->shape != ShapeKind::Rect)   // s197
             title = f->shape == ShapeKind::Oval ? "Oval" : f->open && f->path.size() == 2 ? "Line" : "Path";

@@ -226,7 +226,7 @@ struct PathPoint {
 struct Frame {
     std::string owner;                   // page or master id
     FrameKind   kind = FrameKind::Text;
-    double      x = 0, y = 0, w = 0, h = 0, rot = 0;
+    double      x = 0, y = 0, w = 0, h = 0, rot = 0;   // s228: rot -- degrees, counter-clockwise (as InDesign), about its centre
     double      z = 0;
     std::string story;                   // text
     std::string next;                    // text: the next frame in the thread
@@ -298,6 +298,16 @@ struct Frame {
     // (the one Photoshop marked), "none" none, else one of its paths by
     // name (Asset::path_names).
     std::string clip_path;
+    // s228: with `rot`, how the frame is turned -- `shear` degrees (its top
+    // slid right, positive), `flip` mirrored left to right; all about its
+    // box's centre: owner = C + R(rot) . Shear . Flip . (p - C). x, y, w, h
+    // stay its box before the turn (frame_xf, frame_bounds).
+    double      shear = 0;
+    bool        flip = false;
+    // s232: scaled WITH its contents -- the box drawn sx wide, sy tall
+    // (1 = as set): text, stroke and picture with it. Innermost in the turn:
+    // owner = C + R . Shear . Flip . Scale . (p - C).
+    double      sx = 1, sy = 1;
     bool operator==(const Frame&) const = default;
 };
 
@@ -1136,6 +1146,34 @@ bool set_wrap_shape(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames,
                     const std::map<Doc::Id, std::vector<float>>& traced);
 bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, const std::string& label,
                  const std::function<void(Frame&)>& f);
+// s228: turning frames. One of the nine places on a frame's turned box
+// (0 top left, 1 top, 2 top right, 3 left, 4 centre ... 8 bottom right), on
+// its owner.
+XY ref_point(const Frame& f, int ref);
+// The frames' bounds together (frame_bounds), and their centre: a group's pivot.
+Rect frames_bounds(const Doc& d, const std::vector<Doc::Id>& frames);
+// s231: a frame as it would be turned by `deg` about (px, py) (rotate_frames' sum).
+Frame rotated(const Frame& f, double deg, double px, double py);
+// Rotate by `deg` (counter-clockwise) about (px, py) on their owner -- a
+// group turns as one, each frame's centre round the pivot. One step "Rotate".
+bool rotate_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, double deg, double px, double py,
+                   const std::string& label = "Rotate");
+// Mirror about the vertical (or, `vertical`, horizontal) line through
+// (px, py). One step "Flip Horizontal" / "Flip Vertical".
+bool flip_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, bool vertical, double px, double py);
+// Each frame's rotation and / or shear SET (NAN: leave it), its reference
+// place `ref` kept where it is. One step `label`.
+bool set_turn(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, double rot, double shear, int ref,
+              const std::string& label);
+// s232: scale WITH contents, by kx / ky along the owner's axes about
+// (px, py) -- a group as one. One step `label`.
+bool scale_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, double kx, double ky, double px, double py,
+                  const std::string& label = "Scale");
+// Each frame's scale SET (fractions, NAN: leave it), its reference place held.
+bool set_scale(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, double sx, double sy, int ref,
+               const std::string& label = "Scale");
+// Degrees in (-180, 180], to 0.01.
+double norm_deg(double a);
 // s070: stacking order -- the frames among the others on their page (or
 // master): to the front / one forward / one backward / to the back. The
 // picked keep their order among themselves; forward / backward step past
@@ -1560,6 +1598,45 @@ bool on_panel(const Doc& d, const Placed& p, const Doc::Id& fid);
 const Placed* panel_at(const std::vector<Placed>& pl, double x, double y);
 std::vector<Placed> layout_pages(const Doc& d, const std::vector<Doc::Id>& ids, double gap = 36);
 inline Rect frame_rect(const Frame& f) { return {f.x, f.y, f.w, f.h}; }
+// s228: a frame's turn -- an affine map (cairo's / PDF's cm order: x' = xx x
+// + xy y + x0, y' = yx x + yy y + y0) from its box's coordinates (owner,
+// before the turn) to the owner's.
+struct Xf {
+    double xx = 1, yx = 0, xy = 0, yy = 1, x0 = 0, y0 = 0;
+    void apply(double x, double y, double& ox, double& oy) const { ox = xx * x + xy * y + x0; oy = yx * x + yy * y + y0; }
+    Xf inverse() const;
+    Xf then(const Xf& b) const;   // this, then b
+    bool identity() const { return xx == 1 && yx == 0 && xy == 0 && yy == 1 && x0 == 0 && y0 == 0; }
+};
+bool turned(const Frame& f);   // rotated, sheared, flipped or scaled (s232)
+// s232: the frame put through an affine map of its owner `a` -- its centre
+// moved by it, its turn's linear part taken by it, split back into rotation,
+// shear, flip and scale (any map with an inverse is one). Its box (w, h)
+// stays; only its place and its turn change.
+Frame transformed(const Frame& f, const Xf& a);
+// A map of the owner: about (px, py), by the linear part (xx yx xy yy).
+Xf about(double px, double py, double xx, double yx, double xy, double yy);
+Xf   frame_xf(const Frame& f);  // identity when not turned
+// Owner coordinates -> the frame's box coordinates (before the turn), and back.
+void to_box(const Frame& f, double& x, double& y);
+void from_box(const Frame& f, double& x, double& y);
+// Where the frame reaches on its owner, turned: its box's corners (or a
+// shape's outline) mapped, their bounds. frame_rect when not turned.
+Rect frame_bounds(const Frame& f);
+// s229: resizing a turned frame by one of its handles -- (dx, dy) the
+// pointer's move on the owner, taken along the frame's own axes; the
+// opposite handle (Alt: its centre) stays put on the page. The new box.
+Rect turned_resize(const Frame& f0, int handle, double dx, double dy, bool shift, bool alt);
+// s233: a frame SCALED by one of its corner handles (contents and all) --
+// the pointer's move (dx, dy, owner) taken along its axes; the opposite
+// corner held (Alt: the centre); Shift keeps its proportions.
+Frame scaled_by_handle(const Frame& f0, int handle, double dx, double dy, bool shift, bool alt);
+// s233: a frame SKEWED by dragging just outside one of its edges' middles
+// (handle N / E / S / W): that edge slides along itself by the pointer's
+// move, the opposite edge held.
+Frame skewed_by_edge(const Frame& f0, int handle, double dx, double dy);
+// The 8 handle places of a frame's turned box on its owner (Handle order NW..W).
+std::array<std::array<double, 2>, 8> turned_handles(const Frame& f);
 // s012: a text frame's columns -- how many, each one's width and left edge
 // (frame coordinates), and which column an x falls in (the nearest). Widths
 // are the frame's width less the gutters, shared by the columns' weights

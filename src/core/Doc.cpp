@@ -2765,6 +2765,106 @@ bool edit_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const s
     });
 }
 
+// ── s228: turning frames ─────────────────────────────────────────────────────
+double norm_deg(double a) {
+    a = std::fmod(a, 360.0);
+    if (a <= -180) a += 360;
+    if (a > 180) a -= 360;
+    a = std::round(a * 100) / 100;
+    return a == -0.0 ? 0.0 : a;
+}
+
+XY ref_point(const Frame& f, int ref) {
+    ref = std::clamp(ref, 0, 8);
+    double x = f.x + f.w * (ref % 3) / 2.0, y = f.y + f.h * (ref / 3) / 2.0;
+    from_box(f, x, y);
+    return {x, y};
+}
+
+Rect frames_bounds(const Doc& d, const std::vector<Doc::Id>& ids) {
+    double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+    for (const auto& id : ids)
+        if (const auto* f = d.as<Frame>(id)) {
+            const Rect b = frame_bounds(*f);
+            x0 = std::min(x0, b.x); y0 = std::min(y0, b.y); x1 = std::max(x1, b.r()); y1 = std::max(y1, b.b());
+        }
+    if (x1 < x0) return {};
+    return {x0, y0, x1 - x0, y1 - y0};
+}
+
+namespace {
+// The frame's centre moved to (cx, cy), its box with it.
+void centre_at(Frame& f, double cx, double cy) {
+    const double dx = cx - (f.x + f.w / 2), dy = cy - (f.y + f.h / 2);
+    f.x += dx;
+    f.y += dy;   // (a path's points are its box's: they come along)
+}
+}  // namespace
+
+Frame rotated(const Frame& f0, double deg, double px, double py) {   // s231
+    Frame f = f0;
+    const double a = -deg * M_PI / 180, c = std::cos(a), s = std::sin(a);
+    const double cx = f.x + f.w / 2 - px, cy = f.y + f.h / 2 - py;
+    f.rot = norm_deg(f.rot + deg);
+    centre_at(f, px + c * cx - s * cy, py + s * cx + c * cy);
+    return f;
+}
+
+bool rotate_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, double deg, double px, double py,
+                   const std::string& label) {
+    if (std::abs(norm_deg(deg)) < 1e-9) return false;
+    return edit_frames(j, d, ids, label, [&](Frame& f) { f = rotated(f, deg, px, py); });
+}
+
+bool flip_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, bool vertical, double px, double py) {
+    // Mirror left-right about x = px: rot and shear negate, flip toggles (D . R . Sh . F = R' . Sh' . D . F).
+    // Top-bottom: the same after a half turn about the pivot.
+    return edit_frames(j, d, ids, vertical ? "Flip Vertical" : "Flip Horizontal", [&](Frame& f) {
+        double cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+        double r = f.rot;
+        if (vertical) {   // a half turn first: the centre to the pivot's other side
+            r += 180;
+            cx = 2 * px - cx;
+            cy = 2 * py - cy;
+        }
+        f.rot = norm_deg(-r);
+        f.shear = -f.shear;
+        if (f.shear == -0.0) f.shear = 0;
+        f.flip = !f.flip;
+        centre_at(f, 2 * px - cx, cy);
+    });
+}
+
+bool scale_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, double kx, double ky, double px, double py,
+                  const std::string& label) {   // s232
+    if (kx <= 0 || ky <= 0 || (kx == 1 && ky == 1)) return false;
+    const Xf a = about(px, py, kx, 0, 0, ky);
+    return edit_frames(j, d, ids, label, [&](Frame& f) { f = transformed(f, a); });
+}
+
+bool set_scale(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, double sx, double sy, int ref, const std::string& label) {
+    return edit_frames(j, d, ids, label, [&](Frame& f) {
+        const XY before = ref_point(f, ref);
+        if (!std::isnan(sx) && sx > 0) f.sx = std::round(std::clamp(sx, 0.01, 100.0) * 1e6) / 1e6;
+        if (!std::isnan(sy) && sy > 0) f.sy = std::round(std::clamp(sy, 0.01, 100.0) * 1e6) / 1e6;
+        const XY after = ref_point(f, ref);
+        if (std::abs(after.x - before.x) > 1e-9 || std::abs(after.y - before.y) > 1e-9)
+            centre_at(f, f.x + f.w / 2 + before.x - after.x, f.y + f.h / 2 + before.y - after.y);
+    });
+}
+
+bool set_turn(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, double rot, double shear, int ref,
+              const std::string& label) {
+    return edit_frames(j, d, ids, label, [&](Frame& f) {
+        const XY before = ref_point(f, ref);
+        if (!std::isnan(rot)) f.rot = norm_deg(rot);
+        if (!std::isnan(shear)) f.shear = std::clamp(std::round(shear * 100) / 100, -85.0, 85.0);
+        const XY after = ref_point(f, ref);
+        if (std::abs(after.x - before.x) > 1e-9 || std::abs(after.y - before.y) > 1e-9)
+            centre_at(f, f.x + f.w / 2 + before.x - after.x, f.y + f.h / 2 + before.y - after.y);
+    });
+}
+
 bool set_wrap_shape(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids,
                     const std::map<Doc::Id, std::vector<float>>& traced) {
     std::vector<Doc::Id> frames, assets;
@@ -5176,6 +5276,19 @@ const std::vector<Verb>& verbs() {
              frames_set(j, d, "frame.5", {24, 44, 880, 390});
              frames_end(j);
          }},
+        // s228 / s231: turning frames
+        {"rotate_frames", [](DocJournal& j, Doc& d) { rotate_frames(j, d, {"frame.4", "frame.5"}, 90, 200, 300); }},
+        {"flip_frames", [](DocJournal& j, Doc& d) { flip_frames(j, d, {"frame.4"}, true, 200, 300); }},
+        {"set_turn", [](DocJournal& j, Doc& d) { set_turn(j, d, {"frame.1", "frame.4"}, 12.5, 8, 0, "Rotation"); }},
+        {"scale_frames", [](DocJournal& j, Doc& d) { scale_frames(j, d, {"frame.4", "frame.5"}, 1.5, 0.75, 100, 100); }},   // s232
+        {"set_scale", [](DocJournal& j, Doc& d) { set_scale(j, d, {"frame.1"}, 1.25, 1.25, 8); }},
+        {"rotate_drag", [](DocJournal& j, Doc& d) {   // press .. turn .. release
+             const Frame f0 = *d.as<Frame>("frame.4");
+             frames_begin(j, d, {"frame.4"}, "Rotate");
+             for (double a : {5.0, 20.0, 33.0})
+                 edit_frames(j, d, {"frame.4"}, "Rotate", [&](Frame& g) { g = rotated(f0, a, 100, 100); });
+             frames_end(j);
+         }},
     };
     return table;
 }
@@ -5438,6 +5551,62 @@ const std::vector<int>& tint_steps() {
 
 std::string tint_text(double t) { return std::to_string(static_cast<int>(std::lround(t * 100))) + "%"; }
 
+namespace {
+// s230: polygons (owner coordinates) scanned into bands `step` tall, each
+// the span they cover, grown by `grow`; relative to (ox, oy).
+std::vector<Band> scan_polys(const std::vector<std::vector<doc::XY>>& polys, bool closed, double grow, double step, double ox, double oy) {
+    std::vector<Band> out;
+    double top = 1e300, bot = -1e300;
+    for (const auto& p : polys) for (const auto& q : p) { top = std::min(top, q.y); bot = std::max(bot, q.y); }
+    if (bot < top || step <= 0) return out;
+    for (double y0 = top - grow; y0 < bot + grow; y0 += step) {
+        const double y1 = std::min(y0 + step, bot + grow);
+        double lo = 1e300, hi = -1e300;
+        for (const auto& poly : polys) {
+            const std::size_t n = poly.size();
+            const std::size_t segs = closed ? n : n - 1;
+            for (std::size_t i = 0; i < segs && n >= 2; ++i) {
+                const auto a = poly[i], b = poly[(i + 1) % n];
+                const double ya = std::min(a.y, b.y) - grow, yb = std::max(a.y, b.y) + grow;
+                if (yb < y0 || ya > y1) continue;
+                for (const double y : {std::max(y0, std::min(a.y, b.y)), std::min(y1, std::max(a.y, b.y))}) {
+                    double xa, xb;
+                    if (std::abs(b.y - a.y) < 1e-12) { xa = std::min(a.x, b.x); xb = std::max(a.x, b.x); }
+                    else { const double t = std::clamp((y - a.y) / (b.y - a.y), 0.0, 1.0); xa = xb = a.x + (b.x - a.x) * t; }
+                    lo = std::min(lo, xa - grow);
+                    hi = std::max(hi, xb + grow);
+                }
+            }
+        }
+        if (hi >= lo) out.push_back({lo - ox, y0 - oy, hi - ox, y1 - oy});
+    }
+    return out;
+}
+
+// s230: what a wrapping frame keeps text off, as polygons on its owner
+// (before its turn): its outline, its picture's traced outline (each band a
+// box), or its box. `closed`: an open path's outline isn't.
+std::vector<std::vector<doc::XY>> wrap_polys(const Doc& d, const Frame& f, bool& closed, double& grow) {
+    closed = true;
+    grow = 0;
+    std::vector<std::vector<doc::XY>> out;
+    if (f.wrap == Wrap::Shape) {
+        if (doc::has_outline(f)) {
+            closed = !(f.shape == ShapeKind::Path && f.open);
+            grow = d.as<Swatch>(f.stroke) && f.stroke_w > 0 ? f.stroke_w / 2 : 0;
+            return doc::outline_polys(f, 0.25);
+        }
+        if (const auto* a = d.as<Asset>(f.asset); a && !frame_shape(f, *a).empty()) {
+            for (const auto& b : shape_bands(f, *a))
+                out.push_back({{f.x + b.x0, f.y + b.y0}, {f.x + b.x1, f.y + b.y0}, {f.x + b.x1, f.y + b.y1}, {f.x + b.x0, f.y + b.y1}});
+            if (!out.empty()) return out;
+        }
+    }
+    out.push_back({{f.x, f.y}, {f.x + f.w, f.y}, {f.x + f.w, f.y + f.h}, {f.x, f.y + f.h}});
+    return out;
+}
+}  // namespace
+
 std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
     std::vector<WrapRect> out;
     const auto* t = d.as<Frame>(id);
@@ -5473,6 +5642,52 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
             if (beneath && !above) continue;   // below the text: it doesn't push
             if (o != t->owner && !master_item_on(d, fid, t->owner)) continue;   // s025: not shown on this page
             const double fx = f->x + (o != t->owner ? across_dx(d, *f, d.side_of(t->owner)) : 0.0);   // s155
+            // s230: either turned -- the frame's outline through its turn (and back
+            // through the text frame's, into its box), scanned into bands.
+            if (turned(*f) || turned(*t)) {
+                bool closed = true;
+                double grow = 0;
+                auto polys = wrap_polys(d, *f, closed, grow);
+                const Xf fxf = frame_xf(*f), tin = frame_xf(*t).inverse();
+                for (auto& poly : polys)
+                    for (auto& q : poly) {
+                        double x = q.x, y = q.y;
+                        fxf.apply(x, y, x, y);
+                        x += fx - f->x;
+                        tin.apply(x, y, x, y);
+                        q = {x, y};
+                    }
+                // a box that comes out level (only scaled / moved): its exact rect, not bands
+                if (f->wrap != Wrap::Shape && polys.size() == 1 && polys[0].size() == 4) {
+                    const auto& q = polys[0];
+                    const bool level = (std::abs(q[0].y - q[1].y) < 1e-6 && std::abs(q[1].x - q[2].x) < 1e-6 && std::abs(q[2].y - q[3].y) < 1e-6 &&
+                                        std::abs(q[3].x - q[0].x) < 1e-6) ||
+                                       (std::abs(q[0].x - q[1].x) < 1e-6 && std::abs(q[1].y - q[2].y) < 1e-6 && std::abs(q[2].x - q[3].x) < 1e-6 &&
+                                        std::abs(q[3].y - q[0].y) < 1e-6);
+                    if (level) {
+                        double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+                        for (const auto& p : q) { x0 = std::min(x0, p.x); y0 = std::min(y0, p.y); x1 = std::max(x1, p.x); y1 = std::max(y1, p.y); }
+                        WrapRect r{x0 - t->x - f->wrap_off.left, y0 - t->y - f->wrap_off.top, x1 - t->x + f->wrap_off.right, y1 - t->y + f->wrap_off.bottom,
+                                   f->wrap == Wrap::Jump};
+                        if (!(r.x1 <= 0 || r.y1 <= 0 || r.x0 >= t->w || r.y0 >= t->h)) out.push_back(r);
+                        continue;
+                    }
+                }
+                const auto bands = scan_polys(polys, closed, grow, 3, t->x, t->y);
+                if (f->wrap == Wrap::Jump && !bands.empty()) {   // jump: the whole reach, lines above and below only
+                    double y0 = 1e300, y1 = -1e300;
+                    for (const auto& b : bands) { y0 = std::min(y0, b.y0); y1 = std::max(y1, b.y1); }
+                    WrapRect r{-1, y0 - f->wrap_off.top, t->w + 1, y1 + f->wrap_off.bottom, true};
+                    if (!(r.y1 <= 0 || r.y0 >= t->h)) out.push_back(r);
+                    continue;
+                }
+                for (const auto& b : bands) {
+                    WrapRect r{b.x0 - f->wrap_off.left, b.y0 - f->wrap_off.top, b.x1 + f->wrap_off.right, b.y1 + f->wrap_off.bottom, false};
+                    if (r.x1 <= 0 || r.y1 <= 0 || r.x0 >= t->w || r.y0 >= t->h) continue;
+                    out.push_back(r);
+                }
+                continue;
+            }
             // s173: Shape -- the picture's traced outline, band by band, grown by the offsets.
             if (f->wrap == Wrap::Shape)
                 if (const auto* a = d.as<Asset>(f->asset); (a && !frame_shape(*f, *a).empty()) || doc::has_outline(*f)) {   // s227: its chosen path's
@@ -5619,6 +5834,185 @@ const Placed* panel_at(const std::vector<Placed>& pl, double x, double y) {
 
 // s150: the first panel it shows on (the canvas puts the panel last used
 // first, so an item on both sides is handled where it was picked).
+// ── s228: turned frames ──────────────────────────────────────────────────────
+Xf Xf::inverse() const {
+    const double det = xx * yy - xy * yx;
+    if (std::abs(det) < 1e-12) return {};
+    Xf r;
+    r.xx = yy / det; r.xy = -xy / det;
+    r.yx = -yx / det; r.yy = xx / det;
+    r.x0 = -(r.xx * x0 + r.xy * y0);
+    r.y0 = -(r.yx * x0 + r.yy * y0);
+    return r;
+}
+
+Xf Xf::then(const Xf& b) const {
+    Xf r;
+    r.xx = b.xx * xx + b.xy * yx; r.xy = b.xx * xy + b.xy * yy;
+    r.yx = b.yx * xx + b.yy * yx; r.yy = b.yx * xy + b.yy * yy;
+    r.x0 = b.xx * x0 + b.xy * y0 + b.x0;
+    r.y0 = b.yx * x0 + b.yy * y0 + b.y0;
+    return r;
+}
+
+bool turned(const Frame& f) { return f.rot != 0 || f.shear != 0 || f.flip || f.sx != 1 || f.sy != 1; }
+
+Xf frame_xf(const Frame& f) {
+    if (!turned(f)) return {};
+    const double cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+    const double a = -f.rot * M_PI / 180;   // counter-clockwise on the page: y runs down
+    const double c = std::cos(a), s = std::sin(a);
+    const double t = std::tan(std::clamp(f.shear, -85.0, 85.0) * M_PI / 180);
+    const double fl = f.flip ? -1 : 1;
+    // L = R . Shear . Flip; shear: x -= t y (the top, y < 0 about the centre, slides right)
+    const double kx = f.sx > 0 ? f.sx : 1, ky = f.sy > 0 ? f.sy : 1;   // s232: innermost, the scale
+    const double lxx = c * fl * kx, lyx = s * fl * kx;            // R . Sh . F . S applied to (1, 0)
+    const double lxy = (c * -t - s) * ky, lyy = (s * -t + c) * ky;  // ... to (0, 1)
+    Xf m;
+    m.xx = lxx; m.yx = lyx; m.xy = lxy; m.yy = lyy;
+    m.x0 = cx - (lxx * cx + lxy * cy);
+    m.y0 = cy - (lyx * cx + lyy * cy);
+    return m;
+}
+
+Xf about(double px, double py, double xx, double yx, double xy, double yy) {   // s232
+    Xf m;
+    m.xx = xx; m.yx = yx; m.xy = xy; m.yy = yy;
+    m.x0 = px - (xx * px + xy * py);
+    m.y0 = py - (yx * px + yy * py);
+    return m;
+}
+
+Frame transformed(const Frame& f0, const Xf& a) {   // s232
+    Frame f = f0;
+    const Xf m0 = frame_xf(f0);
+    // the new linear part: a's, after the frame's own
+    const double L00 = a.xx * m0.xx + a.xy * m0.yx, L10 = a.yx * m0.xx + a.yy * m0.yx;   // first column
+    const double L01 = a.xx * m0.xy + a.xy * m0.yy, L11 = a.yx * m0.xy + a.yy * m0.yy;   // second
+    // L = R(al) . U, U upper triangular [[u11, u12], [0, u22]] = [[fl sx, -t sy], [0, sy]]
+    double al = std::atan2(L10, L00);
+    double u11 = std::hypot(L00, L10);
+    double u12 = std::cos(al) * L01 + std::sin(al) * L11;
+    double u22 = -std::sin(al) * L01 + std::cos(al) * L11;
+    if (u22 < 0) { al += M_PI; u11 = -u11; u12 = -u12; u22 = -u22; }   // sy stays positive: a half turn, the flip takes it
+    const auto tidy = [](double v) { const double r = std::round(v * 1e9) / 1e9; return std::abs(r - 1) < 1e-8 ? 1.0 : r; };
+    if (u22 < 1e-9 || std::abs(u11) < 1e-9) return f0;   // flat: no inverse -- left as it was
+    f.flip = u11 < 0;
+    f.sx = tidy(std::abs(u11));
+    f.sy = tidy(u22);
+    const double t = -u12 / u22;
+    f.shear = std::clamp(std::round(std::atan(t) * 180 / M_PI * 1e9) / 1e9, -85.0, 85.0);
+    if (std::abs(f.shear) < 1e-7) f.shear = 0;
+    {   // (-180, 180], kept exact (norm_deg rounds for what's typed)
+        double r = std::fmod(-al * 180 / M_PI, 360.0);
+        if (r <= -180) r += 360;
+        if (r > 180) r -= 360;
+        r = std::round(r * 1e9) / 1e9;
+        f.rot = std::abs(r) < 1e-7 ? 0.0 : r;
+    }
+    // its centre where a takes it (the box keeps its size; the turn is about its centre)
+    double cx = f0.x + f0.w / 2, cy = f0.y + f0.h / 2;
+    a.apply(cx, cy, cx, cy);
+    f.x = cx - f.w / 2;
+    f.y = cy - f.h / 2;
+    return f;
+}
+
+void to_box(const Frame& f, double& x, double& y) {
+    if (!turned(f)) return;
+    frame_xf(f).inverse().apply(x, y, x, y);
+}
+
+void from_box(const Frame& f, double& x, double& y) {
+    if (!turned(f)) return;
+    frame_xf(f).apply(x, y, x, y);
+}
+
+Rect frame_bounds(const Frame& f) {
+    if (!turned(f)) return frame_rect(f);
+    const Xf m = frame_xf(f);
+    double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+    const auto add = [&](double x, double y) {
+        double ox, oy;
+        m.apply(x, y, ox, oy);
+        x0 = std::min(x0, ox); y0 = std::min(y0, oy); x1 = std::max(x1, ox); y1 = std::max(y1, oy);
+    };
+    if (doc::has_outline(f)) {
+        for (const auto& poly : doc::outline_polys(f, 0.5)) for (const auto& p : poly) add(p.x, p.y);
+    }
+    if (x1 < x0) { add(f.x, f.y); add(f.x + f.w, f.y); add(f.x, f.y + f.h); add(f.x + f.w, f.y + f.h); }
+    return {x0, y0, x1 - x0, y1 - y0};
+}
+
+Rect turned_resize(const Frame& f0, int handle, double dx, double dy, bool shift, bool alt) {   // s229
+    const Xf inv = frame_xf(f0).inverse();
+    const double ldx = inv.xx * dx + inv.xy * dy, ldy = inv.yx * dx + inv.yy * dy;   // along its own axes
+    const auto h = static_cast<Handle>(handle);
+    const Rect b0 = frame_rect(f0);
+    Rect nb = resize_rect(b0, h, ldx, ldy, shift, alt);
+    // The fixed place, in the box (unturned): the opposite handle's, or the centre.
+    const bool L = h == Handle::NW || h == Handle::W || h == Handle::SW, R = h == Handle::NE || h == Handle::E || h == Handle::SE;
+    const bool T = h == Handle::NW || h == Handle::N || h == Handle::NE, B = h == Handle::SW || h == Handle::S || h == Handle::SE;
+    const double ax = alt || !(L || R) ? b0.cx() : L ? b0.r() : b0.x;
+    const double ay = alt || !(T || B) ? b0.cy() : T ? b0.b() : b0.y;
+    double bx = ax, by = ay;   // on the page before
+    from_box(f0, bx, by);
+    Frame f1 = f0;
+    f1.x = nb.x; f1.y = nb.y; f1.w = nb.w; f1.h = nb.h;
+    double cx = ax, cy = ay;   // after (the same place in the new box: resize_rect keeps it)
+    from_box(f1, cx, cy);
+    nb.x += bx - cx;
+    nb.y += by - cy;
+    return nb;
+}
+
+Frame scaled_by_handle(const Frame& f0, int handle, double dx, double dy, bool shift, bool alt) {   // s233
+    Frame v = f0;   // its turn without the scale: the axes it's scaled along
+    v.sx = v.sy = 1;
+    const Xf inv = frame_xf(v).inverse();
+    const double ldx = inv.xx * dx + inv.xy * dy, ldy = inv.yx * dx + inv.yy * dy;
+    const auto h = static_cast<Handle>(handle);
+    const Rect b0{0, 0, f0.w * f0.sx, f0.h * f0.sy};   // the box as seen
+    const Rect nb = resize_rect(b0, h, ldx, ldy, shift, alt, 0.5);
+    static constexpr int opposite[] = {4, 8, 7, 6, 3, 0, 1, 2, 5};   // by Handle (None, NW, N, NE, E, SE, S, SW, W): the place held
+    const int ref = alt ? 4 : opposite[std::clamp(handle, 0, 8)];
+    const doc::XY before = doc::ref_point(f0, ref);
+    Frame f = f0;
+    f.sx = std::round(std::clamp(f0.sx * nb.w / std::max(1e-9, b0.w), 0.01, 100.0) * 1e6) / 1e6;
+    f.sy = std::round(std::clamp(f0.sy * nb.h / std::max(1e-9, b0.h), 0.01, 100.0) * 1e6) / 1e6;
+    const doc::XY after = doc::ref_point(f, ref);
+    f.x += before.x - after.x;
+    f.y += before.y - after.y;
+    return f;
+}
+
+Frame skewed_by_edge(const Frame& f0, int handle, double dx, double dy) {   // s233
+    const Xf m = frame_xf(f0), inv = m.inverse();
+    const double ldx = inv.xx * dx + inv.xy * dy, ldy = inv.yx * dx + inv.yy * dy;   // in its box
+    Xf local;   // in its box (before the turn): the edge slides, the opposite one stays
+    const auto h = static_cast<Handle>(handle);
+    if (h == Handle::N || h == Handle::S) {
+        const double ya = h == Handle::N ? f0.y + f0.h : f0.y;   // the edge held
+        const double k = ldx / (h == Handle::N ? -f0.h : f0.h);
+        local.xy = k;
+        local.x0 = -k * ya;
+    } else if (h == Handle::E || h == Handle::W) {
+        const double xa = h == Handle::W ? f0.x + f0.w : f0.x;
+        const double k = ldy / (h == Handle::W ? -f0.w : f0.w);
+        local.yx = k;
+        local.y0 = -k * xa;
+    } else {
+        return f0;
+    }
+    return transformed(f0, inv.then(local).then(m));
+}
+
+std::array<std::array<double, 2>, 8> turned_handles(const Frame& f) {
+    auto pts = handle_points(frame_rect(f));
+    for (auto& p : pts) from_box(f, p[0], p[1]);
+    return pts;
+}
+
 Rect frame_in_layout(const Doc& d, const std::vector<Placed>& pl, const Doc::Id& id) {
     const auto* f = d.as<Frame>(id);
     if (!f) return {};
@@ -5635,12 +6029,13 @@ Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double 
         for (auto it = own.rbegin(); it != own.rend(); ++it) {   // topmost first
             if (!on_panel(d, p, *it)) continue;
             const auto& fr = *d.as<Frame>(*it);
+            double bx = x - p.r.x, by = y - p.r.y;   // s228: in its box, before the turn
+            to_box(fr, bx, by);
             if (doc::has_outline(fr)) {   // s203: a line or a path by its outline, not its box
-                if (doc::shape_hit(fr, x - p.r.x, y - p.r.y, tol)) return *it;
+                if (doc::shape_hit(fr, bx, by, tol)) return *it;
                 continue;
             }
-            const Rect r{p.r.x + fr.x, p.r.y + fr.y, fr.w, fr.h};
-            if (Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) return *it;
+            if (Rect{fr.x - tol, fr.y - tol, fr.w + 2 * tol, fr.h + 2 * tol}.contains(bx, by)) return *it;
         }
     }
     return {};
@@ -5665,11 +6060,12 @@ Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, d
                 if (!master_item_on(d, *it, p.id)) continue;
                 const auto& f = *d.as<Frame>(*it);
                 const Side sd = d.side_of(p.id);
-                const Rect r{p.r.x + f.x + across_dx(d, f, sd), p.r.y + f.y, f.w, f.h};
                 // s155: an item across the spine is this page's only on its side of it
                 if (f.across && (sd == Side::Left ? x > p.r.r() : sd == Side::Right ? x < p.r.x : false)) continue;
-                if (doc::has_outline(f) ? doc::shape_hit(f, x - p.r.x - across_dx(d, f, sd), y - p.r.y, tol)   // s203
-                                        : Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) {
+                double bx = x - p.r.x - across_dx(d, f, sd), by = y - p.r.y;   // s228: in its box, before the turn
+                to_box(f, bx, by);
+                if (doc::has_outline(f) ? doc::shape_hit(f, bx, by, tol)   // s203
+                                        : Rect{f.x - tol, f.y - tol, f.w + 2 * tol, f.h + 2 * tol}.contains(bx, by)) {
                     if (page) *page = p.id;
                     return *it;
                 }
@@ -5704,7 +6100,8 @@ std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, cons
         for (const auto& f : d.frames_on(p.id)) {
             if (!on_panel(d, p, f) || std::find(out.begin(), out.end(), f) != out.end()) continue;
             const auto& fr = *d.as<Frame>(f);
-            if (Rect{p.r.x + fr.x, p.r.y + fr.y, fr.w, fr.h}.intersects(r)) out.push_back(f);   // s150: per panel
+            const Rect b = frame_bounds(fr);   // s228: where it reaches, turned
+            if (Rect{p.r.x + b.x, p.r.y + b.y, b.w, b.h}.intersects(r)) out.push_back(f);   // s150: per panel
         }
     return out;
 }
@@ -5842,7 +6239,8 @@ SnapTargets snap_targets(const Doc& d, const std::vector<Placed>& pl, const std:
                 if (skip(f)) continue;
                 if (o == p.id ? !on_panel(d, p, f) : !master_item_on(d, f, p.id)) continue;   // s150: what shows here
                 const auto& fr = *d.as<Frame>(f);
-                const Rect r{p.r.x + fr.x + across_dx(d, fr, side_for(d, p.id, p.side)), p.r.y + fr.y, fr.w, fr.h};   // s155
+                const Rect fb = frame_bounds(fr);   // s229: a turned frame's bounds
+                const Rect r{p.r.x + fb.x + across_dx(d, fr, side_for(d, p.id, p.side)), p.r.y + fb.y, fb.w, fb.h};   // s155
                 t.xs.insert(t.xs.end(), {r.x, r.cx(), r.r()});
                 t.ys.insert(t.ys.end(), {r.y, r.cy(), r.b()});
             }

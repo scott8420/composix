@@ -221,6 +221,12 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         m_arrange_menu->append("Bring Forward", "win.bring-forward");
         m_arrange_menu->append("Send Backward", "win.send-backward");
         m_arrange_menu->append("Send to Back", "win.send-back");
+        auto turn = Gio::Menu::create();   // s231
+        turn->append("Rotate 90\u00B0 Counter-clockwise", "win.turn::ccw");
+        turn->append("Rotate 90\u00B0 Clockwise", "win.turn::cw");
+        turn->append("Flip Horizontal", "win.turn::fliph");
+        turn->append("Flip Vertical", "win.turn::flipv");
+        m_arrange_menu->append_section(turn);
         auto paths = Gio::Menu::create();   // s212
         paths->append("Make Compound Path", "win.make-compound");
         paths->append("Release Compound Path", "win.release-compound");

@@ -138,6 +138,8 @@ private:
     void on_shortcuts();                         // category: handler: keyboard reference
     void on_go_up();                             // category: handler: s068 -- Alt+Up / the header's Up: the section's tiles
     void on_arrange(core::doc::Arrange how);
+    int  turn_ref() const;                                                       // s231
+    void turn_selection(const std::string& how, const std::vector<std::string>& ids);
     void on_canvas_context(const views::Canvas::ContextHit& h);   // category: handler: s074 -- the canvas's right-click menu
     void bind_path_actions();                    // category: bindings: s214 -- Pathfinder, Offset Path, Outline Stroke (Shell_paths.cpp)
     void on_offset_path();                       // category: handler: s215 -- the Offset Path window

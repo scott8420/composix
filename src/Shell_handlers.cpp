@@ -703,6 +703,34 @@ void Shell::on_go_up() {  // handler
     sync_up();
 }
 
+// s231: the place a turn is about (0 top left .. 8 bottom right), kept in the app's settings.
+int Shell::turn_ref() const {
+    return core::setting_int(m_settings, "transform.ref", 4, 0, 8);
+}
+
+// s231: a quarter turn or a flip of the picked frames -- about the reference
+// place of the one frame, or of their bounds together.
+void Shell::turn_selection(const std::string& how, const std::vector<std::string>& ids) {
+    if (ids.empty()) return;
+    const int ref = turn_ref();
+    core::doc::XY p;
+    if (ids.size() == 1) {
+        const auto* f = m_doc.as<core::Frame>(ids.front());
+        if (!f) return;
+        p = core::doc::ref_point(*f, ref);
+    } else {
+        const auto b = core::doc::frames_bounds(m_doc, ids);
+        p = {b.x + b.w * (ref % 3) / 2.0, b.y + b.h * (ref / 3) / 2.0};
+    }
+    bool did = false;
+    if (how == "ccw") did = core::doc::rotate_frames(m_journal, m_doc, ids, 90, p.x, p.y, "Rotate 90\u00B0 Counter-clockwise");
+    else if (how == "cw") did = core::doc::rotate_frames(m_journal, m_doc, ids, -90, p.x, p.y, "Rotate 90\u00B0 Clockwise");
+    else if (how == "fliph") did = core::doc::flip_frames(m_journal, m_doc, ids, false, p.x, p.y);
+    else if (how == "flipv") did = core::doc::flip_frames(m_journal, m_doc, ids, true, p.x, p.y);
+    else if (how == "unscale") did = core::doc::set_scale(m_journal, m_doc, ids, 1, 1, ref, "Scale 100%");   // s234
+    if (auto lg = log::get(log::Area::Shell)) lg->info("turn '{}' on {} frame(s) about place {}: {}", how, ids.size(), ref, did ? "step" : "no change");
+}
+
 // s070: the picked frames up / down the stack -- one step.
 void Shell::on_arrange(core::doc::Arrange how) {  // handler
     auto& cv = m_canvas_view.canvas();
@@ -733,6 +761,11 @@ void Shell::bind_context_actions() {  // bindings
         });
     });
     add_action("remove-override", [this, picked] { core::doc::remove_overrides(m_journal, m_doc, picked()); });
+    // s231: quarter turns and flips, from Edit > Arrange and the right-click menu
+    add_action_with_parameter("turn", Glib::Variant<Glib::ustring>::variant_type(), [this, picked](const Glib::VariantBase& p) {
+        if (m_canvas_view.canvas().editing()) return;
+        turn_selection(Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(p).get(), picked());
+    });
     // s212: compound paths
     add_action("make-compound", [this, picked] {
         const auto id = core::doc::make_compound(m_journal, m_doc, picked());
@@ -1357,6 +1390,25 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 // s221: never past its end mark
                 f.path_from = f.path_to > 0 ? std::min(v, std::max(0.0, f.path_to - 1)) : v;
             });
+        } else if (key == "rot" || key == "shear") {   // s231: typed or picked, about the reference place
+            double v = 0;
+            try { v = std::stod(choice); } catch (const std::exception&) { return; }
+            did = key == "rot" ? core::doc::set_turn(m_journal, m_doc, m_inspected, v, NAN, turn_ref(), "Rotation")
+                               : core::doc::set_turn(m_journal, m_doc, m_inspected, NAN, v, turn_ref(), "Shear");
+        } else if (key == "scale_x" || key == "scale_y") {   // s234: percent, typed or picked; about the reference place
+            double v = 0;
+            try { v = std::stod(choice); } catch (const std::exception&) { return; }
+            if (v <= 0) return;
+            did = key == "scale_x" ? core::doc::set_scale(m_journal, m_doc, m_inspected, v / 100, NAN, turn_ref(), "Scale across")
+                                   : core::doc::set_scale(m_journal, m_doc, m_inspected, NAN, v / 100, turn_ref(), "Scale down");
+        } else if (key == "turn_ref") {   // s231: kept between runs; changes nothing in the document
+            m_settings["transform.ref"] = choice;
+            core::save_settings(m_settings_file, m_settings);
+            on_canvas_selection();
+            return;
+        } else if (key == "turn") {   // s231: quarter turns and flips
+            turn_selection(choice, m_inspected);
+            return;
         } else if (key == "clip_path") {   // s227 (G3): which of the picture's paths clips it
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Clipping path", [&](core::Frame& f) {
                 if (f.kind == core::FrameKind::Image) f.clip_path = choice;
@@ -1477,7 +1529,13 @@ void Shell::on_canvas_selection() {  // handler
         return;
     }
     m_inspected = sel;
-    const auto items = core::frame_items(m_doc, sel, m_project_dir);
+    auto items = core::frame_items(m_doc, sel, m_project_dir);
+    {   // s231: the place a turn is about -- the app's choice, not the frame's
+        const int ref = turn_ref();
+        for (auto& it : items)
+            for (auto& fl : it.fields)
+                if (fl.edit == "turn_ref") fl.value = core::turn_ref_choices()[static_cast<std::size_t>(ref)].label;
+    }
     std::vector<const core::Item*> ptrs;
     for (const auto& it : items) ptrs.push_back(&it);
     m_inspector.show(core::frames_title(items),

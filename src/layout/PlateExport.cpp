@@ -281,7 +281,8 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core
             const bool clear = f.opacity < 1 || (a && asset_see_through(c, *a, f, f.asset));
             if (clear) {
                 const double grow = (c.d.as<core::Swatch>(f.stroke) ? (f.end_a || f.end_b ? f.stroke_w * 4.5 + 2 : f.stroke_w / 2) : 0) + 0.5;   // s204: arrows
-                core::Rect box{f.x - grow, f.y - grow, f.w + 2 * grow, f.h + 2 * grow};
+                const core::Rect fb = core::frame_bounds(f);   // s228: where it reaches, turned
+                core::Rect box{fb.x - grow, fb.y - grow, fb.w + 2 * grow, fb.h + 2 * grow};
                 const double bl = core::bleed_of(c.d, on_page);
                 const double pw = page ? page->w : box.r(), ph = page ? page->h : box.b();
                 const double x0 = std::max(box.x, -bl), y0 = std::max(box.y, -bl), x1 = std::min(box.r(), pw + bl), y1 = std::min(box.b(), ph + bl);
@@ -321,6 +322,10 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core
                 pg.restore();
                 continue;
             }
+        }
+        if (core::turned(f)) {   // s228: turned -- everything it draws, through its turn
+            const auto m = core::frame_xf(f);
+            pg.concat(m.xx, m.yx, m.xy, m.yy, m.x0, m.y0);
         }
         if (f.opacity < 1) pg.set_alpha(f.opacity, f.opacity);   // s021: fill, content and stroke alike
         // s197: the frame's outline -- its box, or a shape's oval / path.

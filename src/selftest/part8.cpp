@@ -2594,5 +2594,400 @@ void part8() {
               core::from_json(e, text, &err) && e.as<core::Frame>(frame)->clip_path == "Corner" &&
               e.as<core::Asset>(e.as<core::Frame>(frame)->asset)->path_names == a.path_names && core::to_json(e) == text, err);
     }
+    // ── s228: turned frames -- rotate, shear, flip ───────────────────────────
+    {
+        std::cout << "--- s228 turned frames ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        const auto near = [](double a, double b, double e = 1e-9) { return std::abs(a - b) < e; };
+        core::Frame f;
+        f.kind = core::FrameKind::Shape;
+        f.x = 100; f.y = 100; f.w = 100; f.h = 50;   // centre (150, 125)
+        check("turn: none -- identity, bounds its box", !core::turned(f) && core::frame_xf(f).identity() &&
+              core::frame_bounds(f).w == 100);
+        f.rot = 90;
+        double x = 200, y = 125;   // its right edge's middle
+        core::from_box(f, x, y);
+        check("rotate 90: counter-clockwise -- the right edge goes up", near(x, 150) && near(y, 75));
+        const auto b = core::frame_bounds(f);
+        check("rotate 90: its bounds stand up (50 x 100, same centre)", near(b.w, 50) && near(b.h, 100) && near(b.x, 125) && near(b.y, 75));
+        f.rot = 0; f.shear = 45;
+        x = 100; y = 100;
+        core::from_box(f, x, y);
+        check("shear 45: the top slides right by half the height", near(x, 125) && near(y, 100));
+        f.shear = 0; f.flip = true;
+        x = 100; y = 100;
+        core::from_box(f, x, y);
+        check("flip: left and right change places", near(x, 200) && near(y, 100));
+        f.rot = 33; f.shear = -12; f.flip = true;
+        x = 123; y = 141;
+        core::from_box(f, x, y);
+        core::to_box(f, x, y);
+        check("turn: out and back (rotated, sheared, flipped)", near(x, 123, 1e-7) && near(y, 141, 1e-7));
+        // Picked by its turned shape, not its old box (nor its bounds).
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = core::to_json(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto bar = D::add_frame(j, d, page, core::FrameKind::Shape, {50, 300, 200, 20});
+        const auto sw = d.ids_of<core::Swatch>().front();
+        D::edit_frames(j, d, {bar}, "Fill", [&](core::Frame& g) { g.fill = sw; g.z = 1e6; });
+        check("rotate: one step", D::rotate_frames(j, d, {bar}, 45, 150, 310) && j.undo_label() == "Rotate" &&
+              d.as<core::Frame>(bar)->rot == 45);
+        const auto pl = core::layout_pages(d, {page});
+        const double ox = pl.front().r.x, oy = pl.front().r.y;
+        check("hit: on the turned bar", core::hit_frame(d, pl, ox + 150 + 40, oy + 310 - 40, 0) == bar);
+        check("hit: where its old box was, off the bar -- not it", core::hit_frame(d, pl, ox + 60, oy + 310, 0) != bar);
+        {   // drawn turned, on screen as in print
+            L::FlowCache flows;
+            auto* surf = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 432, 648);
+            cairo_t* cr = cairo_create(surf);
+            cairo_set_source_rgb(cr, 1, 1, 1);
+            cairo_paint(cr);
+            L::draw_page(cr, d, page, flows, {}, nullptr, {});
+            cairo_destroy(cr);
+            cairo_surface_flush(surf);
+            const auto px = [&](int X, int Y) {
+                const auto* row = cairo_image_surface_get_data(surf) + Y * cairo_image_surface_get_stride(surf);
+                return reinterpret_cast<const std::uint32_t*>(row)[X] & 0xffffff;
+            };
+            const bool on = px(150 + 40, 310 - 40) != 0xffffff, off = px(60, 310) == 0xffffff || px(60, 310) != px(190, 270);
+            cairo_surface_destroy(surf);
+            check("drawn: along its turn, not its old box", on && off);
+            namespace fs = std::filesystem;
+            const auto base = fs::temp_directory_path() / "composix_selftest_turn";
+            std::error_code ec;
+            fs::create_directories(base, ec);
+            const auto out = (base / "p.pdf").string();
+            L::PdfOptions opt;
+            opt.compress = false;
+            L::PdfReport rep;
+            std::string err;
+            const bool ok = L::export_print_pdf(d, out, opt, {}, &rep, &err);
+            std::string pdf;
+            { std::ifstream in(out, std::ios::binary); std::stringstream ss; ss << in.rdbuf(); pdf = ss.str(); }
+            int turned_cm = 0;
+            std::istringstream ls(pdf);
+            for (std::string line; std::getline(ls, line);) {
+                if (line.size() < 4 || line.compare(line.size() - 3, 3, " cm") != 0) continue;
+                std::istringstream ns(line);
+                double a, bb, c, dd;
+                if (ns >> a >> bb >> c >> dd && std::abs(a - std::sqrt(0.5)) < 1e-3 && std::abs(bb + std::sqrt(0.5)) < 1e-3) ++turned_cm;
+            }
+            check("print: through its turn (a 45 degree cm)", ok && turned_cm >= 1, std::to_string(turned_cm));
+            fs::remove_all(base, ec);
+        }
+        // A group turns as one: each centre round the pivot.
+        const auto b2 = D::add_frame(j, d, page, core::FrameKind::Shape, {250, 300, 40, 20});   // centre (270, 310)
+        D::rotate_frames(j, d, {bar, b2}, 90, 150, 310);
+        const auto* g2 = d.as<core::Frame>(b2);
+        check("rotate a group: each centre round the pivot, each turned", near(g2->x + g2->w / 2, 150) && near(g2->y + g2->h / 2, 190) &&
+              g2->rot == 90 && d.as<core::Frame>(bar)->rot == 135);
+        for (int k = 0; k < 3; ++k) D::rotate_frames(j, d, {b2}, 90, 150, 310);
+        check("rotate: four quarter turns -- back where it was", near(g2->x, 250, 1e-6) && near(g2->y, 300, 1e-6) && g2->rot == 0);
+        {
+            const core::Frame was = *g2;
+            D::flip_frames(j, d, {b2}, false, 400, 0);
+            check("flip: mirrored across the line, one step", near(g2->x + g2->w / 2, 530) && g2->flip && j.undo_label() == "Flip Horizontal");
+            D::flip_frames(j, d, {b2}, false, 400, 0);
+            check("flip twice: as it was", *g2 == was);
+            D::rotate_frames(j, d, {b2}, 30, 0, 0);
+            const core::Frame turned30 = *g2;
+            D::flip_frames(j, d, {b2}, true, 0, 300);
+            D::flip_frames(j, d, {b2}, true, 0, 300);
+            check("flip vertical twice: as it was", near(g2->x, turned30.x, 1e-6) && near(g2->y, turned30.y, 1e-6) &&
+                  g2->rot == turned30.rot && g2->flip == turned30.flip);
+            {   // flip vertical: the top goes to the bottom
+                core::Frame t = *g2;
+                t.rot = 0; t.shear = 0; t.flip = false;
+                core::Doc e2;
+                core::DocJournal j2{e2};
+                e2.set_door([&j2] { return j2.open(); });
+                core::load_sample(e2);
+                const auto id = D::add_frame(j2, e2, page, core::FrameKind::Shape, {100, 100, 100, 50});
+                D::flip_frames(j2, e2, {id}, true, 150, 125);
+                double tx = 120, ty = 100;   // near its top-left
+                core::from_box(*e2.as<core::Frame>(id), tx, ty);
+                check("flip vertical: top to bottom, left stays left", near(tx, 120, 1e-9) && near(ty, 150, 1e-9));
+            }
+        }
+        {   // typed: a reference place held still
+            const auto r0 = D::ref_point(*d.as<core::Frame>(bar), 0);
+            check("set: rotation, the top-left held", D::set_turn(j, d, {bar}, -20, NAN, 0, "Rotation") &&
+                  d.as<core::Frame>(bar)->rot == -20 && near(D::ref_point(*d.as<core::Frame>(bar), 0).x, r0.x, 1e-9) &&
+                  near(D::ref_point(*d.as<core::Frame>(bar), 0).y, r0.y, 1e-9));
+            const auto r8 = D::ref_point(*d.as<core::Frame>(bar), 8);
+            D::set_turn(j, d, {bar}, NAN, 15, 8, "Shear");
+            check("set: shear, the bottom-right held", d.as<core::Frame>(bar)->shear == 15 &&
+                  near(D::ref_point(*d.as<core::Frame>(bar), 8).x, r8.x, 1e-9) && near(D::ref_point(*d.as<core::Frame>(bar), 8).y, r8.y, 1e-9));
+            check("degrees: kept in (-180, 180]", D::norm_deg(270) == -90 && D::norm_deg(-180) == 180 && D::norm_deg(540) == 180);
+        }
+        core::Doc e;
+        std::string err;
+        const auto text = core::to_json(d);
+        check("turn: through JSON", core::from_json(e, text, &err) && e.as<core::Frame>(bar)->rot == -20 && e.as<core::Frame>(bar)->shear == 15 &&
+              core::to_json(e) == text, err);
+        while (j.can_undo()) j.undo();
+        check("turn: all undone exactly", core::to_json(d) == before);
+    }
+    // ── s229: a turned frame's handles and resize ────────────────────────────
+    {
+        std::cout << "--- s229 turned resize ---\n";
+        namespace D = core::doc;
+        const auto near = [](double a, double b, double e = 1e-9) { return std::abs(a - b) < e; };
+        core::Frame f;
+        f.kind = core::FrameKind::Shape;
+        f.x = 100; f.y = 100; f.w = 100; f.h = 50;
+        f.rot = 90;   // its right edge now its top
+        const auto hs = core::turned_handles(f);
+        check("handles: on the turned box (E now at the top)", near(hs[3][0], 150) && near(hs[3][1], 75));
+        // Drag E straight up 30: its own x grows by 30; W (its opposite) stays on the page.
+        double wx = 100, wy = 125;
+        core::from_box(f, wx, wy);
+        const auto nb = core::turned_resize(f, static_cast<int>(core::Handle::E), 0, -30, false, false);
+        core::Frame g = f;
+        g.x = nb.x; g.y = nb.y; g.w = nb.w; g.h = nb.h;
+        double wx2 = g.x, wy2 = g.y + g.h / 2;
+        core::from_box(g, wx2, wy2);
+        check("resize turned: along its own axis", near(nb.w, 130) && near(nb.h, 50));
+        check("resize turned: the opposite edge stays put", near(wx2, wx, 1e-9) && near(wy2, wy, 1e-9));
+        // A corner, rotated 30 and sheared: the opposite corner fixed.
+        f.rot = 30; f.shear = 10;
+        double ax = 100, ay = 100;   // NW -- opposite of SE
+        core::from_box(f, ax, ay);
+        const auto nb2 = core::turned_resize(f, static_cast<int>(core::Handle::SE), 12, 25, false, false);
+        g = f;
+        g.x = nb2.x; g.y = nb2.y; g.w = nb2.w; g.h = nb2.h;
+        double ax2 = g.x, ay2 = g.y;
+        core::from_box(g, ax2, ay2);
+        check("resize turned corner: the opposite corner stays put", near(ax2, ax, 1e-9) && near(ay2, ay, 1e-9));
+        // Alt: about its centre
+        const auto nb3 = core::turned_resize(f, static_cast<int>(core::Handle::E), 10, 0, false, true);
+        check("resize turned, Alt: its centre stays", near(nb3.x + nb3.w / 2, 150, 1e-9) && near(nb3.y + nb3.h / 2, 125, 1e-9));
+        // The marquee and snapping know where it reaches.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto bar = D::add_frame(j, d, page, core::FrameKind::Shape, {100, 400, 200, 10});   // centre (200, 405)
+        D::rotate_frames(j, d, {bar}, 90, 200, 405);   // now stands 10 x 200, x 195..205, y 305..505
+        const auto pl = core::layout_pages(d, {page});
+        const double ox = pl.front().r.x, oy = pl.front().r.y;
+        const auto in = core::frames_in(d, pl, {ox + 190, oy + 310, 20, 5});
+        check("marquee: over where it reaches now", std::find(in.begin(), in.end(), bar) != in.end());
+        const auto out = core::frames_in(d, pl, {ox + 100, oy + 401, 20, 5});
+        check("marquee: where its box was -- not it", std::find(out.begin(), out.end(), bar) == out.end());
+        const auto t = core::snap_targets(d, pl, {});
+        check("snap: its turned edges", std::find_if(t.ys.begin(), t.ys.end(), [&](double v) { return near(v, oy + 305, 1e-6); }) != t.ys.end());
+        while (j.can_undo()) j.undo();
+    }
+    // ── s230: wrapping round turned frames, and in them ──────────────────────
+    {
+        std::cout << "--- s230 turned wrap ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto tf = D::add_frame(j, d, page, core::FrameKind::Text, {40, 400, 340, 200});
+        const auto sq = D::add_frame(j, d, page, core::FrameKind::Shape, {160, 450, 100, 100});   // centre (210, 500)
+        D::edit_frames(j, d, {sq}, "Wrap", [](core::Frame& g) { g.wrap = core::Wrap::Around; g.wrap_off = {}; g.z = 1e6; });
+        const auto plain = core::wrap_rects(d, tf);
+        D::rotate_frames(j, d, {sq}, 45, 210, 500);   // a diamond, 141 across
+        const auto rs = core::wrap_rects(d, tf);
+        double widest = 0, top_w = 1e9, top = 1e9;
+        for (const auto& r : rs) {
+            widest = std::max(widest, r.x1 - r.x0);
+            if (r.y0 < top) { top = r.y0; top_w = r.x1 - r.x0; }
+        }
+        check("turned obstacle: wrapped by its turned outline (a diamond: wide in the middle, a point at the top)",
+              plain.size() == 1 && rs.size() > 10 && std::abs(widest - 141.4) < 4 && top_w < 10 && std::abs(top - (500 - 70.7 - 400)) < 3,
+              std::to_string(rs.size()) + " / " + std::to_string(widest) + " / " + std::to_string(top_w) + " / " + std::to_string(top));
+        D::edit_frames(j, d, {sq}, "Jump", [](core::Frame& g) { g.wrap = core::Wrap::Jump; });
+        const auto js = core::wrap_rects(d, tf);
+        check("turned obstacle, Jump: its whole reach, across the frame", js.size() == 1 && js[0].jump && std::abs((js[0].y1 - js[0].y0) - 141.4) < 4);
+        // The text frame turned: the obstacle taken into its box.
+        D::rotate_frames(j, d, {sq}, -45, 210, 500);
+        D::edit_frames(j, d, {sq}, "Box", [](core::Frame& g) { g.wrap = core::Wrap::Around; });
+        D::rotate_frames(j, d, {tf}, 90, 210, 500);
+        D::edit_frames(j, d, {sq}, "Off", [](core::Frame& g) { g.wrap = core::Wrap::None; });
+        const auto others = core::wrap_rects(d, tf);   // what the sample's own frames push
+        D::edit_frames(j, d, {sq}, "On", [](core::Frame& g) { g.wrap = core::Wrap::Around; });
+        std::vector<core::WrapRect> in;
+        for (const auto& r : core::wrap_rects(d, tf))
+            if (std::none_of(others.begin(), others.end(), [&](const core::WrapRect& o) {
+                    return o.x0 == r.x0 && o.y0 == r.y0 && o.x1 == r.x1 && o.y1 == r.y1; }))
+                in.push_back(r);
+        // The square's corners in the text frame's box
+        double lo_x = 1e9, hi_x = -1e9, lo_y = 1e9, hi_y = -1e9;
+        const auto& t = *d.as<core::Frame>(tf);
+        for (double cx : {160.0, 260.0})
+            for (double cy : {450.0, 550.0}) {
+                double x = cx, y = cy;
+                core::to_box(t, x, y);
+                lo_x = std::min(lo_x, x - t.x); hi_x = std::max(hi_x, x - t.x); lo_y = std::min(lo_y, y - t.y); hi_y = std::max(hi_y, y - t.y);
+            }
+        double rx0 = 1e9, rx1 = -1e9, ry0 = 1e9, ry1 = -1e9;
+        for (const auto& r : in) { rx0 = std::min(rx0, r.x0); rx1 = std::max(rx1, r.x1); ry0 = std::min(ry0, r.y0); ry1 = std::max(ry1, r.y1); }
+        check("turned text frame: the obstacle in its own box", !in.empty() && std::abs(rx0 - lo_x) < 1 && std::abs(rx1 - hi_x) < 1 &&
+              std::abs(ry0 - std::max(0.0, lo_y)) < 3.5 && ry1 >= std::min(t.h, hi_y) - 0.5,
+              std::to_string(rx0) + "," + std::to_string(rx1) + " vs " + std::to_string(lo_x) + "," + std::to_string(hi_x));
+        while (j.can_undo()) j.undo();
+    }
+    // ── s231: the Transform rows ────────────────────────────────────────────
+    {
+        std::cout << "--- s231 transform rows ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::set_turn(j, d, {"frame.1"}, 30, -10, 4, "Rotation");
+        const auto items = core::frame_items(d, {"frame.1"}, "");
+        std::map<std::string, const core::Field*> by;
+        for (const auto& fl : items.front().fields) if (!fl.edit.empty()) by[fl.edit] = &fl;
+        check("inspector: Rotation and Shear, as set", by.count("rot") && by["rot"]->value == "30°" && by.count("shear") &&
+              by["shear"]->value == "-10°");
+        check("inspector: Turn about -- nine places", by.count("turn_ref") && by["turn_ref"]->choices.size() == 9 &&
+              core::turn_ref_choices()[4].label == "Centre");
+        check("inspector: the quarter turns and flips as buttons", by.count("turn") && by["turn"]->buttons && by["turn"]->choices.size() >= 4);
+        {   // rotated(): what rotate_frames does, without a step
+            const auto f0 = *d.as<core::Frame>("frame.4");
+            const auto r = D::rotated(f0, 40, 10, 20);
+            D::rotate_frames(j, d, {"frame.4"}, 40, 10, 20);
+            check("rotated: the same as the verb", r == *d.as<core::Frame>("frame.4"));
+        }
+    }
+    // ── s232: scale with contents; any affine map, split back ───────────────
+    {
+        std::cout << "--- s232 scale and transforms ---\n";
+        namespace D = core::doc;
+        const auto near = [](double a, double b, double e = 1e-9) { return std::abs(a - b) < e; };
+        core::Frame f;
+        f.kind = core::FrameKind::Shape;
+        f.x = 100; f.y = 100; f.w = 100; f.h = 50;
+        f.sx = 2; f.sy = 0.5;
+        double x = 200, y = 150;   // its bottom-right corner
+        core::from_box(f, x, y);
+        check("scale: about its centre, x by 2, y by a half", near(x, 250) && near(y, 137.5) && core::turned(f));
+        // Any map back to rotation / shear / flip / scale: the same corners.
+        bool same = true;
+        const core::Xf maps[] = {core::about(150, 125, 0.6, 0.8, -0.8, 0.6), core::about(0, 0, 1, 0.4, 0, 1),   // a turn; a vertical shear
+                                 core::about(10, 20, -1, 0, 0, 1), core::about(300, 0, 1.5, 0.3, -0.2, 0.7), core::about(5, 5, 0, 1, 1, 0)};
+        core::Frame g0 = f;
+        g0.rot = 25; g0.shear = 12; g0.flip = true; g0.sx = 1.2; g0.sy = 0.9;
+        for (const auto& a : maps) {
+            const core::Frame g = core::transformed(g0, a);
+            for (double cx : {g0.x, g0.x + g0.w})
+                for (double cy : {g0.y, g0.y + g0.h}) {
+                    double p = cx, q = cy;
+                    core::from_box(g0, p, q);
+                    a.apply(p, q, p, q);   // where the map takes the corner
+                    double r = cx, s2 = cy;
+                    r += g.x - g0.x; s2 += g.y - g0.y;   // the same corner of the moved box
+                    core::from_box(g, r, s2);
+                    if (!near(p, r, 2e-3) || !near(q, s2, 2e-3)) same = false;
+                }
+        }
+        check("transformed: any map (a turn, a vertical shear, a mirror, a mix, a swap) -- split back, the same corners", same);
+        check("transformed: a turn about its centre is a rotation", [&] {
+            core::Frame h = f; h.sx = h.sy = 1;
+            const auto r = core::transformed(h, core::about(150, 125, std::cos(-M_PI / 6), std::sin(-M_PI / 6), -std::sin(-M_PI / 6), std::cos(-M_PI / 6)));
+            return near(r.rot, 30, 1e-6) && r.sx == 1 && r.sy == 1 && r.shear == 0 && !r.flip && near(r.x, 100, 1e-6);
+        }());
+        // Verbs: a group scaled about a point; a scale set, a place held; one step each.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = core::to_json(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto a1 = D::add_frame(j, d, page, core::FrameKind::Shape, {100, 100, 40, 40});   // centre (120, 120)
+        check("scale_frames: one step, the centre out from the pivot, the frame scaled", D::scale_frames(j, d, {a1}, 2, 2, 100, 100) &&
+              j.undo_label() == "Scale" && near(d.as<core::Frame>(a1)->x + 20, 140) && d.as<core::Frame>(a1)->sx == 2);
+        const auto r8 = D::ref_point(*d.as<core::Frame>(a1), 8);
+        D::set_scale(j, d, {a1}, 0.5, 0.5, 8);
+        check("set_scale: as typed, the bottom-right held", d.as<core::Frame>(a1)->sx == 0.5 &&
+              near(D::ref_point(*d.as<core::Frame>(a1), 8).x, r8.x) && near(D::ref_point(*d.as<core::Frame>(a1), 8).y, r8.y));
+        {   // text scaled with its frame: drawn twice the size, the same lines
+            const auto t1 = "frame.1";
+            std::vector<std::string> all;   // nothing wrapping (what pushes it would be half the size in its box)
+            for (const auto& fid : d.ids_of<core::Frame>()) all.push_back(fid);
+            D::edit_frames(j, d, all, "No wrap", [](core::Frame& g) { g.wrap = core::Wrap::None; });
+            const auto lines0 = composix::layout::flow_story(d, d.as<core::Frame>(t1)->story).lines;
+            D::scale_frames(j, d, {t1}, 2, 2, 0, 0);
+            check("scale a text frame: the same lines (set in its box, then scaled)",
+                  composix::layout::flow_story(d, d.as<core::Frame>(t1)->story).lines == lines0);
+        }
+        core::Doc e;
+        std::string err;
+        const auto text = core::to_json(d);
+        check("scale: through JSON", core::from_json(e, text, &err) && e.as<core::Frame>(a1)->sx == 0.5 && core::to_json(e) == text, err);
+        while (j.can_undo()) j.undo();
+        check("scale: all undone exactly", core::to_json(d) == before);
+    }
+    // ── s233: a corner scales; just outside an edge's middle skews ──────────
+    {
+        std::cout << "--- s233 scale and skew by hand ---\n";
+        const auto near = [](double a, double b, double e = 1e-6) { return std::abs(a - b) < e; };
+        const auto corner = [](const core::Frame& f, double u, double v) {   // a place on its box (0..1), on the page
+            double x = f.x + f.w * u, y = f.y + f.h * v;
+            core::from_box(f, x, y);
+            return std::array<double, 2>{x, y};
+        };
+        core::Frame f;
+        f.kind = core::FrameKind::Image;
+        f.x = 100; f.y = 100; f.w = 100; f.h = 50;
+        auto g = core::scaled_by_handle(f, static_cast<int>(core::Handle::SE), 50, 25, false, false);
+        check("corner: scaled (1.5 x 1.5), the opposite corner held", near(g.sx, 1.5) && near(g.sy, 1.5) && g.w == 100 &&
+              near(corner(g, 0, 0)[0], 100) && near(corner(g, 0, 0)[1], 100) && near(corner(g, 1, 1)[0], 250) && near(corner(g, 1, 1)[1], 175));
+        g = core::scaled_by_handle(f, static_cast<int>(core::Handle::SE), 100, 0, true, false);
+        check("corner, Shift: in proportion", near(g.sx, 2) && near(g.sy, 2));
+        g = core::scaled_by_handle(f, static_cast<int>(core::Handle::NE), 50, 0, false, true);
+        check("corner, Alt: about its centre", near(g.sx, 2) && near(corner(g, 0.5, 0.5)[0], 150) && near(corner(g, 0.5, 0.5)[1], 125));
+        {   // turned 90: along its own axes, the opposite corner held
+            core::Frame t = f;
+            t.rot = 90;
+            const auto held = corner(t, 0, 1);   // SW's opposite of NE
+            const auto r = core::scaled_by_handle(t, static_cast<int>(core::Handle::NE), 0, -50, false, false);   // its x now runs up
+            check("corner, turned: scaled along its own axis", near(r.sx, 1.5) && near(r.sy, 1) && near(corner(r, 0, 1)[0], held[0]) &&
+                  near(corner(r, 0, 1)[1], held[1]));
+        }
+        auto k = core::skewed_by_edge(f, static_cast<int>(core::Handle::N), 20, 0);
+        check("skew N: the top slides right 20, the bottom held", near(corner(k, 0, 0)[0], 120) && near(corner(k, 0, 0)[1], 100) &&
+              near(corner(k, 0, 1)[0], 100) && near(corner(k, 0, 1)[1], 150) && near(corner(k, 1, 1)[0], 200));
+        k = core::skewed_by_edge(f, static_cast<int>(core::Handle::E), 0, 30);
+        check("skew E: the right edge slides down 30, the left held", near(corner(k, 1, 0)[1], 130) && near(corner(k, 1, 0)[0], 200) &&
+              near(corner(k, 0, 0)[1], 100) && near(corner(k, 0, 1)[1], 150));
+        {   // twice by hand -- composed, the corners where they should be
+            const auto k2 = core::skewed_by_edge(core::skewed_by_edge(f, static_cast<int>(core::Handle::S), -10, 0),
+                                                 static_cast<int>(core::Handle::W), 0, 15);
+            const auto tl = corner(k2, 0, 0), br = corner(k2, 1, 1);
+            check("skew twice: composed (bottom left 10, then the leaning left edge 15 along itself)", near(tl[0], 97) && near(tl[1], 115) && near(br[0], 190) &&
+                  near(br[1], 150));
+        }
+    }
+    // ── s234: the Scale rows ─────────────────────────────────────────────────
+    {
+        std::cout << "--- s234 scale rows ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::set_scale(j, d, {"frame.4"}, 1.5, 0.75, 4);
+        const auto items = core::frame_items(d, {"frame.4"}, "");
+        std::map<std::string, const core::Field*> by;
+        for (const auto& fl : items.front().fields) if (!fl.edit.empty()) by[fl.edit] = &fl;
+        check("inspector: Scale across / down, as set", by.count("scale_x") && by["scale_x"]->value == "150%" && by.count("scale_y") &&
+              by["scale_y"]->value == "75%");
+        check("inspector: a 100% button with the turns", by.count("turn") && by["turn"]->choices.size() == 5 && by["turn"]->choices[4].id == "unscale");
+        check("100%: the scale back, one step", D::set_scale(j, d, {"frame.4"}, 1, 1, 4, "Scale 100%") && d.as<core::Frame>("frame.4")->sx == 1 &&
+              !core::turned(*d.as<core::Frame>("frame.4")) && j.undo_label() == "Scale 100%");
+    }
 }
 }  // namespace cxtest
