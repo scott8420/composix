@@ -139,6 +139,8 @@ private:
     void on_go_up();                             // category: handler: s068 -- Alt+Up / the header's Up: the section's tiles
     void on_arrange(core::doc::Arrange how);
     void on_canvas_context(const views::Canvas::ContextHit& h);   // category: handler: s074 -- the canvas's right-click menu
+    void bind_path_actions();                    // category: bindings: s214 -- Pathfinder, Offset Path, Outline Stroke (Shell_paths.cpp)
+    void on_offset_path();                       // category: handler: s215 -- the Offset Path window
     void bind_context_actions();                 // category: bindings: s074 -- what that menu runs     // category: handler: s070 -- the canvas's picked frames, up / down the stack
     void on_go_forward();                        // category: handler: s068 -- Alt+Right / Forward: back into what Back left
     void sync_up();                              // category: helper: s068 -- the Up button: shown, named, enabled
@@ -339,6 +341,7 @@ private:
 
     // s013: the Export PDF sheet, and its choices for the session.
     std::unique_ptr<Gtk::Window>     m_export;
+    std::unique_ptr<Gtk::Window>     m_offset;   // s215: Offset Path
     std::function<void()>            m_export_sync;   // s086: the sheet's live state and summary card
     // s058: the swatch editor -- the swatch being made / changed, its sheet's widgets.
     // s064: the start screen's recent-project cards and their folders.

@@ -3,6 +3,7 @@
 #   libharfbuzz-dev zlib1g-dev cmake g++ zip (s180: lcms2 was missing from this list).
 # Optional (s187): libtiff-dev (Fedora: libtiff-devel) -- CMYK TIFFs print as CMYK.
 # Optional (s194), for faster builds: ccache ninja-build mold (or lld).
+# Optional (s213): clipper2-devel (Fedora) -- else the copy in third_party/clipper2 builds.
 set -e
 cd "$(dirname "${BASH_SOURCE[0]}")"
 # s194: Ninja when it's installed (a fresh build dir only -- an old Makefile

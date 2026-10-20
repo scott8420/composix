@@ -225,6 +225,16 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         paths->append("Make Compound Path", "win.make-compound");
         paths->append("Release Compound Path", "win.release-compound");
         m_arrange_menu->append_section(paths);
+        auto finder = Gio::Menu::create();   // s214: the Pathfinder -- a section (a nested submenu warned in GTK's popover stack)
+        finder->append("Unite Shapes", "win.path-op::0");
+        finder->append("Subtract (Back Minus Front)", "win.path-op::1");
+        finder->append("Intersect Shapes", "win.path-op::2");
+        finder->append("Exclude Overlap", "win.path-op::3");
+        m_arrange_menu->append_section(finder);
+        auto outline = Gio::Menu::create();   // s215
+        outline->append("Offset Path\u2026", "win.offset-path");
+        outline->append("Outline Stroke", "win.outline-stroke");
+        m_arrange_menu->append_section(outline);
         m_edit_menu->append_submenu("Arrange", m_arrange_menu);
     }
 

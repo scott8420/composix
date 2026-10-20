@@ -26,6 +26,7 @@
 #include "core/TextMap.hpp"
 #include "core/Hyphen.hpp"
 #include "core/Swatches.hpp"
+#include "core/Pathfinder.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>

@@ -166,6 +166,7 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     add_action("send-backward", [this] { on_arrange(core::doc::Arrange::Backward); });
     add_action("send-back",     [this] { on_arrange(core::doc::Arrange::Back); });
     bind_context_actions();   // s074
+    bind_path_actions();      // s214
     add_action("export-pdf",    sigc::mem_fun(*this, &Shell::on_export_pdf));   // s013
     add_action("color-report",  sigc::mem_fun(*this, &Shell::on_color_report));   // s053
     add_action("dump-registry", sigc::mem_fun(*this, &Shell::on_dump_registry));

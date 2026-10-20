@@ -1856,5 +1856,102 @@ void part8() {
         while (j.can_undo()) j.undo();
         check("compound: all undone exactly", core::to_json(d) == before);
     }
+    // ── s213: shapes combined (Clipper2), curves fitted back ──────────────
+    {
+        std::cout << "--- s213 pathfinder ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const std::string before = core::to_json(d);
+        const auto pl = core::layout_pages(d, {page});
+        const double ox = pl.front().r.x, oy = pl.front().r.y;
+        const auto inside = [&](const std::string& id, double x, double y) { return D::shape_hit(*d.as<core::Frame>(id), x, y, 0); };
+        (void)ox; (void)oy;
+        // Two squares overlapping: one L-ish outline of eight corners.
+        auto a = D::add_frame(j, d, page, core::FrameKind::Shape, {100, 100, 60, 60});
+        auto b = D::add_frame(j, d, page, core::FrameKind::Shape, {130, 130, 60, 60});
+        const auto u = D::path_op(j, d, {a, b}, D::PathOp::Unite);
+        const auto* uf = d.as<core::Frame>(u);
+        check("unite: two squares -- one path of 8 corners, the other gone, one step", uf && uf->path.size() == 8 && uf->subs.empty() &&
+              !d.as<core::Frame>(u == a ? b : a) && j.undo_label() == "Unite shapes" &&
+              core::frame_rect(*uf) == core::Rect{100, 100, 90, 90}, uf ? std::to_string(uf->path.size()) : "none");
+        check("unite: its corners straight lines, corners", uf && std::all_of(uf->path.begin(), uf->path.end(), [](const core::PathPoint& p) {
+                  return !p.smooth && p.ix == p.x && p.ox == p.x; }));
+        j.undo();
+        // A circle's outline comes back a handful of curves, on the circle.
+        const auto c1 = D::add_frame(j, d, page, core::FrameKind::Shape, {300, 300, 100, 100}, 1, 12, false, core::ShapeKind::Oval);
+        const auto c2 = D::add_frame(j, d, page, core::FrameKind::Shape, {360, 300, 100, 100}, 1, 12, false, core::ShapeKind::Oval);
+        const auto cu = D::path_op(j, d, {c1, c2}, D::PathOp::Unite);
+        {
+            const auto* f = d.as<core::Frame>(cu);
+            bool on = f != nullptr;
+            const auto polys = f ? D::outline_polys(*f) : std::vector<std::vector<D::XY>>{};
+            for (const auto& poly : polys)
+                for (const auto& q : poly) {
+                    const double r1 = std::hypot(q.x - 350, q.y - 350), r2 = std::hypot(q.x - 410, q.y - 350);
+                    on = on && std::min(std::abs(r1 - 50), std::abs(r2 - 50)) < 0.6;
+                }
+            check("unite: two circles -- a few curves (not a hundred lines), every point on one circle or the other",
+                  on && f->path.size() <= 16 && f->path.size() >= 4, f ? std::to_string(f->path.size()) : "none");
+        }
+        j.undo();
+        j.undo();
+        j.undo();
+        // A square minus a circle inside it: a hole.
+        const auto sq = D::add_frame(j, d, page, core::FrameKind::Shape, {100, 300, 100, 100});
+        const auto ci = D::add_frame(j, d, page, core::FrameKind::Shape, {125, 325, 50, 50}, 1, 12, false, core::ShapeKind::Oval);
+        const auto sw = D::add_swatch(j, d, core::Swatch{"Brick", 0, core::ColorModel::RGB, {180, 60, 40, 0}});
+        D::edit_frames(j, d, {sq}, "Fill", [&](core::Frame& f) { f.fill = sw; });
+        const auto s = D::path_op(j, d, {ci, sq}, D::PathOp::Subtract);
+        check("subtract: the backmost (the square) minus the circle -- a compound path with a hole, the square's fill",
+              s == sq && !d.as<core::Frame>(ci) && d.as<core::Frame>(s)->subs.size() == 1 && d.as<core::Frame>(s)->fill == sw &&
+              inside(s, 105, 305) && !inside(s, 150, 350) && j.undo_label() == "Subtract shapes");
+        j.undo();
+        const auto in = D::path_op(j, d, {sq, ci}, D::PathOp::Intersect);
+        check("intersect: the overlap -- the circle's area", !in.empty() && inside(in, 150, 350) && !inside(in, 105, 305));
+        j.undo();
+        const auto x = D::path_op(j, d, {sq, ci}, D::PathOp::Exclude);
+        check("exclude: all but the overlap", !x.empty() && inside(x, 105, 305) && !inside(x, 150, 350));
+        j.undo();
+        const auto far = D::add_frame(j, d, page, core::FrameKind::Shape, {400, 500, 20, 20});
+        check("intersect: shapes that don't meet -- nothing, no step", D::path_op(j, d, {sq, far}, D::PathOp::Intersect).empty() &&
+              d.as<core::Frame>(far));
+        check("pathfinder: a text frame isn't a shape here", D::path_op(j, d, {sq, "frame.1"}, D::PathOp::Unite).empty());
+        while (j.can_undo()) j.undo();
+        check("pathfinder: all undone exactly", core::to_json(d) == before);
+    }
+    // ── s215: Offset Path, Outline Stroke ─────────────────────────────────
+    {
+        std::cout << "--- s215 offset ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto sq = D::add_frame(j, d, page, core::FrameKind::Shape, {100, 100, 100, 100});
+        const auto out = D::offset_paths(j, d, {sq}, 10, 0, true);
+        check("offset: a square out 10 (mitre) -- a new 120-wide square on top, the original kept",
+              out.size() == 1 && out[0] != sq && d.as<core::Frame>(sq) &&
+              std::abs(d.as<core::Frame>(out[0])->w - 120) < 0.01 && d.as<core::Frame>(out[0])->z > d.as<core::Frame>(sq)->z &&
+              j.undo_label() == "Offset path");
+        const auto in = D::offset_paths(j, d, {sq}, -20, 1, true);
+        check("offset: in 20 -- 60 wide", in.size() == 1 && std::abs(d.as<core::Frame>(in[0])->w - 60) < 0.01);
+        const auto rnd = D::offset_paths(j, d, {sq}, 10, 1, true);
+        check("offset: round corners -- curves at them", rnd.size() == 1 && std::any_of(d.as<core::Frame>(rnd[0])->path.begin(),
+              d.as<core::Frame>(rnd[0])->path.end(), [](const core::PathPoint& p) { return p.ix != p.x || p.ox != p.x; }));
+        const auto ln = D::add_path(j, d, page, {D::corner_point(100, 400), D::corner_point(300, 400)}, true);
+        D::edit_frames(j, d, {ln}, "Weight", [](core::Frame& f) { f.stroke_w = 8; });
+        const auto stroke = d.as<core::Frame>(ln)->stroke;
+        const auto ol = D::offset_paths(j, d, {ln}, 4, 0, false);
+        const auto* of = d.as<core::Frame>(ln);
+        check("outline stroke: the line made a 200 x 8 shape, filled with its stroke's colour, in its place",
+              ol.size() == 1 && ol[0] == ln && !of->open && std::abs(of->w - 200) < 0.01 && std::abs(of->h - 8) < 0.01 &&
+              of->fill == stroke && of->stroke.empty() && j.undo_label() == "Outline");
+        while (j.can_undo()) j.undo();
+    }
 }
 }  // namespace cxtest

@@ -50,6 +50,21 @@ pkg_check_modules(GTKMM REQUIRED gtkmm-4.0)
 find_package(spdlog REQUIRED)
 find_package(Threads REQUIRED)   # s102: work off the UI thread (the progress dialog)
 find_package(ZLIB REQUIRED)      # s202: the core unzips SwatchBooker (.sbz) files
+# s213: Clipper2 (Angus Johnson, Boost 1.0) -- shapes united / subtracted /
+# intersected, paths offset. The system's when there is one (Fedora:
+# clipper2-devel, as Curvz uses), else the copy in third_party/clipper2.
+find_package(Clipper2 QUIET)
+if(NOT Clipper2_FOUND AND NOT TARGET Clipper2)
+    add_library(Clipper2 STATIC
+        third_party/clipper2/src/clipper.engine.cpp
+        third_party/clipper2/src/clipper.offset.cpp
+        third_party/clipper2/src/clipper.rectclip.cpp)
+    target_include_directories(Clipper2 SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/clipper2/include)
+    target_compile_options(Clipper2 PRIVATE -w)
+    message(STATUS "Clipper2: the copy in third_party")
+else()
+    message(STATUS "Clipper2: the system's")
+endif()
 
 # ── composix_core -- the GTK-free core (the model side of the one real seam) ──────
 # No gtkmm on this library's link line, BY DESIGN: a stray UI include under
@@ -104,10 +119,11 @@ add_library(composix_core STATIC
     src/core/Project.cpp
     # s038: hyphenation -- Liang's algorithm; the TeX patterns embedded below.
     src/core/Hyphen.cpp
+    src/core/Pathfinder.cpp   # s213: shapes combined (Clipper2), curves fitted back
     ${CMAKE_CURRENT_BINARY_DIR}/HyphenData.cpp
 )
 target_include_directories(composix_core PUBLIC include)
-target_link_libraries(composix_core PUBLIC ZLIB::ZLIB)   # s202
+target_link_libraries(composix_core PUBLIC ZLIB::ZLIB PRIVATE Clipper2)   # s202; s213: Clipper2
 # Vendored nlohmann/json (header-only, MIT), PRIVATE -- an implementation detail
 # of the pump, no consumer inherits the include (CANON: surprise-free build).
 target_include_directories(composix_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
@@ -200,6 +216,7 @@ add_executable(composix
     src/Shell_find.cpp
     src/Shell_colorreport.cpp
     src/Shell_swatch.cpp
+    src/Shell_paths.cpp         # s214: Pathfinder, Offset Path, Outline Stroke
     src/Shell_libraries.cpp
     src/Shell_start.cpp
     src/Shell_preflight.cpp
@@ -240,7 +257,7 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s212")
+set(COMPOSIX_BUILD "s215")
 # s194: on the About window's file alone -- on the whole target, each bump
 # rebuilt every app file and missed ccache.
 set_source_files_properties(src/AboutWindow.cpp PROPERTIES
