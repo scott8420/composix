@@ -1221,6 +1221,29 @@ void Canvas::on_drag_begin(double x, double y) {
             }
             end_edit();   // a click anywhere else ends editing, then does its own thing
         }
+        // s217: the Text tool on a shape's outline (not a text frame's) -- its words set along it, from there.
+        if (m_tool == Tool::Text && m_load.empty() && uf && uf->kind != core::FrameKind::Text && uf->kind != core::FrameKind::Image &&
+            (core::doc::has_outline(*uf) || uf->kind == core::FrameKind::Shape)) {
+            const Rect fl = core::frame_in_layout(m_doc, m_placed, under);
+            const auto tr = core::doc::path_track(*uf);
+            double dd = 0;
+            const double s = tr.nearest(px0 - (fl.x - uf->x), py0 - (fl.y - uf->y), &dd);
+            if (dd * m_vp.scale() <= 8 && core::doc::set_text_on_path(m_journal, m_doc, {under}, true, s)) {
+                m_drag = Drag::None;
+                relayout();
+                pick({under});
+                m_sig_edited.emit();
+                Glib::signal_timeout().connect_once([this] { open_story_editor(); }, 150);   // its words typed there, once the navigator has its story (the canvas edits text in boxes)
+                return;
+            }
+        }
+        // s217: text on a path is typed in the Story Editor (double-click / the Text tool open it).
+        if (text_frame && uf->on_path && m_load.empty() && ((m_tool == Tool::Select && m_clicks >= 2) || m_tool == Tool::Text)) {
+            m_drag = Drag::None;
+            pick({under});
+            Glib::signal_timeout().connect_once([this] { open_story_editor(); }, 150);
+            return;
+        }
         if (m_thread_from.empty() && m_load.empty() && text_frame && !m_mods_alt && out_port_hit(x, y).empty() &&
             ((m_tool == Tool::Select && m_clicks >= 2) || m_tool == Tool::Text)) {
             begin_edit(under, hit_story(under, px0, py0));
@@ -2150,6 +2173,12 @@ std::vector<core::PathPoint> Canvas::drawn_polygon(double& inner) const {   // s
     const double rr = std::hypot(m_lx1 - m_dx0, m_ly1 - m_dy0);
     if (rr <= 0) return {};
     return core::doc::polygon_points(m_dx0, m_dy0, rr, m_poly_sides, inner, std::atan2(m_ly1 - m_dy0, m_lx1 - m_dx0));
+}
+
+void Canvas::open_story_editor() {   // s217: the window's Story Editor action, for text on a path
+    auto* root = dynamic_cast<Gtk::Widget*>(get_root());
+    const bool ok = root && root->activate_action("win.story-editor");
+    if (auto lg = log::get(log::Area::View)) lg->info("story editor for text on a path: {}", ok ? "opened" : "no action");
 }
 
 bool Canvas::pen_near_first(double sx, double sy) const {   // s199

@@ -1401,11 +1401,77 @@ std::vector<std::vector<XY>> end_shapes(const Frame& f, double dx, double dy) {
     return out;
 }
 
+// ── s216: text on a path ───────────────────────────────────────────────────
+PathTrack path_track(const Frame& f) {
+    PathTrack t;
+    if (!has_outline(f) && f.radius <= 0) {   // a box: round its edge, from the top left
+        t.pts = {{f.x, f.y}, {f.x + f.w, f.y}, {f.x + f.w, f.y + f.h}, {f.x, f.y + f.h}, {f.x, f.y}};
+    } else {
+        const auto polys = outline_polys(f, 0.1);
+        if (!polys.empty()) t.pts = polys.front();
+        const bool closed = !(f.shape == ShapeKind::Path && f.open);
+        if (closed && !t.pts.empty()) t.pts.push_back(t.pts.front());
+    }
+    double run = 0;
+    for (std::size_t i = 0; i < t.pts.size(); ++i) {
+        if (i) run += std::hypot(t.pts[i].x - t.pts[i - 1].x, t.pts[i].y - t.pts[i - 1].y);
+        t.cum.push_back(run);
+    }
+    return t;
+}
+
+void PathTrack::at(double s, double& x, double& y, double& angle) const {
+    x = y = angle = 0;
+    if (pts.size() < 2) { if (!pts.empty()) { x = pts[0].x; y = pts[0].y; } return; }
+    // Past either end: on along the end's direction.
+    std::size_t i = static_cast<std::size_t>(std::upper_bound(cum.begin(), cum.end(), s) - cum.begin());
+    i = std::clamp<std::size_t>(i, 1, pts.size() - 1);
+    while (i + 1 < pts.size() && cum[i] - cum[i - 1] < 1e-9) ++i;   // skip a zero-length step
+    const XY a = pts[i - 1], b = pts[i];
+    const double seg = std::max(1e-9, cum[i] - cum[i - 1]);
+    const double t = (s - cum[i - 1]) / seg;
+    x = a.x + (b.x - a.x) * t;
+    y = a.y + (b.y - a.y) * t;
+    angle = std::atan2(b.y - a.y, b.x - a.x);
+}
+
+double PathTrack::nearest(double x, double y, double* dist) const {
+    double best = 1e300, at_s = 0;
+    for (std::size_t i = 1; i < pts.size(); ++i) {
+        const XY a = pts[i - 1], b = pts[i];
+        const double dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+        const double t = l2 > 0 ? std::clamp(((x - a.x) * dx + (y - a.y) * dy) / l2, 0.0, 1.0) : 0.0;
+        const double dd = std::hypot(x - (a.x + dx * t), y - (a.y + dy * t));
+        if (dd < best) { best = dd; at_s = cum[i - 1] + t * std::sqrt(l2); }
+    }
+    if (dist) *dist = best;
+    return at_s;
+}
+
+Frame text_box(const Frame& f) {
+    if (!f.on_path || f.kind != FrameKind::Text) return f;
+    Frame g = f;
+    g.w = std::max(1.0, path_track(f).length() - std::max(0.0, f.path_from));
+    g.h = 1e5;   // one line is drawn; the rest would be overset
+    g.columns = 1;
+    g.widths.clear();
+    g.inset = {};
+    g.valign = VAlign::Top;
+    g.autosize = false;
+    g.shape = ShapeKind::Rect;
+    g.path.clear();
+    g.subs.clear();
+    g.radius = 0;
+    return g;
+}
+
 bool shape_hit(const Frame& f, double x, double y, double tol) {   // s203
-    if (!Rect{f.x - tol - f.stroke_w, f.y - tol - f.stroke_w, f.w + 2 * (tol + f.stroke_w), f.h + 2 * (tol + f.stroke_w)}.contains(x, y))
+    const double m = tol + f.stroke_w + (f.on_path ? 16 : 0);   // s217: text on a path sits above it
+    if (!Rect{f.x - m, f.y - m, f.w + 2 * m, f.h + 2 * m}.contains(x, y))
         return false;
     if (!has_outline(f)) return true;
-    const double near = std::max(tol, 1.0) + (f.stroke.empty() ? 0.0 : f.stroke_w / 2);
+    double near = std::max(tol, 1.0) + (f.stroke.empty() ? 0.0 : f.stroke_w / 2);
+    if (f.on_path) near += 16;   // s217: its words sit above the path
     const bool open = f.shape == ShapeKind::Path && f.open;
     bool inside = false;
     for (const auto& poly : outline_polys(f, 0.5)) {
@@ -1556,6 +1622,37 @@ bool set_frame_content(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames
                 made.push_back(story);
                 f.story = story;
             }
+            d.put(id, f);
+        }
+        return made;
+    });
+}
+
+bool set_text_on_path(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, bool on, double from) {   // s217
+    std::vector<Doc::Id> touch;
+    for (const auto& id : frames) {
+        const auto* f = d.as<Frame>(id);
+        if (!f || f->kind == FrameKind::Image) continue;
+        if (on ? (f->on_path && f->kind == FrameKind::Text && (from < 0 || f->path_from == from)) : !f->on_path) continue;
+        touch.push_back(id);
+    }
+    if (touch.empty()) return false;
+    return j.run(on ? "Text on path" : "Text in frame", touch, [&]() -> std::vector<Doc::Id> {
+        std::vector<Doc::Id> made;
+        Doc::Id style;
+        for (const auto& s : d.ids_of<Style>())
+            if (d.as<Style>(s)->kind == StyleKind::Paragraph) { style = s; break; }
+        for (const auto& id : touch) {
+            Frame f = *d.as<Frame>(id);
+            if (on && f.kind != FrameKind::Text) {
+                f.kind = FrameKind::Text;
+                const Doc::Id story = d.fresh_id("story");
+                d.put(story, Story{"Story " + story.substr(story.find('.') + 1), {{style, ""}}});
+                made.push_back(story);
+                f.story = story;
+            }
+            f.on_path = on;
+            if (on && from >= 0) f.path_from = from;
             d.put(id, f);
         }
         return made;
@@ -5174,6 +5271,7 @@ std::string tint_text(double t) { return std::to_string(static_cast<int>(std::lr
 std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
     std::vector<WrapRect> out;
     const auto* t = d.as<Frame>(id);
+    if (t && t->on_path) return out;   // s216: text along a path -- nothing pushes it, its own outline doesn't hold it
     // s209: a text frame with a shape -- its lines kept inside it: what lies
     // outside the outline, band by band, is wrapped like any other frame.
     if (t && doc::has_outline(*t) && !(t->shape == ShapeKind::Path && t->open)) {

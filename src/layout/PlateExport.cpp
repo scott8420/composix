@@ -151,8 +151,36 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
         pg.rect({f.x + m.r.x, f.y + m.r.y, m.r.w, m.r.h});
         pg.fill();
     }
+    // s216: text on a path -- each glyph turned to the path at its middle (one line).
+    const bool on_path = f.on_path && f.kind == core::FrameKind::Text;
+    const core::doc::PathTrack tr = on_path ? core::doc::path_track(f) : core::doc::PathTrack{};
+    double first_base = -1;
+    const auto show = [&](const plate::pango::Run& run) {
+        if (!on_path) { plate::pango::show(c.doc, pg, run); return; }
+        double pen = run.x;
+        for (const auto& g : run.glyphs) {
+            const double mid = pen - f.x + g.advance / 2;
+            pen += g.advance;
+            const double s = std::max(0.0, f.path_from) + mid;
+            if (s < 0 || s > tr.length()) continue;
+            double px, py, ang;
+            tr.at(s, px, py, ang);
+            plate::pango::Run one = run;
+            one.x = -g.advance / 2;
+            one.baseline = 0;
+            one.glyphs = {g};
+            pg.save();
+            pg.concat(std::cos(ang), std::sin(ang), -std::sin(ang), std::cos(ang), px, py);
+            plate::pango::show(c.doc, pg, one);
+            pg.restore();
+        }
+    };
     visit_lines(c.d, f.story, flow, fid, [&](const LineVisit& v) {
         if (v.para >= static_cast<int>(st->paras.size())) return;
+        if (on_path) {   // its first line only
+            if (first_base < 0) first_base = v.baseline;
+            if (v.baseline > first_base + 0.01) return;
+        }
         const auto& para = st->paras[static_cast<std::size_t>(v.para)];
         const auto* ps = c.d.as<core::Style>(para.style);
         for (const auto& run : plate::pango::runs(v.line, f.x + v.x, f.y + v.baseline)) {
@@ -164,7 +192,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             if (v.from >= 0)
                 if (const auto lc = core::local_at(para, v.from + run.start + 1).color; c.d.as<core::Swatch>(lc)) {
                     pg.set_fill(ink_of(c.d, lc, 1));
-                    plate::pango::show(c.doc, pg, run);
+                    show(run);
                     continue;
                 }
             if (const auto* cs = v.from < 0 ? nullptr : c.d.as<core::Style>(core::char_style_at(para, v.from + run.start + 1));
@@ -173,7 +201,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
                 tint = cs->color_tint;
             }
             pg.set_fill(ink_of(c.d, sw, tint));
-            plate::pango::show(c.doc, pg, run);
+            show(run);
         }
     }, rs.any ? &rs.text : nullptr);
 }

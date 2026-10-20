@@ -856,8 +856,14 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         std::string on = d.as<Page>(f->owner) ? "Page " + d.folio(f->owner) : master_label(d, f->owner);
         std::vector<Field> fields{{"Kind", kind}, {"On", on}};
         // s210: what it holds -- a shape made a text or picture frame, and back
-        fields.push_back({"Content", f->kind == FrameKind::Text ? "Text" : f->kind == FrameKind::Image ? "Picture" : "None", "content",
-                          {{"0", "Text"}, {"1", "Picture"}, {"2", "None"}}});
+        fields.push_back({"Content", f->on_path && f->kind == FrameKind::Text ? "Text on path"   // s217
+                                     : f->kind == FrameKind::Text ? "Text" : f->kind == FrameKind::Image ? "Picture" : "None", "content",
+                          {{"0", "Text"}, {"3", "Text on path"}, {"1", "Picture"}, {"2", "None"}}});
+        if (f->on_path && f->kind == FrameKind::Text) {   // s217: where along the path it starts
+            std::vector<Choice> sc;
+            for (double v : {0.0, 6.0, 12.0, 18.0, 24.0, 36.0, 48.0, 72.0, 96.0, 144.0}) sc.push_back({pts(v), pts(v) + " pt"});
+            fields.push_back({"Path start", pts(f->path_from) + " pt", "path_from", sc});
+        }
         {   // s197: its outline -- a rectangle and an oval trade places (s210: any frame's)
             if (f->shape == ShapeKind::Path) {
                 const bool line = f->open && f->path.size() == 2;

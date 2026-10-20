@@ -1691,7 +1691,8 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
     }
 
     for (std::size_t fi = first; fi < chain.size() && !done; ++fi) {
-        const auto& fr = *d.as<core::Frame>(chain[fi]);
+        const core::Frame fr_box = core::doc::text_box(*d.as<core::Frame>(chain[fi]));   // s216: text on a path -- one line as long as it
+        const auto& fr = fr_box;
         out.frames[fi].from_p = c.p;   // s105
         out.frames[fi].from_b = c.start;
         out.frames[fi].carry_in = c.carry;   // s117
@@ -1910,9 +1911,11 @@ template <class F>
 void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, F&& f,
                 const core::Story* text = nullptr) {
     const auto* st = text ? text : d.as<core::Story>(story);
-    const auto* fr = d.as<core::Frame>(frame);
+    const auto* fr0 = d.as<core::Frame>(frame);
     const FrameText* ft = frame_text(flow, frame);
-    if (!st || !fr || !ft || ft->lines.empty()) return;
+    if (!st || !fr0 || !ft || ft->lines.empty()) return;
+    const core::Frame box = core::doc::text_box(*fr0);   // s216: as it was flowed
+    const auto* fr = &box;
     const StoryScope scope(d, st);   // s109
     std::size_t i = 0;
     while (i < ft->lines.size()) {
@@ -2156,9 +2159,82 @@ std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& stor
     return out;
 }
 
+namespace {
+// s216: one Pango line set along a path -- each glyph turned to the path at
+// its middle, its baseline on it. (dx, dy): from the path's (owner)
+// coordinates to the context's; x0: the line's left in the text box.
+void show_line_on_path(cairo_t* cr, PangoLayoutLine* line, double x0, const core::doc::PathTrack& tr, double from,
+                       double dx, double dy) {
+    double run_x = 0;   // Pango units
+    for (GSList* l = line->runs; l; l = l->next) {
+        auto* run = static_cast<PangoGlyphItem*>(l->data);
+        PangoGlyphString* gs = run->glyphs;
+        PangoFont* font = run->item->analysis.font;
+        cairo_save(cr);
+        for (GSList* a = run->item->analysis.extra_attrs; a; a = a->next) {   // a run's own colour
+            const auto* at = static_cast<PangoAttribute*>(a->data);
+            if (at->klass->type == PANGO_ATTR_FOREGROUND) {
+                const auto& c = reinterpret_cast<const PangoAttrColor*>(at)->color;
+                cairo_set_source_rgb(cr, c.red / 65535.0, c.green / 65535.0, c.blue / 65535.0);
+            }
+        }
+        for (int i = 0; i < gs->num_glyphs; ++i) {
+            const auto& g = gs->glyphs[i];
+            const double w = g.geometry.width / static_cast<double>(PANGO_SCALE);
+            const double mid = x0 + (run_x + g.geometry.width / 2.0) / PANGO_SCALE;
+            run_x += g.geometry.width;
+            if (g.glyph == PANGO_GLYPH_EMPTY || (g.glyph & PANGO_GLYPH_UNKNOWN_FLAG)) continue;
+            const double s = from + mid;
+            if (s < 0 || s > tr.length()) continue;   // off the path's ends: not set
+            double px, py, ang;
+            tr.at(s, px, py, ang);
+            PangoGlyphString* one = pango_glyph_string_new();
+            pango_glyph_string_set_size(one, 1);
+            one->glyphs[0] = g;
+            one->glyphs[0].geometry.x_offset = 0;
+            one->log_clusters[0] = 0;
+            cairo_save(cr);
+            cairo_translate(cr, dx + px, dy + py);
+            cairo_rotate(cr, ang);
+            cairo_move_to(cr, -w / 2 + g.geometry.x_offset / static_cast<double>(PANGO_SCALE), 0);
+            pango_cairo_show_glyph_string(cr, font, one);
+            cairo_restore(cr);
+            pango_glyph_string_free(one);
+        }
+        cairo_restore(cr);
+    }
+}
+}  // namespace
+
 void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, const StoryFlow& flow,
                      const std::string& frame, double ox, double oy, double ink, const core::Story* text) {
     cairo_save(cr);
+    // s216: text on a path -- its first line along it, glyph by glyph.
+    if (const auto* pf = d.as<core::Frame>(frame); pf && pf->on_path && pf->kind == core::FrameKind::Text) {
+        const auto tr = core::doc::path_track(*pf);
+        const auto* st = text ? text : d.as<core::Story>(story);
+        double first = -1;
+        walk_frame(d, story, flow, frame, [&](const Placed& pl) {
+            if (first < 0) first = pl.base;
+            if (pl.base > first + 0.01) return;   // one line: the rest is overset
+            const core::Swatch* sw = nullptr;
+            double tint = 1;
+            if (st && pl.line->para < static_cast<int>(st->paras.size()))
+                if (const auto* ps = d.as<core::Style>(st->paras[static_cast<std::size_t>(pl.line->para)].style)) {
+                    sw = d.as<core::Swatch>(ps->color);
+                    tint = ps->color_tint;
+                }
+            if (sw) {
+                const auto c = core::tint_rgb(core::doc::screen_rgb(*sw), tint);
+                cairo_set_source_rgb(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
+            } else {
+                cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
+            }
+            show_line_on_path(cr, pl.pl, pl.x, tr, std::max(0.0, pf->path_from), ox - pf->x, oy - pf->y);
+        }, text);
+        cairo_restore(cr);
+        return;
+    }
     const auto* st = text ? text : d.as<core::Story>(story);
     // s044: paragraph rules, under the words; s055: column rules with them.
     auto marks = paragraph_rules(d, story, flow, frame, text);

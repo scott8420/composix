@@ -209,8 +209,10 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
         // drawn at true size and scaled -- breaks never change with zoom.
         const auto& flow = P.flows.get(P.doc, f.story);
         cr->save();
-        cr->rectangle(r.x, r.y, r.w, r.h);
-        cr->clip();
+        if (!f.on_path) {   // s216: text on a path sits above it, past the box
+            cr->rectangle(r.x, r.y, r.w, r.h);
+            cr->clip();
+        }
         cr->translate(r.x, r.y);
         cr->scale(s, s);
         if (from_master || op < 1) cr->push_group();
@@ -222,7 +224,7 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
         if (rs && rs->any) layout::draw_frame_text(cr->cobj(), P.doc, f.story, rs->flow, id, 0, 0, 0.08, &rs->text);
         else layout::draw_frame_text(cr->cobj(), P.doc, f.story, flow, id, 0, 0);
         // s059: hidden characters, over the words, in the selection's blue (never printed).
-        if (P.show_hidden && !from_master) {
+        if (P.show_hidden && !from_master && !f.on_path) {
             const auto marks = (rs && rs->any) ? layout::hidden_marks(P.doc, f.story, rs->flow, id, &rs->text)
                                                : layout::hidden_marks(P.doc, f.story, flow, id);
             cr->save();

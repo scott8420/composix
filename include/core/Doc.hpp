@@ -273,6 +273,11 @@ struct Frame {
     // (ascending, 0 < k < size). Filled even-odd: a subpath inside another
     // is a hole.
     std::vector<int> subs;
+    // s216: a text frame's words set ALONG its outline (an open path, a
+    // line, an oval's edge...) -- not inside it: one line, its baseline on
+    // the path, starting `path_from` points along it.
+    bool        on_path = false;
+    double      path_from = 0;
     bool operator==(const Frame&) const = default;
 };
 
@@ -921,6 +926,20 @@ Doc::Id add_polygon(DocJournal& j, Doc& d, const Doc::Id& owner, double cx, doub
 std::vector<OutlineOp> stroke_ops(const Frame& f, double dx = 0, double dy = 0);
 std::vector<double> dash_pattern(const Frame& f);
 std::vector<std::vector<XY>> end_shapes(const Frame& f, double dx = 0, double dy = 0);
+// s216: text on a path. The path as a track to measure along (owner
+// coordinates): its first subpath, flattened; a closed one returns to its
+// start. at(s): the point s points along and the direction there (radians).
+struct PathTrack {
+    std::vector<XY>     pts;
+    std::vector<double> cum;   // the length to each point
+    double length() const { return cum.empty() ? 0 : cum.back(); }
+    void at(double s, double& x, double& y, double& angle) const;
+    double nearest(double x, double y, double* dist = nullptr) const;   // how far along the closest point is
+};
+PathTrack path_track(const Frame& f);
+// The box the frame's text is flowed in: itself -- or, for text on a path,
+// one long line as long as the path (from path_from), its shape a box.
+Frame text_box(const Frame& f);
 // s203: is (x, y) (owner coordinates) on this shape -- inside a closed
 // one, or within `tol` (and half its stroke) of its outline; an open path
 // (a line) only near its stroke. Frames without an outline: their box.
@@ -941,6 +960,10 @@ Doc::Id make_compound(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames)
 // Its subpaths each a path of its own, styled alike. One step; the new ids
 // (the first is the frame itself).
 std::vector<Doc::Id> release_compound(DocJournal& j, Doc& d, const Doc::Id& frame);
+// s217: text set along the frames' outlines (on) -- a shape gets an empty
+// story first -- or back inside them (off). `from` >= 0: where along the
+// path it starts. One step ("Text on path" / "Text in frame").
+bool set_text_on_path(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, bool on, double from = -1);
 // Change shapes between Rect and Oval (a Path keeps its points). One step.
 bool set_shape_kind(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ShapeKind k);
 // s200: Direct on a shape -- its points to edit (owner coordinates): a

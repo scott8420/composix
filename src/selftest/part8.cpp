@@ -1953,5 +1953,90 @@ void part8() {
               of->fill == stroke && of->stroke.empty() && j.undo_label() == "Outline");
         while (j.can_undo()) j.undo();
     }
+    // ── s216: text on a path ──────────────────────────────────────────────
+    {
+        std::cout << "--- s216 text on a path ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto ln = D::add_path(j, d, page, {D::corner_point(100, 300), D::corner_point(300, 300)}, true);
+        const auto tr = D::path_track(*d.as<core::Frame>(ln));
+        double x, y, a;
+        tr.at(50, x, y, a);
+        check("track: a 200 pt line, 50 along it at (150, 300), heading right", std::abs(tr.length() - 200) < 1e-6 &&
+              std::abs(x - 150) < 1e-6 && std::abs(y - 300) < 1e-6 && std::abs(a) < 1e-9);
+        double dist = 0;
+        check("track: the nearest place to a point -- how far along", std::abs(tr.nearest(220, 310, &dist) - 120) < 1e-6 && std::abs(dist - 10) < 1e-6);
+        D::set_frame_content(j, d, {ln}, core::FrameKind::Text);
+        D::edit_frames(j, d, {ln}, "On path", [](core::Frame& f) { f.on_path = true; f.path_from = 20; });
+        {
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>(d.as<core::Frame>(ln)->story);
+            st.paras[0].text = "Along the line, and on past its end until the words run out of room entirely here";
+            d.put(d.as<core::Frame>(ln)->story, st);
+        }
+        const auto box = D::text_box(*d.as<core::Frame>(ln));
+        check("text box: the path's length less where it starts, one column, no shape", std::abs(box.w - 180) < 1e-6 && box.columns == 1 &&
+              box.shape == core::ShapeKind::Rect);
+        check("text on a path: nothing wraps it", core::wrap_rects(d, ln).empty());
+        L::FlowCache flows;
+        const auto& fl = flows.get(d, d.as<core::Frame>(ln)->story);
+        double w0 = 0;
+        for (const auto& ft : fl.frames) if (ft.frame == ln && !ft.lines.empty()) w0 = ft.lines.front().w > 0 ? ft.lines.front().w : 180;
+        check("text on a path: flowed at the path's length", w0 > 0 && w0 <= 180.01, std::to_string(w0));
+        {   // as it prints: each glyph turned (a cm before it)
+            namespace fs = std::filesystem;
+            const auto base = fs::temp_directory_path() / "composix_selftest_onpath";
+            std::error_code ec;
+            fs::create_directories(base, ec);
+            const auto out = (base / "p.pdf").string();
+            L::PdfOptions opt;
+            opt.compress = false;
+            L::PdfReport rep;
+            std::string err;
+            const bool ok = L::export_print_pdf(d, out, opt, {}, &rep, &err);
+            std::string pdf;
+            { std::ifstream in(out, std::ios::binary); std::stringstream ss; ss << in.rdbuf(); pdf = ss.str(); }
+            int cms = 0;
+            for (auto i = pdf.find(" 0 Tm ["); i != std::string::npos; i = pdf.find(" 0 Tm [", i + 1)) ++cms;   // each glyph at its own origin
+            check("print: the glyphs set one by one along it", ok && cms >= 20, std::to_string(cms));
+            fs::remove_all(base, ec);
+        }
+        core::Doc e;
+        std::string err;
+        const auto text = core::to_json(d);
+        check("text on a path: through JSON", core::from_json(e, text, &err) && e.as<core::Frame>(ln)->on_path &&
+              e.as<core::Frame>(ln)->path_from == 20 && core::to_json(e) == text, err);
+        while (j.can_undo()) j.undo();
+    }
+    // ── s217: making text on a path ───────────────────────────────────────
+    {
+        std::cout << "--- s217 text on path verbs ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const std::string before = core::to_json(d);
+        const auto ov = D::add_frame(j, d, page, core::FrameKind::Shape, {100, 100, 120, 80}, 1, 12, false, core::ShapeKind::Oval);
+        check("on path: a shape gets a story, its words along it, from where it was clicked -- one step",
+              D::set_text_on_path(j, d, {ov}, true, 33) && d.as<core::Frame>(ov)->kind == core::FrameKind::Text &&
+              d.as<core::Frame>(ov)->on_path && d.as<core::Frame>(ov)->path_from == 33 && d.as<core::Story>(d.as<core::Frame>(ov)->story) &&
+              j.undo_label() == "Text on path");
+        check("on path: already so -- no step", !D::set_text_on_path(j, d, {ov}, true, 33));
+        check("on path: back inside", D::set_text_on_path(j, d, {ov}, false) && !d.as<core::Frame>(ov)->on_path &&
+              j.undo_label() == "Text in frame");
+        check("on path: a picture frame isn't", !D::set_text_on_path(j, d, {"frame.11"}, true));
+        D::set_text_on_path(j, d, {ov}, true, 0);
+        const auto pl = core::layout_pages(d, {page});
+        check("on path: picked by its words above the path (16 pt)", core::hit_frame(d, pl, pl.front().r.x + 160, pl.front().r.y + 88, 1) == ov);
+        while (j.can_undo()) j.undo();
+        check("on path: all undone exactly", core::to_json(d) == before);
+    }
 }
 }  // namespace cxtest

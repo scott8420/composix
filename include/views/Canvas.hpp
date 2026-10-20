@@ -360,7 +360,8 @@ private:
     bool        m_pen_rev = false;           // ... from its first point (the points held reversed)
     double      m_pen_ox = 0, m_pen_oy = 0;
     void pen_finish(bool keep, bool closed = false);   // Enter / Esc / another tool: drawn (two points or more)
-    bool pen_near_first(double sx, double sy) const;   // the pointer on the first point (screen): it closes
+    bool pen_near_first(double sx, double sy) const;
+    void open_story_editor();                // s217   // the pointer on the first point (screen): it closes
     std::string m_thread_from;               // "loaded": the next click threads into a frame
 
     // s009

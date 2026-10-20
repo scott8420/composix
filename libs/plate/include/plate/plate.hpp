@@ -88,6 +88,7 @@ public:
     void set_fill(const Color& c);
     void set_stroke(const Color& c);
     void set_line_width(double w);
+    void concat(double a, double b, double c, double d, double e, double f);   // s216: cm -- what follows turned / moved
     void set_line_cap(int cap);     // s204: 0 butt, 1 round, 2 square
     void set_line_join(int join);   // s204: 0 miter, 1 round, 2 bevel
     void set_dash(const std::vector<double>& on_off, double phase = 0);   // s204: empty -- solid
