@@ -283,6 +283,13 @@ struct Frame {
     // top (the words hang below), 3 its bottom.
     bool        path_flip = false;
     int         path_align = 0;
+    // s221: where the words stop, points along the path (as path_from is
+    // measured); 0 = the path's end. Past it the text is overset.
+    double      path_to = 0;
+    // s223: how each glyph sits on the path (InDesign's effects): 0 Rainbow
+    // (turned with it), 1 Skew (upright, slanted along it), 2 3D Ribbon
+    // (level, leaning with it), 3 Stair Step (upright and level).
+    int         path_effect = 0;
     bool operator==(const Frame&) const = default;
 };
 
@@ -950,6 +957,19 @@ void path_unpoint(const PathTrack& tr, const Frame& f, double x, double y, doubl
 // The baseline's distance below the path for the frame's alignment, from the
 // line's ascent and descent (points).
 double path_shift(const Frame& f, double ascent, double descent);
+// s221: where along the track the words stop -- path_to, or the track's end
+// (and never before path_from).
+double path_end(const Frame& f, const PathTrack& tr);
+// s221: the path_to to store for an end at `s` along the track: at least a
+// point past path_from; within half a point of the track's end, 0 (the end
+// itself, which follows the path's length); to 0.1 pt.
+double path_to_for(const Frame& f, const PathTrack& tr, double s);
+// s223: a glyph's axes at a place on the path heading `angle` -- where its
+// x (along) and y (down) go, for the frame's effect: x' = xx x + xy y,
+// y' = yx x + yy y (cairo's / PDF's cm order: xx yx xy yy). Never mirrored:
+// running leftward, Skew and 3D Ribbon turn the glyph over as Rainbow does.
+struct PathAxes { double xx = 1, yx = 0, xy = 0, yy = 1; };
+PathAxes path_axes(const Frame& f, double angle);
 // The box the frame's text is flowed in: itself -- or, for text on a path,
 // one long line as long as the path (from path_from), its shape a box.
 Frame text_box(const Frame& f);

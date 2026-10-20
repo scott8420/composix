@@ -1449,19 +1449,47 @@ double PathTrack::nearest(double x, double y, double* dist) const {
     return at_s;
 }
 
+PathAxes path_axes(const Frame& f, double a) {   // s223
+    const double c = std::cos(a), s = std::sin(a);
+    const double turn = c < 0 ? -1 : 1;   // running leftward: over, not mirrored
+    switch (f.path_effect) {
+    case 1: return {c, s, 0, turn};       // Skew: its verticals stay vertical
+    case 2: return {turn, 0, -s, c};      // 3D Ribbon: its horizontals stay level
+    case 3: return {1, 0, 0, 1};          // Stair Step: as set, on its place
+    default: return {c, s, -s, c};        // Rainbow: turned with the path
+    }
+}
+
 void path_point(const PathTrack& tr, const Frame& f, double bx, double by, double base, double shift, double& x, double& y) {   // s218
     double px, py, a;
     tr.at(std::max(0.0, f.path_from) + bx, px, py, a);
-    const double v = by - base + shift;   // below the path, along its left-hand normal turned down
-    x = px - std::sin(a) * v;
-    y = py + std::cos(a) * v;
+    const double v = by - base + shift;   // below the path, along the glyph's down (s223: the effect's)
+    const PathAxes m = path_axes(f, a);
+    x = px + m.xy * v;
+    y = py + m.yy * v;
 }
 
 void path_unpoint(const PathTrack& tr, const Frame& f, double x, double y, double base, double shift, double& bx, double& by) {
-    const double s = tr.nearest(x, y);
-    double px, py, a;
-    tr.at(s, px, py, a);
-    const double v = (x - px) * -std::sin(a) + (y - py) * std::cos(a);
+    // s223: from the nearest place, then along the path until the point is
+    // straight down the glyph's down from it (off the normal for Skew / Stair
+    // Step): (x, y) - P(s) = da * along + v * down, solved, s += da.
+    double s = tr.nearest(x, y), v = 0;
+    for (int it = 0; it < 6; ++it) {
+        double px, py, a;
+        tr.at(s, px, py, a);
+        const PathAxes m = path_axes(f, a);
+        const double tx = std::cos(a), ty = std::sin(a);
+        const double det = tx * m.yy - ty * m.xy;
+        const double rx = x - px, ry = y - py;
+        if (std::abs(det) < 1e-6) {   // down runs along the path here: as far down the normal
+            v = rx * m.xy + ry * m.yy;
+            break;
+        }
+        const double da = (rx * m.yy - ry * m.xy) / det;
+        v = (tx * ry - ty * rx) / det;
+        if (std::abs(da) < 1e-7) break;
+        s = std::clamp(s + da, 0.0, tr.length());
+    }
     bx = s - std::max(0.0, f.path_from);
     by = base + v - shift;
 }
@@ -1475,10 +1503,24 @@ double path_shift(const Frame& f, double ascent, double descent) {
     }
 }
 
+double path_end(const Frame& f, const PathTrack& tr) {   // s221
+    const double len = tr.length();
+    const double to = f.path_to > 0 ? std::min(f.path_to, len) : len;
+    return std::max(to, std::max(0.0, f.path_from));
+}
+
+double path_to_for(const Frame& f, const PathTrack& tr, double s) {   // s221
+    const double len = tr.length();
+    const double lo = std::min(len, std::max(0.0, f.path_from) + 1);
+    s = std::clamp(s, lo, len);
+    if (len - s < 0.5) return 0;
+    return std::round(s * 10) / 10;
+}
+
 Frame text_box(const Frame& f) {
     if (!f.on_path || f.kind != FrameKind::Text) return f;
     Frame g = f;
-    g.w = std::max(1.0, path_track(f).length() - std::max(0.0, f.path_from));
+    g.w = std::max(1.0, path_end(f, path_track(f)) - std::max(0.0, f.path_from));   // s221: to its end mark
     g.h = 1e5;   // one line is drawn; the rest would be overset
     g.columns = 1;
     g.widths.clear();

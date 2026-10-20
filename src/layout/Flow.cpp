@@ -1806,6 +1806,23 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         NoteCount count{note_from};
         NoteCount* nc = restart != core::NoteRestart::Story ? &count : nullptr;
         done = fill_frame(d, *st, fr, wraps, c, floor, out.frames[fi], nc, false, away);
+        // s222: text on a path holds ONE line -- what follows goes on to the
+        // next frame in the thread, or is overset (was: laid out below and
+        // never drawn, so nothing said words were missing).
+        if (const auto* pf0 = d.as<core::Frame>(chain[fi]); pf0 && pf0->on_path && pf0->kind == core::FrameKind::Text) {
+            auto& ls = out.frames[fi].lines;
+            if (ls.size() > 1) {
+                const Line l0 = ls.front();
+                ls.resize(1);
+                const auto& para = st->paras[static_cast<std::size_t>(l0.para)];
+                c = Cursor{};
+                if (l0.end >= static_cast<int>(para.text.size())) { c.p = l0.para + 1; c.start = 0; }
+                else { c.p = l0.para; c.start = l0.end; }
+                c.end_from = at.end_from;   // endnotes: as they stood coming in
+                std::erase_if(out.frames[fi].notes, [&](const NotePlace& nt) { return nt.para > l0.para; });
+                done = c.p >= static_cast<int>(st->paras.size());
+            }
+        }
         if (done && fr.balance && core::column_count(fr) > 1) {
             // The shortest column height that still holds the rest.
             double lo = std::max(0.0, fr.inset.top), hi = floor;
@@ -2189,7 +2206,7 @@ namespace {
 // its middle, its baseline on it. (dx, dy): from the path's (owner)
 // coordinates to the context's; x0: the line's left in the text box.
 void show_line_on_path(cairo_t* cr, PangoLayoutLine* line, double x0, const core::doc::PathTrack& tr, double from,
-                       double dx, double dy, double shift) {
+                       double dx, double dy, double shift, const core::Frame& f) {
     double run_x = 0;   // Pango units
     for (GSList* l = line->runs; l; l = l->next) {
         auto* run = static_cast<PangoGlyphItem*>(l->data);
@@ -2219,8 +2236,12 @@ void show_line_on_path(cairo_t* cr, PangoLayoutLine* line, double x0, const core
             one->glyphs[0].geometry.x_offset = 0;
             one->log_clusters[0] = 0;
             cairo_save(cr);
-            cairo_translate(cr, dx + px, dy + py);
-            cairo_rotate(cr, ang);
+            {   // s223: the effect's axes (Rainbow: turned with the path)
+                const auto m = core::doc::path_axes(f, ang);
+                cairo_matrix_t mx;
+                cairo_matrix_init(&mx, m.xx, m.yx, m.xy, m.yy, dx + px, dy + py);
+                cairo_transform(cr, &mx);
+            }
             cairo_move_to(cr, -w / 2 + g.geometry.x_offset / static_cast<double>(PANGO_SCALE), shift);   // s218: below the path by the alignment
             pango_cairo_show_glyph_string(cr, font, one);
             cairo_restore(cr);
@@ -2256,7 +2277,7 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
                 cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
             }
             show_line_on_path(cr, pl.pl, pl.x, tr, std::max(0.0, pf->path_from), ox - pf->x, oy - pf->y,
-                              core::doc::path_shift(*pf, line_ascent(pl.pl), line_descent(pl.pl)));
+                              core::doc::path_shift(*pf, line_ascent(pl.pl), line_descent(pl.pl)), *pf);
         }, text);
         cairo_restore(cr);
         return;

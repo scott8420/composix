@@ -963,6 +963,19 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         cr->arc(sx, sy, 3.5, 0, 2 * M_PI);
         cr->fill();
     }
+    // s221: and where it stops -- a bar across the path, a small square on it.
+    if (double mx, my, ma; path_end_mark(mx, my, ma)) {
+        double sx, sy;
+        m_vp.to_screen(mx, my, sx, sy);
+        const double nx = -std::sin(ma), ny = std::cos(ma);
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+        cr->set_line_width(2);
+        cr->move_to(sx - nx * 12, sy - ny * 12);
+        cr->line_to(sx + nx * 6, sy + ny * 6);
+        cr->stroke();
+        cr->rectangle(sx - 3.5, sy - 3.5, 7, 7);
+        cr->fill();
+    }
     // Loaded (s009): the file's name beside the pointer.
     if (!m_load.empty() && m_in) {
         // s063: and how many more wait; the next one's picture beside it.
@@ -1418,13 +1431,33 @@ void Canvas::on_drag_begin(double x, double y) {
     }
 
     // s220: the picked text on a path's start mark -- drag it along the path.
-    if (double mx, my, ma; path_start_mark(mx, my, ma)) {
-        double sx, sy;
-        m_vp.to_screen(mx, my, sx, sy);
-        if (std::hypot(sx - x, sy - y) <= 7) {
-            core::doc::frames_begin(m_journal, m_doc, {m_sel.front()}, "Path start");
+    // s221: or its end mark -- the nearer of the two when they're close.
+    {
+        double best = 7.0001, ax = 0, ay = 0, bx = 1e9, by = 1e9;
+        Drag which = Drag::None;
+        if (double mx, my, ma; path_start_mark(mx, my, ma)) {
+            m_vp.to_screen(mx, my, ax, ay);
+            if (const double dd = std::hypot(ax - x, ay - y); dd < best) { best = dd; which = Drag::PathStart; }
+        }
+        if (double mx, my, ma; path_end_mark(mx, my, ma)) {
+            m_vp.to_screen(mx, my, bx, by);
+            if (const double dd = std::hypot(bx - x, by - y); dd < best) { best = dd; which = Drag::PathEnd; }
+        }
+        // One on the other (a closed path, the words all round it): the side
+        // of the mark the pointer is on -- behind it along the path, the end.
+        if (which != Drag::None && std::hypot(ax - bx, ay - by) < 3) {
+            const auto* f = m_doc.as<core::Frame>(m_sel.front());
+            const Rect lr = core::frame_in_layout(m_doc, m_placed, m_sel.front());
+            double lx, ly;
+            m_vp.to_doc(x, y, lx, ly);
+            const auto tr = core::doc::path_track(*f);
+            const double s = tr.nearest(lx - (lr.x - f->x), ly - (lr.y - f->y));
+            which = s > tr.length() / 2 ? Drag::PathEnd : Drag::PathStart;
+        }
+        if (which != Drag::None) {
+            core::doc::frames_begin(m_journal, m_doc, {m_sel.front()}, which == Drag::PathStart ? "Path start" : "Path end");
             m_begun = true;
-            m_drag = Drag::PathStart;
+            m_drag = which;
             return;
         }
     }
@@ -1589,8 +1622,24 @@ void Canvas::on_drag_update(double ox, double oy) {
         double lx, ly;
         m_vp.to_doc(m_px + ox, m_py + oy, lx, ly);
         const auto tr = core::doc::path_track(*f);
-        const double at = std::clamp(tr.nearest(lx - (lr.x - f->x), ly - (lr.y - f->y)), 0.0, std::max(0.0, tr.length() - 1));
+        // s221: never past its end mark (a point short of it)
+        const double hi = std::max(0.0, (f->path_to > 0 ? core::doc::path_end(*f, tr) : tr.length()) - 1);
+        const double at = std::clamp(tr.nearest(lx - (lr.x - f->x), ly - (lr.y - f->y)), 0.0, hi);
         core::doc::edit_frames(m_journal, m_doc, {m_sel.front()}, "Path start", [&](core::Frame& g) { g.path_from = std::round(at * 10) / 10; });
+        relayout();
+        queue_draw();
+        return;
+    }
+    case Drag::PathEnd: {   // s221: where it stops -- a point past its start at least; at the path's end, 0 (the end)
+        if (m_sel.empty()) return;
+        const auto* f = m_doc.as<core::Frame>(m_sel.front());
+        if (!f) return;
+        const Rect lr = core::frame_in_layout(m_doc, m_placed, m_sel.front());
+        double lx, ly;
+        m_vp.to_doc(m_px + ox, m_py + oy, lx, ly);
+        const auto tr = core::doc::path_track(*f);
+        const double to = core::doc::path_to_for(*f, tr, tr.nearest(lx - (lr.x - f->x), ly - (lr.y - f->y)));
+        core::doc::edit_frames(m_journal, m_doc, {m_sel.front()}, "Path end", [&](core::Frame& g) { g.path_to = to; });
         relayout();
         queue_draw();
         return;
@@ -1845,7 +1894,7 @@ void Canvas::on_drag_end(double, double) {
         return;
     }
     if (was == Drag::Text) { queue_draw(); return; }
-    if (was == Drag::Picture || was == Drag::PicScale || was == Drag::PathPoint || was == Drag::PathStart) {   // s220: the start mark too   // s035: the move (s186: or the scale; s200: a point), one step
+    if (was == Drag::Picture || was == Drag::PicScale || was == Drag::PathPoint || was == Drag::PathStart || was == Drag::PathEnd) {   // s220: the start mark too (s221: the end)   // s035: the move (s186: or the scale; s200: a point), one step
         m_begun = false;
         core::doc::frames_end(m_journal);
         m_sig_edited.emit();
@@ -2003,7 +2052,7 @@ void Canvas::on_drag_end(double, double) {
 // Escape mid-drag: everything back where it was, no step.
 void Canvas::cancel_drag() {
     if ((m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Guide || m_drag == Drag::Gutter ||
-         m_drag == Drag::Picture || m_drag == Drag::PicScale || m_drag == Drag::PathPoint || m_drag == Drag::PathStart) && m_begun) {   // s200: a picture's / a point's drag too
+         m_drag == Drag::Picture || m_drag == Drag::PicScale || m_drag == Drag::PathPoint || m_drag == Drag::PathStart || m_drag == Drag::PathEnd) && m_begun) {   // s200: a picture's / a point's drag too
         core::doc::frames_cancel(m_journal);
         m_sig_edited.emit();
     }
@@ -2213,6 +2262,20 @@ bool Canvas::path_start_mark(double& x, double& y, double& angle) const {   // s
     if (lr.w <= 0 && lr.h <= 0 && lr.x == 0 && lr.y == 0) return false;
     double px, py;
     core::doc::path_track(*f).at(std::max(0.0, f->path_from), px, py, angle);
+    x = lr.x - f->x + px;
+    y = lr.y - f->y + py;
+    return true;
+}
+
+bool Canvas::path_end_mark(double& x, double& y, double& angle) const {   // s221
+    if (m_sel.size() != 1 || !text_on_path(m_sel.front()) || editing()) return false;
+    const auto* f = m_doc.as<core::Frame>(m_sel.front());
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, m_sel.front());
+    if (lr.w <= 0 && lr.h <= 0 && lr.x == 0 && lr.y == 0) return false;
+    const auto tr = core::doc::path_track(*f);
+    double px, py;
+    // just short of the end, so a closed path's end mark takes its last edge's direction
+    tr.at(std::max(0.0, core::doc::path_end(*f, tr) - 1e-6), px, py, angle);
     x = lr.x - f->x + px;
     y = lr.y - f->y + py;
     return true;

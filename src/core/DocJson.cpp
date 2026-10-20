@@ -108,6 +108,8 @@ json to(const Record& r) {
             if (v.on_path) { j["on_path"] = true; j["path_from"] = v.path_from; }   // s216
             if (v.path_flip) j["path_flip"] = true;          // s218
             if (v.path_align) j["path_align"] = v.path_align;
+            if (v.path_to > 0) j["path_to"] = v.path_to;     // s221
+            if (v.path_effect) j["path_effect"] = v.path_effect;   // s223
             if (!v.path.empty()) {
                 json pts = json::array();
                 for (const auto& p : v.path) pts.push_back({p.x, p.y, p.ix, p.iy, p.ox, p.oy, p.smooth ? 1 : 0});
@@ -393,6 +395,8 @@ std::optional<Record> from(const json& j) {
         v.subs = val(j, "subs", std::vector<int>{});   // s211
         v.on_path = val(j, "on_path", false); v.path_from = val(j, "path_from", 0.0);   // s216
         v.path_flip = val(j, "path_flip", false); v.path_align = val(j, "path_align", 0);   // s218
+        v.path_to = val(j, "path_to", 0.0);   // s221
+        v.path_effect = std::clamp(val(j, "path_effect", 0), 0, 3);   // s223
         if (j.contains("path") && j["path"].is_array())
             for (const auto& a : j["path"])
                 if (a.is_array() && a.size() >= 6)

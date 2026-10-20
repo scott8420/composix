@@ -2088,5 +2088,241 @@ void part8() {
         check("path line: hung from its top -- shifted down by the ascent", pl2.ok && pl2.shift > 5);
         while (j.can_undo()) j.undo();
     }
+    // ── s221: where text on a path stops -- its end mark ─────────────────
+    {
+        std::cout << "--- s221 path end ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Frame f;
+        D::set_path(f, {D::corner_point(100, 300), D::corner_point(300, 300)}, true);
+        f.kind = core::FrameKind::Text;
+        f.on_path = true;
+        f.path_from = 20;
+        const auto tr = D::path_track(f);
+        check("end: unset -- the path's end", std::abs(D::path_end(f, tr) - 200) < 1e-9);
+        f.path_to = 120;
+        check("end: set -- there", D::path_end(f, tr) == 120 && std::abs(D::text_box(f).w - 100) < 1e-9);
+        f.path_to = 500;
+        check("end: past the path -- the path's end", std::abs(D::path_end(f, tr) - 200) < 1e-9);
+        f.path_to = 10;
+        check("end: before the start -- the start (never a negative box)", D::path_end(f, tr) == 20 && D::text_box(f).w >= 1);
+        check("end to store: a point past the start at least", D::path_to_for(f, tr, 5) == 21);
+        check("end to store: at the path's end -- 0 (follows the path)", D::path_to_for(f, tr, 199.7) == 0 && D::path_to_for(f, tr, 900) == 0);
+        check("end to store: to a tenth of a point", D::path_to_for(f, tr, 87.6543) == 87.7);
+        {   // flipped: measured along the reversed track as the start is
+            core::Frame g = f;
+            g.path_flip = true;
+            g.path_to = 120;
+            double x, y, a;
+            D::path_track(g).at(D::path_end(g, D::path_track(g)), x, y, a);
+            check("end: flipped -- measured from the other end", std::abs(x - 180) < 1e-9 && std::abs(y - 300) < 1e-9);
+        }
+        // A real story: flowed between its marks; one step; JSON; undo.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = core::to_json(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto ln = D::add_path(j, d, page, {D::corner_point(100, 300), D::corner_point(300, 300)}, true);
+        D::set_text_on_path(j, d, {ln}, true, 20);
+        {
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>(d.as<core::Frame>(ln)->story);
+            st.paras[0].text = "Along the line, and on past its end until the words run out of room entirely here";
+            d.put(d.as<core::Frame>(ln)->story, st);
+        }
+        check("end mark: one step", D::edit_frames(j, d, {ln}, "Path end", [](core::Frame& g) { g.path_to = 80; }) &&
+              j.undo_label() == "Path end");
+        L::FlowCache flows;
+        const auto& fl = flows.get(d, d.as<core::Frame>(ln)->story);
+        double w0 = -1;
+        std::size_t n = 0;
+        for (const auto& ft : fl.frames) if (ft.frame == ln && !ft.lines.empty()) { w0 = ft.lines.front().w; n = ft.lines.size(); }
+        check("end mark: the words flowed between the marks (60 pt)", w0 >= 0 && w0 <= 60.01, std::to_string(w0));
+        // s222: one line on a path -- the rest overset (was: laid out below, never drawn)
+        check("on a path: one line, the rest overset", n == 1 && fl.overset, std::to_string(n));
+        {   // all of it fits: not overset
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>(d.as<core::Frame>(ln)->story);
+            st.paras[0].text = "Short";
+            d.put(d.as<core::Frame>(ln)->story, st);
+        }
+        L::FlowCache f2;
+        check("on a path: all on the line -- not overset", !f2.get(d, d.as<core::Frame>(ln)->story).overset);
+        {   // two paragraphs: the second overset, whole
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>(d.as<core::Frame>(ln)->story);
+            st.paras.push_back(st.paras[0]);
+            st.paras[1].text = "Second";
+            d.put(d.as<core::Frame>(ln)->story, st);
+        }
+        L::FlowCache f3;
+        const auto& fl3 = f3.get(d, d.as<core::Frame>(ln)->story);
+        std::size_t n3 = 0;
+        for (const auto& ft : fl3.frames) if (ft.frame == ln) n3 = ft.lines.size();
+        check("on a path: a second paragraph overset", fl3.overset && n3 == 1, std::to_string(n3));
+        {   // threaded on to a frame: the rest goes there
+            const auto nx = D::add_frame(j, d, page, core::FrameKind::Text, {100, 400, 200, 100});
+            const bool th = D::thread_frames(j, d, ln, nx);
+            L::FlowCache f4;
+            const auto& fl4 = f4.get(d, d.as<core::Frame>(ln)->story);
+            std::size_t a = 0, b = 0;
+            for (const auto& ft : fl4.frames) { if (ft.frame == ln) a = ft.lines.size(); if (ft.frame == nx) b = ft.lines.size(); }
+            check("on a path, threaded: one line there, the next paragraph in the next frame", th && a == 1 && b == 1 && !fl4.overset,
+                  std::to_string(a) + " / " + std::to_string(b));
+        }
+        core::Doc e;
+        std::string err;
+        const auto text = core::to_json(d);
+        check("end mark: through JSON", core::from_json(e, text, &err) && e.as<core::Frame>(ln)->path_to == 80 && core::to_json(e) == text, err);
+        while (j.can_undo()) j.undo();
+        check("end mark: all undone exactly", core::to_json(d) == before);
+    }
+    // ── s222: text on a path -- a run's own colour, drawn ───────────────
+    {
+        std::cout << "--- s222 path colours ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        core::Swatch red;
+        red.name = "Test red";
+        red.model = core::ColorModel::RGB;
+        red.v = {255, 0, 0, 0};
+        red.preview = 0xff0000;
+        const auto sw = D::add_swatch(j, d, red);
+        const auto ln = D::add_path(j, d, page, {D::corner_point(60, 120), D::corner_point(380, 120)}, true);
+        D::set_text_on_path(j, d, {ln}, true, 0);
+        {
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>(d.as<core::Frame>(ln)->story);
+            st.paras[0].text = "MMMMMMMMMM WWWWWWWWWW";
+            core::Run r;
+            r.start = 0;
+            r.end = 10;
+            r.local.color = sw;
+            st.paras[0].runs = {r};
+            d.put(d.as<core::Frame>(ln)->story, st);
+        }
+        L::FlowCache flows;
+        auto* surf = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 432, 648);
+        cairo_t* cr = cairo_create(surf);
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_paint(cr);
+        std::set<std::string> missing;
+        L::draw_page(cr, d, page, flows, {}, &missing, {});
+        cairo_destroy(cr);
+        cairo_surface_flush(surf);
+        int reds = 0, darks = 0;
+        for (int y = 90; y < 130; ++y)
+            for (int x = 50; x < 400; ++x) {
+                const auto* row = cairo_image_surface_get_data(surf) + y * cairo_image_surface_get_stride(surf);
+                const auto v = reinterpret_cast<const std::uint32_t*>(row)[x] & 0xffffff;
+                const int R = (v >> 16) & 0xff, G = (v >> 8) & 0xff, B = v & 0xff;
+                if (R > 180 && G < 90 && B < 90) ++reds;
+                else if (R < 90 && G < 90 && B < 90) ++darks;
+            }
+        cairo_surface_destroy(surf);
+        check("on a path, drawn: the coloured run in its colour", reds > 30, std::to_string(reds));
+        check("on a path, drawn: the rest in the paragraph's (black)", darks > 30, std::to_string(darks));
+        while (j.can_undo()) j.undo();
+    }
+    // ── s223: text on a path -- the effects ───────────────────────────────
+    {
+        std::cout << "--- s223 path effects ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        const auto near = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+        core::Frame f;
+        f.kind = core::FrameKind::Text;
+        f.on_path = true;
+        const double a = M_PI / 6, c = std::cos(a), s = std::sin(a);
+        auto m = D::path_axes(f, a);
+        check("effect: Rainbow -- turned with the path", near(m.xx, c) && near(m.yx, s) && near(m.xy, -s) && near(m.yy, c));
+        f.path_effect = 1;
+        m = D::path_axes(f, a);
+        check("effect: Skew -- along it, its verticals vertical", near(m.xx, c) && near(m.yx, s) && near(m.xy, 0) && near(m.yy, 1));
+        f.path_effect = 2;
+        m = D::path_axes(f, a);
+        check("effect: 3D Ribbon -- level, leaning with it", near(m.xx, 1) && near(m.yx, 0) && near(m.xy, -s) && near(m.yy, c));
+        f.path_effect = 3;
+        m = D::path_axes(f, a);
+        check("effect: Stair Step -- as set", near(m.xx, 1) && near(m.yx, 0) && near(m.xy, 0) && near(m.yy, 1));
+        bool unmirrored = true;
+        for (int e = 0; e < 4; ++e)
+            for (double ang : {0.3, 1.2, 2.0, 3.0, -2.5, -0.7}) {
+                f.path_effect = e;
+                const auto k = D::path_axes(f, ang);
+                if (k.xx * k.yy - k.yx * k.xy <= 0) unmirrored = false;
+            }
+        check("effect: never mirrored, any heading, any effect", unmirrored);
+        // Up a slope and back: the box <-> the path for each effect.
+        D::set_path(f, {D::corner_point(100, 300), D::corner_point(300, 200)}, true);
+        f.kind = core::FrameKind::Text;
+        const auto tr = D::path_track(f);
+        bool round = true;
+        for (int e = 0; e < 4; ++e) {
+            f.path_effect = e;
+            double x, y, bx, by;
+            D::path_point(tr, f, 50, 6, 12, 0, x, y);   // 6 above the baseline
+            D::path_unpoint(tr, f, x, y, 12, 0, bx, by);
+            if (std::abs(bx - 50) > 1e-6 || std::abs(by - 6) > 1e-6) round = false;
+        }
+        check("effect: a place maps out and back (each effect)", round);
+        f.path_effect = 3;
+        {
+            double x, y, px, py, ang;
+            D::path_point(tr, f, 50, 2, 12, 0, x, y);
+            tr.at(50, px, py, ang);
+            check("effect: Stair Step -- above the baseline straight up", near(x, px) && near(y, py - 10));
+        }
+        // In a document: one step, JSON, print.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = core::to_json(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto ln = D::add_path(j, d, page, {D::corner_point(60, 160), D::corner_point(360, 60)}, true);
+        D::set_text_on_path(j, d, {ln}, true, 0);
+        {
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>(d.as<core::Frame>(ln)->story);
+            st.paras[0].text = "Stairs up the slope";
+            d.put(d.as<core::Frame>(ln)->story, st);
+        }
+        check("effect: one step", D::edit_frames(j, d, {ln}, "Text on path: effect", [](core::Frame& g) { g.path_effect = 3; }) &&
+              j.undo_label() == "Text on path: effect");
+        core::Doc e;
+        std::string err;
+        const auto text = core::to_json(d);
+        check("effect: through JSON", core::from_json(e, text, &err) && e.as<core::Frame>(ln)->path_effect == 3 && core::to_json(e) == text, err);
+        {
+            namespace fs = std::filesystem;
+            const auto base = fs::temp_directory_path() / "composix_selftest_effect";
+            std::error_code ec;
+            fs::create_directories(base, ec);
+            const auto out = (base / "p.pdf").string();
+            L::PdfOptions opt;
+            opt.compress = false;
+            L::PdfReport rep;
+            const bool ok = L::export_print_pdf(d, out, opt, {}, &rep, &err);
+            std::string pdf;
+            { std::ifstream in(out, std::ios::binary); std::stringstream ss; ss << in.rdbuf(); pdf = ss.str(); }
+            // each glyph moved, not turned: "1 0 0 1 x y cm" before its Tm
+            int level = 0;
+            std::istringstream ls(pdf);
+            for (std::string line; std::getline(ls, line);)
+                if (line.rfind("1 0 0 1 ", 0) == 0 && line.size() > 3 && line.compare(line.size() - 3, 3, " cm") == 0) ++level;
+            check("effect, print: Stair Step's glyphs upright", ok && level >= 15, std::to_string(level));
+            fs::remove_all(base, ec);
+        }
+        while (j.can_undo()) j.undo();
+        check("effect: all undone exactly", core::to_json(d) == before);
+    }
 }
 }  // namespace cxtest

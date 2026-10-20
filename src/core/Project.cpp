@@ -863,11 +863,24 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             std::vector<Choice> sc;
             for (double v : {0.0, 6.0, 12.0, 18.0, 24.0, 36.0, 48.0, 72.0, 96.0, 144.0}) sc.push_back({pts(v), pts(v) + " pt"});
             fields.push_back({"Path start", pts(f->path_from) + " pt", "path_from", sc});
+            {   // s221: where it stops -- the path's end, or short of it
+                const double len = doc::path_track(*f).length();
+                std::vector<Choice> ec{{"0", "End of path"}};
+                for (double q : {0.25, 0.5, 0.75}) {
+                    const double v = std::round(len * q);
+                    if (v > f->path_from + 1) ec.push_back({pts(v), pts(v) + " pt"});
+                }
+                fields.push_back({"Path end", f->path_to > 0 ? pts(doc::path_end(*f, doc::path_track(*f))) + " pt" : std::string("End of path"),
+                                  "path_to", ec});
+            }
             // s218: its side of the path, and what of the line sits on it
             fields.push_back({"Side", f->path_flip ? "Flipped" : "As drawn", "path_flip", {{"0", "As drawn"}, {"1", "Flipped"}}});
             static const char* on[] = {"Baseline", "Middle", "Top", "Bottom"};
             fields.push_back({"On the path", on[std::clamp(f->path_align, 0, 3)], "path_align",
                               {{"0", "Baseline"}, {"1", "Middle"}, {"2", "Top"}, {"3", "Bottom"}}});
+            static const char* fx[] = {"Rainbow", "Skew", "3D Ribbon", "Stair Step"};   // s223
+            fields.push_back({"Effect", fx[std::clamp(f->path_effect, 0, 3)], "path_effect",
+                              {{"0", "Rainbow"}, {"1", "Skew"}, {"2", "3D Ribbon"}, {"3", "Stair Step"}}});
         }
         {   // s197: its outline -- a rectangle and an oval trade places (s210: any frame's)
             if (f->shape == ShapeKind::Path) {

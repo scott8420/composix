@@ -170,7 +170,8 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             one.baseline = shift;   // s218: below the path by the alignment
             one.glyphs = {g};
             pg.save();
-            pg.concat(std::cos(ang), std::sin(ang), -std::sin(ang), std::cos(ang), px, py);
+            const auto m = core::doc::path_axes(f, ang);   // s223: the effect
+            pg.concat(m.xx, m.yx, m.xy, m.yy, px, py);
             plate::pango::show(c.doc, pg, one);
             pg.restore();
         }
