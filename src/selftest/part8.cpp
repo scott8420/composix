@@ -2989,5 +2989,229 @@ void part8() {
         check("100%: the scale back, one step", D::set_scale(j, d, {"frame.4"}, 1, 1, 4, "Scale 100%") && d.as<core::Frame>("frame.4")->sx == 1 &&
               !core::turned(*d.as<core::Frame>("frame.4")) && j.undo_label() == "Scale 100%");
     }
+    // ── s235: XML, zip, and an ODT read ──────────────────────────────────────
+    {
+        std::cout << "--- s235 odt read ---\n";
+        namespace X = core::xml;
+        std::string err;
+        const auto x = X::parse("<?xml version=\"1.0\"?><!-- c --><a k=\"1 &amp; 2\"><b/>one &lt;two&gt; &#233;<![CDATA[<raw>]]><c x='y'>in</c>tail</a>", &err);
+        check("xml: a tree, mixed content kept in order", x && x->name == "a" && x->attr_or("k") == "1 & 2" && x->kids.size() == 4 &&
+              x->kids[0].name == "b" && x->kids[1].is_text() && x->kids[1].text == "one <two> \xC3\xA9<raw>" && x->kids[2].attr_or("x") == "y" &&
+              x->kids[3].text == "tail", err);
+        check("xml: a mismatched end tag refused, said where", !X::parse("<a><b></a>", &err) && err.find("closes") != std::string::npos);
+        check("xml: unfinished -- refused", !X::parse("<a><b>", &err));
+        {
+            std::string deep;
+            for (int i = 0; i < 1200; ++i) deep += "<d>";
+            check("xml: nested past 1000 -- refused, not a crash", !X::parse(deep, &err) && err.find("deep") != std::string::npos);
+        }
+        const auto z = core::zip::make_stored({{"mimetype", "x"}, {"a/b.txt", "hello"}});
+        bool ok = false;
+        check("zip: stored entries out again, the names listed", core::zip::entry(z, "a/b.txt", &ok) == "hello" && ok &&
+              core::zip::names(z).size() == 2 && core::zip::entry(z, "nope", &ok).empty() && !ok);
+        // A small .odt the way LibreOffice writes one.
+        const std::string ns = R"( xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="s" xmlns:text="t" xmlns:fo="f" xmlns:svg="v" xmlns:table="tb" xmlns:draw="d" xmlns:dc="dc" xmlns:meta="m")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:font-face-decls><style:font-face style:name="Liberation Serif" svg:font-family="'Liberation Serif'"/></office:font-face-decls>
+<office:styles>
+ <style:default-style style:family="paragraph"><style:text-properties style:font-name="Liberation Serif" fo:font-size="12pt"/></style:default-style>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Text_20_body" style:display-name="Text body" style:family="paragraph" style:parent-style-name="Standard">
+  <style:paragraph-properties fo:margin-top="0cm" fo:margin-bottom="0.25cm" fo:text-indent="0.5in" fo:line-height="115%"/></style:style>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:parent-style-name="Standard" style:next-style-name="Text_20_body" style:default-outline-level="1">
+  <style:paragraph-properties fo:break-before="page" fo:text-align="center"/><style:text-properties fo:font-size="18pt" fo:font-weight="bold"/></style:style>
+ <style:style style:name="Emphasis" style:family="text"><style:text-properties fo:font-style="italic"/></style:style>
+</office:styles>
+<office:automatic-styles>
+ <style:style style:name="P1" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="end"/></style:style>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="1in" fo:margin-left="2cm" fo:margin-right="2cm"/></style:page-layout>
+</office:automatic-styles>
+<office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">
+ <style:header><text:p text:style-name="P1">My Novel <text:page-number text:select-page="current">7</text:page-number></text:p></style:header>
+ <style:footer><text:p text:style-name="Standard">Footer words</text:p></style:footer>
+</style:master-page></office:master-styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:automatic-styles>
+ <style:style style:name="P1" style:family="paragraph" style:parent-style-name="Text_20_body"><style:text-properties fo:font-weight="bold"/></style:style>
+ <style:style style:name="T1" style:family="text"><style:text-properties fo:font-style="italic"/></style:style>
+</office:automatic-styles><office:body><office:text>
+ <text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter   One</text:h>
+ <text:p text:style-name="Text_20_body">The harbor   smelled
+   of <text:span text:style-name="T1">diesel</text:span> and<text:s text:c="3"/>oranges.<text:tab/>Tab<text:line-break/>Next line<text:note text:id="n1" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p>Note one.</text:p><text:p>Its <text:span text:style-name="Emphasis">second</text:span>.</text:p></text:note-body></text:note> after.</text:p>
+ <text:p text:style-name="P1">Bold body &amp; more</text:p>
+ <text:list><text:list-item><text:p text:style-name="Standard">An item</text:p></text:list-item></text:list>
+ <table:table table:name="T"><table:table-row/></table:table>
+ <text:p text:style-name="Standard"><draw:frame draw:name="pic"/>Picture there</text:p>
+</office:text></office:body></office:document-content>)";
+        const std::string meta = "<office:document-meta" + ns + "><office:meta><dc:title>Harbor</dc:title><meta:initial-creator>Scott</meta:initial-creator></office:meta></office:document-meta>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content},
+                                                 {"styles.xml", styles}, {"meta.xml", meta}});
+        const auto b = core::odt::read(odt, &err);
+        check("odt: read", b.has_value(), err);
+        if (b) {
+            const auto& body = b->body;
+            check("odt: the paragraphs in order -- a list's item among them", body.size() == 5 && body[0].outline == 1 &&
+                  body[0].text == "Chapter One" && body[3].text == "An item");
+            check("odt: white space as ODF says (runs collapsed; text:s kept; tab; line break)",
+                  body[1].text.rfind("The harbor smelled of diesel and   oranges.\tTab\nNext line", 0) == 0, body[1].text);
+            check("odt: a span on its words", body[1].spans.size() == 1 && body[1].text.substr(static_cast<std::size_t>(body[1].spans[0].start),
+                  static_cast<std::size_t>(body[1].spans[0].end - body[1].spans[0].start)) == "diesel" && body[1].spans[0].style == "T1");
+            check("odt: a footnote -- its mark, its two paragraphs, its span", body[1].notes.size() == 1 &&
+                  body[1].text.find(core::kMarkNote) != std::string::npos && body[1].notes[0].text == "Note one.\nIts second." &&
+                  body[1].notes[0].spans.size() == 1 && !body[1].notes[0].endnote && body[1].text.find(" after.") != std::string::npos);
+            check("odt: entities decoded", body[2].text == "Bold body & more");
+            const auto p1 = b->resolved("P1");
+            check("odt: an automatic style through its chain (bold, Text body's indent, the default's font and size)",
+                  p1.bold == 1 && std::abs(p1.indent - 36) < 1e-6 && p1.family == "Liberation Serif" && p1.size == 12 && std::abs(p1.leading_pct - 115) < 1e-9);
+            const auto h1 = b->resolved("Heading_20_1");
+            check("odt: Heading 1 -- 18 pt bold, centred, a new page; its display name and outline level",
+                  h1.size == 18 && h1.bold == 1 && h1.align == 1 && h1.page_break == 1 && b->styles.at("Heading_20_1").display == "Heading 1" &&
+                  b->styles.at("Heading_20_1").outline == 1);
+            check("odt: the page layout (6 x 9 in; 2 cm sides)", b->layouts.count("pm1") && std::abs(b->layouts.at("pm1").w - 432) < 1e-6 &&
+                  std::abs(b->layouts.at("pm1").left - 72 / 2.54 * 2) < 1e-6);
+            check("odt: the master page's header (its page number, its own P1 kept apart) and footer",
+                  b->masters.size() == 1 && b->masters[0].header.size() == 1 && b->masters[0].header[0].text == std::string("My Novel ") + core::kMarkPage &&
+                  b->masters[0].header[0].style == "S:P1" && b->resolved("S:P1").align == 2 && b->masters[0].footer[0].text == "Footer words");
+            check("odt: what wasn't kept, counted (a table, a picture)", b->tables == 1 && b->pictures == 1);
+            check("odt: the title and author", b->title == "Harbor" && b->author == "Scott");
+        }
+        check("odt: not an ODT -- refused, said why", !core::odt::read("hello", &err) && !err.empty() &&
+              !core::odt::read(core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.spreadsheet"}}), &err) &&
+              err.find("not a text document") != std::string::npos);
+        check("length: units to points", core::odt::length("1in") == 72 && std::abs(core::odt::length("2.54cm") - 72) < 1e-9 &&
+              core::odt::length("12pt") == 12 && core::odt::length("x", -5) == -5);
+    }
+    // ── s236: an ODT made a document ─────────────────────────────────────────
+    {
+        std::cout << "--- s236 odt import ---\n";
+        namespace L = composix::layout;
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f" xmlns:svg="v" xmlns:dc="dc" xmlns:meta="m")";
+        std::string body;
+        body += R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter One</text:h>)";
+        body += R"(<text:p text:style-name="P1">Bold opening <text:span text:style-name="T1">italic <text:span text:style-name="T2">red</text:span></text:span> plain<text:line-break/>second line<text:note><text:note-body><text:p>A note.</text:p></text:note-body></text:note></text:p>)";
+        for (int i = 0; i < 260; ++i)
+            body += R"(<text:p text:style-name="Text_20_body">The harbor smelled of diesel and oranges the morning the ship came in, and nobody on the quay expected her; the guild had posted a notice by noon.</text:p>)";
+        body += R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter Two</text:h><text:p text:style-name="Text_20_body">The end.</text:p>)";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:default-style style:family="paragraph"><style:text-properties fo:font-family="Serif" fo:font-size="11pt"/></style:default-style>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Text_20_body" style:display-name="Text body" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-indent="18pt" fo:text-align="justify"/></style:style>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:parent-style-name="Standard" style:next-style-name="Text_20_body" style:default-outline-level="1">
+  <style:paragraph-properties fo:break-before="page"/><style:text-properties fo:font-size="20pt" fo:font-weight="bold"/></style:style>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.5in"/></style:page-layout>
+</office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:automatic-styles>
+ <style:style style:name="P1" style:family="paragraph" style:parent-style-name="Text_20_body"><style:paragraph-properties fo:text-align="center"/><style:text-properties fo:font-weight="bold"/></style:style>
+ <style:style style:name="T1" style:family="text"><style:text-properties fo:font-style="italic"/></style:style>
+ <style:style style:name="T2" style:family="text"><style:text-properties fo:color="#cc0000"/></style:style>
+</office:automatic-styles><office:body><office:text>)" + body + "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles},
+                                                 {"meta.xml", "<office:document-meta" + ns + "><office:meta><dc:title>Harbor</dc:title></office:meta></office:document-meta>"}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        core::Doc d;
+        L::OdtInfo info;
+        int ticks = 0;
+        L::OdtOptions opt;
+        opt.progress = [&](double, const std::string&) { ++ticks; };
+        const bool ok = book && L::import_odt(d, *book, &info, opt, &err);
+        check("import: made", ok, err);
+        if (ok) {
+            const auto& st = *d.as<core::Story>("story.1");
+            check("import: the page (6 x 9 in), its margins, mirrored -- facing", d.settings().trim_w == 432 && d.settings().facing &&
+                  d.as<core::Master>("master.1")->margins.inside == 54 && d.as<core::Master>("master.1")->margins.outside == 36 && d.settings().title == "Harbor");
+            check("import: every paragraph (a line break makes two)", static_cast<int>(st.paras.size()) == 1 + 2 + 260 + 2 && info.paragraphs == 265);
+            const auto* h1 = d.as<core::Style>(st.paras[0].style);
+            const auto* tb = d.as<core::Style>(st.paras[3].style);
+            check("import: styles flattened from their chains (Heading 1: 20 bold, a new page, Enter -> Text body)",
+                  h1 && h1->name == "Heading 1" && h1->size == 20 && h1->bold && h1->start == core::ParaStart::NextPage && h1->family == "Serif" &&
+                  h1->next == st.paras[3].style && tb->name == "Text body" && tb->first_indent == 18 && tb->align == core::Align::Justify);
+            const auto& p1 = st.paras[1];
+            check("import: an automatic paragraph style -- its named parent, its own centring, its bold as local formatting",
+                  p1.style == st.paras[3].style && p1.over.align == core::Align::Center && !p1.runs.empty() && p1.runs.front().start == 0 &&
+                  p1.runs.front().local.bold == 1);
+            bool italic = false, red = false;
+            for (const auto& r : p1.runs) {
+                const auto w = p1.text.substr(static_cast<std::size_t>(r.start), static_cast<std::size_t>(r.end - r.start));
+                if (w.find("italic") != std::string::npos) italic = r.local.italic == 1 && r.local.bold == 1;
+                if (w == "red") red = r.local.italic == 1 && d.as<core::Swatch>(r.local.color) && d.as<core::Swatch>(r.local.color)->preview == 0xcc0000;
+            }
+            bool sorted = true;
+            for (std::size_t i = 1; i < p1.runs.size(); ++i) sorted = sorted && p1.runs[i].start >= p1.runs[i - 1].end;
+            check("import: nested spans as runs that don't overlap (italic; red inside it, italic too; a swatch for the red)", italic && red && sorted);
+            check("import: the line break's second paragraph keeps the note", st.paras[2].text.rfind("second line", 0) == 0 && st.paras[2].notes.size() == 1 &&
+                  st.paras[2].notes[0].text == "A note." && info.notes == 1);
+            const auto f = L::flow_story(d, "story.1");
+            int last = -1, i = 0;
+            for (const auto& ft : f.frames) { if (!ft.lines.empty()) last = i; ++i; }
+            check("import: pages fitted -- all of it set, no empty page at the end", !f.overset && info.pages >= 4 &&
+                  last == static_cast<int>(f.frames.size()) - 1 && static_cast<int>(f.frames.size()) == info.pages, std::to_string(info.pages));
+            check("import: Chapter Two on a page of its own start", [&] {
+                for (const auto& ft : f.frames)
+                    if (!ft.lines.empty() && st.paras[static_cast<std::size_t>(ft.lines.front().para)].text == "Chapter Two") return ft.lines.front().start == 0;
+                return false; }());
+            check("import: told how far along", ticks >= 3 && info.chapters == 2);
+            std::string jerr;
+            core::Doc e;
+            check("import: a document like any (saves, loads back)", core::from_json(e, core::to_json(d), &jerr) && core::to_json(e) == core::to_json(d), jerr);
+        }
+    }
+    // ── s237: headers / footers onto the master; front matter and body ──────
+    {
+        std::cout << "--- s237 odt masters and sections ---\n";
+        namespace L = composix::layout;
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        std::string body = R"(<text:p text:style-name="Title">Harbor Lights</text:p><text:p text:style-name="Standard">For my father.</text:p>)";
+        body += R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter One</text:h>)";
+        for (int i = 0; i < 40; ++i) body += R"(<text:p text:style-name="Standard">The ship came in, and nobody on the quay expected her that morning.</text:p>)";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:default-style style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:default-style>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Title" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="28pt"/></style:style>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:paragraph-properties fo:break-before="page"/></style:style>
+</office:styles><office:automatic-styles>
+ <style:style style:name="MP1" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="end"/></style:style>
+ <style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="1in" fo:margin-right="0.5in"/></style:page-layout>
+</office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">
+ <style:header><text:p text:style-name="MP1">Harbor Lights</text:p></style:header>
+ <style:header-left><text:p text:style-name="Standard">Scott</text:p></style:header-left>
+ <style:footer><text:p text:style-name="Standard"><text:page-number>1</text:page-number></text:p></style:footer>
+</style:master-page></office:master-styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + "><office:body><office:text>" + body + "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        check("import masters: made", ok, err);
+        if (ok) {
+            std::vector<const core::Frame*> on_master;
+            for (const auto& fid : d.frames_on("master.1")) on_master.push_back(d.as<core::Frame>(fid));
+            const auto words = [&](const core::Frame* f) { return d.as<core::Story>(f->story)->paras.front().text; };
+            int heads = 0, feet = 0;
+            bool left_own = false, right_own = false, folio = false, sides = true;
+            for (const auto* f : on_master) {
+                const bool head = f->y < 54;
+                (head ? heads : feet)++;
+                if (head && f->side == core::Side::Left) left_own = words(f) == "Scott";
+                if (head && f->side == core::Side::Right) right_own = words(f) == "Harbor Lights";
+                if (!head) folio = words(f) == core::kMarkPage;
+                sides = sides && f->side != core::Side::Any;
+            }
+            check("header: a frame a side, in the top margin -- the left pages' own words", heads == 2 && left_own && right_own && sides);
+            check("footer: the page number, both sides (uneven margins)", feet == 2 && folio && info.headers == 2);
+            {
+                const auto* hr = [&]() -> const core::Frame* { for (const auto* f : on_master) if (f->y < 54 && f->side == core::Side::Right) return f; return nullptr; }();
+                const auto& para = d.as<core::Story>(hr->story)->paras.front();
+                check("header: its own (styles.xml) style -- right aligned", para.over.align == core::Align::Right);
+            }
+            const auto* s1 = d.as<core::Section>("section.1");
+            const auto* s2 = d.as<core::Section>("section.2");
+            check("sections: front matter (roman) before the first chapter, the body (arabic) from its page",
+                  s1 && s2 && s1->name == "Front matter" && s1->numbering == core::Numbering::RomanLower && s2->name == "Body" &&
+                  s2->numbering == core::Numbering::Arabic && s2->start_page != s1->start_page && info.front_matter && info.chapters == 1);
+            check("sections: the body's first page shows 1", d.folio(s2->start_page) == "1");
+        }
+    }
 }
 }  // namespace cxtest

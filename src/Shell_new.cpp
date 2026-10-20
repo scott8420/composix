@@ -1,6 +1,12 @@
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "layout/BigBook.hpp"
+#include "layout/OdtImport.hpp"
+#include "core/Odt.hpp"
+#include <gtkmm/filedialog.h>
+#include <gtkmm/filefilter.h>
+#include <fstream>
+#include <sstream>
 #include <glibmm/miscutils.h>
 #include <chrono>
 #include <gtkmm/adjustment.h>
@@ -114,6 +120,89 @@ void Shell::on_big_book() {  // handler
                                                            std::to_string(out->info.whole) + " whole)", ms);
             });
     });
+}
+
+// s238 (T2): an OpenDocument text brought in as a new document -- read and
+// set on a worker under a progress bar (Scott: long work keeps the user
+// told), then what came in and what didn't, said.
+void Shell::on_import_odt() {  // handler
+    auto dialog = Gtk::FileDialog::create();
+    dialog->set_title("Import an OpenDocument text");
+    auto filter = Gtk::FileFilter::create();
+    filter->set_name("OpenDocument text (.odt, .fodt)");
+    filter->add_pattern("*.odt");
+    filter->add_pattern("*.ODT");
+    filter->add_pattern("*.fodt");
+    filter->add_mime_type("application/vnd.oasis.opendocument.text");
+    dialog->set_default_filter(filter);
+    dialog->open(*this, [this, dialog](const Glib::RefPtr<Gio::AsyncResult>& result) {
+        std::string path;
+        try {
+            auto f = dialog->open_finish(result);
+            if (f) path = f->get_path();
+        } catch (const Glib::Error& e) {
+            if (auto lg = log::get(log::Area::Io)) lg->info("import odt: dismissed ({})", e.what());
+            return;
+        }
+        if (path.empty()) return;
+        confirm_discard([this, path] { import_odt_file(path); });
+    });
+}
+
+void Shell::import_odt_file(const std::string& path) {  // helper
+    struct Out {
+        core::Doc         doc;
+        layout::FlowCache flows;
+        layout::OdtInfo   info;
+        std::string       err;
+        bool              ok = false;
+    };
+    auto out = std::make_shared<Out>();
+    const std::string name = Glib::path_get_basename(path);
+    busy_thread("Importing \u201c" + name + "\u201d", "Reading it\u2026",
+        [out, path](const Report& report) {
+            std::string bytes;
+            {
+                std::ifstream in(path, std::ios::binary);
+                if (!in) { out->err = "it couldn't be opened"; return; }
+                std::ostringstream ss;
+                ss << in.rdbuf();
+                bytes = ss.str();
+            }
+            report(0.04, "Reading its styles and text\u2026");
+            const auto book = core::odt::read(bytes, &out->err);
+            if (!book) return;
+            layout::OdtOptions o;
+            o.progress = [&](double f, const std::string& line) { report(0.05 + 0.7 * f, line); };
+            out->ok = layout::import_odt(out->doc, *book, &out->info, o, &out->err);
+            if (!out->ok) return;
+            const auto pages = out->doc.pages().size();
+            layout::flow_all(out->doc, out->flows, [&](int done, int total) {
+                report(0.75 + 0.25 * done / std::max(1, total), "Laying out page " +
+                       std::to_string(std::max<std::size_t>(1, pages * static_cast<std::size_t>(done) / static_cast<std::size_t>(std::max(1, total)))) +
+                       " of " + std::to_string(pages) + "\u2026");
+            });
+        },
+        "Showing it\u2026",
+        [this, out, name] {
+            if (!out->ok) {
+                alert("Couldn\u2019t import \u201c" + name + "\u201d", out->err.empty() ? "It isn't an OpenDocument text." : "It " + out->err + ".");
+                return;
+            }
+            adopt(out->doc, "", &out->flows);
+            set_dirty(true);   // not saved anywhere yet: Save As asks where
+            const auto& i = out->info;
+            std::string detail = std::to_string(i.pages) + (i.pages == 1 ? " page, " : " pages, ") + std::to_string(i.paragraphs) + " paragraphs, " +
+                                 std::to_string(i.styles) + " styles";
+            if (i.chapters) detail += ", " + std::to_string(i.chapters) + (i.chapters == 1 ? " chapter" : " chapters");
+            if (i.notes) detail += ", " + std::to_string(i.notes) + (i.notes == 1 ? " note" : " notes");
+            if (i.headers) detail += "; its header / footer on the master";
+            if (i.front_matter) detail += "; front matter and body as sections";
+            detail += ".";
+            for (const auto& s : i.notes_said) detail += "\n\u2022 " + s;
+            alert("Imported \u201c" + name + "\u201d", detail);
+            if (auto lg = log::get(log::Area::Io)) lg->info("import odt '{}': {} pages, {} paragraphs, {} styles", name, i.pages, i.paragraphs, i.styles);
+        });
 }
 
 namespace {

@@ -16,6 +16,7 @@
 #include "layout/Psd.hpp"
 #include <zlib.h>
 #include "layout/BigBook.hpp"
+#include "layout/OdtImport.hpp"
 #include "core/Outline.hpp"
 #include "core/Recents.hpp"
 #include "core/Settings.hpp"
@@ -27,6 +28,9 @@
 #include "core/Hyphen.hpp"
 #include "core/Swatches.hpp"
 #include "core/Pathfinder.hpp"
+#include "core/Odt.hpp"
+#include "core/Xml.hpp"
+#include "core/Zip.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>

@@ -93,6 +93,7 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     });
     add_action("open-sample",   sigc::mem_fun(*this, &Shell::on_sample));   // s019
     add_action("open-big-book", sigc::mem_fun(*this, &Shell::on_big_book)); // s100
+    add_action("import-odt", sigc::mem_fun(*this, &Shell::on_import_odt));   // s238
     add_action("open",          sigc::mem_fun(*this, &Shell::on_open));
     add_action("close-project", sigc::mem_fun(*this, &Shell::on_close_project));   // s145
     add_action("start",         [this] { show_start(); });   // s064

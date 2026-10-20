@@ -110,6 +110,8 @@ private:
     void on_new();                               // category: handler: s019 -- the New sheet -> a blank document
     void on_sample();                            // category: handler: s019 -- open the built-in sample book
     void on_big_book();                          // category: handler: s100 -- the generated ~400-page test book
+    void on_import_odt();                        // category: handler: s238 -- File > Import ODT...
+    void import_odt_file(const std::string& path);   // category: helper: s238 -- read, set, lay out (worker), adopt, say what came in
     void on_find();                              // category: handler: s022 -- Ctrl+F: show the find bar
     void on_story_editor();                      // category: handler: s033 -- Ctrl+Y: the story being edited / picked
     void on_save();                              // category: handler: save (Save As the first time)

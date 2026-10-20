@@ -120,6 +120,9 @@ add_library(composix_core STATIC
     # s038: hyphenation -- Liang's algorithm; the TeX patterns embedded below.
     src/core/Hyphen.cpp
     src/core/Pathfinder.cpp   # s213: shapes combined (Clipper2), curves fitted back
+    src/core/Zip.cpp          # s235: zip entries (ODT, SwatchBooker)
+    src/core/Xml.cpp          # s235: an XML tree (ODT import)
+    src/core/Odt.cpp          # s235: an OpenDocument text file, read
     ${CMAKE_CURRENT_BINARY_DIR}/HyphenData.cpp
 )
 target_include_directories(composix_core PUBLIC include)
@@ -149,6 +152,7 @@ add_library(composix_layout STATIC
     src/layout/Psd.cpp          # s185: a PSD's merged picture
     # s100: the generated long test book (fitted by flowing it).
     src/layout/BigBook.cpp
+    src/layout/OdtImport.cpp    # s236: an ODT made a document (its pages fitted by flowing it)
     # s103: page thumbnails on a worker thread, from a document snapshot.
     src/layout/ThumbStore.cpp
 )
@@ -257,7 +261,7 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s234")
+set(COMPOSIX_BUILD "s238")
 # s194: on the About window's file alone -- on the whole target, each bump
 # rebuilt every app file and missed ccache.
 set_source_files_properties(src/AboutWindow.cpp PROPERTIES

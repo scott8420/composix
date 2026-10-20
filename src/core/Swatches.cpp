@@ -2,6 +2,7 @@
 // palettes. See core/Swatches.hpp.
 #include <zlib.h>
 #include "core/Swatches.hpp"
+#include "core/Zip.hpp"
 
 #include "json.hpp"
 
@@ -397,51 +398,8 @@ std::optional<Library> parse_kde(const std::string& text, std::string* err) {
 
 // s202 (C5): SwatchBooker (.sbz, Scribus ships some) -- a zip holding
 // swatchbook.xml. The entry found by its local header and inflated.
-std::string unzip_entry(const std::string& zip, const std::string& want) {
-    std::size_t at = 0;
-    const auto u16 = [&](std::size_t i) { return static_cast<unsigned>(static_cast<unsigned char>(zip[i])) | static_cast<unsigned>(static_cast<unsigned char>(zip[i + 1])) << 8; };
-    const auto u32 = [&](std::size_t i) { return static_cast<std::uint32_t>(u16(i)) | static_cast<std::uint32_t>(u16(i + 2)) << 16; };
-    while (at + 30 <= zip.size() && zip.compare(at, 4, "PK\x03\x04") == 0) {
-        const unsigned flags = u16(at + 6), method = u16(at + 8);
-        std::uint32_t csize = u32(at + 18);
-        const std::uint32_t usize = u32(at + 22);
-        const unsigned nlen = u16(at + 26), xlen = u16(at + 28);
-        if (at + 30 + nlen + xlen > zip.size()) break;
-        const std::string name = zip.substr(at + 30, nlen);
-        const std::size_t data = at + 30 + nlen + xlen;
-        if (flags & 8) {   // sizes after the data: take them from the central directory
-            const auto cd = zip.find("PK\x01\x02");
-            for (std::size_t c = cd; c != std::string::npos && c + 46 <= zip.size(); c = zip.find("PK\x01\x02", c + 4)) {
-                const unsigned cn = u16(c + 28);
-                if (c + 46 + cn <= zip.size() && zip.compare(c + 46, cn, name) == 0) { csize = u32(c + 20); break; }
-            }
-        }
-        if (data + csize > zip.size()) break;
-        if (name == want) {
-            if (method == 0) return zip.substr(data, csize);
-            if (method != 8) return {};
-            std::string out(usize ? usize : csize * 8 + 1024, '\0');
-            z_stream zs{};
-            if (inflateInit2(&zs, -MAX_WBITS) != Z_OK) return {};
-            zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(zip.data() + data));
-            zs.avail_in = csize;
-            int rc = Z_OK;
-            std::size_t done = 0;
-            while (rc == Z_OK) {
-                if (done == out.size()) out.resize(out.size() * 2);
-                zs.next_out = reinterpret_cast<Bytef*>(out.data() + done);
-                zs.avail_out = static_cast<uInt>(out.size() - done);
-                rc = inflate(&zs, Z_NO_FLUSH);
-                done = out.size() - zs.avail_out;
-            }
-            inflateEnd(&zs);
-            if (rc != Z_STREAM_END) return {};
-            out.resize(done);
-            return out;
-        }
-        at = data + csize;
-    }
-    return {};
+std::string unzip_entry(const std::string& zip, const std::string& want) {   // s235: core/Zip's now
+    return core::zip::entry(zip, want);
 }
 // The text between <tag ...> and </tag> from `from` ("" none); `at` moves past it.
 std::string inner(const std::string& x, const std::string& tag, std::size_t& at, std::size_t end) {
