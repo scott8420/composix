@@ -123,9 +123,32 @@ bool draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
         }
         if (op < 1) { cairo_pop_group_to_source(cr); cairo_paint_with_alpha(cr, op); }
         if (f.stroke_w > 0 && paint(f.stroke, f.stroke_tint)) {
+            cairo_save(cr);
             cairo_set_line_width(cr, f.stroke_w);
-            outline();
+            // s204: its ends, corners, dashes; under an arrow the line stops short.
+            const auto dash = core::doc::dash_pattern(f);
+            cairo_set_line_cap(cr, static_cast<cairo_line_cap_t>(f.dash == 2 ? 1 : std::clamp(f.cap, 0, 2)));
+            cairo_set_line_join(cr, static_cast<cairo_line_join_t>(std::clamp(f.join, 0, 2)));
+            if (!dash.empty()) cairo_set_dash(cr, dash.data(), static_cast<int>(dash.size()), 0);
+            if (core::doc::has_outline(f)) {
+                cairo_new_path(cr);
+                for (const auto& o : core::doc::stroke_ops(f)) {
+                    if (o.op == 'M') cairo_move_to(cr, o.v[0], o.v[1]);
+                    else if (o.op == 'L') cairo_line_to(cr, o.v[0], o.v[1]);
+                    else if (o.op == 'C') cairo_curve_to(cr, o.v[0], o.v[1], o.v[2], o.v[3], o.v[4], o.v[5]);
+                    else cairo_close_path(cr);
+                }
+            } else {
+                outline();
+            }
             cairo_stroke(cr);
+            for (const auto& poly : core::doc::end_shapes(f)) {
+                for (std::size_t i = 0; i < poly.size(); ++i)
+                    (i ? cairo_line_to : cairo_move_to)(cr, poly[i].x, poly[i].y);
+                cairo_close_path(cr);
+                cairo_fill(cr);
+            }
+            cairo_restore(cr);
         }
         if (cut) cairo_restore(cr);   // s155
         if (!how.stop_after.empty() && fid == how.stop_after) return true;   // s193
@@ -894,7 +917,12 @@ std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& fl
         for (const auto& sid : order) {
             for (auto para : d.as<core::Story>(sid)->paras) {
                 if (std::find(l->from_styles.begin(), l->from_styles.end(), para.style) == l->from_styles.end()) continue;
-                if (sid != own) for (auto& a : para.anchors) a.clear();
+                // s201 (W1): a copy built here before -- its original (if still there) is gathered instead.
+                if (sid == own && !para.copy_of.empty()) continue;
+                if (sid != own) {
+                    for (auto& a : para.anchors) a.clear();
+                    para.copy_of = sid;
+                }
                 std::string w;
                 for (std::size_t i = 0; i < para.text.size();) {
                     if (static_cast<unsigned char>(para.text[i]) == 0xEE && i + 2 < para.text.size() &&

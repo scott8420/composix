@@ -26,7 +26,7 @@
 
 namespace composix::core::swatches {
 
-enum class Format { Unknown, ASE, GPL, SOC, Scribus, ACO, Composix };
+enum class Format { Unknown, ASE, GPL, SOC, Scribus, ACO, Composix, KDE, SwatchBooker };   // s202: KDE, SwatchBooker (.sbz)
 enum class LibKind { Mine, System, Imported };
 
 struct Library {

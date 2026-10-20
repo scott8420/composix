@@ -98,6 +98,11 @@ json to(const Record& r) {
             if (v.across) j["across"] = true;                          // s155
             if (v.shape != ShapeKind::Rect) j["shape"] = en(v.shape);   // s197
             if (v.open) j["open"] = true;
+            if (v.cap) j["cap"] = v.cap;   // s204
+            if (v.join) j["join"] = v.join;
+            if (v.dash) j["dash"] = v.dash;
+            if (v.end_a) j["end_a"] = v.end_a;
+            if (v.end_b) j["end_b"] = v.end_b;
             if (!v.path.empty()) {
                 json pts = json::array();
                 for (const auto& p : v.path) pts.push_back({p.x, p.y, p.ix, p.iy, p.ox, p.oy, p.smooth ? 1 : 0});
@@ -175,6 +180,7 @@ json to(const Record& r) {
                     jp["refs"] = rs;
                 }
                 if (!p.anchors.empty()) jp["anchors"] = p.anchors;   // s128
+                if (!p.copy_of.empty()) jp["copy_of"] = p.copy_of;   // s201
                 if (!p.index.empty()) {   // s134
                     json xs = json::array();
                     for (const auto& m : p.index) {
@@ -376,6 +382,8 @@ std::optional<Record> from(const json& j) {
         v.across = val(j, "across", false);   // s155
         v.shape = de(j, "shape", ShapeKind::Rect);   // s197
         v.open = val(j, "open", false);
+        v.cap = val(j, "cap", 0); v.join = val(j, "join", 0); v.dash = val(j, "dash", 0);   // s204
+        v.end_a = val(j, "end_a", 0); v.end_b = val(j, "end_b", 0);
         if (j.contains("path") && j["path"].is_array())
             for (const auto& a : j["path"])
                 if (a.is_array() && a.size() >= 6)
@@ -452,6 +460,7 @@ std::optional<Record> from(const json& j) {
                         if (r.contains("more") && r.at("more").is_array())   // s143
                             for (const auto& m : r.at("more")) para.refs.back().more.push_back(m.is_string() ? m.get<std::string>() : std::string{});
                     }
+                if (p.contains("copy_of") && p.at("copy_of").is_string()) para.copy_of = p.at("copy_of").get<std::string>();   // s201
                 if (p.contains("anchors") && p.at("anchors").is_array())
                     for (const auto& a : p.at("anchors")) para.anchors.push_back(a.is_string() ? a.get<std::string>() : std::string{});
                 if (p.contains("index") && p.at("index").is_array())   // s134

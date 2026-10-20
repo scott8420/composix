@@ -88,6 +88,9 @@ public:
     void set_fill(const Color& c);
     void set_stroke(const Color& c);
     void set_line_width(double w);
+    void set_line_cap(int cap);     // s204: 0 butt, 1 round, 2 square
+    void set_line_join(int join);   // s204: 0 miter, 1 round, 2 bevel
+    void set_dash(const std::vector<double>& on_off, double phase = 0);   // s204: empty -- solid
     // s021 (Composix): constant opacity for what's filled (and images) and
     // what's stroked, 0..1 -- an ExtGState (/ca, /CA). Within save() /
     // restore() to scope it. Below 1 is transparency: PDF/X-1a refuses it.

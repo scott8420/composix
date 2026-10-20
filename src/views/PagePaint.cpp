@@ -168,8 +168,34 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
             cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0,
                                 dim * std::clamp(f.opacity, 0.0, 1.0));
             cr->set_line_width(std::max(0.5, f.stroke_w * s));
-            outline();   // centred on the frame's edge, as it prints
-            cr->stroke();
+            // s204: its ends, corners, dashes (in screen units); under an arrow the line stops short.
+            auto dash = core::doc::dash_pattern(f);
+            for (auto& v : dash) v *= s;
+            cr->set_line_cap(static_cast<Cairo::Context::LineCap>(f.dash == 2 ? 1 : std::clamp(f.cap, 0, 2)));
+            cr->set_line_join(static_cast<Cairo::Context::LineJoin>(std::clamp(f.join, 0, 2)));
+            if (!dash.empty()) cr->set_dash(dash, 0);
+            if (core::doc::has_outline(f)) {
+                cr->begin_new_path();
+                const auto X = [&](double v) { return r.x + (v - f.x) * s; };
+                const auto Y = [&](double v) { return r.y + (v - f.y) * s; };
+                for (const auto& o : core::doc::stroke_ops(f)) {
+                    if (o.op == 'M') cr->move_to(X(o.v[0]), Y(o.v[1]));
+                    else if (o.op == 'L') cr->line_to(X(o.v[0]), Y(o.v[1]));
+                    else if (o.op == 'C') cr->curve_to(X(o.v[0]), Y(o.v[1]), X(o.v[2]), Y(o.v[3]), X(o.v[4]), Y(o.v[5]));
+                    else cr->close_path();
+                }
+                cr->stroke();
+                cr->unset_dash();
+                for (const auto& poly : core::doc::end_shapes(f)) {
+                    for (std::size_t i = 0; i < poly.size(); ++i)
+                        if (i) cr->line_to(X(poly[i].x), Y(poly[i].y)); else cr->move_to(X(poly[i].x), Y(poly[i].y));
+                    cr->close_path();
+                    cr->fill();
+                }
+            } else {
+                outline();   // centred on the frame's edge, as it prints
+                cr->stroke();
+            }
             cr->restore();
         }
     } stroke_later{cr, P.doc, f, r, s, dim, outline};
@@ -453,6 +479,7 @@ PixBox canvas_page_box(const core::Doc& d, const core::Placed& p, const CanvasPa
         if (f->across && sd == core::Side::Right) { const double r = fr.r(); fr.x = std::max(fr.x, p.r.x); fr.w = std::max(0.0, r - fr.x); }
         b = b.unite(fr);
         stroke = std::max(stroke, f->stroke_w);
+        if (f->end_a || f->end_b) stroke = std::max(stroke, f->stroke_w * 4 + 2);   // s204: an arrow is wider than its line
     };
     if (!p.master)
         for (const auto& m : core::master_chain(d, p.id))

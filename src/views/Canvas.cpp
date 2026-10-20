@@ -2838,7 +2838,7 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     const auto show_shape = [shape_btn_p, last_shape](int k) {
         *last_shape = k;
         (*shape_btn_p)->set_icon_name(shapes[k].icon);
-        (*shape_btn_p)->set_tooltip_text(std::string(shapes[k].tip) + "\nRight-click or hold: rectangle, oval, line, pen");
+        (*shape_btn_p)->set_tooltip_text(std::string(shapes[k].tip) + "\nClick again (or right-click, or hold): rectangle, oval, line, pen");
     };
     const auto use_shape = [this, last_shape](int k) {
         if (shapes[k].tool == Canvas::Tool::Pen) m_canvas.set_tool(Canvas::Tool::Pen);
@@ -2870,7 +2870,8 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
         auto pop = Gtk::make_managed<Gtk::Popover>();
         pop->set_name("canvas_view.tool.shapes");
         pop->set_position(Gtk::PositionType::RIGHT);
-        pop->set_has_arrow(false);
+        pop->set_has_arrow(true);
+        pop->set_autohide(true);
         auto list = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
         for (int k = 0; k < 4; ++k) {
             auto row = Gtk::make_managed<Gtk::Button>();
@@ -2919,11 +2920,26 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
         ov->add_overlay(*mark);
         pop->set_parent(*ov);
         m_shape_pop = pop;
-        auto right = Gtk::GestureClick::create();
-        right->set_button(GDK_BUTTON_SECONDARY);
-        right->signal_pressed().connect([pop](int, double, double) { pop->popup(); });
-        ov->add_controller(right);
+        // s201 (Scott: the menu didn't show): every way in, ahead of the
+        // button's own handling (the capture phase) -- a click on the button
+        // when it's already the tool, a right-click, a hold.
+        auto click = Gtk::GestureClick::create();
+        click->set_button(0);   // any button
+        click->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+        auto was_active = std::make_shared<bool>(false);
+        click->signal_pressed().connect([click, b, pop, was_active](int, double, double) {
+            *was_active = b->get_active();
+            if (click->get_current_button() == GDK_BUTTON_SECONDARY) {
+                click->set_state(Gtk::EventSequenceState::CLAIMED);
+                pop->popup();
+            }
+        });
+        click->signal_released().connect([click, pop, was_active](int, double, double) {
+            if (click->get_current_button() == GDK_BUTTON_PRIMARY && *was_active) pop->popup();
+        });
+        ov->add_controller(click);
         auto hold = Gtk::GestureLongPress::create();
+        hold->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
         hold->signal_pressed().connect([pop](double, double) { pop->popup(); });
         ov->add_controller(hold);
         m_tools.append(*ov);

@@ -1,5 +1,6 @@
 // core::swatches -- s171: colour library formats, My Library, the system's
 // palettes. See core/Swatches.hpp.
+#include <zlib.h>
 #include "core/Swatches.hpp"
 
 #include "json.hpp"
@@ -121,7 +122,8 @@ Swatch rgb_swatch(const std::string& name, double r, double g, double b) {   // 
     Swatch s;
     s.name = name;
     s.model = ColorModel::RGB;
-    s.v = {std::clamp(r, 0.0, 255.0), std::clamp(g, 0.0, 255.0), std::clamp(b, 0.0, 255.0), 0};
+    // s202 (C5): whole numbers -- real files store 16-bit or float channels (45.0039)
+    s.v = {std::round(std::clamp(r, 0.0, 255.0)), std::round(std::clamp(g, 0.0, 255.0)), std::round(std::clamp(b, 0.0, 255.0)), 0};
     s.preview = doc::swatch_preview(s);
     return s;
 }
@@ -345,12 +347,16 @@ std::optional<Library> parse_scribus(const std::string& xml, std::string* err) {
     for (const auto& a : tags(xml, "COLOR")) {
         const std::string name = attr_of(a, "name");
         if (name.empty()) continue;
+        if (attr_of(a, "register") == "1") continue;   // s202 (C5): Scribus's Registration -- the marks' ink, not a colour
         Swatch s;
         const std::string space = lower(attr_of(a, "space"));
         std::uint32_t rgb;
         if (const std::string c = attr_of(a, "cmyk"); c.size() == 9 && c[0] == '#') {   // #CCMMYYKK, 0-255 each
             const auto byte = [&](int i) { return std::stoul(c.substr(1 + 2 * static_cast<std::size_t>(i), 2), nullptr, 16) * 100.0 / 255; };
-            s = cmyk_swatch(name, byte(0), byte(1), byte(2), byte(3));
+            // s202 (C5): exact percentages when given too (Shades of K: K="1" beside #...03)
+            const bool exact = a.count("c") || a.count("m") || a.count("y") || a.count("k");
+            s = exact ? cmyk_swatch(name, num(a, "c", byte(0)), num(a, "m", byte(1)), num(a, "y", byte(2)), num(a, "k", byte(3)))
+                      : cmyk_swatch(name, byte(0), byte(1), byte(2), byte(3));
         } else if (hex_rgb(attr_of(a, "rgb"), rgb)) {
             s = rgb_swatch(name, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
         } else if (space == "cmyk") {
@@ -363,6 +369,156 @@ std::optional<Library> parse_scribus(const std::string& xml, std::string* err) {
         if (attr_of(a, "spot") == "1") make_spot(s);
         lib.colors.push_back(s);
     }
+    return lib;
+}
+
+// s202 (C5): KDE's palette -- "KDE RGB Palette", then "R G B<tab>Name" a line.
+std::optional<Library> parse_kde(const std::string& text, std::string* err) {
+    std::istringstream in(text);
+    std::string line;
+    if (!std::getline(in, line) || trim(line).rfind("KDE RGB Palette", 0) != 0) {
+        if (err) *err = "not a KDE palette";
+        return std::nullopt;
+    }
+    Library lib;
+    lib.format = Format::KDE;
+    while (std::getline(in, line)) {
+        const std::string t = trim(line);
+        if (t.empty() || t[0] == '#' || t[0] == '!') continue;
+        std::istringstream ls(t);
+        int R, G, B;
+        if (!(ls >> R >> G >> B)) continue;
+        std::string name;
+        std::getline(ls, name);
+        lib.colors.push_back(rgb_swatch(trim(name), R, G, B));
+    }
+    return lib;
+}
+
+// s202 (C5): SwatchBooker (.sbz, Scribus ships some) -- a zip holding
+// swatchbook.xml. The entry found by its local header and inflated.
+std::string unzip_entry(const std::string& zip, const std::string& want) {
+    std::size_t at = 0;
+    const auto u16 = [&](std::size_t i) { return static_cast<unsigned>(static_cast<unsigned char>(zip[i])) | static_cast<unsigned>(static_cast<unsigned char>(zip[i + 1])) << 8; };
+    const auto u32 = [&](std::size_t i) { return static_cast<std::uint32_t>(u16(i)) | static_cast<std::uint32_t>(u16(i + 2)) << 16; };
+    while (at + 30 <= zip.size() && zip.compare(at, 4, "PK\x03\x04") == 0) {
+        const unsigned flags = u16(at + 6), method = u16(at + 8);
+        std::uint32_t csize = u32(at + 18);
+        const std::uint32_t usize = u32(at + 22);
+        const unsigned nlen = u16(at + 26), xlen = u16(at + 28);
+        if (at + 30 + nlen + xlen > zip.size()) break;
+        const std::string name = zip.substr(at + 30, nlen);
+        const std::size_t data = at + 30 + nlen + xlen;
+        if (flags & 8) {   // sizes after the data: take them from the central directory
+            const auto cd = zip.find("PK\x01\x02");
+            for (std::size_t c = cd; c != std::string::npos && c + 46 <= zip.size(); c = zip.find("PK\x01\x02", c + 4)) {
+                const unsigned cn = u16(c + 28);
+                if (c + 46 + cn <= zip.size() && zip.compare(c + 46, cn, name) == 0) { csize = u32(c + 20); break; }
+            }
+        }
+        if (data + csize > zip.size()) break;
+        if (name == want) {
+            if (method == 0) return zip.substr(data, csize);
+            if (method != 8) return {};
+            std::string out(usize ? usize : csize * 8 + 1024, '\0');
+            z_stream zs{};
+            if (inflateInit2(&zs, -MAX_WBITS) != Z_OK) return {};
+            zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(zip.data() + data));
+            zs.avail_in = csize;
+            int rc = Z_OK;
+            std::size_t done = 0;
+            while (rc == Z_OK) {
+                if (done == out.size()) out.resize(out.size() * 2);
+                zs.next_out = reinterpret_cast<Bytef*>(out.data() + done);
+                zs.avail_out = static_cast<uInt>(out.size() - done);
+                rc = inflate(&zs, Z_NO_FLUSH);
+                done = out.size() - zs.avail_out;
+            }
+            inflateEnd(&zs);
+            if (rc != Z_STREAM_END) return {};
+            out.resize(done);
+            return out;
+        }
+        at = data + csize;
+    }
+    return {};
+}
+// The text between <tag ...> and </tag> from `from` ("" none); `at` moves past it.
+std::string inner(const std::string& x, const std::string& tag, std::size_t& at, std::size_t end) {
+    const auto a = x.find("<" + tag, at);
+    if (a == std::string::npos || a >= end) return {};
+    const auto b = x.find('>', a);
+    const auto c = x.find("</" + tag + ">", b);
+    if (b == std::string::npos || c == std::string::npos || c > end) return {};
+    at = c + tag.size() + 3;
+    return x.substr(b + 1, c - b - 1);
+}
+std::optional<Library> parse_sbz(const std::string& bytes, std::string* err) {
+    const std::string xml = bytes.compare(0, 4, "PK\x03\x04") == 0 ? unzip_entry(bytes, "swatchbook.xml") : bytes;
+    if (xml.find("<SwatchBook") == std::string::npos) {
+        if (err) *err = "not a SwatchBooker file";
+        return std::nullopt;
+    }
+    Library lib;
+    lib.format = Format::SwatchBooker;
+    const auto mats = xml.find("<materials");
+    {   // its title, from the book's metadata (before the materials)
+        std::size_t at = 0;
+        const auto t = inner(xml, "dc:title", at, mats == std::string::npos ? xml.size() : mats);
+        lib.name = unxml(trim(t));
+    }
+    std::map<std::string, Swatch> by_id;
+    std::vector<std::string> order;
+    for (std::size_t at = mats == std::string::npos ? 0 : mats;;) {
+        const auto a = xml.find("<color", at);
+        if (a == std::string::npos) break;
+        const auto head_end = xml.find('>', a);
+        const auto e = xml.find("</color>", a);
+        if (head_end == std::string::npos || e == std::string::npos) break;
+        const bool spot = xml.substr(a, head_end - a).find("usage=\"spot\"") != std::string::npos;
+        std::size_t p = a;
+        const std::string id = unxml(trim(inner(xml, "dc:identifier", p, e)));
+        p = a;
+        const std::string title = unxml(trim(inner(xml, "dc:title", p, e)));
+        // Its values: CMYK first (what prints), then Lab, then RGB.
+        std::map<std::string, std::vector<double>> vals;
+        for (std::size_t v = a;;) {
+            const auto va = xml.find("<values", v);
+            if (va == std::string::npos || va > e) break;
+            const auto vb = xml.find('>', va), vc = xml.find("</values>", va);
+            if (vb == std::string::npos || vc == std::string::npos || vc > e) break;
+            std::string model;
+            if (const auto m = xml.find("model=\"", va); m != std::string::npos && m < vb) model = lower(xml.substr(m + 7, xml.find('"', m + 7) - m - 7));
+            std::istringstream in(xml.substr(vb + 1, vc - vb - 1));
+            std::vector<double> nums;
+            for (double d; in >> d;) nums.push_back(d);
+            vals[model] = nums;
+            v = vc + 9;
+        }
+        const std::string name = !title.empty() ? title : id;
+        std::optional<Swatch> sw;
+        if (const auto it = vals.find("cmyk"); it != vals.end() && it->second.size() >= 4)
+            sw = cmyk_swatch(name, it->second[0] * 100, it->second[1] * 100, it->second[2] * 100, it->second[3] * 100);
+        else if (const auto l = vals.find("lab"); l != vals.end() && l->second.size() >= 3)
+            sw = lab_swatch(name, l->second[0], l->second[1], l->second[2]);
+        else if (const auto r = vals.count("rgb") ? vals.find("rgb") : vals.find("srgb"); r != vals.end() && r->second.size() >= 3)
+            sw = rgb_swatch(name, r->second[0] * 255, r->second[1] * 255, r->second[2] * 255);
+        else if (const auto g = vals.find("gray"); g != vals.end() && !g->second.empty())
+            sw = gray_swatch(name, 100 * (1 - g->second[0]));
+        if (sw) {
+            if (spot) make_spot(*sw);
+            if (!by_id.count(id)) order.push_back(id);
+            by_id[id] = *sw;
+        }
+        at = e + 8;
+    }
+    // The book's order when it has one; else the materials'.
+    std::vector<std::string> book;
+    if (const auto b = xml.find("<book"); b != std::string::npos)
+        for (const auto& t : tags(xml.substr(b), "swatch")) if (const auto m = attr_of(t, "material"); by_id.count(m)) book.push_back(m);
+    std::set<std::string> seen;
+    for (const auto& id : book.empty() ? order : book)
+        if (seen.insert(id).second) lib.colors.push_back(by_id[id]);
     return lib;
 }
 
@@ -481,6 +637,8 @@ const char* format_name(Format f) {
     case Format::SOC:      return "LibreOffice palette";
     case Format::Scribus:  return "Scribus swatches";
     case Format::ACO:      return "Photoshop swatches";
+    case Format::KDE:      return "KDE palette";             // s202
+    case Format::SwatchBooker: return "SwatchBooker swatches";
     case Format::Composix: return "Composix library";
     default:               return "Unknown";
     }
@@ -494,8 +652,11 @@ Format format_of(const std::string& path, const std::string& bytes) {
     if (bytes.compare(0, 3, "\xEF\xBB\xBF") == 0) i = 3;
     while (i < bytes.size() && std::isspace(static_cast<unsigned char>(bytes[i]))) ++i;
     if (bytes.compare(i, 12, "GIMP Palette") == 0) return Format::GPL;
+    if (bytes.compare(i, 15, "KDE RGB Palette") == 0) return Format::KDE;   // s202
+    if (bytes.compare(0, 4, "PK\x03\x04") == 0 && bytes.find("swatchbook.xml") != std::string::npos) return Format::SwatchBooker;
     const std::string head = lower(bytes.substr(0, 4096));
     if (head.find("<scribuscolors") != std::string::npos) return Format::Scribus;
+    if (head.find("<swatchbook") != std::string::npos) return Format::SwatchBooker;   // s202: its XML unzipped
     if (head.find("color-table") != std::string::npos || head.find("<draw:color") != std::string::npos) return Format::SOC;
     if (head.find("composix-swatches") != std::string::npos) return Format::Composix;
     const std::string ext = lower(fs::path(path).extension().string());
@@ -503,18 +664,34 @@ Format format_of(const std::string& path, const std::string& bytes) {
     return Format::Unknown;
 }
 
-std::optional<Library> parse(const std::string& bytes, Format f, std::string* err) {
+std::optional<Library> parse_any(const std::string& bytes, Format f, std::string* err) {
     switch (f) {
     case Format::ASE:      return parse_ase(bytes, err);
     case Format::GPL:      return parse_gpl(bytes, err);
     case Format::SOC:      return parse_soc(bytes, err);
     case Format::Scribus:  return parse_scribus(bytes, err);
     case Format::ACO:      return parse_aco(bytes, err);
+    case Format::KDE:      return parse_kde(bytes, err);       // s202
+    case Format::SwatchBooker: return parse_sbz(bytes, err);
     case Format::Composix: return parse_json(bytes, err);
     default:
         if (err) *err = "not a colour library Composix reads";
         return std::nullopt;
     }
+}
+
+// s202 (C5): real files leave colours unnamed (Adobe Color's ASE exports):
+// those are named by their hex, as a GIMP palette's are.
+std::optional<Library> parse(const std::string& bytes, Format f, std::string* err) {
+    auto lib = parse_any(bytes, f, err);
+    if (lib)
+        for (auto& c : lib->colors)
+            if (trim(c.name).empty()) {
+                char h[8];
+                std::snprintf(h, sizeof h, "#%06X", c.preview & 0xFFFFFFu);
+                c.name = h;
+            }
+    return lib;
 }
 
 std::optional<Library> read_file(const std::string& path, std::string* err) {
@@ -681,7 +858,7 @@ std::vector<Found> system_palettes(const std::string& home, const std::vector<st
             if (it.depth() > 2) { it.disable_recursion_pending(); continue; }
             if (!it->is_regular_file(ec)) continue;
             const std::string ext = lower(it->path().extension().string());
-            if (ext != ".gpl" && ext != ".ase" && ext != ".soc" && ext != ".aco" && ext != ".xml") continue;
+            if (ext != ".gpl" && ext != ".ase" && ext != ".soc" && ext != ".aco" && ext != ".xml" && ext != ".sbz") continue;   // s202: .sbz
             const std::string canon = fs::weakly_canonical(it->path(), ec).string();
             if (!seen.insert(canon).second) continue;
             if (!names.insert(src + "/" + lower(it->path().filename().string())).second) continue;

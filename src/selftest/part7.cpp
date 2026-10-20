@@ -1140,6 +1140,29 @@ void part7() {
             for (const auto& p : d.as<core::Story>(d.as<core::GenList>(bl)->story)->paras)
                 for (const auto& a : p.anchors) with += !a.empty();
             check("a copy elsewhere: no anchor ids copied", with == 0);
+            // s201 (W1): the copies say where they came from; one's original
+            // deleted, a rebuild drops the copy; built again: no change.
+            const auto bs = d.as<core::GenList>(bl)->story;
+            const auto n0 = d.as<core::Story>(bs)->paras.size();
+            bool marked = true;
+            for (const auto& p : d.as<core::Story>(bs)->paras)
+                if (p.style == "style.4") marked = marked && p.copy_of == "story.4";
+            check("W1: the copies are marked with their story", marked && n0 >= 2);
+            const auto& src4 = d.as<core::Story>("story.4")->paras;
+            int k = -1;
+            for (int i = static_cast<int>(src4.size()) - 1; i >= 0 && k < 0; --i)
+                if (src4[static_cast<std::size_t>(i)].style == "style.4" && src4[static_cast<std::size_t>(i)].anchors.empty()) k = i;
+            if (k > 0) {
+                const auto prev = static_cast<int>(src4[static_cast<std::size_t>(k - 1)].text.size());
+                D::edit_text(j, d, "story.4", {k - 1, prev}, {k, static_cast<int>(src4[static_cast<std::size_t>(k)].text.size())}, "", "Delete", "");
+            }
+            L::build_list(j, d, bl);
+            check("W1: its original deleted -- the copy gone at the rebuild", k > 0 && d.as<core::Story>(bs)->paras.size() == n0 - 1,
+                  std::to_string(d.as<core::Story>(bs)->paras.size()) + " of " + std::to_string(n0));
+            const auto label = j.undo_label();
+            check("W1: built again -- no change", !L::build_list(j, d, bl) && j.undo_label() == label);
+            j.undo();   // the rebuild
+            j.undo();   // the delete
         }
         // The source deleted: the citation broken, Preflight says so.
         D::edit_text(j, d, "story.4", {3, 0}, {3, static_cast<int>(d.as<core::Story>("story.4")->paras[3].text.size())}, "", "Delete", "");

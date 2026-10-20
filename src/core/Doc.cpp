@@ -1305,6 +1305,113 @@ Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<
     return made;
 }
 
+// ── s204: the stroke's style ────────────────────────────────────────────────
+namespace {
+// An open path's end k (0 its first point, 1 its last): the point, and the
+// way the line leaves it (a unit vector pointing back along the path).
+bool path_end(const Frame& f, int k, XY& at, XY& back, double dx, double dy) {
+    if (f.kind != FrameKind::Shape || f.shape != ShapeKind::Path || !f.open || f.path.size() < 2) return false;
+    std::vector<PathPoint> P;
+    for (const auto& p : f.path) P.push_back(to_abs(p, f, dx, dy));
+    const auto& e = k == 0 ? P.front() : P.back();
+    const auto& n = k == 0 ? P[1] : P[P.size() - 2];
+    // The handle on this side if it has one, else the neighbour.
+    XY toward = k == 0 ? XY{e.ox, e.oy} : XY{e.ix, e.iy};
+    if (std::hypot(toward.x - e.x, toward.y - e.y) < 1e-9) toward = k == 0 ? XY{n.ix, n.iy} : XY{n.ox, n.oy};
+    if (std::hypot(toward.x - e.x, toward.y - e.y) < 1e-9) toward = {n.x, n.y};
+    const double len = std::hypot(toward.x - e.x, toward.y - e.y);
+    if (len < 1e-9) return false;
+    at = {e.x, e.y};
+    back = {(toward.x - e.x) / len, (toward.y - e.y) / len};
+    return true;
+}
+double end_len(const Frame& f) { return std::max(f.stroke_w, 0.25) * 4.5 + 2; }
+double end_wid(const Frame& f) { return std::max(f.stroke_w, 0.25) * 4 + 2; }
+}  // namespace
+
+std::vector<OutlineOp> stroke_ops(const Frame& f, double dx, double dy) {
+    auto ops = outline_ops(f, dx, dy);
+    if (ops.size() < 2 || !(f.shape == ShapeKind::Path && f.open)) return ops;
+    // Under an arrow: the line stops short of the tip (the arrow covers the rest).
+    for (int k = 0; k < 2; ++k) {
+        const int kind = k == 0 ? f.end_a : f.end_b;
+        if (kind != 1) continue;
+        XY at, back;
+        if (!path_end(f, k, at, back, dx, dy)) continue;
+        const double cut = end_len(f) * 0.6;
+        const double mx = back.x * cut, my = back.y * cut;
+        if (k == 0) {
+            ops[0].v[0] += mx; ops[0].v[1] += my;
+            if (ops[1].op == 'C') { ops[1].v[0] += mx; ops[1].v[1] += my; }
+        } else {
+            auto& o = ops.back();
+            if (o.op == 'L') { o.v[0] += mx; o.v[1] += my; }
+            else if (o.op == 'C') { o.v[2] += mx; o.v[3] += my; o.v[4] += mx; o.v[5] += my; }
+        }
+    }
+    return ops;
+}
+
+std::vector<double> dash_pattern(const Frame& f) {
+    const double w = std::max(f.stroke_w, 0.25);
+    if (f.dash == 1) return {w * 3, w * 2};
+    if (f.dash == 2) return {0, w * 2};   // dots: round ends on nothing
+    return {};
+}
+
+std::vector<std::vector<XY>> end_shapes(const Frame& f, double dx, double dy) {
+    std::vector<std::vector<XY>> out;
+    for (int k = 0; k < 2; ++k) {
+        const int kind = k == 0 ? f.end_a : f.end_b;
+        XY at, back;
+        if (kind <= 0 || !path_end(f, k, at, back, dx, dy)) continue;
+        const XY side{-back.y, back.x};
+        const double L = end_len(f), W = end_wid(f) / 2, w = std::max(f.stroke_w, 0.25);
+        if (kind == 1) {   // an arrow, its tip on the end
+            out.push_back({at, {at.x + back.x * L + side.x * W, at.y + back.y * L + side.y * W},
+                           {at.x + back.x * L - side.x * W, at.y + back.y * L - side.y * W}});
+        } else if (kind == 2) {   // a circle on the end
+            std::vector<XY> c;
+            const double r = W * 0.8;
+            for (int i = 0; i < 32; ++i) {
+                const double a = i * 2 * M_PI / 32;
+                c.push_back({at.x + r * std::cos(a), at.y + r * std::sin(a)});
+            }
+            out.push_back(c);
+        } else if (kind == 3) {   // a bar across the end
+            const double h = w * 0.75;
+            out.push_back({{at.x + side.x * W - back.x * h, at.y + side.y * W - back.y * h},
+                           {at.x + side.x * W + back.x * h, at.y + side.y * W + back.y * h},
+                           {at.x - side.x * W + back.x * h, at.y - side.y * W + back.y * h},
+                           {at.x - side.x * W - back.x * h, at.y - side.y * W - back.y * h}});
+        }
+    }
+    return out;
+}
+
+bool shape_hit(const Frame& f, double x, double y, double tol) {   // s203
+    if (!Rect{f.x - tol - f.stroke_w, f.y - tol - f.stroke_w, f.w + 2 * (tol + f.stroke_w), f.h + 2 * (tol + f.stroke_w)}.contains(x, y))
+        return false;
+    if (!has_outline(f)) return true;
+    const double near = std::max(tol, 1.0) + (f.stroke.empty() ? 0.0 : f.stroke_w / 2);
+    const bool open = f.shape == ShapeKind::Path && f.open;
+    bool inside = false;
+    for (const auto& poly : outline_polys(f, 0.5)) {
+        const std::size_t n = poly.size();
+        for (std::size_t i = 0; i + 1 < n || (!open && i < n && n > 2); ++i) {
+            const XY a = poly[i], b = poly[(i + 1) % n];
+            // near this edge?
+            const double dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+            const double t = len2 > 0 ? std::clamp(((x - a.x) * dx + (y - a.y) * dy) / len2, 0.0, 1.0) : 0.0;
+            if (std::hypot(x - (a.x + dx * t), y - (a.y + dy * t)) <= near) return true;
+            // crossing count (even-odd), for a closed shape's inside
+            if (!open && ((a.y > y) != (b.y > y)) && x < a.x + (y - a.y) * dx / dy) inside = !inside;
+            if (open && i + 2 > n) break;
+        }
+    }
+    return inside;
+}
+
 bool set_shape_kind(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ShapeKind k) {
     if (k == ShapeKind::Path) return false;   // a path is drawn, not chosen
     std::vector<std::pair<Doc::Id, Frame>> plan;
@@ -5030,6 +5137,10 @@ Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double 
         for (auto it = own.rbegin(); it != own.rend(); ++it) {   // topmost first
             if (!on_panel(d, p, *it)) continue;
             const auto& fr = *d.as<Frame>(*it);
+            if (doc::has_outline(fr)) {   // s203: a line or a path by its outline, not its box
+                if (doc::shape_hit(fr, x - p.r.x, y - p.r.y, tol)) return *it;
+                continue;
+            }
             const Rect r{p.r.x + fr.x, p.r.y + fr.y, fr.w, fr.h};
             if (Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) return *it;
         }
@@ -5059,7 +5170,8 @@ Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, d
                 const Rect r{p.r.x + f.x + across_dx(d, f, sd), p.r.y + f.y, f.w, f.h};
                 // s155: an item across the spine is this page's only on its side of it
                 if (f.across && (sd == Side::Left ? x > p.r.r() : sd == Side::Right ? x < p.r.x : false)) continue;
-                if (Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) {
+                if (doc::has_outline(f) ? doc::shape_hit(f, x - p.r.x - across_dx(d, f, sd), y - p.r.y, tol)   // s203
+                                        : Rect{r.x - tol, r.y - tol, r.w + 2 * tol, r.h + 2 * tol}.contains(x, y)) {
                     if (page) *page = p.id;
                     return *it;
                 }

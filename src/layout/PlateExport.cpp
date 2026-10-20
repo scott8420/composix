@@ -239,7 +239,7 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core
             const auto* a = f.kind == core::FrameKind::Image ? c.d.as<core::Asset>(f.asset) : nullptr;
             const bool clear = f.opacity < 1 || (a && asset_see_through(c, *a, f, f.asset));
             if (clear) {
-                const double grow = (c.d.as<core::Swatch>(f.stroke) ? f.stroke_w / 2 : 0) + 0.5;
+                const double grow = (c.d.as<core::Swatch>(f.stroke) ? (f.end_a || f.end_b ? f.stroke_w * 4.5 + 2 : f.stroke_w / 2) : 0) + 0.5;   // s204: arrows
                 core::Rect box{f.x - grow, f.y - grow, f.w + 2 * grow, f.h + 2 * grow};
                 const double bl = core::bleed_of(c.d, on_page);
                 const double pw = page ? page->w : box.r(), ph = page ? page->h : box.b();
@@ -302,8 +302,34 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core
         if (c.d.as<core::Swatch>(f.stroke) && f.stroke_w > 0) {
             pg.set_stroke(ink_of(c.d, f.stroke, f.stroke_tint));
             pg.set_line_width(f.stroke_w);
-            outline();
+            // s204: its ends, corners, dashes; under an arrow the line stops short.
+            const auto dash = core::doc::dash_pattern(f);
+            pg.save();
+            pg.set_line_cap(f.dash == 2 ? 1 : f.cap);
+            pg.set_line_join(f.join);
+            if (!dash.empty()) pg.set_dash(dash);
+            if (core::doc::has_outline(f)) {
+                for (const auto& o : core::doc::stroke_ops(f)) {
+                    if (o.op == 'M') pg.move_to(o.v[0], o.v[1]);
+                    else if (o.op == 'L') pg.line_to(o.v[0], o.v[1]);
+                    else if (o.op == 'C') pg.curve_to(o.v[0], o.v[1], o.v[2], o.v[3], o.v[4], o.v[5]);
+                    else pg.close_path();
+                }
+            } else {
+                outline();
+            }
             pg.stroke();
+            pg.restore();
+            const auto ends = core::doc::end_shapes(f);
+            if (!ends.empty()) {   // the ends, filled in the stroke's ink
+                pg.set_fill(ink_of(c.d, f.stroke, f.stroke_tint));
+                for (const auto& poly : ends) {
+                    for (std::size_t i = 0; i < poly.size(); ++i)
+                        if (i) pg.line_to(poly[i].x, poly[i].y); else pg.move_to(poly[i].x, poly[i].y);
+                    pg.close_path();
+                }
+                pg.fill();
+            }
         }
         pg.restore();
     }

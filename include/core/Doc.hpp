@@ -261,6 +261,11 @@ struct Frame {
     ShapeKind   shape = ShapeKind::Rect;
     std::vector<PathPoint> path;
     bool        open = false;            // Path: not closed (a line, an open curve)
+    // s204: the stroke's style -- its ends (0 butt, 1 round, 2 square), its
+    // corners (0 miter, 1 round, 2 bevel), dashes (0 solid, 1 dashed, 2
+    // dotted), and an open path's ends (0 none, 1 arrow, 2 circle, 3 bar).
+    int         cap = 0, join = 0, dash = 0;
+    int         end_a = 0, end_b = 0;    // its first point's end, its last's
     bool operator==(const Frame&) const = default;
 };
 
@@ -373,6 +378,10 @@ struct Para {
     std::vector<XRef> refs;              // s128: one for each kMarkRef in text, in order
     std::vector<std::string> anchors;    // s128: one id for each kMarkAnchor in text, in order
     std::vector<IndexMark> index;        // s134: one for each kMarkIndex in text, in order
+    // s201 (W1): a bibliography's copy of a source from another story -- that
+    // story's id ("" = a paragraph of its own). A rebuild gathers the
+    // original, not the copy, so a copy whose original is gone drops out.
+    std::string      copy_of;
     bool operator==(const Para&) const = default;
 };
 
@@ -888,6 +897,17 @@ PathPoint corner_point(double x, double y);
 // any new shape. Fewer than two points, or no size at all: nothing.
 Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<PathPoint>& abs, bool open,
                  bool across = false);
+// s204: what a stroke draws -- the outline with an open path's ends drawn
+// back under their arrowheads (so the line's end doesn't show past the
+// tip); the dash pattern in points (empty: solid); the ends' shapes, filled
+// in the stroke's colour (owner coordinates).
+std::vector<OutlineOp> stroke_ops(const Frame& f, double dx = 0, double dy = 0);
+std::vector<double> dash_pattern(const Frame& f);
+std::vector<std::vector<XY>> end_shapes(const Frame& f, double dx = 0, double dy = 0);
+// s203: is (x, y) (owner coordinates) on this shape -- inside a closed
+// one, or within `tol` (and half its stroke) of its outline; an open path
+// (a line) only near its stroke. Frames without an outline: their box.
+bool shape_hit(const Frame& f, double x, double y, double tol);
 // Change shapes between Rect and Oval (a Path keeps its points). One step.
 bool set_shape_kind(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ShapeKind k);
 // s200: Direct on a shape -- its points to edit (owner coordinates): a

@@ -89,6 +89,13 @@ void Page::set_stroke(const Color& c0) {
     m_ops += color_op(c, true);
 }
 void Page::set_line_width(double w) { m_ops += num(w) + " w\n"; }
+void Page::set_line_cap(int cap) { m_ops += std::to_string(std::clamp(cap, 0, 2)) + " J\n"; }     // s204
+void Page::set_line_join(int join) { m_ops += std::to_string(std::clamp(join, 0, 2)) + " j\n"; }
+void Page::set_dash(const std::vector<double>& on_off, double phase) {
+    m_ops += "[";
+    for (std::size_t i = 0; i < on_off.size(); ++i) m_ops += (i ? " " : "") + num(on_off[i]);
+    m_ops += "] " + num(phase) + " d\n";
+}
 void Page::move_to(double x, double y) { m_ops += num(x) + " " + num(y) + " m\n"; }
 void Page::line_to(double x, double y) { m_ops += num(x) + " " + num(y) + " l\n"; }
 void Page::curve_to(double x1, double y1, double x2, double y2, double x, double y) {   // s197

@@ -1512,5 +1512,132 @@ void part8() {
         while (j.can_undo()) j.undo();
         check("points: all undone exactly", core::to_json(d) == before);
     }
+    // ── s202 (C5): real swatch files -- written by Illustrator, Photoshop, KDE, SwatchBooker ──
+    {
+        std::cout << "--- s202 real swatch files ---\n";
+        namespace SW = core::swatches;
+        const std::string dir = std::string(COMPOSIX_SOURCE_DIR) + "/third_party/swatch-samples/";
+        const auto rd = [&](const char* f) { return SW::read_file(dir + f); };
+        const auto has = [](const SW::Library& l, const char* name, std::uint32_t rgb) {
+            for (const auto& c : l.colors) if (c.name == name && (c.preview & 0xFFFFFFu) == rgb) return true;
+            return false;
+        };
+        const auto sampler = rd("nsfmc-sampler.ase");
+        check("ase (Illustrator): RGB and Gray in a group, all five", sampler && sampler->colors.size() == 5 &&
+              has(*sampler, "lablab", 0xC80032) && has(*sampler, "orange", 0xF1A321) && has(*sampler, "grey", 0xF1F1F1));
+        const auto sol = rd("nsfmc-solarized.ase");
+        bool spots = sol && sol->colors.size() == 26;
+        if (sol) for (const auto& c : sol->colors) spots = spots && c.model == core::ColorModel::Spot && c.spot == c.name;
+        check("ase (Illustrator): Lab spot colours -- Solarized's own hex", spots && has(*sol, "Base 03", 0x002B36) &&
+              has(*sol, "Base 1", 0x93A1A1));
+        const auto herbs = rd("hrbrmstr-herbs_and_spice.ase");
+        check("ase (Adobe Color): unnamed colours named by their hex, whole numbers",
+              herbs && herbs->colors.size() == 5 && herbs->colors[0].name == "#5A1F00" && herbs->colors[0].v[1] == 31);
+        const auto tne = rd("hrbrmstr-tomorrow_night_eighties.aco");
+        check("aco (Photoshop): v1 + v2, the names from v2, whole numbers", tne && tne->colors.size() == 12 &&
+              has(*tne, "Tomorrow-Night-Eighties-Red", 0xF2777A) && tne->colors[0].v[0] == 45);
+        const auto ps = rd("szydlovski-swatches.aco");
+        check("aco (Photoshop): the three as the author's test has them", ps && ps->colors.size() == 3 &&
+              has(*ps, "Hearty Red", 0xD41E2A) && has(*ps, "Luscious Pink", 0xFF8CCB) && has(*ps, "Deep Navy", 0x285094));
+        const auto kde = rd("hrbrmstr-fourty.colors");
+        check("kde palette: forty colours, blank lines between groups", kde && kde->colors.size() == 40 &&
+              kde->format == SW::Format::KDE && has(*kde, "Almost black", 0x303030));
+        const auto lab = rd("dtpstudio-CIE-LAB.sbz");
+        check("sbz (SwatchBooker, Scribus ships it): unzipped, 986 Lab colours in the book's order, its title",
+              lab && lab->colors.size() == 986 && lab->name == "CIE-LAB" && lab->colors[0].name == "Lab 95 00 20" &&
+              has(*lab, "Lab 95 00 00", 0xF1F1F1));
+        // Scribus as its own files write it (Shades of K, the Registration colour, HKS spots).
+        const std::string scribus = R"(<?xml version="1.0" encoding="UTF-8"?>
+<SCRIBUSCOLORS Name="Shades">
+    <COLOR NAME="Registration" SPACE="CMYK" CMYK="#ffffffff" Register="1"/>
+    <COLOR NAME="1 %" SPACE="CMYK" CMYK="#00000003" K="1"/>
+    <COLOR RGB="#ffb600" NAME="HKS 5 K" Spot="1" />
+</SCRIBUSCOLORS>)";
+        const auto sc = SW::parse(scribus, SW::format_of("x.xml", scribus));
+        check("scribus: Registration left out; K=\"1\" exact (not 3/255); a spot",
+              sc && sc->colors.size() == 2 && sc->colors[0].v[3] == 1 && sc->colors[1].model == core::ColorModel::Spot);
+    }
+    // ── s203: a line or a path picked by its outline, not its box ─────────
+    {
+        std::cout << "--- s203 shape hit ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto under = D::add_frame(j, d, page, core::FrameKind::Shape, {250, 100, 60, 60});
+        const auto line = D::add_path(j, d, page, {D::corner_point(100, 100), D::corner_point(300, 300)}, true);
+        const auto ov = D::add_frame(j, d, page, core::FrameKind::Shape, {100, 400, 100, 60}, 1, 12, false, core::ShapeKind::Oval);
+        const auto pl = core::layout_pages(d, {page});
+        const double ox = pl.front().r.x, oy = pl.front().r.y;
+        const auto hit = [&](double x, double y) { return core::hit_frame(d, pl, ox + x, oy + y, 2); };
+        check("hit: on the diagonal line -- the line", hit(200, 201) == line);
+        check("hit: in its box, off its stroke -- the frame under it", hit(280, 120) == under);
+        check("hit: an oval's middle -- the oval; its box's corner -- not", hit(150, 430) == ov && hit(101, 401) != ov);
+        check("hit: a level line (no height) -- by its stroke", [&] {
+            const auto lv = D::add_path(j, d, page, {D::corner_point(60, 600), D::corner_point(200, 600)}, true);
+            return hit(130, 601) == lv && hit(130, 606) != lv;
+        }());
+        while (j.can_undo()) j.undo();
+    }
+    // ── s204: the stroke's style -- ends, corners, dashes, arrowheads ────
+    {
+        std::cout << "--- s204 stroke style ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto ln = D::add_path(j, d, page, {D::corner_point(100, 40), D::corner_point(300, 40)}, true);
+        D::edit_frames(j, d, {ln}, "End", [](core::Frame& f) { f.end_b = 1; f.end_a = 2; f.stroke_w = 2; f.z = 1e6; });
+        const auto* f = d.as<core::Frame>(ln);
+        const auto ops = D::stroke_ops(*f);
+        check("arrow: the line stops short of the tip", ops.size() == 2 && ops[1].v[0] < 300 && ops[1].v[0] > 290 && ops[0].v[0] == 100);
+        const auto ends = D::end_shapes(*f);
+        check("ends: a circle at the start, an arrow (tip on the end) at the end",
+              ends.size() == 2 && ends[0].size() == 32 && ends[1].size() == 3 && ends[1][0].x == 300 && ends[1][1].x < 300);
+        check("dash: dashed 3:2 of the weight, dotted 0:2", [&] {
+            core::Frame g = *f;
+            g.dash = 1;
+            const auto a = D::dash_pattern(g);
+            g.dash = 2;
+            const auto b = D::dash_pattern(g);
+            return a == std::vector<double>{6, 4} && b == std::vector<double>{0, 4} && D::dash_pattern(*f).empty();
+        }());
+        check("ends: none on a closed shape", [&] {
+            core::Frame g = *f;
+            g.open = false;
+            return D::end_shapes(g).empty();
+        }());
+        // As it prints: the arrow's middle in the stroke's colour (black), past where the line stops.
+        L::FlowCache flows;
+        const auto at = L::sample_page(d, page, flows, {}, 297, 40, 0.5);
+        check("arrow: drawn (its tip area dark)", ((at >> 16) & 0xFF) < 80, std::to_string(at));
+        {
+            D::edit_frames(j, d, {ln}, "Dash", [](core::Frame& g) { g.dash = 1; g.cap = 1; g.join = 2; });
+            core::Doc e;
+            std::string err;
+            const auto text = core::to_json(d);
+            check("stroke style: through JSON", core::from_json(e, text, &err) && core::to_json(e) == text && e.as<core::Frame>(ln)->dash == 1 &&
+                  e.as<core::Frame>(ln)->end_b == 1, err);
+            namespace fs = std::filesystem;
+            const auto base = fs::temp_directory_path() / "composix_selftest_strokes";
+            std::error_code ec;
+            fs::create_directories(base, ec);
+            const auto out = (base / "s.pdf").string();
+            L::PdfOptions opt;
+            opt.compress = false;
+            L::PdfReport rep;
+            const bool ok = L::export_print_pdf(d, out, opt, {}, &rep, &err);
+            std::string pdf;
+            { std::ifstream in(out, std::ios::binary); std::stringstream ss; ss << in.rdbuf(); pdf = ss.str(); }
+            check("print: round ends, bevel corners, a 6 4 dash", ok && pdf.find("1 J\n2 j\n[6 4] 0 d\n") != std::string::npos, err);
+            fs::remove_all(base, ec);
+        }
+        while (j.can_undo()) j.undo();
+    }
 }
 }  // namespace cxtest

@@ -889,6 +889,21 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 std::vector<Choice> wc;
                 for (double w : {0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0}) wc.push_back({pts(w), pts(w) + " pt"});
                 fields.push_back({"Weight", pts(f->stroke_w) + " pt", "stroke_w", wc});
+                // s204: the stroke's style
+                static const char* dashes[] = {"Solid", "Dashed", "Dotted"};
+                fields.push_back({"Dash", dashes[std::clamp(f->dash, 0, 2)], "dash", {{"0", "Solid"}, {"1", "Dashed"}, {"2", "Dotted"}}});
+                static const char* caps[] = {"Butt", "Round", "Square"};
+                if (f->dash != 2) fields.push_back({"Line ends", caps[std::clamp(f->cap, 0, 2)], "cap", {{"0", "Butt"}, {"1", "Round"}, {"2", "Square"}}});
+                static const char* joins[] = {"Mitre", "Round", "Bevel"};
+                const bool open = f->kind == FrameKind::Shape && f->shape == ShapeKind::Path && f->open;
+                if (!(open && f->path.size() == 2))
+                    fields.push_back({"Corners", joins[std::clamp(f->join, 0, 2)], "join", {{"0", "Mitre"}, {"1", "Round"}, {"2", "Bevel"}}});
+                if (open) {   // an open path's two ends
+                    static const char* ends[] = {"None", "Arrow", "Circle", "Bar"};
+                    const std::vector<Choice> ec{{"0", "None"}, {"1", "Arrow"}, {"2", "Circle"}, {"3", "Bar"}};
+                    fields.push_back({"Start", ends[std::clamp(f->end_a, 0, 3)], "end_a", ec});
+                    fields.push_back({"End", ends[std::clamp(f->end_b, 0, 3)], "end_b", ec});
+                }
             }
         }
         fields.push_back({"Opacity", tint_text(f->opacity), "opacity", tint_choices(0)});   // s021

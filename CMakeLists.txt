@@ -49,6 +49,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM REQUIRED gtkmm-4.0)
 find_package(spdlog REQUIRED)
 find_package(Threads REQUIRED)   # s102: work off the UI thread (the progress dialog)
+find_package(ZLIB REQUIRED)      # s202: the core unzips SwatchBooker (.sbz) files
 
 # ── composix_core -- the GTK-free core (the model side of the one real seam) ──────
 # No gtkmm on this library's link line, BY DESIGN: a stray UI include under
@@ -106,6 +107,7 @@ add_library(composix_core STATIC
     ${CMAKE_CURRENT_BINARY_DIR}/HyphenData.cpp
 )
 target_include_directories(composix_core PUBLIC include)
+target_link_libraries(composix_core PUBLIC ZLIB::ZLIB)   # s202
 # Vendored nlohmann/json (header-only, MIT), PRIVATE -- an implementation detail
 # of the pump, no consumer inherits the include (CANON: surprise-free build).
 target_include_directories(composix_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
@@ -146,6 +148,8 @@ add_executable(composix_selftest src/selftest.cpp
     src/selftest/part1.cpp src/selftest/part2.cpp src/selftest/part3.cpp src/selftest/part4.cpp
     src/selftest/part5.cpp src/selftest/part6.cpp src/selftest/part7.cpp src/selftest/part8.cpp)
 target_link_libraries(composix_selftest PRIVATE composix_core composix_layout Threads::Threads)
+# s202: where the real swatch files (third_party/swatch-samples) are
+target_compile_definitions(composix_selftest PRIVATE COMPOSIX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ── s100: timings on the generated long book -- run by hand, not a gate ───────
 add_executable(composix_bench src/bench.cpp)
@@ -236,7 +240,7 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s200")
+set(COMPOSIX_BUILD "s204")
 # s194: on the About window's file alone -- on the whole target, each bump
 # rebuilt every app file and missed ccache.
 set_source_files_properties(src/AboutWindow.cpp PROPERTIES

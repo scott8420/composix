@@ -584,7 +584,7 @@ void Shell::libraries_import() {  // helper
     dialog->set_title("Import Colour Libraries");
     auto filter = Gtk::FileFilter::create();
     filter->set_name("Palettes (.ase, .gpl, .soc, .aco, .xml, .json)");
-    for (const char* p : {"*.ase", "*.ASE", "*.gpl", "*.GPL", "*.soc", "*.SOC", "*.aco", "*.ACO", "*.xml", "*.XML", "*.json"}) filter->add_pattern(p);
+    for (const char* p : {"*.ase", "*.ASE", "*.gpl", "*.GPL", "*.soc", "*.SOC", "*.aco", "*.ACO", "*.xml", "*.XML", "*.json", "*.sbz", "*.SBZ", "*.colors"}) filter->add_pattern(p);
     auto any = Gtk::FileFilter::create();
     any->set_name("All files");
     any->add_pattern("*");

@@ -1300,6 +1300,13 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             const double v = std::stod(colon == std::string::npos ? choice : choice.substr(colon + 1));
             did = core::doc::set_side(m_journal, m_doc, m_inspected,
                                       key == "inset" ? core::doc::SideOf::Inset : core::doc::SideOf::Wrap, side, v);
+        } else if (key == "dash" || key == "cap" || key == "join" || key == "end_a" || key == "end_b") {   // s204: the stroke's style
+            static const std::map<std::string, std::string> labels{
+                {"dash", "Dash"}, {"cap", "Line ends"}, {"join", "Corners"}, {"end_a", "Start"}, {"end_b", "End"}};
+            const int v = std::stoi(choice);
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, labels.at(key), [&](core::Frame& f) {
+                (key == "dash" ? f.dash : key == "cap" ? f.cap : key == "join" ? f.join : key == "end_a" ? f.end_a : f.end_b) = v;
+            });
         } else if (key == "shape") {   // s197: rectangle <-> oval
             did = core::doc::set_shape_kind(m_journal, m_doc, m_inspected, static_cast<core::ShapeKind>(std::stoi(choice)));
         } else if (key == "wrap" && choice == "3") {   // s173: the pictures' outlines
