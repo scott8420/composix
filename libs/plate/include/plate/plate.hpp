@@ -102,6 +102,7 @@ public:
     void close_path();       // s189
     void clip_even_odd();    // s189: the path built so far clips what follows (even-odd), and is ended
     void fill();
+    void fill_even_odd();   // s211: f* -- a path inside another is a hole
     void stroke();
     // An image stretched into r.
     void image(ImageId id, const Rect& r);

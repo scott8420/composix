@@ -204,7 +204,7 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
     const core::Rect r = core::picture_rect({f.x, f.y, f.w, f.h}, f, iw, ih);
     pg.save();
     pg.clip_rect({f.x, f.y, f.w, f.h});
-    if (f.radius > 0) {   // s205: cut by its rounded corners
+    if (f.radius > 0 || core::doc::has_outline(f)) {   // s205: cut by its rounded corners (s209: or its shape)
         for (const auto& o : core::doc::outline_ops(f)) {
             if (o.op == 'M') pg.move_to(o.v[0], o.v[1]);
             else if (o.op == 'L') pg.line_to(o.v[0], o.v[1]);
@@ -304,7 +304,7 @@ void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core
         if (c.d.as<core::Swatch>(f.fill)) {   // s016: the frame's background
             pg.set_fill(ink_of(c.d, f.fill, f.fill_tint));
             outline();
-            pg.fill();
+            if (f.subs.empty()) pg.fill(); else pg.fill_even_odd();   // s211: holes
         }
         if (f.kind == core::FrameKind::Text && !f.story.empty()) draw_text(c, pg, f, fid, on_page);
         else if (f.kind == core::FrameKind::Image) draw_image(c, pg, f);

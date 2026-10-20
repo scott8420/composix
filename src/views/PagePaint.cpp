@@ -154,7 +154,9 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
         cr->save();
         cr->set_source_rgba(((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0, dim * op);
         outline();
+        cr->set_fill_rule(f.subs.empty() ? Cairo::Context::FillRule::WINDING : Cairo::Context::FillRule::EVEN_ODD);   // s211: holes
         cr->fill();
+        cr->set_fill_rule(Cairo::Context::FillRule::WINDING);
         cr->restore();
     }
     struct StrokeLater {
@@ -379,7 +381,7 @@ void paint_frame(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook& P, c
             int iw = 0, ih = 0;
             if (auto pic = images::peek(file, core::file_stamp(file), &iw, &ih, &pending)) {
                 cr->save();
-                if (f.radius > 0) outline();   // s205: its rounded corners
+                if (f.radius > 0 || core::doc::has_outline(f)) outline();   // s205: its rounded corners (s209: or its shape)
                 else cr->rectangle(r.x, r.y, r.w, r.h);
                 cr->clip();
                 const Rect ir = core::picture_rect(r, f, iw, ih, s);   // s035: Custom placement too

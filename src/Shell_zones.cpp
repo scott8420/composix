@@ -221,6 +221,10 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         m_arrange_menu->append("Bring Forward", "win.bring-forward");
         m_arrange_menu->append("Send Backward", "win.send-backward");
         m_arrange_menu->append("Send to Back", "win.send-back");
+        auto paths = Gio::Menu::create();   // s212
+        paths->append("Make Compound Path", "win.make-compound");
+        paths->append("Release Compound Path", "win.release-compound");
+        m_arrange_menu->append_section(paths);
         m_edit_menu->append_submenu("Arrange", m_arrange_menu);
     }
 

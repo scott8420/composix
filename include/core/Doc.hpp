@@ -269,6 +269,10 @@ struct Frame {
     int         cap = 0, join = 0, dash = 0;
     int         end_a = 0, end_b = 0;    // its first point's end, its last's
     double      radius = 0;              // s205: rounded corners, points (any frame drawn as its box)
+    // s211: a compound path -- where each further subpath starts in `path`
+    // (ascending, 0 < k < size). Filled even-odd: a subpath inside another
+    // is a hole.
+    std::vector<int> subs;
     bool operator==(const Frame&) const = default;
 };
 
@@ -921,6 +925,22 @@ std::vector<std::vector<XY>> end_shapes(const Frame& f, double dx = 0, double dy
 // one, or within `tol` (and half its stroke) of its outline; an open path
 // (a line) only near its stroke. Frames without an outline: their box.
 bool shape_hit(const Frame& f, double x, double y, double tol);
+// s210: what frames hold -- Text (a new empty story), Image (no picture
+// yet: Place fills it) or Shape (none). Its outline, fill and stroke stay.
+// A text frame gives its text up only when it has none and no thread; a
+// picture frame drops its picture (the asset stays while others use it).
+// One step ("Content: Text" / "Content: Picture" / "Content: None").
+bool set_frame_content(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, FrameKind k);
+// s211: a path's subpaths as [a, b) ranges of its points (one when not compound).
+struct SubRange { int a = 0, b = 0; };
+std::vector<SubRange> sub_ranges(int n, const std::vector<int>& subs);
+// Shapes (closed: rectangles, ovals, closed paths) made one compound path --
+// the first (in the order given) keeps its style, the rest go; holes where
+// they overlap (even-odd). One step "Make compound path"; its id.
+Doc::Id make_compound(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
+// Its subpaths each a path of its own, styled alike. One step; the new ids
+// (the first is the frame itself).
+std::vector<Doc::Id> release_compound(DocJournal& j, Doc& d, const Doc::Id& frame);
 // Change shapes between Rect and Oval (a Path keeps its points). One step.
 bool set_shape_kind(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ShapeKind k);
 // s200: Direct on a shape -- its points to edit (owner coordinates): a

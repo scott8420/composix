@@ -733,6 +733,25 @@ void Shell::bind_context_actions() {  // bindings
         });
     });
     add_action("remove-override", [this, picked] { core::doc::remove_overrides(m_journal, m_doc, picked()); });
+    // s212: compound paths
+    add_action("make-compound", [this, picked] {
+        const auto id = core::doc::make_compound(m_journal, m_doc, picked());
+        if (id.empty()) return;   // fewer than two closed shapes on one page
+        m_canvas_view.canvas().model_changed();
+        m_canvas_view.canvas().set_selection({id});
+        on_canvas_selection();
+    });
+    add_action("release-compound", [this, picked] {
+        std::vector<std::string> all;
+        for (const auto& id : picked()) {
+            const auto parts = core::doc::release_compound(m_journal, m_doc, id);
+            all.insert(all.end(), parts.begin(), parts.end());
+        }
+        if (all.empty()) return;   // no compound path picked
+        m_canvas_view.canvas().model_changed();
+        m_canvas_view.canvas().set_selection(all);
+        on_canvas_selection();
+    });
     add_action("override-item", [this] {
         if (m_ctx.page.empty() || m_ctx.master_item.empty()) return;
         const auto made = core::doc::override_master_item(m_journal, m_doc, m_ctx.page, m_ctx.master_item);
@@ -1312,6 +1331,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Corner radius", [&](core::Frame& f) {
                 if (!(f.kind == core::FrameKind::Shape && f.shape != core::ShapeKind::Rect)) f.radius = v;
             });
+        } else if (key == "content") {   // s210: a shape made a text or picture frame
+            did = core::doc::set_frame_content(m_journal, m_doc, m_inspected, static_cast<core::FrameKind>(std::stoi(choice)));
         } else if (key == "shape") {   // s197: rectangle <-> oval
             did = core::doc::set_shape_kind(m_journal, m_doc, m_inspected, static_cast<core::ShapeKind>(std::stoi(choice)));
         } else if (key == "wrap" && choice == "3") {   // s173: the pictures' outlines

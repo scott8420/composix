@@ -855,10 +855,14 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         const char* kind = f->kind == FrameKind::Text ? "Text" : f->kind == FrameKind::Image ? "Image" : "Shape";
         std::string on = d.as<Page>(f->owner) ? "Page " + d.folio(f->owner) : master_label(d, f->owner);
         std::vector<Field> fields{{"Kind", kind}, {"On", on}};
-        if (f->kind == FrameKind::Shape) {   // s197: its outline -- a rectangle and an oval trade places
+        // s210: what it holds -- a shape made a text or picture frame, and back
+        fields.push_back({"Content", f->kind == FrameKind::Text ? "Text" : f->kind == FrameKind::Image ? "Picture" : "None", "content",
+                          {{"0", "Text"}, {"1", "Picture"}, {"2", "None"}}});
+        {   // s197: its outline -- a rectangle and an oval trade places (s210: any frame's)
             if (f->shape == ShapeKind::Path) {
                 const bool line = f->open && f->path.size() == 2;
                 fields.push_back({"Shape", line ? std::string("Line")
+                                       : !f->subs.empty() ? "Compound path, " + std::to_string(f->subs.size() + 1) + " parts"   // s212
                                                 : (f->open ? "Open path, " : "Closed path, ") + std::to_string(f->path.size()) + " points"});
             } else {
                 fields.push_back({"Shape", f->shape == ShapeKind::Oval ? "Oval" : "Rectangle", "shape", {{"0", "Rectangle"}, {"1", "Oval"}}});

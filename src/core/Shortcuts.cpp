@@ -123,6 +123,10 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Frames", "win.bring-forward", {"<Ctrl>bracketright"}, "", "Bring the picked frames forward one"},
         {"Frames", "win.send-backward", {"<Ctrl>bracketleft"}, "", "Send the picked frames backward one"},
         {"Frames", "win.send-back",     {"<Ctrl><Shift>bracketleft", "<Ctrl><Shift>braceleft"}, "Ctrl+Shift+[", "Send the picked frames to the back"},
+        // s212: compound paths (InDesign's keys)
+        {"Frames", "win.make-compound",    {"<Ctrl>8"}, "", "Make the picked shapes one compound path (where they overlap: holes)"},
+        {"Frames", "win.release-compound", {"<Ctrl><Alt>8"}, "", "Release a compound path into its separate paths"},
+
 
         // ── General ───────────────────────────────────────────────────────────
         {"General", "win.new",           {"<Ctrl>n"}, "", "New document"},
@@ -176,6 +180,15 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Text", "", {}, "Ctrl+Shift+-", "Discretionary hyphen -- the word may break only there (one at its start: never)"},
         {"Text", "", {}, "Shift+Keypad Enter", "Frame break -- the text after it starts the next frame"},
         {"Text", "", {}, "Ctrl+Keypad Enter", "Page break -- the text after it starts the next page"},
+
+        // ── Tools (s212: the canvas's letters, doc-only -- the canvas hears them) ──
+        {"Tools", "", {}, "V", "Select"},
+        {"Tools", "", {}, "A", "Direct -- a picture in its frame; a shape's points (Shift-click, marquee, arrows, Delete)"},
+        {"Tools", "", {}, "T", "Text frame"},
+        {"Tools", "", {}, "F", "Image frame"},
+        {"Tools", "", {}, "M  /  L  /  \\", "Rectangle / Oval / Line (the Shape button: click it again for its menu, Polygon too)"},
+        {"Tools", "", {}, "P", "Pen -- click corners, drag curves; on an open path's end: carry it on"},
+        {"Tools", "", {}, "I", "Eyedropper -- the page's colour onto the fill (Shift: stroke; Alt: a swatch)"},
 
         // ── View (s002) ───────────────────────────────────────────────────────
         {"View", "", {}, "Page Up / Page Down", "The previous / next spread (pages open with their facing page)"},

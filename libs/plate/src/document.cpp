@@ -103,6 +103,7 @@ void Page::curve_to(double x1, double y1, double x2, double y2, double x, double
 }
 void Page::rect(const Rect& r) { m_ops += num(r.x) + " " + num(r.y) + " " + num(r.w) + " " + num(r.h) + " re\n"; }
 void Page::fill() { m_ops += "f\n"; }
+void Page::fill_even_odd() { m_ops += "f*\n"; }   // s211
 void Page::close_path() { m_ops += "h\n"; }            // s189
 void Page::clip_even_odd() { m_ops += "W* n\n"; }      // s189
 void Page::stroke() { m_ops += "S\n"; }

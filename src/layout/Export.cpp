@@ -42,7 +42,7 @@ void draw_image(cairo_t* cr, const core::Doc& d, const core::Frame& f, const Ima
     const double iw = a->px_w > 0 ? a->px_w : pw, ih = a->px_h > 0 ? a->px_h : ph;
     const core::Rect r = core::picture_rect({f.x, f.y, f.w, f.h}, f, iw, ih);
     cairo_save(cr);
-    if (f.radius > 0) {   // s205: cut by its rounded corners
+    if (f.radius > 0 || core::doc::has_outline(f)) {   // s205: cut by its rounded corners (s209: or its shape)
         for (const auto& o : core::doc::outline_ops(f)) {
             if (o.op == 'M') cairo_move_to(cr, o.v[0], o.v[1]);
             else if (o.op == 'L') cairo_line_to(cr, o.v[0], o.v[1]);
@@ -110,7 +110,12 @@ bool draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
                 else cairo_close_path(cr);
             }
         };
-        if (paint(f.fill, f.fill_tint)) { outline(); cairo_fill(cr); }   // s016
+        if (paint(f.fill, f.fill_tint)) {   // s016
+            outline();
+            cairo_set_fill_rule(cr, f.subs.empty() ? CAIRO_FILL_RULE_WINDING : CAIRO_FILL_RULE_EVEN_ODD);   // s211: holes
+            cairo_fill(cr);
+            cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING);
+        }
         if (op < 1) cairo_push_group(cr);
         switch (f.kind) {
         case core::FrameKind::Text:

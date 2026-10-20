@@ -1177,18 +1177,22 @@ XY bez(XY p0, XY p1, XY p2, XY p3, double t) {
     return {a * p0.x + b * p1.x + c * p2.x + e * p3.x, a * p0.y + b * p1.y + c * p2.y + e * p3.y};
 }
 // The ops for absolute points (a path or an oval's four).
-std::vector<OutlineOp> ops_of(const std::vector<PathPoint>& P, bool open) {
+std::vector<OutlineOp> ops_of(const std::vector<PathPoint>& P, bool open, const std::vector<int>& subs = {}) {
     std::vector<OutlineOp> out;
     if (P.empty()) return out;
-    out.push_back({'M', {P[0].x, P[0].y}});
-    const std::size_t n = P.size(), segs = open ? n - 1 : n;
-    for (std::size_t i = 0; i < segs; ++i) {
-        const auto& a = P[i];
-        const auto& b = P[(i + 1) % n];
-        if (straight(a, b)) out.push_back({'L', {b.x, b.y}});
-        else                out.push_back({'C', {a.ox, a.oy, b.ix, b.iy, b.x, b.y}});
+    for (const auto r : sub_ranges(static_cast<int>(P.size()), subs)) {   // s211: each subpath
+        const int n = r.b - r.a;
+        if (n < 1) continue;
+        out.push_back({'M', {P[static_cast<std::size_t>(r.a)].x, P[static_cast<std::size_t>(r.a)].y}});
+        const int segs = open ? n - 1 : n;
+        for (int i = 0; i < segs; ++i) {
+            const auto& a = P[static_cast<std::size_t>(r.a + i)];
+            const auto& b = P[static_cast<std::size_t>(r.a + (i + 1) % n)];
+            if (straight(a, b)) out.push_back({'L', {b.x, b.y}});
+            else                out.push_back({'C', {a.ox, a.oy, b.ix, b.iy, b.x, b.y}});
+        }
+        if (!open) out.push_back({'Z', {}});
     }
-    if (!open) out.push_back({'Z', {}});
     return out;
 }
 std::vector<PathPoint> oval_points(const Frame& f, double dx, double dy) {
@@ -1204,8 +1208,8 @@ std::vector<PathPoint> oval_points(const Frame& f, double dx, double dy) {
 }
 }  // namespace
 
-bool has_outline(const Frame& f) {
-    return f.kind == FrameKind::Shape && (f.shape == ShapeKind::Oval || (f.shape == ShapeKind::Path && f.path.size() >= 2));
+bool has_outline(const Frame& f) {   // s209: any frame -- a picture cut to an oval, text flowing in a star
+    return f.shape == ShapeKind::Oval || (f.shape == ShapeKind::Path && f.path.size() >= 2);
 }
 
 std::vector<PathPoint> path_points(const Frame& f) {
@@ -1220,7 +1224,7 @@ std::vector<OutlineOp> outline_ops(const Frame& f, double dx, double dy) {
         if (f.shape == ShapeKind::Oval) return ops_of(oval_points(f, dx, dy), false);
         std::vector<PathPoint> P;
         for (const auto& p : f.path) P.push_back(to_abs(p, f, dx, dy));
-        return ops_of(P, f.open);
+        return ops_of(P, f.open, f.subs);
     }
     const double x = f.x + dx, y = f.y + dy;
     if (const double r = std::min({f.radius, f.w / 2, f.h / 2}); r > 0) {   // s205: rounded corners
@@ -1271,9 +1275,8 @@ Rect path_bounds(const std::vector<PathPoint>& abs, bool open) {
     return Rect::from_corners(x0, y0, x1, y1);
 }
 
-void set_path(Frame& f, const std::vector<PathPoint>& abs, bool open) {
+void set_path(Frame& f, const std::vector<PathPoint>& abs, bool open) {   // s209: its kind kept (a shaped picture stays one)
     const Rect b = path_bounds(abs, open);
-    f.kind = FrameKind::Shape;
     f.shape = ShapeKind::Path;
     f.open = open;
     f.x = b.x; f.y = b.y; f.w = b.w; f.h = b.h;
@@ -1299,6 +1302,7 @@ Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<
     j.run(!label.empty() ? label : line ? "Draw line" : "Draw path", {}, [&] {
         Frame f;
         f.owner = owner;
+        f.kind = FrameKind::Shape;
         set_path(f, abs, open);
         if (const auto* m = d.as<Master>(owner)) f.across = across && m->facing && m->folds.empty();
         for (const auto& sw : d.ids_of<Swatch>())
@@ -1318,7 +1322,7 @@ namespace {
 // An open path's end k (0 its first point, 1 its last): the point, and the
 // way the line leaves it (a unit vector pointing back along the path).
 bool path_end(const Frame& f, int k, XY& at, XY& back, double dx, double dy) {
-    if (f.kind != FrameKind::Shape || f.shape != ShapeKind::Path || !f.open || f.path.size() < 2) return false;
+    if (f.shape != ShapeKind::Path || !f.open || f.path.size() < 2) return false;
     std::vector<PathPoint> P;
     for (const auto& p : f.path) P.push_back(to_abs(p, f, dx, dy));
     const auto& e = k == 0 ? P.front() : P.back();
@@ -1443,12 +1447,127 @@ Doc::Id add_polygon(DocJournal& j, Doc& d, const Doc::Id& owner, double cx, doub
                     inner < 0.9999 ? "Draw star" : "Draw polygon");
 }
 
+std::vector<SubRange> sub_ranges(int n, const std::vector<int>& subs) {   // s211
+    std::vector<SubRange> out;
+    int a = 0;
+    for (const int k : subs)
+        if (k > a && k < n) { out.push_back({a, k}); a = k; }
+    if (n > a) out.push_back({a, n});
+    return out;
+}
+
+Doc::Id make_compound(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames) {   // s211
+    std::vector<Doc::Id> use;
+    for (const auto& id : frames) {
+        const auto* f = d.as<Frame>(id);
+        if (!f || f->kind == FrameKind::Text || (f->shape == ShapeKind::Path && f->open) || f->rot != 0) continue;
+        if (!use.empty() && f->owner != d.as<Frame>(use.front())->owner) continue;   // one page's
+        use.push_back(id);
+    }
+    if (use.size() < 2) return {};
+    std::vector<PathPoint> all;
+    std::vector<int> subs;
+    for (const auto& id : use) {
+        const auto* f = d.as<Frame>(id);
+        bool open = false;
+        auto P = shape_points(*f, open);
+        if (f->shape == ShapeKind::Path)   // its own subpaths come along
+            for (const int k : f->subs) subs.push_back(static_cast<int>(all.size()) + k);
+        if (!all.empty()) subs.push_back(static_cast<int>(all.size()));
+        all.insert(all.end(), P.begin(), P.end());
+    }
+    std::sort(subs.begin(), subs.end());
+    subs.erase(std::unique(subs.begin(), subs.end()), subs.end());
+    const Doc::Id keep = use.front();
+    j.run("Make compound path", use, [&] {
+        Frame g = *d.as<Frame>(keep);
+        g.radius = 0;
+        set_path(g, all, false);
+        g.subs = subs;
+        d.put(keep, g);
+        for (std::size_t i = 1; i < use.size(); ++i) d.put(use[i], std::nullopt);
+    });
+    return keep;
+}
+
+std::vector<Doc::Id> release_compound(DocJournal& j, Doc& d, const Doc::Id& id) {   // s211
+    const auto* f = d.as<Frame>(id);
+    if (!f || f->shape != ShapeKind::Path || f->subs.empty()) return {};
+    const auto P = path_points(*f);
+    const auto ranges = sub_ranges(static_cast<int>(P.size()), f->subs);
+    std::vector<Doc::Id> out{id};
+    j.run("Release compound path", {id}, [&]() -> std::vector<Doc::Id> {
+        std::vector<Doc::Id> made;
+        const Frame base = *d.as<Frame>(id);
+        for (std::size_t r = 0; r < ranges.size(); ++r) {
+            std::vector<PathPoint> part(P.begin() + ranges[r].a, P.begin() + ranges[r].b);
+            Frame g = base;
+            g.subs.clear();
+            set_path(g, part, base.open);
+            if (r == 0) { d.put(id, g); continue; }
+            g.z = base.z + 0.001 * static_cast<double>(r);
+            const Doc::Id nid = d.fresh_id("frame");
+            d.put(nid, g);
+            made.push_back(nid);
+            out.push_back(nid);
+        }
+        return made;
+    });
+    return out;
+}
+
+namespace { bool used_by_other(const Doc& d, const Doc::Id& rec, const std::vector<Doc::Id>& but); }   // below
+
+bool set_frame_content(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, FrameKind k) {   // s210
+    std::vector<Doc::Id> touch;
+    for (const auto& id : frames) {
+        const auto* f = d.as<Frame>(id);
+        if (!f || f->kind == k) continue;
+        if (f->kind == FrameKind::Text) {   // only an empty, unthreaded one
+            const auto* st = d.as<Story>(f->story);
+            bool empty = !st || std::all_of(st->paras.begin(), st->paras.end(), [](const Para& p) { return p.text.empty(); });
+            for (const auto& o : d.ids_of<Frame>()) if (o != id && d.as<Frame>(o)->story == f->story && !f->story.empty()) empty = false;
+            if (!empty) continue;
+            if (!f->story.empty()) touch.push_back(f->story);
+        }
+        if (f->kind == FrameKind::Image && !f->asset.empty() && !used_by_other(d, f->asset, {id})) touch.push_back(f->asset);
+        touch.push_back(id);
+    }
+    if (touch.empty()) return false;
+    static const char* names[] = {"Text", "Picture", "None"};
+    return j.run(std::string("Content: ") + names[static_cast<int>(k)], touch, [&]() -> std::vector<Doc::Id> {
+        std::vector<Doc::Id> made;
+        Doc::Id style;
+        for (const auto& s : d.ids_of<Style>())
+            if (d.as<Style>(s)->kind == StyleKind::Paragraph) { style = s; break; }
+        for (const auto& id : frames) {
+            const auto* cur = d.as<Frame>(id);
+            if (!cur || cur->kind == k || std::find(touch.begin(), touch.end(), id) == touch.end()) continue;
+            Frame f = *cur;
+            if (f.kind == FrameKind::Text && !f.story.empty()) d.put(f.story, std::nullopt);
+            if (f.kind == FrameKind::Image && !f.asset.empty() && !used_by_other(d, f.asset, {id})) d.put(f.asset, std::nullopt);
+            f.story.clear();
+            f.next.clear();
+            f.asset.clear();
+            f.kind = k;
+            if (k == FrameKind::Text) {
+                const Doc::Id story = d.fresh_id("story");
+                d.put(story, Story{"Story " + story.substr(story.find('.') + 1), {{style, ""}}});
+                made.push_back(story);
+                f.story = story;
+            }
+            d.put(id, f);
+        }
+        return made;
+    });
+}
+
 bool set_shape_kind(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, ShapeKind k) {
     if (k == ShapeKind::Path) return false;   // a path is drawn, not chosen
     std::vector<std::pair<Doc::Id, Frame>> plan;
     for (const auto& id : frames) {
         const auto* f = d.as<Frame>(id);
-        if (!f || f->kind != FrameKind::Shape || f->shape == ShapeKind::Path || f->shape == k) continue;
+        if (!f || f->shape == ShapeKind::Path || f->shape == k) continue;   // s210: any frame -- a text frame made an oval
         Frame g = *f;
         g.shape = k;
         plan.emplace_back(id, g);
@@ -1466,7 +1585,7 @@ bool set_shape_kind(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, S
 // ── s200: Direct on a shape's points ───────────────────────────────────────
 std::vector<PathPoint> shape_points(const Frame& f, bool& open) {
     open = false;
-    if (f.kind != FrameKind::Shape) return {};
+    // s210: any frame -- a text frame's box, a shaped picture's outline
     if (f.shape == ShapeKind::Path) { open = f.open; return path_points(f); }
     if (f.shape == ShapeKind::Oval) return oval_points(f, 0, 0);
     return {corner_point(f.x, f.y), corner_point(f.x + f.w, f.y), corner_point(f.x + f.w, f.y + f.h), corner_point(f.x, f.y + f.h)};
@@ -1476,18 +1595,19 @@ OutlineHit outline_nearest(const Frame& f, double x, double y) {
     OutlineHit best;
     bool open = false;
     const auto P = shape_points(f, open);
-    const std::size_t n = P.size();
-    if (n < 2) return best;
-    const std::size_t segs = open ? n - 1 : n;
-    for (std::size_t k = 0; k < segs; ++k) {
-        const auto& a = P[k];
-        const auto& b = P[(k + 1) % n];
-        constexpr int kSteps = 64;
-        for (int i = 0; i <= kSteps; ++i) {
-            const double t = static_cast<double>(i) / kSteps;
-            const XY q = bez({a.x, a.y}, {a.ox, a.oy}, {b.ix, b.iy}, {b.x, b.y}, t);
-            const double dd = std::hypot(q.x - x, q.y - y);
-            if (dd < best.dist) best = {static_cast<int>(k), t, dd};
+    if (P.size() < 2) return best;
+    for (const auto r : sub_ranges(static_cast<int>(P.size()), f.shape == ShapeKind::Path ? f.subs : std::vector<int>{})) {   // s211
+        const int n = r.b - r.a;
+        for (int k = 0; k < (open ? n - 1 : n); ++k) {
+            const auto& a = P[static_cast<std::size_t>(r.a + k)];
+            const auto& b = P[static_cast<std::size_t>(r.a + (k + 1) % n)];
+            constexpr int kSteps = 64;
+            for (int i = 0; i <= kSteps; ++i) {
+                const double t = static_cast<double>(i) / kSteps;
+                const XY q = bez({a.x, a.y}, {a.ox, a.oy}, {b.ix, b.iy}, {b.x, b.y}, t);
+                const double dd = std::hypot(q.x - x, q.y - y);
+                if (dd < best.dist) best = {r.a + k, t, dd};
+            }
         }
     }
     return best;
@@ -1495,11 +1615,14 @@ OutlineHit outline_nearest(const Frame& f, double x, double y) {
 
 namespace {
 // Write a shape's points back as a path (one step).
-bool put_path(DocJournal& j, Doc& d, const Doc::Id& id, const std::vector<PathPoint>& P, bool open, const std::string& label) {
+bool put_path(DocJournal& j, Doc& d, const Doc::Id& id, const std::vector<PathPoint>& P, bool open, const std::string& label,
+              const std::vector<int>* subs = nullptr) {
     const auto* f = d.as<Frame>(id);
     if (!f) return false;
     Frame g = *f;
     set_path(g, P, open);
+    if (subs) g.subs = *subs;   // s211: the subpaths as they now are
+    else if (f->shape != ShapeKind::Path) g.subs.clear();
     if (g == *f) return false;
     return j.run(label, {id}, [&] { d.put(id, g); });
 }
@@ -1507,13 +1630,17 @@ bool put_path(DocJournal& j, Doc& d, const Doc::Id& id, const std::vector<PathPo
 
 bool path_add_point(DocJournal& j, Doc& d, const Doc::Id& id, int k, double t) {
     const auto* f = d.as<Frame>(id);
-    if (!f || f->kind != FrameKind::Shape || t <= 0 || t >= 1) return false;
+    if (!f || t <= 0 || t >= 1) return false;
     bool open = false;
     auto P = shape_points(*f, open);
     const int n = static_cast<int>(P.size());
-    if (k < 0 || k >= (open ? n - 1 : n)) return false;
+    std::vector<int> subs = f->shape == ShapeKind::Path ? f->subs : std::vector<int>{};
+    SubRange in{-1, -1};   // s211: the subpath k is in -- its segment ends within it
+    for (const auto r : sub_ranges(n, subs)) if (k >= r.a && k < r.b) in = r;
+    if (in.a < 0 || (open && k == in.b - 1)) return false;
+    const int next = k + 1 < in.b ? k + 1 : in.a;
     auto& a = P[static_cast<std::size_t>(k)];
-    auto& b = P[static_cast<std::size_t>((k + 1) % n)];
+    auto& b = P[static_cast<std::size_t>(next)];
     const auto lerp = [](XY p, XY q, double u) { return XY{p.x + (q.x - p.x) * u, p.y + (q.y - p.y) * u}; };
     const XY p0{a.x, a.y}, p1{a.ox, a.oy}, p2{b.ix, b.iy}, p3{b.x, b.y};
     const XY q0 = lerp(p0, p1, t), q1 = lerp(p1, p2, t), q2 = lerp(p2, p3, t);
@@ -1529,23 +1656,18 @@ bool path_add_point(DocJournal& j, Doc& d, const Doc::Id& id, int k, double t) {
         mid.smooth = true;
     }
     P.insert(P.begin() + k + 1, mid);
-    return put_path(j, d, id, P, open, "Add point");
+    for (auto& sidx : subs) if (sidx > k) ++sidx;
+    return put_path(j, d, id, P, open, "Add point", &subs);
 }
 
 bool path_delete_point(DocJournal& j, Doc& d, const Doc::Id& id, int k) {
-    const auto* f = d.as<Frame>(id);
-    if (!f || f->kind != FrameKind::Shape) return false;
-    bool open = false;
-    auto P = shape_points(*f, open);
-    if (k < 0 || k >= static_cast<int>(P.size()) || static_cast<int>(P.size()) <= (open ? 2 : 3)) return false;
-    P.erase(P.begin() + k);
-    return put_path(j, d, id, P, open, "Delete point");
+    return path_delete_points(j, d, id, {k});
 }
 
 bool set_path_points(DocJournal& j, Doc& d, const Doc::Id& id, const std::vector<PathPoint>& abs, bool open,
                      const std::string& label) {   // s208
     const auto* f = d.as<Frame>(id);
-    if (!f || f->kind != FrameKind::Shape || abs.size() < 2) return false;
+    if (!f || abs.size() < 2) return false;
     return put_path(j, d, id, abs, open, label);
 }
 
@@ -1555,22 +1677,33 @@ std::vector<PathPoint> reversed_path(std::vector<PathPoint> P) {   // s208
     return P;
 }
 
-bool path_delete_points(DocJournal& j, Doc& d, const Doc::Id& id, const std::set<int>& ks) {   // s207
+bool path_delete_points(DocJournal& j, Doc& d, const Doc::Id& id, const std::set<int>& ks) {   // s207 (s211: by subpath)
     const auto* f = d.as<Frame>(id);
-    if (!f || f->kind != FrameKind::Shape || ks.empty()) return false;
+    if (!f || ks.empty()) return false;
     bool open = false;
     auto P = shape_points(*f, open);
+    const int least = open ? 2 : 3;
     std::vector<PathPoint> keep;
-    for (int i = 0; i < static_cast<int>(P.size()); ++i)
-        if (!ks.count(i)) keep.push_back(P[static_cast<std::size_t>(i)]);
-    if (keep.size() == P.size() || static_cast<int>(keep.size()) < (open ? 2 : 3)) return false;
-    return put_path(j, d, id, keep, open, ks.size() == 1 ? "Delete point" : "Delete points");
+    std::vector<int> subs;
+    bool any = false;
+    for (const auto r : sub_ranges(static_cast<int>(P.size()), f->shape == ShapeKind::Path ? f->subs : std::vector<int>{})) {
+        std::vector<PathPoint> part;
+        for (int i = r.a; i < r.b; ++i)
+            if (!ks.count(i)) part.push_back(P[static_cast<std::size_t>(i)]);
+            else any = true;
+        if (static_cast<int>(part.size()) < least) continue;   // too few left: that subpath goes (a hole taken out)
+        if (!keep.empty()) subs.push_back(static_cast<int>(keep.size()));
+        keep.insert(keep.end(), part.begin(), part.end());
+    }
+    if (!any || static_cast<int>(keep.size()) < least) return false;
+    const int gone = static_cast<int>(P.size() - keep.size());
+    return put_path(j, d, id, keep, open, gone == 1 ? "Delete point" : "Delete points", &subs);
 }
 
 bool path_move_points(DocJournal& j, Doc& d, const Doc::Id& id, const std::set<int>& ks, double dx, double dy,
                       const std::string& merge_key, std::chrono::steady_clock::time_point now) {   // s207
     const auto* f = d.as<Frame>(id);
-    if (!f || f->kind != FrameKind::Shape || ks.empty() || (dx == 0 && dy == 0)) return false;
+    if (!f || ks.empty() || (dx == 0 && dy == 0)) return false;
     bool open = false;
     auto P = shape_points(*f, open);
     bool any = false;
@@ -1589,7 +1722,7 @@ bool path_move_points(DocJournal& j, Doc& d, const Doc::Id& id, const std::set<i
 
 bool path_toggle_point(DocJournal& j, Doc& d, const Doc::Id& id, int k) {
     const auto* f = d.as<Frame>(id);
-    if (!f || f->kind != FrameKind::Shape) return false;
+    if (!f) return false;
     bool open = false;
     auto P = shape_points(*f, open);
     const int n = static_cast<int>(P.size());
@@ -1602,8 +1735,11 @@ bool path_toggle_point(DocJournal& j, Doc& d, const Doc::Id& id, int k) {
         p.smooth = false;
     } else {
         // Neighbours (an open path's end: itself on that side).
-        const auto& prev = (k > 0 || !open) ? P[static_cast<std::size_t>((k - 1 + n) % n)] : p;
-        const auto& next = (k < n - 1 || !open) ? P[static_cast<std::size_t>((k + 1) % n)] : p;
+        SubRange in{0, n};   // s211: its neighbours within its own subpath
+        for (const auto r : sub_ranges(n, f->shape == ShapeKind::Path ? f->subs : std::vector<int>{})) if (k >= r.a && k < r.b) in = r;
+        const int m = in.b - in.a, kk = k - in.a;
+        const auto& prev = (kk > 0 || !open) ? P[static_cast<std::size_t>(in.a + (kk - 1 + m) % m)] : p;
+        const auto& next = (kk < m - 1 || !open) ? P[static_cast<std::size_t>(in.a + (kk + 1) % m)] : p;
         double dx = next.x - prev.x, dy = next.y - prev.y;
         const double len = std::hypot(dx, dy);
         if (len < 1e-9) return false;
@@ -3995,7 +4131,7 @@ Doc::Id existing_asset(const Doc& d, const ImageFile& f) {
 
 bool place_image(DocJournal& j, Doc& d, const Doc::Id& frame, const ImageFile& file) {
     const auto* f = d.as<Frame>(frame);
-    if (!f || f->kind != FrameKind::Image || file.path.empty()) return false;
+    if (!f || (f->kind != FrameKind::Image && f->kind != FrameKind::Shape) || file.path.empty()) return false;   // s210: a shape takes a picture too
     std::vector<Doc::Id> touched{frame};
     const Doc::Id old = f->asset;
     const Doc::Id same = existing_asset(d, file);
@@ -4017,6 +4153,7 @@ bool place_image(DocJournal& j, Doc& d, const Doc::Id& frame, const ImageFile& f
         }
         Frame nf = *d.as<Frame>(frame);
         nf.asset = a;
+        nf.kind = FrameKind::Image;   // s210: a shape placed into is a picture frame now
         d.put(frame, nf);
         if (drop_old) d.put(old, std::nullopt);
         return made;
@@ -5037,6 +5174,22 @@ std::string tint_text(double t) { return std::to_string(static_cast<int>(std::lr
 std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
     std::vector<WrapRect> out;
     const auto* t = d.as<Frame>(id);
+    // s209: a text frame with a shape -- its lines kept inside it: what lies
+    // outside the outline, band by band, is wrapped like any other frame.
+    if (t && doc::has_outline(*t) && !(t->shape == ShapeKind::Path && t->open)) {
+        Frame own = *t;
+        own.stroke.clear();   // the words sit inside the outline itself
+        const auto bands = outline_bands(own, d, 2);
+        double y = 0;
+        for (auto b : bands) {
+            if (b.x1 - b.x0 < 24) continue;   // too narrow for words: a gap, as above and below the shape
+            if (b.y0 > y + 0.01) out.push_back({-1, y, t->w + 1, b.y0, true});   // above the shape (a gap)
+            if (b.x0 > 0.01) out.push_back({-1, b.y0, b.x0, b.y1, false});
+            if (b.x1 < t->w - 0.01) out.push_back({b.x1, b.y0, t->w + 1, b.y1, false});
+            y = std::max(y, b.y1);
+        }
+        if (y < t->h - 0.01) out.push_back({-1, y, t->w + 1, t->h + 1, true});
+    }
     if (!t || t->ignore_wrap) return out;   // s069
     auto owners = master_chain(d, t->owner);
     owners.push_back(t->owner);
@@ -5055,7 +5208,7 @@ std::vector<WrapRect> wrap_rects(const Doc& d, const Doc::Id& id) {
             // s173: Shape -- the picture's traced outline, band by band, grown by the offsets.
             if (f->wrap == Wrap::Shape)
                 if (const auto* a = d.as<Asset>(f->asset); (a && !a->shape.empty()) || doc::has_outline(*f)) {
-                    const auto bands = a ? shape_bands(*f, *a) : outline_bands(*f, d);   // s200: a shape's own outline
+                    const auto bands = doc::has_outline(*f) ? outline_bands(*f, d) : shape_bands(*f, *a);   // s200: a shape's own outline (s209: a shaped picture's too)
                     if (!bands.empty()) {
                         for (const auto& b : bands) {
                             WrapRect r{fx + b.x0 - f->wrap_off.left - t->x, f->y + b.y0 - f->wrap_off.top - t->y,

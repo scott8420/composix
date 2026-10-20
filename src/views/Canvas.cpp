@@ -1324,7 +1324,9 @@ void Canvas::on_drag_begin(double x, double y) {
             // (a text frame under it doesn't stop it -- only another shape or a picture is picked instead)
             Rect hfl, hpl;
             double hdx = 0, hdy = 0;
-            const bool other = !hit.empty() && hit != m_direct && (direct_shape(hit, hdx, hdy) || direct_pic(hit, hfl, hpl));
+            const auto* hf = m_doc.as<core::Frame>(hit);
+            const bool plain_text = hf && hf->kind == core::FrameKind::Text && !core::doc::has_outline(*hf);   // s210: a column's box
+            const bool other = !hit.empty() && hit != m_direct && !plain_text && (direct_shape(hit, hdx, hdy) || direct_pic(hit, hfl, hpl));
             if (!m_direct.empty() && !other && direct_shape(m_direct, odx, ody) && m_clicks < 2) {
                 if (!m_mods_shift) { m_pts_sel.clear(); m_pt = -1; }
                 m_pts0.clear();
@@ -2740,7 +2742,8 @@ void Canvas::draw_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
 // ── s009: placing images ────────────────────────────────────────────────────
 bool Canvas::direct_shape(const std::string& fid, double& dx, double& dy) const {   // s200
     const auto* f = m_doc.as<core::Frame>(fid);
-    if (!f || f->kind != core::FrameKind::Shape || f->rot != 0) return false;
+    // s210: a shape, or a text frame (its box's corners, or its shape) -- a picture frame's Direct is its picture
+    if (!f || f->kind == core::FrameKind::Image || f->rot != 0) return false;
     if (std::none_of(m_placed.begin(), m_placed.end(), [&](const core::Placed& p) { return p.id == f->owner; })) return false;
     const Rect fl = core::frame_in_layout(m_doc, m_placed, fid);
     dx = fl.x - f->x;
@@ -2820,7 +2823,7 @@ void Canvas::place_loaded(double lx, double ly, const Rect* drawn) {
     front_panel(lx, ly);   // s150
     if (!drawn) {
         const auto hit = core::hit_frame(m_doc, m_placed, lx, ly, 3 / m_vp.scale());
-        if (const auto* f = m_doc.as<core::Frame>(hit); f && f->kind == core::FrameKind::Image) {
+        if (const auto* f = m_doc.as<core::Frame>(hit); f && (f->kind == core::FrameKind::Image || f->kind == core::FrameKind::Shape)) {   // s210: or into a shape
             if (f->wrap == core::Wrap::Shape) file.shape = images::trace(file.path, file.stamp);   // s175: its outline, as Replace
             core::doc::place_image(m_journal, m_doc, hit, file);
             made = hit;

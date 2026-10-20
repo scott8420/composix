@@ -1741,5 +1741,120 @@ void part8() {
         check("unchanged: no step", !D::set_path_points(j, d, ln, P, false, "Close path"));
         while (j.can_undo()) j.undo();
     }
+    // ── s209: any frame shaped -- text kept inside its outline ────────────
+    {
+        std::cout << "--- s209 shaped frames ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        load_plain(d);
+        check("shaped: a text frame is a rectangle to start", !D::has_outline(*d.as<core::Frame>("frame.1")));
+        D::edit_frames(j, d, {"frame.1"}, "Oval", [](core::Frame& f) { f.shape = core::ShapeKind::Oval; });
+        const auto* t = d.as<core::Frame>("frame.1");
+        const auto rs = core::wrap_rects(d, "frame.1");
+        int left = 0, right = 0, gaps = 0;
+        for (const auto& r : rs) { left += r.x0 < 0 && !r.jump; right += r.x1 > t->w && !r.jump; gaps += r.jump; }
+        check("shaped: an oval text frame -- outside its outline wrapped, both sides",
+              D::has_outline(*d.as<core::Frame>("frame.1")) && left > 10 && right > 10, std::to_string(left) + " " + std::to_string(right) + " " + std::to_string(gaps));
+        L::FlowCache flows;
+        const auto& fl = flows.get(d, d.as<core::Frame>("frame.1")->story);
+        double widest = 0, first_w = 0;
+        bool first = true;
+        for (const auto& ft : fl.frames)
+            for (const auto& ln : ft.lines) {
+                const double w = ln.w > 0 ? ln.w : L::line_width_of(*d.as<core::Frame>(ft.frame), ln);
+                if (first) { first_w = w; first = false; }
+                widest = std::max(widest, w);
+            }
+        check("shaped: its first line narrower than its widest", !first && first_w < widest - 20,
+              std::to_string(first_w) + " / " + std::to_string(widest));
+        // A picture frame made a star keeps its kind (set_path no longer makes it a shape).
+        core::Frame pic = *d.as<core::Frame>("frame.11");
+        D::set_path(pic, D::polygon_points(pic.x + pic.w / 2, pic.y + pic.h / 2, 40, 5, D::perfect_star(5), -M_PI / 2), false);
+        check("shaped: a picture frame stays a picture frame, with an outline", pic.kind == core::FrameKind::Image && D::has_outline(pic));
+        while (j.can_undo()) j.undo();
+    }
+    // ── s210: Content -- a shape made a text or picture frame, and back ──
+    {
+        std::cout << "--- s210 content ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const std::string before = core::to_json(d);
+        const auto star = D::add_polygon(j, d, page, 200, 200, 60, 5, D::perfect_star(5), -M_PI / 2);
+        check("content: a star made a text frame -- its story made, its outline kept",
+              D::set_frame_content(j, d, {star}, core::FrameKind::Text) && d.as<core::Frame>(star)->kind == core::FrameKind::Text &&
+              d.as<core::Story>(d.as<core::Frame>(star)->story) && d.as<core::Frame>(star)->path.size() == 10 &&
+              j.undo_label() == "Content: Text");
+        check("content: an empty text frame back to none -- its story gone", [&] {
+            const auto st = d.as<core::Frame>(star)->story;
+            return D::set_frame_content(j, d, {star}, core::FrameKind::Shape) && !d.as<core::Story>(st) &&
+                   d.as<core::Frame>(star)->story.empty();
+        }());
+        check("content: a text frame with words keeps them (refused)", !D::set_frame_content(j, d, {"frame.1"}, core::FrameKind::Shape));
+        check("content: a shape made a picture frame", D::set_frame_content(j, d, {star}, core::FrameKind::Image) &&
+              d.as<core::Frame>(star)->kind == core::FrameKind::Image && j.undo_label() == "Content: Picture");
+        check("shape kind: a text frame made an oval", D::set_shape_kind(j, d, {"frame.1"}, core::ShapeKind::Oval) &&
+              d.as<core::Frame>("frame.1")->shape == core::ShapeKind::Oval && d.as<core::Frame>("frame.1")->kind == core::FrameKind::Text);
+        bool open = true;
+        check("points: a text frame's corners for Direct", D::shape_points(*d.as<core::Frame>("frame.2"), open).size() == 4 && !open);
+        while (j.can_undo()) j.undo();
+        check("content: all undone exactly", core::to_json(d) == before);
+    }
+    // ── s211: compound paths -- holes ────────────────────────────────────
+    {
+        std::cout << "--- s211 compound paths ---\n";
+        namespace D = core::doc;
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const std::string before = core::to_json(d);
+        const auto outer = D::add_frame(j, d, page, core::FrameKind::Shape, {300, 20, 60, 60});
+        const auto hole = D::add_frame(j, d, page, core::FrameKind::Shape, {315, 35, 30, 30}, 1, 12, false, core::ShapeKind::Oval);
+        const auto sw = D::add_swatch(j, d, core::Swatch{"Brick", 0, core::ColorModel::RGB, {180, 60, 40, 0}});
+        D::edit_frames(j, d, {outer}, "Fill", [&](core::Frame& f) { f.fill = sw; f.stroke.clear(); f.z = 1e6; });
+        const auto c = D::make_compound(j, d, {outer, hole});
+        const auto* f = d.as<core::Frame>(c);
+        check("compound: one path of two subpaths (4 corners + 4 oval points), the other frame gone",
+              c == outer && f->path.size() == 8 && f->subs == std::vector<int>{4} && !d.as<core::Frame>(hole) &&
+              j.undo_label() == "Make compound path");
+        std::string ops;
+        for (const auto& o : D::outline_ops(*f)) ops += o.op;
+        check("compound: two closed outlines", ops == "MLLLLZMCCCCZ", ops);
+        L::FlowCache flows;
+        const auto ring = L::sample_page(d, page, flows, {}, 305, 25, 1), mid = L::sample_page(d, page, flows, {}, 330, 50, 1);
+        check("compound: the ring filled, the hole paper", ring == d.as<core::Swatch>(sw)->preview && mid != ring);
+        const auto pl = core::layout_pages(d, {page});
+        check("compound: the hole isn't the shape (hit)", core::hit_frame(d, pl, pl.front().r.x + 330, pl.front().r.y + 50, 0.5) != c);
+        // Direct in a compound: a point added in the hole stays in the hole.
+        const auto h = D::outline_nearest(*d.as<core::Frame>(c), 340.6, 39.4);
+        check("compound: nearest -- on the hole's subpath", h.k >= 4 && h.dist < 1, std::to_string(h.k));
+        D::path_add_point(j, d, c, h.k, h.t);
+        check("compound: a point added there -- the hole has five", d.as<core::Frame>(c)->path.size() == 9 && d.as<core::Frame>(c)->subs == std::vector<int>{4},
+              std::to_string(d.as<core::Frame>(c)->path.size()) + " k=" + std::to_string(h.k) + " t=" + std::to_string(h.t));
+        check("compound: the hole's points taken out -- it goes, the square stays",
+              D::path_delete_points(j, d, c, {4, 5, 6}) && d.as<core::Frame>(c)->path.size() == 4 && d.as<core::Frame>(c)->subs.empty());
+        j.undo();
+        const auto parts = D::release_compound(j, d, c);
+        check("release: two paths again, styled alike", parts.size() == 2 && d.as<core::Frame>(parts[1])->fill == sw &&
+              d.as<core::Frame>(parts[0])->subs.empty() && d.as<core::Frame>(parts[1])->path.size() == 5 && j.undo_label() == "Release compound path");
+        {
+            j.undo();
+            core::Doc e;
+            std::string err;
+            const auto text = core::to_json(d);
+            check("compound: through JSON", core::from_json(e, text, &err) && e.as<core::Frame>(c)->subs == std::vector<int>{4} && core::to_json(e) == text, err);
+        }
+        while (j.can_undo()) j.undo();
+        check("compound: all undone exactly", core::to_json(d) == before);
+    }
 }
 }  // namespace cxtest
