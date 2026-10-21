@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <sstream>
 
 namespace composix::core::odt {
@@ -426,6 +427,40 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}
             read_block(k, b, out, list);
         } else if (nm == "table:table") {
             ++b.tables;
+        } else if (nm == "text:table-of-content" && &out == &b.body) {   // s271: kept -- made a contents list on import
+            Toc t;
+            t.at = static_cast<int>(out.size());
+            if (const auto* src = k.child("text:table-of-content-source")) {
+                t.levels = std::clamp(std::atoi(src->attr_or("text:outline-level", "10").c_str()), 1, 10);
+                if (const auto* tt = src->child("text:index-title-template")) {
+                    t.title_style = tt->attr_or("text:style-name");
+                    for (const auto& x : tt->kids) if (x.is_text()) t.title += x.text;
+                }
+                for (const auto* e : src->children("text:table-of-content-entry-template"))
+                    if (e->attr_or("text:outline-level") == "1") {
+                        t.entry_style = e->attr_or("text:style-name");
+                        if (const auto* ts = e->child("text:index-entry-tab-stop"); ts && ts->attr_or("style:type") == "right") {   // s272
+                            t.right_tab = true;
+                            t.leader = ts->attr_or("style:leader-char");
+                            if (t.leader == " ") t.leader.clear();
+                        }
+                    }
+            }
+            if (const auto* body = k.child("text:index-body")) {
+                if (const auto* it = body->child("text:index-title"))
+                    if (const auto* p = it->child("text:p")) {
+                        std::string words;
+                        std::function<void(const Node&)> collect = [&](const Node& x) {
+                            if (x.is_text()) { words += x.text; return; }
+                            for (const auto& y : x.kids) collect(y);
+                        };
+                        collect(*p);
+                        if (!words.empty()) t.title = words;
+                        t.title_style = p->attr_or("text:style-name", t.title_style);
+                    }
+                t.entries = static_cast<int>(body->children("text:p").size());
+            }
+            b.tocs.push_back(std::move(t));
         } else if (nm == "text:table-of-content" || nm == "text:alphabetical-index" || nm == "text:bibliography") {
             ++b.contents;
         } else if (nm == "draw:frame" || nm == "draw:custom-shape" || nm == "draw:g") {

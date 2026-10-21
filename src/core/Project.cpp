@@ -1148,6 +1148,10 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                     }
                 }
             }
+            // s275: on a master -- its header, its footer, or neither.
+            if (d.as<Master>(f->owner))
+                fields.push_back({"Role", f->role == 1 ? "Header" : f->role == 2 ? "Footer" : "None", "frole",
+                                  {{"0", "None"}, {"1", "Header"}, {"2", "Footer"}}});
             // s069: other frames' wrap -- pushes this text, or not.
             fields.push_back({"Others' wrap", f->ignore_wrap ? "Ignored" : "Pushes the text", "ignore_wrap",
                               {{"0", "Pushes the text"}, {"1", "Ignored"}}});

@@ -5374,6 +5374,9 @@ const std::vector<Verb>& verbs() {
         {"set_picture_offset", [](DocJournal& j, Doc& d) { set_picture_offset(j, d, {"frame.11"}, 0, -6); }},   // s076
         {"arrange_back", [](DocJournal& j, Doc& d) { arrange(j, d, {"frame.11"}, Arrange::Back); }},   // s070
         {"arrange_forward", [](DocJournal& j, Doc& d) { arrange(j, d, {"frame.1"}, Arrange::Forward); }},
+        {"frame_role", [](DocJournal& j, Doc& d) {   // s275
+             edit_frames(j, d, {"frame.1"}, "Header / footer", [](Frame& f) { f.role = 2; });
+         }},
         {"ignore_wrap", [](DocJournal& j, Doc& d) {
              edit_frames(j, d, {"frame.1"}, "Ignore text wrap", [](Frame& f) { f.ignore_wrap = true; });
          }},

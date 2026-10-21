@@ -276,6 +276,7 @@ struct Frame {
     double      autosize_min = 0;
     ColumnRule  col_rule;                // s055: text -- a rule between its columns
     bool        ignore_wrap = false;     // s069: text -- other frames' wrap doesn't push this text
+    int         role = 0;                // s275: a master's text frame -- 1 its header, 2 its footer (0 neither)
     // s155 (Scott): a facing master's item ACROSS THE SPINE -- one item, its
     // x from the left page's left edge; shown on both pages, each its part
     // (cut at the spine). `side` stays Any.
@@ -1991,6 +1992,12 @@ struct NewDoc {
     bool        text_frames = true;   // one story threaded through a frame in every page's margins
     bool        folios = true;        // s023: the page number at the foot, on the master
     Units       units = Units::Inches; // s079: the new document's (and the sheet's) unit
+    // s276: header / footer presets on the master -- the folio at the outside
+    // corners (else centred); a running head: 0 none, 1 the title on left
+    // pages and the chapter on right (one-sided: the title), 2 the chapter's
+    // name, 3 the title.
+    bool        folio_outside = false;
+    int         head = 0;
     bool operator==(const NewDoc&) const = default;
 };
 // s079: the New sheet's choices between runs, in the app's settings

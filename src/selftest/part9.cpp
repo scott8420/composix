@@ -1128,6 +1128,14 @@ void part9() {
                 for (const auto& [sid, n] : uses) once = once && n == 1;
                 check("every header / footer story in one frame (the left page's footer shows its number)", once);
             }
+            {   // s275: the import's heads are headers, its feet footers
+                int heads = 0, feet = 0, none = 0;
+                for (const auto& f : d.frames_on(by["Standard"])) {
+                    const auto* fr = d.as<core::Frame>(f);
+                    (fr->role == 1 ? heads : fr->role == 2 ? feet : none)++;
+                }
+                check("imported: two headers, two footers on Standard (their roles)", heads == 2 && feet == 2 && none == 0);
+            }
             check("Right Page's own margins: 2 in at the top", std::abs(d.as<core::Master>(by["Right Page"])->margins.top - 144) < 0.01);
             // The pages: the title FrontMatter, chapters on Right Page, the rest Standard; blanks blank.
             const auto fl = L::flow_story(d, "story.1");
@@ -1151,6 +1159,205 @@ void part9() {
                   std::to_string(blanks) + " blank");
             check("the title page on FrontMatter", d.as<core::Master>(d.as<core::Page>(d.pages().front())->master)->name == "FrontMatter");
         }
+    }
+    // ── s271 / s272: an ODT's table of contents, a contents list ─────────────
+    {
+        std::cout << "--- s271 / s272 an ODT's table of contents ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:default-style style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:default-style>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Title" style:family="paragraph" style:master-page-name="FrontMatter"/>
+ <style:style style:name="Contents_20_Heading" style:display-name="Contents Heading" style:family="paragraph"><style:text-properties fo:font-size="16pt"/></style:style>
+ <style:style style:name="Contents_20_1" style:display-name="Contents 1" style:family="paragraph"><style:paragraph-properties><style:tab-stops><style:tab-stop style:position="4in" style:type="right" style:leader-text="."/></style:tab-stops></style:paragraph-properties></style:style>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1" style:master-page-name="Right_20_Page"/>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+ <style:page-layout style:name="pm2" style:page-usage="right"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+ <style:master-page style:name="Right_20_Page" style:display-name="Right Page" style:page-layout-name="pm2" style:next-style-name="Standard"/>
+ <style:master-page style:name="FrontMatter" style:page-layout-name="pm2" style:next-style-name="Standard"/>
+</office:master-styles></office:document-styles>)";
+        std::string lots;
+        for (int i = 0; i < 40; ++i) lots += R"(<text:p text:style-name="Standard">The ship came in, and nobody on the quay expected her that morning, nor the next.</text:p>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:automatic-styles>
+ <style:style style:name="P4" style:family="paragraph" style:parent-style-name="Contents_20_Heading" style:master-page-name="FrontMatter"/>
+ <style:style style:name="P5" style:family="paragraph" style:parent-style-name="Contents_20_1"/>
+</office:automatic-styles><office:body><office:text>)"
+            R"(<text:p text:style-name="Title">The Book</text:p>)"
+            R"(<text:table-of-content text:name="Table of Contents1"><text:table-of-content-source text:outline-level="1">)"
+            R"(<text:index-title-template text:style-name="Contents_20_Heading">Table of Contents</text:index-title-template>)"
+            R"(<text:table-of-content-entry-template text:outline-level="1" text:style-name="Contents_20_1"><text:index-entry-text/><text:index-entry-tab-stop style:type="right" style:leader-char="."/><text:index-entry-page-number/></text:table-of-content-entry-template></text:table-of-content-source>)"
+            R"(<text:index-body><text:index-title><text:p text:style-name="P4">Contents</text:p></text:index-title>)"
+            R"(<text:p text:style-name="P5">Chapter One<text:tab/>7</text:p><text:p text:style-name="P5">Chapter Two<text:tab/>9</text:p></text:index-body></text:table-of-content>)"
+            R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter One</text:h>)" + lots +
+            R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter Two</text:h>)" + lots +
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        check("read: one table of contents, after the title, level 1, its title and entry style",
+              book && book->tocs.size() == 1 && book->tocs[0].at == 1 && book->tocs[0].levels == 1 && book->tocs[0].title == "Contents" &&
+                  book->tocs[0].title_style == "P4" && book->tocs[0].entry_style == "Contents_20_1" && book->tocs[0].entries == 2 &&
+                  book->contents == 0,
+              err);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        check("import: made, one contents list", ok && info.contents_lists == 1 && d.ids_of<core::GenList>().size() == 1, err);
+        if (ok && d.ids_of<core::GenList>().size() == 1) {
+            const auto& l = *d.as<core::GenList>(d.ids_of<core::GenList>().front());
+            const auto& ls = *d.as<core::Story>(l.story);
+            const auto* hs = d.as<core::Style>(l.from_styles.at(0));
+            check("the list: Contents, gathering Heading 1, built", l.name == "Contents" && l.kind == core::ListKind::Contents && hs &&
+                                                                     hs->name == "Heading 1" && l.built_entries == 2);
+            const auto* es = ls.paras.size() == 3 ? d.as<core::Style>(ls.paras[1].style) : nullptr;
+            check("its words: the title, then each chapter and its page, in Contents 1",
+                  ls.paras.size() == 3 && ls.paras[0].text == "Contents" && ls.paras[1].text.rfind("Chapter One\t", 0) == 0 &&
+                      ls.paras[2].text.rfind("Chapter Two\t", 0) == 0 && es && es->name == "Contents 1",
+                  ls.paras.empty() ? "" : ls.paras[1].text);
+            // Its page: the right-hand FrontMatter page after the title's; chapter one on a later page.
+            const auto fl = L::flow_story(d, "story.1");
+            std::map<std::string, int> page_of_text;
+            const auto& st = *d.as<core::Story>("story.1");
+            for (const auto& ft : fl.frames)
+                for (const auto& line : ft.lines)
+                    if (!page_of_text.count(st.paras[static_cast<std::size_t>(line.para)].text))
+                        page_of_text[st.paras[static_cast<std::size_t>(line.para)].text] = d.page_index(d.as<core::Frame>(ft.frame)->owner);
+            const int lp = d.page_index(l.placed_on);
+            check("on its own right-hand page (FrontMatter), after the title's, before chapter one",
+                  lp > page_of_text["The Book"] && lp < page_of_text["Chapter One"] && d.side_of(l.placed_on) == core::Side::Right &&
+                      d.as<core::Master>(d.as<core::Page>(l.placed_on)->master)->name == "FrontMatter",
+                  std::to_string(page_of_text["The Book"]) + " / " + std::to_string(lp) + " / " + std::to_string(page_of_text["Chapter One"]));
+            check("Contents 1: a right tab at the frame's right edge, dot leader (the entry template's)",
+                  es && es->tabs.size() == 1 && es->tabs[0].align == core::TabAlign::Right && es->tabs[0].leader == "." &&
+                      std::abs(es->tabs[0].pos - core::margin_rect(d, l.placed_on).w) < 0.01,
+                  es && !es->tabs.empty() ? std::to_string(es->tabs[0].pos) : "none");
+            check("its page number for chapter one is this book's", ls.paras[1].text == "Chapter One\t" + d.folio(d.pages().at(static_cast<std::size_t>(page_of_text["Chapter One"]))),
+                  ls.paras[1].text);
+        }
+    }
+    // ── s273: New Index settled on a copy (a long book's way) ───────────────
+    {
+        std::cout << "--- s273 New Index settled apart ---\n";
+        core::Doc a, b;
+        core::load_sample(a);
+        core::load_sample(b);
+        const auto page = a.pages().back();
+        core::DocJournal ja{a};
+        a.set_door([&ja] { return ja.open(); });
+        {   // index marks in both: harbor (twice), lanterns, map
+            for (auto* doc : {&a, &b}) {
+                core::DocJournal jx{*doc};
+                doc->set_door([&jx] { return jx.open(); });
+                core::doc::insert_index_mark(jx, *doc, "story.1", {3, 0}, "harbor");
+                core::doc::insert_index_mark(jx, *doc, "story.1", {5, 0}, "harbor");
+                core::doc::insert_index_mark(jx, *doc, "story.1", {4, 0}, "lanterns");
+                core::doc::insert_index_mark(jx, *doc, "story.1", {6, 0}, "map");
+            }
+            a.set_door([&ja] { return ja.open(); });
+        }
+        const auto la = core::doc::add_list(ja, a, core::ListKind::Index, "Index", page);
+        L::build_list(ja, a, la);
+        // The worker's way: the copy holds the list-to-be under its own name.
+        core::Doc scratch;
+        {
+            core::Doc::Loading load(scratch);
+            for (const auto& [id, r] : b.records()) scratch.put(id, r);
+            core::GenList l;
+            l.name = "Index";
+            l.kind = core::ListKind::Index;
+            l.placed_on = page;
+            l.built_entries = -1;
+            scratch.put("list.new-index", l);
+        }
+        const auto built = L::settle_lists(scratch, {"list.new-index"});
+        core::DocJournal jb{b};
+        b.set_door([&jb] { return jb.open(); });
+        const auto lb = core::doc::add_list(jb, b, core::ListKind::Index, "Index", page);
+        const bool wrote = built.size() == 1 && core::doc::build_list(jb, b, lb, built.front().entries);
+        const auto* sa = a.as<core::Story>(a.as<core::GenList>(la)->story);
+        const auto* sb = b.as<core::Story>(b.as<core::GenList>(lb)->story);
+        check("the same index as built here (its entries too)", wrote && sa && sb && sa->paras == sb->paras && sa->paras.size() >= 4,
+              sa ? std::to_string(sa->paras.size()) + " paragraphs" : "no story");
+    }
+    // ── s275: a master's header / footer role ────────────────────────────────
+    {
+        std::cout << "--- s275 header / footer role ---\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("the sample's folios: footers", d.as<core::Frame>("frame.12")->role == 2 && d.as<core::Frame>("frame.13")->role == 2 &&
+                                              d.as<core::Frame>("frame.14")->role == 2);
+        core::NewDoc n;
+        n.pages = 2;
+        core::Doc e;
+        core::new_document(e, n);
+        int footers = 0;
+        for (const auto& f : e.frames_on("master.1")) footers += e.as<core::Frame>(f)->role == 2;
+        check("a new document's folio: its master's footer", footers == 1);
+        const auto items = core::frame_items(d, {"frame.12"});
+        std::string role;
+        for (const auto& f : items.at(0).fields) if (f.edit == "frole") role = f.value;
+        check("the inspector: Role -- Footer (a master's text frame)", role == "Footer", role);
+        bool page_row = false;
+        for (const auto& f : core::frame_items(d, {"frame.1"}).at(0).fields) page_row = page_row || f.edit == "frole";
+        check("a page's frame: no Role row", !page_row);
+        core::doc::edit_frames(j, d, {"frame.12"}, "Header / footer", [](core::Frame& f) { f.role = 1; });
+        std::string err;
+        core::Doc back;
+        check("kept in the file", core::from_json(back, core::to_json(d), &err) && back.as<core::Frame>("frame.12")->role == 1, err);
+    }
+    // ── s276: header / footer presets for a new document ─────────────────────
+    {
+        std::cout << "--- s276 New: header / footer presets ---\n";
+        const auto made = [](const core::NewDoc& n, core::Doc& d) {
+            core::new_document(d, n);
+            std::vector<const core::Frame*> out;
+            for (const auto& f : d.frames_on("master.1")) out.push_back(d.as<core::Frame>(f));
+            return out;
+        };
+        const auto first_text = [](const core::Doc& d, const core::Frame* f) { return d.as<core::Story>(f->story)->paras.at(0).text; };
+        core::NewDoc n;
+        n.pages = 2;
+        n.facing = true;
+        n.folio_outside = true;
+        n.head = 1;
+        core::Doc d;
+        const auto fs = made(n, d);
+        int foot_l = 0, foot_r = 0, head_l = 0, head_r = 0;
+        for (const auto* f : fs) {
+            const auto& p = d.as<core::Story>(f->story)->paras.at(0);
+            if (f->role == 2 && f->side == core::Side::Left && p.over.align == core::Align::Left && p.text == core::kMarkPage) ++foot_l;
+            if (f->role == 2 && f->side == core::Side::Right && p.over.align == core::Align::Right && p.text == core::kMarkPage) ++foot_r;
+            if (f->role == 1 && f->side == core::Side::Left && p.text == core::kMarkTitle) ++head_l;
+            if (f->role == 1 && f->side == core::Side::Right && p.text == core::kMarkChapter) ++head_r;
+        }
+        check("facing, outside corners: a folio a side (left on the left, right on the right)", foot_l == 1 && foot_r == 1);
+        check("title left, chapter right: a running head a side, headers, in Running Head",
+              head_l == 1 && head_r == 1 && fs.size() == 4 && d.as<core::Style>("style.7") && d.as<core::Style>("style.7")->name == "Running Head");
+        bool in_margin = true;
+        for (const auto* f : fs) in_margin = in_margin && (f->role == 1 ? f->y + f->h <= n.margins.top : f->y >= n.trim_h - n.margins.bottom);
+        check("each in its margin (heads at the top, folios at the foot)", in_margin);
+        core::NewDoc m;
+        m.pages = 1;
+        m.facing = false;
+        m.head = 2;
+        core::Doc e;
+        const auto es = made(m, e);
+        check("one-sided, chapter name, centred folio: one head, one folio",
+              es.size() == 2 && std::count_if(es.begin(), es.end(), [&](const core::Frame* f) { return f->role == 1 && first_text(e, f) == core::kMarkChapter; }) == 1 &&
+                  std::count_if(es.begin(), es.end(), [](const core::Frame* f) { return f->role == 2 && f->side == core::Side::Any; }) == 1);
+        core::NewDoc plain;
+        plain.pages = 1;
+        core::Doc g;
+        check("the defaults as before: one centred folio, no head, no Running Head style", made(plain, g).size() == 1 && !g.as<core::Style>("style.7"));
+        core::AppSettings st;
+        core::new_to_settings(n, st);
+        const auto back = core::new_from_settings(st);
+        check("the sheet remembers them", back.folio_outside && back.head == 1);
     }
 }
 }  // namespace cxtest

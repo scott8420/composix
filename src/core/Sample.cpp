@@ -202,15 +202,21 @@ void load_sample(Doc& d) {
     d.put("style.7", Style{"Folio", StyleKind::Paragraph, 7, "Serif", 9, 11, false, false, Align::Center});
     d.put("story.5", Story{"Folio (front)", {{"style.7", kMarkPage}}});
     d.put("story.6", Story{"Folio (body)", {{"style.7", kMarkPage}}});
-    d.put("frame.12", Frame{"master.1", FrameKind::Text, m, s.trim_h - 0.5 * in, tw, 0.25 * in, 0, 1, "story.5", "", ""});
+    {
+        Frame f{"master.1", FrameKind::Text, m, s.trim_h - 0.5 * in, tw, 0.25 * in, 0, 1, "story.5", "", ""};
+        f.role = 2;   // s275: the master's footer
+        d.put("frame.12", f);
+    }
     {   // s025: the body master is a facing one -- folios at the outside
         // corners: the right-hand pages' at the right, the left-hand pages'
         // at the left (each frame shows on its side's pages only).
         Frame r{"master.2", FrameKind::Text, m + tw - 0.5 * in, s.trim_h - 0.5 * in, 0.5 * in, 0.25 * in, 0, 1, "story.6", "", ""};
         r.side = Side::Right;
+        r.role = 2;   // s275
         d.put("frame.13", r);
         Frame l{"master.2", FrameKind::Text, m, s.trim_h - 0.5 * in, 0.5 * in, 0.25 * in, 0, 2, "story.7", "", ""};
         l.side = Side::Left;
+        l.role = 2;   // s275
         d.put("story.7", Story{"Folio (body, left)", {{"style.7", kMarkPage}}});
         d.put("frame.14", l);
         // The chapter opener's folio, overridden on its page: centred there.

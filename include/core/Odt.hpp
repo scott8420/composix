@@ -112,6 +112,20 @@ struct MasterPage {
     std::vector<Para> header, footer, header_left, footer_left;   // _left: the left pages' own (empty: as the right)
 };
 
+// s271: a table of contents in the body -- where it stands (before body
+// paragraph `at`), its title (words and paragraph style, often an automatic
+// one naming a page style), the levels it gathers (outline 1..levels), and
+// level 1's entry style.
+struct Toc {
+    int         at = 0;
+    std::string title, title_style;
+    std::string entry_style;
+    int         levels = 10;
+    int         entries = 0;            // as LibreOffice last wrote it
+    bool        right_tab = false;      // s272: level 1's page number at the right edge (its entry template's tab)
+    std::string leader;                 //        what fills up to it ("." dots; "" none)
+};
+
 struct Book {
     std::map<std::string, Style>      styles;      // by name (named and automatic)
     std::map<std::string, Props>      defaults;    // style:default-style, by family
@@ -123,7 +137,8 @@ struct Book {
     std::vector<MasterPage>           masters;
     std::vector<Para>                 body;
     std::string                       title, author;
-    int tables = 0, pictures = 0, contents = 0;   // what wasn't kept
+    std::vector<Toc>                  tocs;        // s271: the body's tables of contents
+    int tables = 0, pictures = 0, contents = 0;   // what wasn't kept (s271: contents -- an index / bibliography)
     // A style's property, its chain followed (named parents; the family's default last).
     Props resolved(const std::string& style) const;
 };

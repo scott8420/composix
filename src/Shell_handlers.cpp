@@ -808,10 +808,31 @@ void Shell::bind_context_actions() {  // bindings
     add_action("page-add-after", [this] { if (!m_ctx.page.empty()) page_action("add", {m_ctx.page}); });
 }
 
-void Shell::on_canvas_context(const views::Canvas::ContextHit& h) {  // handler
+void Shell::on_canvas_context(const views::Canvas::ContextHit& hit) {  // handler
+    views::Canvas::ContextHit h = hit;
+    // s275: a header / footer right-clicked: typing in it at its end -- the text menu (Insert Field first).
+    if (!h.text && !h.zoom && !h.frame.empty())
+        if (const auto* f = m_doc.as<core::Frame>(h.frame); f && f->role && f->kind == core::FrameKind::Text && m_doc.as<core::Story>(f->story)) {
+            const auto& st = *m_doc.as<core::Story>(f->story);
+            m_canvas_view.canvas().select_text(h.frame, core::story_end(st), core::story_end(st), true);
+            h.text = true;
+        }
     m_ctx = h;
     auto menu = Gio::Menu::create();
-    if (h.zoom) {   // s241: the Zoom tool's levels
+    if (h.text) {   // s274 (Scott): typing -- the fields by name, the type style, at the caret
+        auto ins = Gio::Menu::create();
+        ins->append_submenu("Insert Field", field_menu());
+        ins->append_submenu("Type Style", type_style_menu());
+        menu->append_section(ins);
+        auto more = Gio::Menu::create();
+        more->append("Footnote", "win.insert-footnote");
+        more->append("Index Entry\u2026", "win.index-mark");
+        more->append("Cross-Reference\u2026", "win.insert-xref");
+        menu->append_section(more);
+        auto ed = Gio::Menu::create();
+        ed->append("Story Editor", "win.story-editor");
+        menu->append_section(ed);
+    } else if (h.zoom) {   // s241: the Zoom tool's levels
         auto fit = Gio::Menu::create();
         fit->append("Fit the Pages", "win.zoom-fit");
         menu->append_section(fit);
@@ -1146,6 +1167,10 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::set_ruler_origin(m_journal, m_doc, static_cast<core::RulerOrigin>(std::clamp(std::stoi(choice), 0, 2)));
         } else if (key == "dwrap") {   // s069
             did = core::doc::set_wrap_beneath(m_journal, m_doc, choice == "1");
+        } else if (key == "frole") {   // s275
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Header / footer", [&](core::Frame& f) {
+                if (f.kind == core::FrameKind::Text && m_doc.as<core::Master>(f.owner)) f.role = std::clamp(std::stoi(choice), 0, 2);
+            });
         } else if (key == "ignore_wrap") {   // s069
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Ignore text wrap", [&](core::Frame& f) {
                 if (f.kind == core::FrameKind::Text) f.ignore_wrap = choice == "1";

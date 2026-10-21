@@ -1,6 +1,7 @@
 // layout::import_odt -- see the header.
 #include "layout/OdtImport.hpp"
 #include "layout/Flow.hpp"
+#include "layout/Export.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -400,7 +401,27 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     bool any_foot = false, any_end = false;
     std::vector<char> heading1;   // s237: which paragraphs are chapters (level-1 headings, or a style at outline 1)
     std::vector<int> first_of;   // s245: each body paragraph's first story paragraph (a picture's anchor)
+    // s272: a table of contents holds its place in the text -- an empty
+    // paragraph starting its page (as its title's style does: the locket's
+    // front matter's right-hand page); the text after it starts afresh. The
+    // list itself goes on that page once the pages are set.
+    std::vector<int> toc_para(b.tocs.size(), -1);
+    bool after_toc = false;
+    const auto put_tocs = [&](int at) {
+        for (std::size_t t = 0; t < b.tocs.size(); ++t) {
+            if (b.tocs[t].at != at) continue;
+            core::Para q;
+            q.style = bl.para_for(b.tocs[t].title_style);
+            q.brk = bl.start_for_master(b.resolved(b.tocs[t].title_style).master);
+            if (q.brk == core::ParaStart::Anywhere) q.brk = core::ParaStart::NextPage;
+            toc_para[t] = static_cast<int>(st.paras.size());
+            st.paras.push_back(q);
+            heading1.push_back(false);
+            after_toc = true;
+        }
+    };
     for (const auto& p : b.body) {
+        put_tocs(static_cast<int>(first_of.size()));
         first_of.push_back(static_cast<int>(st.paras.size()));
         const bool ch = p.outline == 1 || [&] { const auto it = b.styles.find(bl.named_of(p.style)); return it != b.styles.end() && it->second.outline == 1; }();
         if (ch) ++info.chapters;
@@ -409,9 +430,15 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             heading1.push_back(ch && first);   // the heading's first line is the chapter's start
             first = false;
             st.paras.push_back(bl.para_of(piece));
+            if (after_toc) {   // s272: what follows the contents starts a page of its own
+                auto& q = st.paras.back();
+                if (q.brk == core::ParaStart::Anywhere && core::doc::start_of(d, q) == core::ParaStart::Anywhere) q.brk = core::ParaStart::NextPage;
+                after_toc = false;
+            }
             for (const auto& nn : piece.notes) (nn.endnote ? any_end : any_foot) = true;
         }
     }
+    put_tocs(static_cast<int>(b.body.size()));
     if (st.paras.empty()) st.paras.push_back({bl.para_for(""), ""});
     info.paragraphs = static_cast<int>(st.paras.size());
     d.put("story.1", st);
@@ -451,7 +478,16 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     for (const auto& p : b.body) use(b.resolved(p.style).master);
     for (std::size_t i = 0; i < used.size(); ++i) use(mp_of(used[i])->next);
     std::vector<std::string> para_style_page;   // each story paragraph: the page style it names ("" none)
+    const auto toc_pages = [&](int at) {   // s272: a contents placeholder -- its title's page style
+        for (const auto& t : b.tocs)
+            if (t.at == at) {
+                const std::string want = b.resolved(t.title_style).master;
+                para_style_page.push_back(mp_of(want) ? want : std::string{});
+            }
+    };
+    int body_i = 0;
     for (const auto& p : b.body) {
+        toc_pages(body_i++);
         const std::string want = b.resolved(p.style).master;
         bool first = true;
         for (const auto& piece : split_lines(p)) {
@@ -460,6 +496,7 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             first = false;
         }
     }
+    toc_pages(static_cast<int>(b.body.size()));
     std::map<std::string, std::string> master_id;   // page style -> master
     std::string blank_master;   // s270: an inserted blank page's (LibreOffice prints them blank)
     {
@@ -764,6 +801,7 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
                 const double y = top ? std::max(0.0, (ms.margins.top - h) / 2) : ms.h - ms.margins.bottom + std::max(0.0, (ms.margins.bottom - h) / 2);
                 core::Frame f{mid, core::FrameKind::Text, r.x, y, r.w, h, 0, 1, story, "", ""};
                 f.side = side;
+                f.role = top ? 1 : 2;   // s275
                 d.put(d.fresh_id("frame"), f);
                 // s248: its pictures (a logo, a rule) -- by the header's frame, over it, no wrap
                 if (opt.picture_dir.empty()) return;
@@ -827,6 +865,66 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             }
         }
     }
+    // s272: each table of contents a contents list -- on the page its place
+    // holds, its title and level 1's entry style from the file; gathering one
+    // paragraph style per outline level (those the book's headings are in);
+    // built, so its page numbers are this book's.
+    if (!b.tocs.empty()) {
+        report(0.96, "The contents…");
+        core::DocJournal j{d};
+        const StoryFlow f = flow_story(d, "story.1");
+        for (std::size_t t = 0; t < b.tocs.size(); ++t) {
+            const auto& toc = b.tocs[t];
+            if (toc_para[t] < 0) continue;
+            std::string page;
+            for (const auto& ft : f.frames) {
+                for (const auto& l : ft.lines)
+                    if (l.para == toc_para[t]) { page = d.as<core::Frame>(ft.frame)->owner; break; }
+                if (!page.empty()) break;
+            }
+            if (page.empty()) continue;
+            std::vector<std::string> by_level(static_cast<std::size_t>(toc.levels));
+            for (std::size_t i = 0; i < b.body.size() && i < first_of.size(); ++i) {
+                const auto& p = b.body[i];
+                int lv = p.outline;
+                if (lv <= 0) if (const auto it = b.styles.find(bl.named_of(p.style)); it != b.styles.end()) lv = it->second.outline;
+                if (lv < 1 || lv > toc.levels) continue;
+                auto& slot = by_level[static_cast<std::size_t>(lv - 1)];
+                if (slot.empty()) slot = st.paras[static_cast<std::size_t>(first_of[i])].style;
+            }
+            std::vector<std::string> from;
+            for (const auto& s : by_level) if (!s.empty() && std::find(from.begin(), from.end(), s) == from.end()) from.push_back(s);
+            if (from.empty()) continue;
+            const std::string title_style = bl.para_for(toc.title_style);
+            const std::string entry_style = toc.entry_style.empty() ? title_style : bl.para_for(toc.entry_style);
+            const std::string name = toc.title.empty() ? std::string("Contents") : toc.title;
+            const auto sid = d.fresh_id("story");
+            core::Story ls{name, {}};
+            if (!toc.title.empty()) ls.paras.push_back({title_style, toc.title});
+            ls.paras.push_back({entry_style, ""});
+            d.put(sid, ls);
+            const core::Rect r = core::margin_rect(d, page);
+            if (toc.right_tab && r.w > 1) {   // the page number at the right edge, the leader up to it -- as the file's entry template
+                auto es = *d.as<core::Style>(entry_style);
+                const double at = std::max(12.0, r.w - std::max(0.0, es.left_indent) - std::max(0.0, es.right_indent));
+                es.tabs = {core::TabStop{at, core::TabAlign::Right, toc.leader}};
+                d.put(entry_style, es);
+            }
+            double z = 0;
+            for (const auto& o : d.frames_on(page)) z = std::max(z, d.as<core::Frame>(o)->z);
+            core::Frame fr{page, core::FrameKind::Text, r.x, r.y, r.w, r.h, 0, z + 1, sid, "", ""};
+            d.put(d.fresh_id("frame"), fr);
+            double pos = 0;
+            for (const auto& id : d.ids_of<core::GenList>()) pos = std::max(pos, d.as<core::GenList>(id)->pos);
+            core::GenList gl{name, core::ListKind::Contents, pos + 1, from, page, -1, sid};
+            gl.entry_styles = {entry_style};
+            const auto lid = d.fresh_id("list");
+            d.put(lid, gl);
+            build_list(j, d, lid);
+            ++info.contents_lists;
+        }
+    }
+    info.masters = std::max<int>(1, static_cast<int>(used.size()) + (blank_master.empty() ? 0 : 1));
     info.tables = b.tables;
     info.pictures = b.pictures;
     info.contents = b.contents;

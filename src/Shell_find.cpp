@@ -19,6 +19,26 @@
 namespace composix {
 
 // s023: Edit > Insert Special Character.
+// s274 (Scott: "special chars are hard to remember and codes are even
+// harder"): the fields by name -- what each shows, and the sign it wears on
+// a master -- for the text menu (right-click while typing).
+Glib::RefPtr<Gio::Menu> Shell::field_menu() {  // zone
+    auto m = Gio::Menu::create();
+    auto pages = Gio::Menu::create();
+    pages->append("Page Number  \uFF03", "win.insert-page-number");
+    pages->append("Next Page Number  \u300B", "win.insert-next-page");
+    pages->append("Previous Page Number  \u300A", "win.insert-prev-page");
+    pages->append("Section Name  \u2E39", "win.insert-section-name");
+    m->append_section(pages);
+    auto book = Gio::Menu::create();
+    book->append("Document Title  \u24E3", "win.insert-doc-title");
+    book->append("Author  \u24B6", "win.insert-doc-author");
+    book->append("Chapter Name  \u24B8", "win.insert-chapter-name");
+    book->append("Chapter Subtitle  \u24C8", "win.insert-chapter-sub");
+    m->append_section(book);
+    return m;
+}
+
 // s263: the words' type style -- a toggle each (the inspector's rows too).
 Glib::RefPtr<Gio::Menu> Shell::type_style_menu() {  // zone
     auto ts = Gio::Menu::create();

@@ -48,6 +48,7 @@ void Shell::on_close_project() {  // handler
         n.pages = 1;
         n.text_frames = false;
         n.folios = false;
+        n.head = 0;   // s276: bare -- no running head either
         if (!core::new_document(fresh, n)) {   // the remembered choices refused: the defaults
             n = core::NewDoc{};
             n.pages = 1;
@@ -291,7 +292,10 @@ void Shell::import_odt_file(const std::string& path, int pictures, bool sections
             if (i.notes) detail += ", " + std::to_string(i.notes) + (i.notes == 1 ? " note" : " notes");
             if (i.placed) detail += ", " + std::to_string(i.placed) + (i.placed == 1 ? " picture" : " pictures");   // s246
             if (i.lists) detail += ", " + std::to_string(i.lists) + (i.lists == 1 ? " list style" : " list styles");   // s243
-            if (i.headers) detail += "; its header / footer on the master";
+            if (i.headers) detail += i.masters > 1 ? "; its headers / footers on " + std::to_string(i.masters) + " masters (one a page style)"
+                                                   : std::string("; its header / footer on the master");   // s270
+            if (i.contents_lists) detail += i.contents_lists == 1 ? "; its table of contents a contents list, built"
+                                                                  : "; its " + std::to_string(i.contents_lists) + " tables of contents as contents lists, built";   // s272
             if (i.front_matter) detail += "; front matter and body as sections";
             detail += ".";
             if (i.placed) {
@@ -325,7 +329,8 @@ struct NewForm {
     Gtk::SpinButton*  gutter = nullptr;
     Gtk::SpinButton*  bleed = nullptr;
     Gtk::CheckButton* frames = nullptr;
-    Gtk::CheckButton* folios = nullptr;
+    Gtk::DropDown*    folios = nullptr;   // s276: page numbers -- none / centred / outside corners
+    Gtk::DropDown*    head = nullptr;     // s276: a running head
     Gtk::DropDown*    units = nullptr;   // s079: the sheet's (and the document's) unit
     core::Units       u = core::Units::Inches;
     Gtk::Label*       wh_unit = nullptr;
@@ -347,7 +352,9 @@ struct NewForm {
         n.gutter = gutter->get_value();
         n.bleed = bleed->get_value() * in;
         n.text_frames = frames->get_active();
-        n.folios = folios->get_active();
+        n.folios = folios->get_selected() > 0;   // s276
+        n.folio_outside = folios->get_selected() == 2;
+        n.head = static_cast<int>(std::min(3u, head->get_selected()));
         n.units = u;
         return n;
     }
@@ -513,10 +520,21 @@ void Shell::show_new_sheet() {  // helper
     f->frames->set_active(m_newdoc.text_frames);
     grid->attach(*f->frames, 1, row, 3);
     ++row;
-    f->folios = Gtk::make_managed<Gtk::CheckButton>("Page numbers at the foot (on the master)");
+    // s276 (Scott: fields are hard to remember): headers / footers made for you, on the master.
+    f->folios = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"None", "At the foot, centred", "At the foot, outside corners"}));
     f->folios->set_name("new.folios");
-    f->folios->set_active(m_newdoc.folios);
+    f->folios->set_selected(!m_newdoc.folios ? 0 : m_newdoc.folio_outside ? 2 : 1);
+    grid->attach(*label("Page numbers"), 0, row);
     grid->attach(*f->folios, 1, row, 3);
+    ++row;
+    f->head = Gtk::make_managed<Gtk::DropDown>(
+        Gtk::StringList::create({"None", "Title left, chapter right", "Chapter name", "Document title"}));
+    f->head->set_name("new.head");
+    f->head->set_selected(static_cast<guint>(std::clamp(m_newdoc.head, 0, 3)));
+    f->head->set_tooltip_text("At the top of each page, on the master: the document's title (Document > Title), the chapter's name "
+                              "(Heading 1, or Document > Running head)");
+    grid->attach(*label("Running head"), 0, row);
+    grid->attach(*f->head, 1, row, 3);
     ++row;
     box->append(*grid);
 

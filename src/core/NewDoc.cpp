@@ -60,6 +60,8 @@ void new_to_settings(const NewDoc& n, AppSettings& s) {   // s079
     s["new.bleed"] = num_text(n.bleed);
     s["new.frames"] = n.text_frames ? "1" : "0";
     s["new.folios"] = n.folios ? "1" : "0";
+    s["new.folio_outside"] = n.folio_outside ? "1" : "0";   // s276
+    s["new.head"] = std::to_string(n.head);
     s["new.units"] = std::to_string(static_cast<int>(n.units));
 }
 
@@ -92,6 +94,8 @@ NewDoc new_from_settings(const AppSettings& s) {   // s079
     n.bleed = num("new.bleed", n.bleed, 0, 72);
     n.text_frames = flag("new.frames", n.text_frames);
     n.folios = flag("new.folios", n.folios);
+    n.folio_outside = flag("new.folio_outside", n.folio_outside);   // s276
+    n.head = static_cast<int>(num("new.head", 0, 0, 3));
     n.units = static_cast<Units>(static_cast<int>(num("new.units", 0, 0, 3)));
     return n;
 }
@@ -151,12 +155,43 @@ bool new_document(Doc& d, const NewDoc& n) {
     d.put("style.4", Style{"Emphasis", StyleKind::Character, 4, "", 0, 0, false, true, Align::Left});
     d.put("style.5", Style{"Folio", StyleKind::Paragraph, 5, "Serif", 9, 11, false, false, Align::Center});
 
-    if (n.folios) {   // s023: centred in the bottom margin, across the text width
-        const double h = 14, y = n.trim_h - n.margins.bottom / 2 - h / 2;
-        d.put("story.2", Story{"Folio", {{"style.5", kMarkPage}}});
-        Frame f{"master.1", FrameKind::Text, n.margins.inside, y, n.trim_w - n.margins.inside - n.margins.outside, h, 0, 1,
-                "story.2", "", ""};
-        d.put("frame." + std::to_string(n.pages + 1), f);   // after the page frames
+    // s276: the header / footer presets -- frames on the master in its
+    // margins (after the page frames' ids), each with its role (s275).
+    const double tw = n.trim_w - n.margins.inside - n.margins.outside;
+    int next_frame = n.pages + 1, next_story = 2;
+    const auto margin_frame = [&](bool top, Side side, const std::string& story, int role) {
+        const double h = 14, y = top ? n.margins.top / 2 - h / 2 : n.trim_h - n.margins.bottom / 2 - h / 2;
+        const double x = side == Side::Left ? n.margins.outside : n.margins.inside;   // a left page: the outside margin on the left
+        Frame f{"master.1", FrameKind::Text, x, y, tw, h, 0, 1, story, "", ""};
+        f.side = side;
+        f.role = role;
+        d.put("frame." + std::to_string(next_frame++), f);
+    };
+    const auto story_of = [&](const std::string& name, const std::string& style, const char* mark, std::optional<Align> al = {}) {
+        Para p{style, mark};
+        p.over.align = al;
+        const std::string id = "story." + std::to_string(next_story++);
+        d.put(id, Story{name, {p}});
+        return id;
+    };
+    if (n.folios) {   // s023: centred in the bottom margin, across the text width; s276: or at the outside corners
+        if (!n.folio_outside) {
+            margin_frame(false, Side::Any, story_of("Folio", "style.5", kMarkPage), 2);
+        } else if (n.facing) {
+            margin_frame(false, Side::Right, story_of("Folio (right)", "style.5", kMarkPage, Align::Right), 2);
+            margin_frame(false, Side::Left, story_of("Folio (left)", "style.5", kMarkPage, Align::Left), 2);
+        } else {
+            margin_frame(false, Side::Any, story_of("Folio", "style.5", kMarkPage, Align::Right), 2);
+        }
+    }
+    if (n.head >= 1 && n.head <= 3) {   // s276: a running head, in its own style
+        d.put("style.7", Style{"Running Head", StyleKind::Paragraph, 5.5, "Serif", 9, 11, false, true, Align::Center});
+        if (n.head == 1 && n.facing) {
+            margin_frame(true, Side::Left, story_of("Running head (left)", "style.7", kMarkTitle), 1);
+            margin_frame(true, Side::Right, story_of("Running head (right)", "style.7", kMarkChapter), 1);
+        } else {
+            margin_frame(true, Side::Any, story_of("Running head", "style.7", n.head == 2 ? kMarkChapter : kMarkTitle), 1);
+        }
     }
 
     if (n.text_frames) {

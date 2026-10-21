@@ -79,7 +79,25 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
         right->set_button(GDK_BUTTON_SECONDARY);
         right->signal_pressed().connect([this](int, double x, double y) {
             if (m_take) { cancel_take(); return; }   // s180: the eyedropper put down
-            if (editing() || m_drag != Drag::None) return;
+            if (m_drag != Drag::None) return;
+            if (editing()) {   // s274: in the words being edited -- the caret there (a selection kept when it's in it), the text menu
+                double lx = 0, ly = 0;
+                m_vp.to_doc(x, y, lx, ly);
+                const auto fid = core::hit_frame(m_doc, m_placed, lx, ly, 3 / m_vp.scale());
+                const auto* f = fid.empty() ? nullptr : m_doc.as<core::Frame>(fid);
+                if (!f || f->story != m_edit_story) return;
+                const auto at = hit_story(fid, lx, ly);
+                const auto [a, b] = edit_range();
+                if (a == b || at < a || b < at) set_caret(at, false);
+                ContextHit h;
+                h.x = x;
+                h.y = y;
+                h.frame = fid;
+                h.page = f->owner;
+                h.text = true;
+                m_sig_context.emit(h);
+                return;
+            }
             grab_focus();
             if (m_tool == Tool::Zoom) {   // s241: the zoom levels, nothing picked
                 ContextHit z;

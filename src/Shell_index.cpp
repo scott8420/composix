@@ -224,22 +224,52 @@ void Shell::on_new_index() {  // handler
         if (m_doc.as<core::Page>(id)) { page = id; break; }
     if (page.empty() && !m_doc.pages().empty()) page = m_doc.pages().back();
     if (page.empty()) return;
-    std::string id;
     // One step: the list, then its story, frame and styles. Runs inside a run
     // just write (Undo.hpp), so the step names what it made: every record new since.
-    std::set<core::Doc::Id> had;
-    for (const auto& [rid, rec] : m_doc.records()) had.insert(rid);
-    m_journal.run("New Index", {}, [&]() -> std::vector<core::Doc::Id> {
-        id = core::doc::add_list(m_journal, m_doc, core::ListKind::Index, "Index", page);
-        if (!id.empty()) layout::build_list(m_journal, m_doc, id);
-        std::vector<core::Doc::Id> made;
-        for (const auto& [rid, rec] : m_doc.records()) if (!had.count(rid)) made.push_back(rid);
-        return made;
-    });
-    if (auto lg = log::get(log::Area::Shell)) lg->info("index: new {} on {}", id, page);
-    if (id.empty()) return;
-    queue_refresh();
-    m_nav.select_items({page});
+    // s273: `built` -- its entries settled on a worker (a long book), else here.
+    const auto make = [this, page](const std::vector<core::doc::ListEntry>* built) {
+        std::string id;
+        std::set<core::Doc::Id> had;
+        for (const auto& [rid, rec] : m_doc.records()) had.insert(rid);
+        m_journal.run("New Index", {}, [&]() -> std::vector<core::Doc::Id> {
+            id = core::doc::add_list(m_journal, m_doc, core::ListKind::Index, "Index", page);
+            if (!id.empty()) {
+                if (built) core::doc::build_list(m_journal, m_doc, id, *built);
+                else layout::build_list(m_journal, m_doc, id);
+            }
+            std::vector<core::Doc::Id> made;
+            for (const auto& [rid, rec] : m_doc.records()) if (!had.count(rid)) made.push_back(rid);
+            return made;
+        });
+        if (auto lg = log::get(log::Area::Shell)) lg->info("index: new {} on {}", id, page);
+        if (id.empty()) return;
+        queue_refresh();
+        m_nav.select_items({page});
+    };
+    if (m_doc.pages().size() < kBusyPages) { make(nullptr); return; }
+    // s273: a long book -- gathered and placed on a copy, on a worker, behind the progress dialog.
+    struct Job {
+        core::Doc                      doc;
+        std::vector<layout::ListBuild> built;
+    };
+    auto job = std::make_shared<Job>();
+    {
+        core::Doc::Loading load(job->doc);
+        for (const auto& [rid, r] : m_doc.records()) job->doc.put(rid, r);
+        core::GenList l;   // the list it will be, under a name of its own in the copy
+        l.name = "Index";
+        l.kind = core::ListKind::Index;
+        l.placed_on = page;
+        l.built_entries = -1;
+        job->doc.put("list.new-index", l);
+    }
+    busy_thread("Building the index", "Gathering the entries\u2026",
+                [job](const Report& report) { job->built = layout::settle_lists(job->doc, {"list.new-index"}, report); },
+                "Writing the entries\u2026",
+                [job, make] {
+                    if (job->built.empty()) make(nullptr);
+                    else make(&job->built.front().entries);
+                });
 }
 
 }  // namespace composix

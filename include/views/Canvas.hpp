@@ -176,6 +176,7 @@ public:
         std::string frame, master_item, page;
         double x = 0, y = 0;
         bool zoom = false;   // s241: with the Zoom tool -- the zoom levels
+        bool text = false;   // s274: typing, in the story being edited -- the text menu (the caret there)
     };
     // s241: zoom to `pct` about a point on screen (the pointer's place kept).
     void zoom_about(double pct, double sx, double sy);
