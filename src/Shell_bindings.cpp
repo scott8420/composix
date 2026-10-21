@@ -112,6 +112,8 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     add_action("insert-xref", [this] { on_insert_xref(); });   // s128
     add_action("hyperlink", [this] { on_hyperlink(); });       // s304
     add_action("check-spelling", [this] { on_check_spelling(); });   // s313
+    add_action("insert-table", [this] { on_insert_table(); });   // s318
+    add_action("edit-table", [this] { on_edit_table(); });
     add_action("edit-xref", [this] { on_edit_xref(); });       // s130
     add_action("xrefs-panel", [this] { open_xrefs_panel(); }); // s133
     add_action("sources-panel", [this] { open_sources_panel(); }); // s144

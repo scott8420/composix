@@ -62,6 +62,10 @@ struct Line {
     // spanning paragraph: all the columns), 0 = the column's.
     int    band = 0;
     double cw   = 0;
+    // s315: a table's row (its paragraph a table): which row (-1 not one);
+    // x, w the table's left and width, y, h the row's. A header row set again
+    // at a column's top is its own row number too.
+    int    row  = -1;
 };
 // s167: the stories whose flow waits on `story`'s notes at a page's foot
 // (the other text frames on the pages of its narrow frames).
@@ -103,6 +107,7 @@ struct FrameText {
     std::vector<NoteRun> carry_in;     // s117: notes running on into this frame
     bool              ending_in = false;   // s120: ... as endnotes (the story's text ended before it)
     int               end_from_in = 0;     // s122: notes from this paragraph on not yet set as endnotes
+    int               from_row = 0;        // s315: a table's row it came to (running on)
 };
 
 struct StoryFlow {
@@ -269,6 +274,30 @@ struct LineVisit {
 };
 void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
                  const std::function<void(const LineVisit&)>& f, const core::Story* text = nullptr);
+// s315: a table's widths fitted to `avail` points (its own widths when they
+// fit, else narrowed in proportion), and each row's height -- its cells'
+// words set at their widths, insets round them, the row's least height.
+struct TableGeo {
+    std::vector<double> col_x, col_w;   // from the table's left
+    std::vector<double> row_h;
+    double width = 0;
+};
+TableGeo table_geo(const core::Doc& d, const core::Para& table_para, double avail);
+// s315: what the table rows set in a frame draw, in frame coordinates, in
+// order -- the cells' fills, their words line by line, the grid's lines. A
+// Text piece's line lives for the call only.
+struct TablePiece {
+    enum Kind { Fill, Text, Rule } kind = Fill;
+    core::Rect  r;                        // Fill: the cell; Rule: the line as a thin box
+    std::string color;                    // a swatch id ("" black / none for a fill)
+    double      tint = 1;
+    PangoLayoutLine* line = nullptr;      // Text
+    double      x = 0, baseline = 0;
+    const core::Para* para = nullptr;     // Text: the cell's paragraph
+    int         row = 0, col = 0, para_index = 0;
+};
+void visit_tables(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                  const std::function<void(const TablePiece&)>& f, const core::Story* text = nullptr);
 // s261: a line's underlines and strikethroughs, for a writer that sets glyphs
 // itself (the print PDF) -- Pango's renderer draws its own. Each run that has
 // either: its byte offset in the layout, its left and right, and each

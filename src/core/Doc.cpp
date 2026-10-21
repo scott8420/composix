@@ -2878,6 +2878,117 @@ bool set_reflow_mode(DocJournal& j, Doc& d, int mode) {   // s256
     });
 }
 
+// ── s314: tables ─────────────────────────────────────────────────────────────
+Table make_table(int rows, int cols, double width) {
+    Table t;
+    rows = std::clamp(rows, 1, 500);
+    cols = std::clamp(cols, 1, 50);
+    t.widths.assign(static_cast<std::size_t>(cols), std::max(12.0, width) / cols);
+    t.rows.assign(static_cast<std::size_t>(rows), TableRow{std::vector<TableCell>(static_cast<std::size_t>(cols)), 0});
+    return t;
+}
+
+int table_cols(const Table& t) { return static_cast<int>(t.widths.size()); }
+
+const Table* table_at(const Doc& d, const Doc::Id& story, int para) {
+    const auto* st = d.as<Story>(story);
+    if (!st || para < 0 || para >= static_cast<int>(st->paras.size())) return nullptr;
+    const auto& p = st->paras[static_cast<std::size_t>(para)];
+    return p.tables.empty() ? nullptr : &p.tables.front();
+}
+
+int insert_table(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Table& t) {
+    const auto* st = d.as<Story>(story);
+    if (!st) return -1;
+    at = st->paras.empty() ? TextPos{0, 0} : clamp_pos(*st, at);
+    const int len = st->paras.empty() ? 0 : static_cast<int>(st->paras[static_cast<std::size_t>(at.para)].text.size());
+    std::string text = kMarkTable;
+    int para = at.para;
+    if (at.byte > 0) { text = "\n" + text; ++para; }   // after the words before it
+    if (at.byte < len || len == 0) text += "\n";        // the words after it, a paragraph of their own
+    Carried c;
+    c.tables = {t};
+    edit_text(j, d, story, at, at, text, "Insert Table", {}, &c);
+    return para;
+}
+
+bool edit_table(DocJournal& j, Doc& d, const Doc::Id& story, int para, const std::string& label, const std::function<void(Table&)>& f) {
+    if (!table_at(d, story, para)) return false;
+    Story s = *d.as<Story>(story);
+    Table& t = s.paras[static_cast<std::size_t>(para)].tables.front();
+    const Table was = t;
+    f(t);
+    if (t == was) return false;
+    return j.run(label, {story}, [&] { d.put(story, s); });
+}
+
+std::string cell_text(const TableCell& c) {
+    std::string out;
+    for (std::size_t i = 0; i < c.paras.size(); ++i) out += (i ? "\n" : "") + c.paras[i].text;
+    return out;
+}
+
+void set_cell_words(TableCell& c, const std::string& text) {
+    c.paras.clear();
+    std::size_t a = 0;
+    for (;;) {
+        const auto e = text.find('\n', a);
+        std::string line = text.substr(a, e == std::string::npos ? std::string::npos : e - a);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        Para p;
+        p.text = line;
+        c.paras.push_back(std::move(p));
+        if (e == std::string::npos) break;
+        a = e + 1;
+    }
+    if (c.paras.size() == 1 && c.paras[0].text.empty()) c.paras.clear();
+}
+
+bool set_cell_text(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, const std::string& text) {
+    const auto* t = table_at(d, story, para);
+    if (!t || row < 0 || row >= static_cast<int>(t->rows.size()) || col < 0 || col >= static_cast<int>(t->rows[static_cast<std::size_t>(row)].cells.size()))
+        return false;
+    return edit_table(j, d, story, para, "Cell Text", [&](Table& x) {
+        set_cell_words(x.rows[static_cast<std::size_t>(row)].cells[static_cast<std::size_t>(col)], text);
+    });
+}
+
+void table_insert_row(Table& t, int at) {
+    at = std::clamp(at, 0, static_cast<int>(t.rows.size()));
+    TableRow r;
+    r.cells.resize(t.widths.size());
+    t.rows.insert(t.rows.begin() + at, r);
+    if (at < t.header_rows) ++t.header_rows;
+}
+void table_delete_row(Table& t, int at) {
+    if (t.rows.size() <= 1 || at < 0 || at >= static_cast<int>(t.rows.size())) return;
+    t.rows.erase(t.rows.begin() + at);
+    if (at < t.header_rows) --t.header_rows;
+}
+void table_insert_col(Table& t, int at) {
+    const int n = table_cols(t);
+    at = std::clamp(at, 0, n);
+    double total = 0;
+    for (double w : t.widths) total += w;
+    const double w = n == 0 ? 72 : t.widths[static_cast<std::size_t>(std::min(at, n - 1))];
+    t.widths.insert(t.widths.begin() + at, w);
+    if (n > 0 && total > 0) {   // as wide as before
+        const double k = total / (total + w);
+        for (auto& x : t.widths) x *= k;
+    }
+    for (auto& r : t.rows) r.cells.insert(r.cells.begin() + std::min(at, static_cast<int>(r.cells.size())), TableCell{});
+}
+void table_delete_col(Table& t, int at) {
+    const int n = table_cols(t);
+    if (n <= 1 || at < 0 || at >= n) return;
+    const double gone = t.widths[static_cast<std::size_t>(at)];
+    t.widths.erase(t.widths.begin() + at);
+    double total = 0;
+    for (double w : t.widths) total += w;
+    if (total > 0) for (auto& x : t.widths) x *= (total + gone) / total;   // as wide as before
+    for (auto& r : t.rows) if (at < static_cast<int>(r.cells.size())) r.cells.erase(r.cells.begin() + at);
+}
+
 bool set_language(DocJournal& j, Doc& d, const std::string& lang) {   // s307
     if (lang == d.settings().language) return false;
     return j.run(lang.empty() ? std::string("Language: the app's") : "Language " + lang, {"doc"}, [&] {
@@ -3893,6 +4004,7 @@ Carried carried_between(const Story& s, TextPos a, TextPos b) {   // s132
         take(kMarkRef, para.refs, c.refs);
         take(kMarkAnchor, para.anchors, c.anchors);
         take(kMarkIndex, para.index, c.index);   // s134
+        take(kMarkTable, para.tables, c.tables);   // s314
     }
     return c;
 }
@@ -3964,6 +4076,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     std::vector<XRef> refs;
     std::vector<std::string> anchors;
     std::vector<IndexMark> index;   // s134
+    std::vector<Table> tables;      // s314
     std::size_t pasted_from = 0, pasted_to = 0;   // s132: anchors[from, to) came with the paste
     {
         Para fa = pa, fb = pb;
@@ -3982,6 +4095,7 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
         pasted_to = pasted_from + static_cast<std::size_t>(marks_in(text, kMarkAnchor));
         carry(fa.anchors, fb.anchors, kMarkAnchor, anchors, std::string{}, with ? &with->anchors : nullptr);
         carry(fa.index, fb.index, kMarkIndex, index, IndexMark{}, with ? &with->index : nullptr);   // s134
+        carry(fa.tables, fb.tables, kMarkTable, tables, Table{}, with ? &with->tables : nullptr);   // s314
     }
 
     std::vector<Para> made;
@@ -4012,11 +4126,12 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     }
     std::vector<std::pair<int, int>> pasted;   // s132: (paragraph in made, anchor index) of each pasted anchor
     {   // s128: and its refs and anchors
-        std::size_t ar = 0, aa = 0, ai = 0;
+        std::size_t ar = 0, aa = 0, ai = 0, at_ = 0;
         for (int mi = 0; mi < static_cast<int>(made.size()); ++mi) {
             auto& m = made[static_cast<std::size_t>(mi)];
             for (int k = 0; k < marks_in(m.text, kMarkRef); ++k) m.refs.push_back(ar < refs.size() ? refs[ar++] : XRef{});
             for (int k = 0; k < marks_in(m.text, kMarkIndex); ++k) m.index.push_back(ai < index.size() ? index[ai++] : IndexMark{});   // s134
+            for (int k = 0; k < marks_in(m.text, kMarkTable); ++k) m.tables.push_back(at_ < tables.size() ? tables[at_++] : Table{});   // s314
             for (int k = 0; k < marks_in(m.text, kMarkAnchor); ++k) {
                 if (aa >= pasted_from && aa < pasted_to) pasted.emplace_back(mi, k);
                 m.anchors.push_back(aa < anchors.size() ? anchors[aa++] : std::string{});
@@ -4091,6 +4206,7 @@ bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
         para.refs = std::move(was.refs);       // s128
         para.anchors = std::move(was.anchors);
         para.index = std::move(was.index);     // s134
+        para.tables = std::move(was.tables);   // s314
     }
     if (s == *st) return false;
     return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
@@ -4123,6 +4239,7 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
         para.refs = std::move(was.refs);       // s128
         para.anchors = std::move(was.anchors);
         para.index = std::move(was.index);     // s134
+        para.tables = std::move(was.tables);   // s314
     }
     if (s == *st) return false;
     return j.run(label, {story}, [&] { d.put(story, s); }, merge_key);
@@ -6297,6 +6414,7 @@ const std::vector<Verb>& verbs() {
         {"lock_frames", [](DocJournal& j, Doc& d) { lock_frames(j, d, {"frame.2"}, true); }},          // s301
         {"set_link", [](DocJournal& j, Doc& d) { set_link(j, d, "story.1", {1, 4}, {1, 12}, "www.example.com"); }},   // s303
         {"set_language", [](DocJournal& j, Doc& d) { set_language(j, d, "en_GB"); }},   // s307
+        {"insert_table", [](DocJournal& j, Doc& d) { insert_table(j, d, "story.1", {1, 10}, make_table(3, 3, 288)); }},   // s314
         {"link_to_paragraph", [](DocJournal& j, Doc& d) { link_to_paragraph(j, d, "story.2", {0, 0}, {0, 4}, "story.1", 4); }},   // s311
         {"replace_word", [](DocJournal& j, Doc& d) { replace_word(j, d, "story.1", 1, 4, 10, "harbor", "harbour"); }},
         {"change_all_words", [](DocJournal& j, Doc& d) { change_all_words(j, d, "the", "thee"); }},
@@ -6670,6 +6788,7 @@ void fit_marks(Para& p) {   // s128
     p.refs.resize(static_cast<std::size_t>(marks_in(p.text, kMarkRef)));
     p.anchors.resize(static_cast<std::size_t>(marks_in(p.text, kMarkAnchor)));
     p.index.resize(static_cast<std::size_t>(marks_in(p.text, kMarkIndex)));   // s134
+    p.tables.resize(static_cast<std::size_t>(marks_in(p.text, kMarkTable)));   // s314
 }
 
 bool note_at(const std::string& t, std::size_t i) {   // s109

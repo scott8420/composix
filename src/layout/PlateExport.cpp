@@ -220,6 +220,17 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             strokes(run);
         }
     }, rs.any ? &rs.text : nullptr);
+    if (on_path) return;
+    // s315: the tables' rows -- fills, words, the grid, each in its ink
+    visit_tables(c.d, f.story, flow, fid, [&](const TablePiece& tp) {
+        pg.set_fill(ink_of(c.d, tp.color, tp.tint));
+        if (tp.kind == TablePiece::Text) {
+            for (const auto& run : plate::pango::runs(tp.line, f.x + tp.x, f.y + tp.baseline)) plate::pango::show(c.doc, pg, run);
+        } else {
+            pg.rect({f.x + tp.r.x, f.y + tp.r.y, tp.r.w, tp.r.h});
+            pg.fill();
+        }
+    }, rs.any ? &rs.text : nullptr);
 }
 
 void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {

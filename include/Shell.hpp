@@ -173,6 +173,11 @@ private:
     bool paste_target(double& cx, double& cy, const core::Placed*& tp);   // category: helper: s297 -- the page Paste lands on, the view's middle
     void duplicate_picked();
     void ensure_spell();
+    void on_insert_table();                         // category: handler: s318 -- Type > Insert Table...
+    void on_edit_table();                           // category: handler: s318 -- Type > Edit Table...
+    void open_table_editor(const std::string& story, int para);   // category: helper: s318
+    std::unique_ptr<Gtk::Popover> m_table_pop;      // s318: Insert Table
+    std::unique_ptr<Gtk::Window>  m_table_win;      // s318: the table editor
     void on_check_spelling();                       // category: handler: s313 -- Edit > Check Spelling... (F7)
     void spell_next(const std::string& story, core::TextPos from);   // category: helper: s313
     void spell_show();                              // category: helper: s313

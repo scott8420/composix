@@ -94,6 +94,86 @@ Local local_of_json(const json& l) {
     return o;
 }
 
+// s314: a table -- its columns, rows, cells (each cell's paragraphs: style, words, runs).
+json runs_json(const std::vector<Run>& runs) {
+    json out = json::array();
+    for (const auto& r : runs) {
+        json jr = {{"start", r.start}, {"end", r.end}, {"style", r.style}};
+        if (!r.local.empty()) jr["local"] = local_json(r.local);
+        out.push_back(jr);
+    }
+    return out;
+}
+std::vector<Run> runs_of_json(const json& a) {
+    std::vector<Run> out;
+    if (!a.is_array()) return out;
+    for (const auto& r : a) {
+        Run run{val(r, "start", 0), val(r, "end", 0), val<std::string>(r, "style", "")};
+        if (r.contains("local")) run.local = local_of_json(r.at("local"));
+        out.push_back(run);
+    }
+    return out;
+}
+json table_json(const Table& t) {
+    json rows = json::array();
+    for (const auto& row : t.rows) {
+        json cells = json::array();
+        for (const auto& c : row.cells) {
+            json ps = json::array();
+            for (const auto& p : c.paras) {
+                json jp = {{"style", p.style}, {"text", p.text}};
+                if (!p.runs.empty()) jp["runs"] = runs_json(p.runs);
+                ps.push_back(jp);
+            }
+            json jc = {{"paras", ps}};
+            if (!c.fill.empty()) { jc["fill"] = c.fill; jc["tint"] = c.fill_tint; }
+            cells.push_back(jc);
+        }
+        json jr = {{"cells", cells}};
+        if (row.min_h > 0) jr["min_h"] = row.min_h;
+        rows.push_back(jr);
+    }
+    json j = {{"widths", t.widths}, {"rows", rows}, {"header", t.header_rows}, {"inset", t.inset}, {"rule_w", t.rule_w}};
+    if (!t.rule_color.empty()) j["rule_color"] = t.rule_color;
+    if (!t.cell_style.empty()) j["cell_style"] = t.cell_style;
+    if (!t.header_fill.empty()) { j["header_fill"] = t.header_fill; j["header_tint"] = t.header_tint; }
+    return j;
+}
+Table table_of_json(const json& j) {
+    Table t;
+    if (j.contains("widths") && j.at("widths").is_array())
+        for (const auto& w : j.at("widths")) if (w.is_number()) t.widths.push_back(w.get<double>());
+    if (j.contains("rows") && j.at("rows").is_array())
+        for (const auto& jr : j.at("rows")) {
+            TableRow row;
+            row.min_h = val(jr, "min_h", 0.0);
+            if (jr.contains("cells") && jr.at("cells").is_array())
+                for (const auto& jc : jr.at("cells")) {
+                    TableCell c;
+                    c.fill = val<std::string>(jc, "fill", "");
+                    c.fill_tint = val(jc, "tint", 1.0);
+                    if (jc.contains("paras") && jc.at("paras").is_array())
+                        for (const auto& jp : jc.at("paras")) {
+                            Para p;
+                            p.style = val<std::string>(jp, "style", "");
+                            p.text = val<std::string>(jp, "text", "");
+                            if (jp.contains("runs")) p.runs = runs_of_json(jp.at("runs"));
+                            c.paras.push_back(std::move(p));
+                        }
+                    row.cells.push_back(std::move(c));
+                }
+            t.rows.push_back(std::move(row));
+        }
+    t.header_rows = std::max(0, val(j, "header", 0));
+    t.inset = val(j, "inset", 4.0);
+    t.rule_w = val(j, "rule_w", 0.5);
+    t.rule_color = val<std::string>(j, "rule_color", "");
+    t.cell_style = val<std::string>(j, "cell_style", "");
+    t.header_fill = val<std::string>(j, "header_fill", "");
+    t.header_tint = val(j, "header_tint", 0.2);
+    return t;
+}
+
 json to(const Record& r) {
     return std::visit([](const auto& v) -> json {
         using T = std::decay_t<decltype(v)>;
@@ -261,6 +341,11 @@ json to(const Record& r) {
                 }
                 if (!p.anchors.empty()) jp["anchors"] = p.anchors;   // s128
                 if (!p.copy_of.empty()) jp["copy_of"] = p.copy_of;   // s201
+                if (!p.tables.empty()) {   // s314
+                    json ts = json::array();
+                    for (const auto& t : p.tables) ts.push_back(table_json(t));
+                    jp["tables"] = ts;
+                }
                 if (!p.index.empty()) {   // s134
                     json xs = json::array();
                     for (const auto& m : p.index) {
@@ -599,6 +684,8 @@ std::optional<Record> from(const json& j) {
                     for (const auto& m : p.at("index")) para.index.push_back({val<std::string>(m, "term", ""), val<std::string>(m, "sub", ""),
                                              val<std::string>(m, "see", ""), val(m, "also", false),
                                              static_cast<IndexSpan>(std::clamp(val(m, "span", 0), 0, 4)), val(m, "count", 1)});   // s136, s139
+                if (p.contains("tables") && p.at("tables").is_array())   // s314
+                    for (const auto& t : p.at("tables")) para.tables.push_back(table_of_json(t));
                 fit_marks(para);
                 v.paras.push_back(std::move(para));
             }

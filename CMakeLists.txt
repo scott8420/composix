@@ -245,6 +245,7 @@ add_executable(composix
     src/Shell_index.cpp         # s138: the index -- mark, edit, new
     src/Shell_sources_panel.cpp # s144: Sources, one panel
     src/Shell_xref.cpp     # s128: cross-references -- insert one at the cursor
+    src/Shell_table.cpp    # s318: Insert Table, the table editor
     src/Shell_reflow.cpp   # s106: the far end of a long story on a worker
     src/Shell_busy.cpp
     src/Shell_helpers.cpp
@@ -277,7 +278,7 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s313")
+set(COMPOSIX_BUILD "s318")
 # s194: on the About window's file alone -- on the whole target, each bump
 # rebuilt every app file and missed ccache.
 set_source_files_properties(src/AboutWindow.cpp PROPERTIES

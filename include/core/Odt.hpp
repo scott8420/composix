@@ -95,6 +95,21 @@ struct Picture {
 // entry, under key1 when the file gives one (key2 joins the sub-entry).
 struct IndexMark { std::string term, sub; };
 
+// s317: a table (table:table) -- its columns' widths (points, from their
+// styles; 0 unknown), header rows, and each row's cells (each cell's
+// paragraphs; covered cells of a merge kept as empty cells). In the body it
+// stands as a paragraph whose text is core's kMarkTable.
+struct Para;
+struct TableCell {
+    std::vector<Para> paras;
+    std::string       bg;               // fo:background-color ("#rrggbb"; "" none)
+};
+struct Table {
+    std::vector<double> widths;
+    int header_rows = 0;
+    std::vector<std::vector<TableCell>> rows;
+};
+
 struct Para {
     std::string       style;            // the paragraph's style (often an automatic one)
     std::string       text;             // UTF-8; a note's place marked with core's kMarkNote, a page number kMarkPage
@@ -109,6 +124,7 @@ struct Para {
     std::vector<std::string> cites;     // s291: one for each kMarkRef in text -- the source's identifier
     std::vector<Link> links;            // s304: its hyperlinks
     std::vector<std::string> bookmarks; // s304: one for each kMarkAnchor in text -- the bookmark's name
+    std::vector<Table> tables;          // s317: a table's paragraph (text kMarkTable)
     int               section_cols = 0;  // s293: in a section of 2+ columns: how many, and the gap
     double            section_gap = 0;
 };
@@ -176,6 +192,9 @@ struct Book {
     std::vector<Index>                bibliographies;
     // s293: a section style's columns (style:section-properties) -- count, gap.
     std::map<std::string, std::pair<int, double>> section_columns;
+    // s317: table column styles' widths, table cell styles' backgrounds.
+    std::map<std::string, double>      column_widths;
+    std::map<std::string, std::string> cell_backgrounds;
     int tables = 0, pictures = 0, contents = 0;   // what wasn't kept (s271: contents -- an index / bibliography)
     // A style's property, its chain followed (named parents; the family's default last).
     Props resolved(const std::string& style) const;

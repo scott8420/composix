@@ -32,6 +32,7 @@ std::vector<odt::Para> split_lines(const odt::Para& p) {
         q.section_cols = p.section_cols;   // s293
         q.section_gap = p.section_gap;
         q.text = p.text.substr(a, b - a);
+        q.tables = p.tables;   // s317 (a table's paragraph is one piece)
         for (const auto& s : p.spans) {
             const int s0 = std::max(s.start, static_cast<int>(a)), s1 = std::min(s.end, static_cast<int>(b));
             if (s1 > s0) q.spans.push_back({s0 - static_cast<int>(a), s1 - static_cast<int>(a), s.style});
@@ -411,6 +412,32 @@ struct Builder {
             im.sub = m.sub;
             q.index.push_back(std::move(im));
             ++info.index_marks;
+        }
+        for (const auto& ot : p.tables) {   // s317: a table -- its cells' words in their styles, its widths, fills
+            core::Table t;
+            const std::size_t cols = ot.widths.size();
+            double known = 0;
+            int unknown = 0;
+            for (double w : ot.widths) { if (w > 0) known += w; else ++unknown; }
+            const double each = unknown ? std::max(36.0, (std::max(known, 288.0) - known) / unknown) : 0;
+            for (double w : ot.widths) t.widths.push_back(w > 0 ? w : each);
+            t.header_rows = ot.header_rows;
+            for (const auto& orow : ot.rows) {
+                core::TableRow row;
+                for (std::size_t c = 0; c < cols; ++c) {
+                    core::TableCell cell;
+                    if (c < orow.size()) {
+                        for (const auto& cp : orow[c].paras)
+                            for (const auto& piece : split_lines(cp)) cell.paras.push_back(para_of(piece));
+                        if (!orow[c].bg.empty() && orow[c].bg != "#ffffff" && orow[c].bg != "#FFFFFF") cell.fill = swatch_for(orow[c].bg);
+                    }
+                    if (cell.paras.size() == 1 && cell.paras[0].text.empty()) cell.paras.clear();
+                    row.cells.push_back(std::move(cell));
+                }
+                t.rows.push_back(std::move(row));
+            }
+            q.tables.push_back(std::move(t));
+            ++info.tables_kept;
         }
         for (const auto& n : p.notes) {
             core::Note cn;
@@ -1286,7 +1313,8 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     info.tables = b.tables;
     info.pictures = b.pictures;
     info.contents = b.contents;
-    if (b.tables) info.notes_said.push_back(std::to_string(b.tables) + (b.tables == 1 ? " table" : " tables") + " left out (tables come later)");
+    if (b.tables > info.tables_kept)   // s317: kept now -- only one that couldn't be read is left out
+        info.notes_said.push_back(std::to_string(b.tables - info.tables_kept) + (b.tables - info.tables_kept == 1 ? " table" : " tables") + " left out (empty)");
     if (b.pictures > info.placed)
         info.notes_said.push_back(std::to_string(b.pictures - info.placed) + (b.pictures - info.placed == 1 ? " picture" : " pictures") + " left out -- place them");
     if (b.contents) info.notes_said.push_back("its contents / index left out -- build one from the styles");

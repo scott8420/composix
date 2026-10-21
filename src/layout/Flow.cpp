@@ -379,6 +379,75 @@ LayoutPtr make_layout(const core::Style& st, const char* text, int len, double w
 
 }  // namespace
 
+// ── s315: tables ────────────────────────────────────────────────────────────
+namespace {
+// A cell paragraph's style: its own, else the table's cell style, else the
+// table paragraph's.
+core::Style cell_style(const core::Doc& d, const core::Table& t, const core::Para& tp, const core::Para& cp) {
+    if (const auto* s = d.as<core::Style>(cp.style)) return *s;
+    if (const auto* s = d.as<core::Style>(t.cell_style)) return *s;
+    // the table paragraph's face, set plainly: flush left, no indents, no drop cap, no space round it
+    core::Style st = core::doc::para_style(d, tp);
+    if (st.align != core::Align::Center && st.align != core::Align::Right) st.align = core::Align::Left;
+    st.first_indent = st.left_indent = st.right_indent = 0;
+    st.space_before = st.space_after = 0;
+    st.drop_lines = 0;
+    st.list.type = core::ListType::None;
+    return st;
+}
+// Each line of a cell's words: its layout (kept), its line, its top.
+struct CellLine { std::shared_ptr<PangoLayout> lay; PangoLayoutLine* line; double top, h; const core::Para* para; int pi; };
+std::vector<CellLine> cell_lines(const core::Doc& d, const core::Table& t, const core::Para& tp, const core::TableCell& c, double w) {
+    std::vector<CellLine> out;
+    double y = 0;
+    static const core::Para empty_para;
+    const std::size_t n = std::max<std::size_t>(1, c.paras.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        const core::Para& cp = c.paras.empty() ? empty_para : c.paras[i];
+        const auto st = cell_style(d, t, tp, cp);
+        const double lead = leading_of(st);
+        if (i > 0) y += st.space_before;
+        auto lay = make_layout(st, cp.text.c_str(), static_cast<int>(cp.text.size()), std::max(1.0, w), false, 0);
+        apply_runs(lay.get(), d, cp, 0);
+        std::shared_ptr<PangoLayout> keep(static_cast<PangoLayout*>(g_object_ref(lay.get())), [](PangoLayout* l) { g_object_unref(l); });
+        const int nl = std::max(1, pango_layout_get_line_count(lay.get()));
+        for (int k = 0; k < nl; ++k) {
+            out.push_back({keep, pango_layout_get_line_readonly(lay.get(), k), y, lead, &cp, static_cast<int>(i)});
+            y += lead;
+        }
+        y += st.space_after;
+    }
+    return out;
+}
+double cell_height(const std::vector<CellLine>& ls) { return ls.empty() ? 0 : ls.back().top + ls.back().h; }
+}  // namespace
+
+TableGeo table_geo(const core::Doc& d, const core::Para& tp, double avail) {
+    TableGeo g;
+    if (tp.tables.empty()) return g;
+    const auto& t = tp.tables.front();
+    const int n = core::doc::table_cols(t);
+    double total = 0;
+    for (double w : t.widths) total += std::max(0.0, w);
+    const double k = total > avail && total > 0 ? avail / total : 1;
+    double x = 0;
+    for (int c = 0; c < n; ++c) {
+        const double w = std::max(1.0, t.widths[static_cast<std::size_t>(c)] * k);
+        g.col_x.push_back(x);
+        g.col_w.push_back(w);
+        x += w;
+    }
+    g.width = x;
+    const double in = std::max(0.0, t.inset);
+    for (const auto& r : t.rows) {
+        double h = 0;
+        for (int c = 0; c < n && c < static_cast<int>(r.cells.size()); ++c)
+            h = std::max(h, cell_height(cell_lines(d, t, tp, r.cells[static_cast<std::size_t>(c)], g.col_w[static_cast<std::size_t>(c)] - 2 * in)));
+        g.row_h.push_back(std::max(r.min_h, h + 2 * in));
+    }
+    return g;
+}
+
 std::vector<std::string> thread_frames(const core::Doc& d, const std::string& story) {
     std::vector<std::string> mine;
     for (const auto& id : d.ids_of<core::Frame>()) {
@@ -408,6 +477,7 @@ struct Cursor {
     std::vector<NoteRun> carry;   // s117: notes running on into what comes next
     bool ending = false;          // s120: the carry is the endnotes (set in the column, not the foot)
     int  end_from = 0;            // s122: the first paragraph whose notes aren't set as endnotes yet
+    int  row = 0;                 // s315: a table's rows set already (it runs on from here)
 };
 
 // s018: the free spans of [x0, x1) across the band [y0, y1) -- what the
@@ -568,6 +638,7 @@ int lines_left(const core::Doc& d, const core::Para& para, const core::Style& st
 void apply_keeps(const core::Doc& d, const core::Story& st, const core::Frame& fr, int col, Cursor& c, FrameText& ft) {
     const int paras = static_cast<int>(st.paras.size());
     if (c.p >= paras) return;
+    if (c.row > 0) return;   // s315: a table running on -- it breaks between rows, as it is
     auto& L = ft.lines;
     std::size_t begin = L.size();
     const int band = L.empty() ? 0 : L.back().band;   // s166: this band's column
@@ -581,6 +652,7 @@ void apply_keeps(const core::Doc& d, const core::Story& st, const core::Frame& f
         L.erase(L.begin() + static_cast<std::ptrdiff_t>(from_line), L.end());
         c.p = p;
         c.start = start;
+        c.row = 0;   // s315
     };
     // The paragraph split here.
     if (c.start > 0) {
@@ -1085,7 +1157,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
         }
         const auto chapters = d.settings().note_at == core::NoteAt::ChapterEnd;
         while (c.p < paras && !notes_only) {
-            if (stop_para >= 0 && c.p >= stop_para && c.start == 0) {   // s166: the band ends before this paragraph
+            if (stop_para >= 0 && c.p >= stop_para && (c.start == 0 && c.row == 0)) {   // s166: the band ends before this paragraph
                 place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c, fs, band);
                 return false;
             }
@@ -1094,7 +1166,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
             const double lead = leading_of(style);
             // s122: a paragraph that starts a new page ends a chapter -- its
             // notes first, set here.
-            if (chapters && c.start == 0 && !c.ending) {
+            if (chapters && (c.start == 0 && c.row == 0) && !c.ending) {
                 const auto sa0 = core::doc::start_of(d, para);
                 if (core::page_start(sa0) && build_end(c.p)) {
                     if (y > top) y += 2 * note_gap(d, st, c.p - 1);
@@ -1103,7 +1175,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
             }
             // s043: a paragraph that starts afresh -- not where something is set already.
             // s055: or a break typed before it (its own, over the style's).
-            if (const auto sa = c.start == 0 ? core::doc::start_of(d, para) : core::ParaStart::Anywhere; sa != core::ParaStart::Anywhere) {
+            if (const auto sa = (c.start == 0 && c.row == 0) ? core::doc::start_of(d, para) : core::ParaStart::Anywhere; sa != core::ParaStart::Anywhere) {
                 if (sa == core::ParaStart::NextColumn && y > top) break;
                 if (sa != core::ParaStart::NextColumn && (!ft.lines.empty() || col_has_end())) {   // flow_text finds the frame (s122: endnotes count)
                     place_notes(d, st, fr, col, cx, cw, hmax, ft, nc, cn, c, fs, band);   // s109
@@ -1161,6 +1233,50 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                 if (c.p < pe) break;   // it didn't all fit (a fresh column too small): its rest in the next, split there too
                 y = bottom + style.space_after;
                 continue;
+            }
+            // s315: a table -- its rows, each whole; on into the next column
+            // between rows, its header rows set again at the top there.
+            if (!para.tables.empty() && para.text == core::kMarkTable) {
+                const auto& tb = para.tables.front();
+                const Indents tin = indents_of(d, style, st, c.p);
+                const double avail = std::max(12.0, cw - tin.left - tin.right);
+                const TableGeo tg = table_geo(d, para, avail);
+                const int nrows = static_cast<int>(tg.row_h.size());
+                const int heads = std::clamp(tb.header_rows, 0, nrows);
+                const double tx = cx + tin.left;
+                const int len3 = static_cast<int>(para.text.size());
+                double yy = y + ((c.row == 0 && (y > top || style.top_space)) ? style.space_before : 0);
+                const bool fresh = y <= top + 0.01;   // nothing above it in this column
+                const auto put = [&](int r, double at) {
+                    ft.lines.push_back({c.p, 0, len3, at, tg.row_h[static_cast<std::size_t>(r)], col, tx, tg.width});
+                    ft.lines.back().band = band;
+                    ft.lines.back().row = r;
+                    ++in_col;
+                };
+                int r = c.row;
+                double hy = 0;   // the header rows' height, set again on a continuation
+                if (r > 0 && r >= heads) for (int h = 0; h < heads; ++h) hy += tg.row_h[static_cast<std::size_t>(h)];
+                // what fits: rows from r (at least one body row with the headers; a fresh column takes one regardless)
+                double room = lim() - yy - hy;
+                int last = r;
+                while (last < nrows && tg.row_h[static_cast<std::size_t>(last)] <= room + 0.01) room -= tg.row_h[static_cast<std::size_t>(last++)];
+                if (last <= std::max(r, heads) && last < nrows) {   // not even one body row here
+                    if (!fresh) break;          // the next column
+                    last = std::max(r, heads) + 1;   // a fresh column: one row anyway (it may hang over)
+                    if (last > nrows) last = nrows;
+                }
+                if (r > 0 && r >= heads)
+                    for (int h = 0; h < heads; ++h) { put(h, yy); yy += tg.row_h[static_cast<std::size_t>(h)]; }
+                for (int k = r; k < last; ++k) { put(k, yy); yy += tg.row_h[static_cast<std::size_t>(k)]; }
+                if (last >= nrows) {
+                    y = yy + style.space_after;
+                    ++c.p;
+                    c.start = 0;
+                    c.row = 0;
+                    continue;
+                }
+                c.row = last;
+                break;
             }
             // s011: space before a paragraph -- not at the top of a column.
             const double before = (c.start == 0 && (y > top || style.top_space)) ? style.space_before : 0;   // s242: or kept there
@@ -1981,13 +2097,13 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
             for (std::size_t i = 0; i < chain.size(); ++i) {
                 const auto& ft = prev->flow->frames[i];
                 if (ft.from_p < 0) break;
-                if (ft.from_p < back || (ft.from_p == back && ft.from_b == 0)) { fi0 = i; found = true; }
+                if (ft.from_p < back || (ft.from_p == back && ft.from_b == 0 && ft.from_row == 0)) { fi0 = i; found = true; }
                 else break;
             }
             if (found) {
                 for (std::size_t i = 0; i < fi0; ++i) out.frames[i] = prev->flow->frames[i];
                 const auto& at = prev->flow->frames[fi0];
-                c = Cursor{at.from_p, at.from_b, at.carry_in, at.ending_in, at.end_from_in};   // s117 / s120 / s122: and what ran on into it
+                c = Cursor{at.from_p, at.from_b, at.carry_in, at.ending_in, at.end_from_in, at.from_row};   // s117 / s120 / s122: and what ran on into it; s315
                 last_page = at.page_before;
                 first = fi0;
                 resume = true;
@@ -2000,6 +2116,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         const auto& fr = fr_box;
         out.frames[fi].from_p = c.p;   // s105
         out.frames[fi].from_b = c.start;
+        out.frames[fi].from_row = c.row;   // s315
         out.frames[fi].carry_in = c.carry;   // s117
         out.frames[fi].ending_in = c.ending;   // s120
         out.frames[fi].end_from_in = c.end_from;   // s122
@@ -2027,7 +2144,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         if (resume && fi > first && c.p > k1 && note_delta == 0) {
             const auto& old = prev->flow->frames[fi];
             const auto moved = [&](std::vector<NoteRun> v) { for (auto& r : v) r.para += delta; return v; };   // s117
-            if (old.from_p >= 0 && old.from_p + delta == c.p && old.from_b == c.start && old.page_before == last_page &&
+            if (old.from_p >= 0 && old.from_p + delta == c.p && old.from_b == c.start && old.from_row == c.row && old.page_before == last_page &&
                 old.note_from == note_from && moved(old.carry_in) == c.carry && old.ending_in == c.ending &&
                 (old.end_from_in >= k1 - delta ? old.end_from_in + delta : old.end_from_in) == c.end_from) {
                 for (std::size_t i = fi; i < chain.size(); ++i) {
@@ -2242,6 +2359,7 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
     const StoryScope scope(d, st);   // s109
     std::size_t i = 0;
     while (i < ft->lines.size()) {
+        if (ft->lines[i].row >= 0) { ++i; continue; }   // s315: a table's row -- drawn by visit_tables
         const int p = ft->lines[i].para;
         const int col = ft->lines[i].col;
         std::size_t j = i + 1;
@@ -2671,6 +2789,24 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
                 pango_cairo_show_layout_line(cr, pango_layout_get_line_readonly(rl, 0));
             });
     }, text);
+    // s315: the tables' rows -- fills, words, the grid
+    visit_tables(d, story, flow, frame, [&](const TablePiece& tp) {
+        const core::Swatch* sw = d.as<core::Swatch>(tp.color);
+        if (sw) {
+            const auto c = core::tint_rgb(core::doc::screen_rgb(*sw), tp.tint);
+            cairo_set_source_rgb(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
+        } else {
+            const double g = tp.tint < 1 ? 1 - tp.tint * (1 - ink) : ink;
+            cairo_set_source_rgb(cr, g, g, g);
+        }
+        if (tp.kind == TablePiece::Text) {
+            cairo_move_to(cr, ox + tp.x, oy + tp.baseline);
+            pango_cairo_show_layout_line(cr, tp.line);
+        } else {
+            cairo_rectangle(cr, ox + tp.r.x, oy + tp.r.y, tp.r.w, tp.r.h);
+            cairo_fill(cr);
+        }
+    }, text);
     // s109: the footnotes at the columns' feet, in the ink.
     if (const FrameText* ft = frame_text(flow, frame); st && ft && !ft->notes.empty()) {
         cairo_set_source_rgb(cr, ink, ink, ink > 0 ? ink + 0.02 : 0);
@@ -2762,6 +2898,98 @@ void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& 
         each_note_line(d, *st, *ft, [&](PangoLayoutLine* l, double x, double base, const NotePlace& np) {
             f(LineVisit{l, x, base, np.para, -4});
         });
+}
+
+// s315: a frame's table rows as pieces to draw -- fills, words, grid lines.
+void visit_tables(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                  const std::function<void(const TablePiece&)>& f, const core::Story* text) {
+    const auto* st = text ? text : d.as<core::Story>(story);
+    const FrameText* ft = frame_text(flow, frame);
+    if (!st || !ft) return;
+    const StoryScope scope(d, st);
+    std::map<int, TableGeo> geos;
+    for (const auto& ln : ft->lines) {
+        if (ln.row < 0 || ln.para >= static_cast<int>(st->paras.size())) continue;
+        const auto& tp = st->paras[static_cast<std::size_t>(ln.para)];
+        if (tp.tables.empty()) continue;
+        const auto& t = tp.tables.front();
+        auto gi = geos.find(ln.para);
+        if (gi == geos.end()) gi = geos.emplace(ln.para, table_geo(d, tp, ln.w)).first;
+        const auto& g = gi->second;
+        if (ln.row >= static_cast<int>(t.rows.size())) continue;
+        const auto& row = t.rows[static_cast<std::size_t>(ln.row)];
+        const int n = static_cast<int>(g.col_w.size());
+        const double in = std::max(0.0, t.inset);
+        // fills
+        for (int c = 0; c < n && c < static_cast<int>(row.cells.size()); ++c) {
+            const auto& cell = row.cells[static_cast<std::size_t>(c)];
+            std::string fill = cell.fill;
+            double tint = cell.fill_tint;
+            if (fill.empty() && ln.row < t.header_rows && !t.header_fill.empty()) { fill = t.header_fill; tint = t.header_tint; }
+            if (fill.empty() || !d.as<core::Swatch>(fill)) continue;
+            TablePiece p;
+            p.kind = TablePiece::Fill;
+            p.r = {ln.x + g.col_x[static_cast<std::size_t>(c)], ln.y, g.col_w[static_cast<std::size_t>(c)], ln.h};
+            p.color = fill;
+            p.tint = tint;
+            p.row = ln.row;
+            p.col = c;
+            f(p);
+        }
+        // words
+        for (int c = 0; c < n && c < static_cast<int>(row.cells.size()); ++c) {
+            const auto cw = g.col_w[static_cast<std::size_t>(c)];
+            for (const auto& cl : cell_lines(d, t, tp, row.cells[static_cast<std::size_t>(c)], cw - 2 * in)) {
+                if (cl.para->text.empty()) continue;
+                const LineBox box = line_box(cl.line);
+                const auto st2 = cell_style(d, t, tp, *cl.para);
+                PangoRectangle logical;
+                pango_layout_line_get_extents(cl.line, nullptr, &logical);
+                // the line's own place in its layout (its alignment)
+                PangoLayoutIter* it = pango_layout_get_iter(cl.lay.get());
+                double lx = 0;
+                do {
+                    if (pango_layout_iter_get_line_readonly(it) == cl.line) {
+                        PangoRectangle le;
+                        pango_layout_iter_get_line_extents(it, nullptr, &le);
+                        lx = le.x / static_cast<double>(PANGO_SCALE);
+                        break;
+                    }
+                } while (pango_layout_iter_next_line(it));
+                pango_layout_iter_free(it);
+                TablePiece p;
+                p.kind = TablePiece::Text;
+                p.line = cl.line;
+                p.x = ln.x + g.col_x[static_cast<std::size_t>(c)] + in + lx;
+                p.baseline = ln.y + in + cl.top + (cl.h - box.h) / 2 + box.asc;
+                p.para = cl.para;
+                p.color = st2.color;
+                p.tint = st2.color_tint;
+                p.row = ln.row;
+                p.col = c;
+                p.para_index = cl.pi;
+                f(p);
+            }
+        }
+        // the grid: each column's left (and the last's right), the row's top and bottom
+        if (t.rule_w > 0) {
+            const double hw = t.rule_w / 2;
+            const auto rule = [&](core::Rect r) {
+                TablePiece p;
+                p.kind = TablePiece::Rule;
+                p.r = r;
+                p.color = t.rule_color;
+                p.row = ln.row;
+                f(p);
+            };
+            for (int c = 0; c <= n; ++c) {
+                const double x = ln.x + (c < n ? g.col_x[static_cast<std::size_t>(c)] : g.width);
+                rule({x - hw, ln.y - hw, t.rule_w, ln.h + t.rule_w});
+            }
+            rule({ln.x - hw, ln.y - hw, g.width + t.rule_w, t.rule_w});
+            rule({ln.x - hw, ln.y + ln.h - hw, g.width + t.rule_w, t.rule_w});
+        }
+    }
 }
 
 // ── s023: markers filled in ─────────────────────────────────────────────────

@@ -155,6 +155,7 @@ public:
     // The footnote whose mark is just before (or after) the caret.
     bool note_at_caret(int& p, int& k) const;
     const std::string& edit_story_id() const { return m_edit_story; }
+    const std::string& edit_frame_id() const { return m_edit_frame; }   // s318
     core::Rect caret_screen() const;   // the caret, widget coordinates (w 0: not shown)
     // s061: the caret put at `p` (an undo's place), and the view follows it.
     void place_caret(core::TextPos p);

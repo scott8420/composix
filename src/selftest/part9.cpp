@@ -2408,5 +2408,163 @@ void part9() {
             check("preflight: misspelled words counted (info)", kinds("spelling") == 1);
         }
     }
+    // -- s314: tables -- the model --------------------------------------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto n0 = d.as<core::Story>("story.1")->paras.size();
+        auto t = D::make_table(3, 4, 288);
+        check("make: 3 rows of 4, equal columns", t.rows.size() == 3 && D::table_cols(t) == 4 && t.widths[0] == 72 && t.rows[2].cells.size() == 4);
+        const int p = D::insert_table(j, d, "story.1", {1, 10}, t);   // mid-paragraph: split round it
+        const auto& st = *d.as<core::Story>("story.1");
+        check("insert mid-paragraph: its own paragraph, the words either side kept", p == 2 && st.paras.size() == n0 + 2 &&
+                                                                                    st.paras[2].text == core::kMarkTable && st.paras[1].text == "The harbor" &&
+                                                                                    st.paras[3].text.rfind(" smelled", 0) == 0 && D::table_at(d, "story.1", 2));
+        j.undo();
+        check("insert: one step", d.as<core::Story>("story.1")->paras.size() == n0);
+        const int pe = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, t);
+        check("insert at a paragraph's end: no empty one left over", pe == 2 && d.as<core::Story>("story.1")->paras.size() == n0 + 1);
+        check("cell text: lines a paragraph each", D::set_cell_text(j, d, "story.1", pe, 1, 2, "Harbor fees\nper ton") &&
+                                                   D::table_at(d, "story.1", pe)->rows[1].cells[2].paras.size() == 2 &&
+                                                   D::cell_text(D::table_at(d, "story.1", pe)->rows[1].cells[2]) == "Harbor fees\nper ton");
+        check("rows / columns added and taken (one step each), the width kept", D::edit_table(j, d, "story.1", pe, "Insert Column", [](core::Table& x) {
+                                                                                   core::doc::table_insert_col(x, 1);
+                                                                                   core::doc::table_insert_row(x, 0);
+                                                                               }) &&
+                                                                               D::table_cols(*D::table_at(d, "story.1", pe)) == 5 &&
+                                                                               D::table_at(d, "story.1", pe)->rows.size() == 4 &&
+                                                                               std::abs([&] { double w = 0; for (double x : D::table_at(d, "story.1", pe)->widths) w += x; return w; }() - 288) < 1e-6 &&
+                                                                               D::cell_text(D::table_at(d, "story.1", pe)->rows[2].cells[3]) == "Harbor fees\nper ton");
+        {
+            core::Doc e;
+            check("table: saved", core::from_json(e, core::to_json(d)) && *D::table_at(e, "story.1", pe) == *D::table_at(d, "story.1", pe));
+        }
+        // typing beside it, deleting it
+        const auto copy = *D::table_at(d, "story.1", pe);
+        D::edit_text(j, d, "story.1", {1, 0}, {1, 3}, "A");   // words before it change -- the table rides along
+        check("edits round it: the table kept", D::table_at(d, "story.1", pe) && *D::table_at(d, "story.1", pe) == copy);
+        D::edit_text(j, d, "story.1", {pe, 0}, {pe, 3}, "");
+        check("its mark deleted: the table gone", !D::table_at(d, "story.1", pe));
+        j.undo();
+        check("... undone: back", D::table_at(d, "story.1", pe) && *D::table_at(d, "story.1", pe) == copy);
+    }
+    // -- s315 / s316: a table flowed, broken between rows, drawn ---------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto t = D::make_table(40, 3, 288);
+        t.header_rows = 1;
+        D::set_cell_words(t.rows[0].cells[0], "Port");
+        D::set_cell_words(t.rows[0].cells[1], "Fee");
+        D::set_cell_words(t.rows[5].cells[2], "A long note in a narrow cell that runs over several lines of words");
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, t);
+        const auto geo = L::table_geo(d, d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(p)], 200);
+        check("geo: narrowed to fit, a taller row for the long words", std::abs(geo.width - 200) < 0.01 && geo.row_h.size() == 40 &&
+                                                                       geo.row_h[5] > geo.row_h[4] * 1.5 && geo.row_h[4] > 8,
+              std::to_string(geo.row_h[4]) + " / " + std::to_string(geo.row_h[5]));
+        const auto fl = L::flow_story(d, "story.1");
+        std::vector<std::pair<std::string, int>> rows;   // frame, row
+        for (const auto& ft : fl.frames)
+            for (const auto& l : ft.lines)
+                if (l.para == p) rows.emplace_back(ft.frame, l.row);
+        std::set<std::string> frames;
+        for (const auto& r : rows) frames.insert(r.first);
+        int body = 0, heads = 0;
+        for (const auto& r : rows) { body += r.second > 0; heads += r.second == 0; }
+        check("flow: its rows as lines, each row once (headers again), on into the next frame", body == 39 && frames.size() >= 2 &&
+                                                                                                 heads == static_cast<int>(frames.size()) &&
+                                                                                                 std::all_of(rows.begin(), rows.end(), [](const auto& r) { return r.second >= 0; }),
+              std::to_string(body) + " body, " + std::to_string(heads) + " heads, " + std::to_string(frames.size()) + " frames");
+        // the words after it follow on after its last row
+        int after_frame = -1, last_row_frame = -1;
+        for (int fi = 0; fi < static_cast<int>(fl.frames.size()); ++fi)
+            for (const auto& l : fl.frames[static_cast<std::size_t>(fi)].lines) {
+                if (l.para == p && l.row == 39) last_row_frame = fi;
+                if (l.para == p + 1 && after_frame < 0) after_frame = fi;
+            }
+        check("flow: the next paragraph after the table's last row", after_frame >= last_row_frame && last_row_frame >= 0);
+        L::FlowCache flows;
+        int fills = 0, texts = 0, rules = 0;
+        std::string fr;
+        for (const auto& r : rows) if (r.second == 5) fr = r.first;
+        L::visit_tables(d, "story.1", flows.get(d, "story.1"), fr, [&](const L::TablePiece& tp) {
+            fills += tp.kind == L::TablePiece::Fill;
+            texts += tp.kind == L::TablePiece::Text;
+            rules += tp.kind == L::TablePiece::Rule;
+        });
+        check("draw: the words line by line, the grid", texts >= 4 && rules > 10 && fills == 0, std::to_string(texts) + " lines, " + std::to_string(rules) + " rules");
+        D::edit_table(j, d, "story.1", p, "Header Fill", [&](core::Table& x) { x.header_fill = d.ids_of<core::Swatch>().front(); });
+        fills = 0;
+        L::visit_tables(d, "story.1", flows.get(d, "story.1"), fr, [&](const L::TablePiece& tp) { fills += tp.kind == L::TablePiece::Fill; });
+        check("draw: the header row filled (each frame's)", fills == 3);
+        namespace fs = std::filesystem;
+        const auto dir = fs::temp_directory_path() / "composix_selftest_table";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        L::PdfOptions opt;
+        opt.compress = false;
+        std::string err;
+        const bool ok = L::export_print_pdf(d, (dir / "t.pdf").string(), opt, {}, nullptr, &err) &&
+                        L::export_pdf(d, (dir / "s.pdf").string(), opt, {}, nullptr, &err);
+        check("PDF: both writers take a table", ok, err);
+        if (std::getenv("COMPOSIX_KEEP_TABLE_PDF")) fs::copy_file(dir / "t.pdf", "/tmp/table_print.pdf", fs::copy_options::overwrite_existing, ec);
+        fs::remove_all(dir, ec);
+    }
+    // -- s317: an ODT's tables come in ------------------------------------------
+    {
+        std::cout << "--- s317 an ODT's table ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f" xmlns:table="tb")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:style>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+</office:master-styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:automatic-styles>
+ <style:style style:name="T1.A" style:family="table-column"><style:table-column-properties style:column-width="1.5in"/></style:style>
+ <style:style style:name="T1.B" style:family="table-column"><style:table-column-properties style:column-width="1in"/></style:style>
+ <style:style style:name="T1.H" style:family="table-cell"><style:table-cell-properties fo:background-color="#cccccc"/></style:style>
+</office:automatic-styles><office:body><office:text>)"
+            R"(<text:p text:style-name="Standard">Before.</text:p>)"
+            R"(<table:table table:name="T1"><table:table-column table:style-name="T1.A"/><table:table-column table:style-name="T1.B" table:number-columns-repeated="2"/>)"
+            R"(<table:table-header-rows><table:table-row><table:table-cell table:style-name="T1.H"><text:p text:style-name="Standard">Port</text:p></table:table-cell>)"
+            R"(<table:table-cell table:style-name="T1.H"><text:p text:style-name="Standard">Fee</text:p></table:table-cell><table:table-cell table:style-name="T1.H"><text:p text:style-name="Standard">Days</text:p></table:table-cell></table:table-row></table:table-header-rows>)"
+            R"(<table:table-row><table:table-cell><text:p text:style-name="Standard">Harbor</text:p><text:p text:style-name="Standard">(north)</text:p></table:table-cell>)"
+            R"(<table:table-cell><text:p text:style-name="Standard">12</text:p></table:table-cell><table:table-cell><text:p text:style-name="Standard">3</text:p></table:table-cell></table:table-row>)"
+            R"(</table:table>)"
+            R"(<text:p text:style-name="Standard">After.</text:p>)"
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        check("read: the table between the paragraphs -- 3 columns (widths), a header row, 2 rows", book && book->body.size() == 3 &&
+                                                                                                    book->body[1].tables.size() == 1 &&
+                                                                                                    book->body[1].tables[0].widths.size() == 3 &&
+                                                                                                    std::abs(book->body[1].tables[0].widths[0] - 108) < 0.01 &&
+                                                                                                    std::abs(book->body[1].tables[0].widths[2] - 72) < 0.01 &&
+                                                                                                    book->body[1].tables[0].header_rows == 1 &&
+                                                                                                    book->body[1].tables[0].rows.size() == 2, err);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        const auto* t = ok ? core::doc::table_at(d, "story.1", 1) : nullptr;
+        check("import: a table -- its words, its header's fill, nothing said left out", t && t->rows.size() == 2 && t->header_rows == 1 &&
+                                                                                       core::doc::cell_text(t->rows[1].cells[0]) == "Harbor\n(north)" &&
+                                                                                       core::doc::cell_text(t->rows[0].cells[2]) == "Days" &&
+                                                                                       d.as<core::Swatch>(t->rows[0].cells[0].fill) && info.tables_kept == 1 &&
+                                                                                       std::none_of(info.notes_said.begin(), info.notes_said.end(), [](const std::string& x) { return x.find("table") != std::string::npos; }),
+              err);
+        const auto fl = L::flow_story(d, "story.1");
+        int rows = 0;
+        for (const auto& ft : fl.frames) for (const auto& l : ft.lines) rows += l.row >= 0;
+        check("import: its rows flowed", rows == 2);
+    }
 }
 }  // namespace cxtest

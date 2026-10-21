@@ -246,6 +246,14 @@ void read_styles(const Node* group, Book& b, bool automatic, const std::string& 
                         const int n = std::clamp(std::atoi(cs->attr_or("fo:column-count", "1").c_str()), 1, 12);
                         if (n >= 2) b.section_columns[s.name] = {n, std::max(0.0, length(cs->attr_or("fo:column-gap"), 12))};
                     }
+            if (s.family == "table-column")   // s317
+                if (const auto* cp = k.child("style:table-column-properties"); cp && !cp->attr_or("style:column-width").empty())
+                    b.column_widths[s.name] = length(cp->attr_or("style:column-width"), 0);
+            if (s.family == "table-cell")   // s317
+                if (const auto* cp = k.child("style:table-cell-properties")) {
+                    const auto bg = cp->attr_or("fo:background-color");
+                    if (bg.size() == 7 && bg[0] == '#') b.cell_backgrounds[s.name] = bg;
+                }
             if (!s.name.empty() && (s.family == "paragraph" || s.family == "text")) b.styles[s.name] = std::move(s);
         } else if (k.name == "style:default-style") {
             read_props(k, b.defaults[k.attr_or("style:family")], b.fonts);
@@ -519,8 +527,48 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}
             read_block(k, b, out, in);
         } else if (nm == "text:index-body") {
             read_block(k, b, out, list);
-        } else if (nm == "table:table") {
+        } else if (nm == "table:table") {   // s317: kept -- its rows, cells and their words
             ++b.tables;
+            Table t;
+            const std::function<void(const Node&, bool)> rows = [&](const Node& n, bool header) {
+                for (const auto& r : n.kids) {
+                    if (r.is_text()) continue;
+                    if (r.name == "table:table-header-rows") { rows(r, true); continue; }
+                    if (r.name == "table:table-rows" || r.name == "table:table-row-group") { rows(r, header); continue; }
+                    if (r.name == "table:table-column") {
+                        const int rep = std::clamp(std::atoi(r.attr_or("table:number-columns-repeated", "1").c_str()), 1, 64);
+                        const auto it = b.column_widths.find(r.attr_or("table:style-name"));
+                        for (int i = 0; i < rep; ++i) t.widths.push_back(it == b.column_widths.end() ? 0 : it->second);
+                        continue;
+                    }
+                    if (r.name != "table:table-row") continue;
+                    const int rrep = std::clamp(std::atoi(r.attr_or("table:number-rows-repeated", "1").c_str()), 1, 200);
+                    std::vector<TableCell> cells;
+                    for (const auto& c : r.kids) {
+                        if (c.is_text() || (c.name != "table:table-cell" && c.name != "table:covered-table-cell")) continue;
+                        const int crep = std::clamp(std::atoi(c.attr_or("table:number-columns-repeated", "1").c_str()), 1, 64);
+                        TableCell cell;
+                        if (const auto it = b.cell_backgrounds.find(c.attr_or("table:style-name")); it != b.cell_backgrounds.end()) cell.bg = it->second;
+                        if (c.name == "table:table-cell") read_block(c, b, cell.paras, {});
+                        for (int i = 0; i < crep; ++i) cells.push_back(cell);
+                    }
+                    for (int i = 0; i < rrep; ++i) {
+                        t.rows.push_back(cells);
+                        if (header) ++t.header_rows;
+                    }
+                }
+            };
+            rows(k, false);
+            std::size_t cols = t.widths.size();
+            for (const auto& r : t.rows) cols = std::max(cols, r.size());
+            if (!t.rows.empty() && cols > 0) {
+                t.widths.resize(cols, 0);
+                for (auto& r : t.rows) r.resize(cols);
+                Para p;
+                p.text = kMarkTable;
+                p.tables.push_back(std::move(t));
+                out.push_back(std::move(p));
+            }
         } else if (nm == "text:table-of-content" && &out == &b.body) {   // s271: kept -- made a contents list on import
             Toc t;
             t.at = static_cast<int>(out.size());

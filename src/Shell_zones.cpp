@@ -235,6 +235,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: the menubar's model (s27
         ins->append_submenu("Type Style", type_style_menu());              // s263
         type->append_section(ins);
         section(type, {{"Footnote", "win.insert-footnote"}, {"Index Entry\u2026", "win.index-mark"}, {"Cross-Reference\u2026", "win.insert-xref"}, {"Hyperlink\u2026", "win.hyperlink"}});
+        section(type, {{"Insert Table\u2026", "win.insert-table"}, {"Edit Table\u2026", "win.edit-table"}});   // s318
         section(type, {{"Story Editor", "win.story-editor"}});
         section(type, {{"Footnotes\u2026", "win.notes-panel"}, {"Sources\u2026", "win.sources-panel"}, {"Cross-References\u2026", "win.xrefs-panel"}});
         section(type, {{"New Index\u2026", "win.new-index"}});

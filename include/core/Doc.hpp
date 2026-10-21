@@ -467,6 +467,35 @@ struct IndexMark {
 // s129: the pattern a reference shows by (Custom: its own).
 std::string ref_pattern(const XRef& r);
 
+// s314: a table -- set in the text as a paragraph of its own (its text the
+// one mark kMarkTable; Para::tables[0]), flowing with the story and breaking
+// between rows from column to column, frame to frame, its header rows set
+// again at the top of each. A cell holds paragraphs of its own words.
+struct Para;
+struct TableCell {
+    std::vector<Para> paras;             // its words ("" style: the table's cell style); empty = one empty paragraph
+    std::string fill;                    // a swatch id ("" none)
+    double      fill_tint = 1;
+    bool operator==(const TableCell&) const;
+};
+struct TableRow {
+    std::vector<TableCell> cells;        // one a column
+    double min_h = 0;                    // points (0: as its words need)
+    bool operator==(const TableRow&) const = default;
+};
+struct Table {
+    std::vector<double> widths;          // each column, points (the frame's column narrower: scaled to it)
+    std::vector<TableRow> rows;
+    int         header_rows = 0;         // set again at the top of each column it runs on into
+    double      inset = 4;               // a cell's words in from its edges, points
+    double      rule_w = 0.5;            // the grid's lines, points (0 none)
+    std::string rule_color;              // a swatch id ("" black)
+    std::string cell_style;              // the paragraph style its words take ("" the table paragraph's)
+    std::string header_fill;             // the header rows' fill (a swatch id, "" none)
+    double      header_tint = 0.2;
+    bool operator==(const Table&) const = default;
+};
+
 struct Para {
     std::string      style;              // a paragraph style id
     std::string      text;
@@ -484,8 +513,10 @@ struct Para {
     // story's id ("" = a paragraph of its own). A rebuild gathers the
     // original, not the copy, so a copy whose original is gone drops out.
     std::string      copy_of;
+    std::vector<Table> tables;           // s314: one for each kMarkTable in text, in order
     bool operator==(const Para&) const = default;
 };
+inline bool TableCell::operator==(const TableCell& o) const { return paras == o.paras && fill == o.fill && fill_tint == o.fill_tint; }
 
 struct Story {
     std::string       name;
@@ -1442,6 +1473,7 @@ struct Carried {
     std::vector<XRef> refs;
     std::vector<std::string> anchors;
     std::vector<IndexMark> index;   // s134
+    std::vector<Table> tables;      // s314
     bool operator==(const Carried&) const = default;
 };
 Carried carried_between(const Story& s, TextPos a, TextPos b);
@@ -1535,6 +1567,28 @@ bool set_para_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
 // piece's Local (Clear overrides: f = reset). One step.
 bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
                const std::function<void(Local&)>& f, const std::string& merge_key = {});
+// ── s314: tables ─────────────────────────────────────────────────────────────
+// A table of `rows` x `cols` empty cells across `width` points (equal columns).
+Table make_table(int rows, int cols, double width);
+// A table at `at`, a paragraph of its own (the paragraph split there; at a
+// paragraph's start / end no empty one left over). One step; its paragraph.
+int insert_table(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const Table& t);
+// The table paragraph `para` holds (nullptr none).
+const Table* table_at(const Doc& d, const Doc::Id& story, int para);
+// A table changed by `f` (`label` names the step). One step.
+bool edit_table(DocJournal& j, Doc& d, const Doc::Id& story, int para, const std::string& label, const std::function<void(Table&)>& f);
+// A cell's words: paragraphs a line each ('\n' between); style "" (the table's).
+std::string cell_text(const TableCell& c);
+void set_cell_words(TableCell& c, const std::string& text);
+bool set_cell_text(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, const std::string& text);
+// Rows and columns: a fresh empty one at `at` (0..n), or one gone (not the
+// last). Widths: a new column takes the width of its neighbour, the table
+// as wide as before (the others narrowed in proportion).
+void table_insert_row(Table& t, int at);
+void table_delete_row(Table& t, int at);
+void table_insert_col(Table& t, int at);
+void table_delete_col(Table& t, int at);
+int  table_cols(const Table& t);
 // s307: the document's language for spell check ("" the app's). One step.
 bool set_language(DocJournal& j, Doc& d, const std::string& lang);
 // s307: a misspelled word put right -- [from, to) of paragraph `para`, if it
@@ -1994,6 +2048,8 @@ inline constexpr const char* kMarkAuthor  = "\xEE\x80\x89";   // U+E009: its aut
 // subtitle) in force on the page: the first on the page, else the last before it.
 inline constexpr const char* kMarkChapter = "\xEE\x80\x8A";   // U+E00A: the chapter's name
 inline constexpr const char* kMarkSubhead = "\xEE\x80\x8B";   // U+E00B: the chapter's subtitle
+// s314: a table (Para::tables) -- alone in its paragraph.
+inline constexpr const char* kMarkTable   = "\xEE\x80\x8C";   // U+E00C
 // s240: the paragraph style a running head (0 chapter, 1 subtitle) follows -- the
 // document's choice, else by name; "" when there's none.
 std::string running_style(const Doc& d, int slot);
