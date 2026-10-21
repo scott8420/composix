@@ -1,5 +1,6 @@
 #include "Shell.hpp"
 #include "Log.hpp"
+#include "core/Zip.hpp"
 #include "core/Swatches.hpp"
 #include "views/Images.hpp"
 
@@ -387,13 +388,13 @@ void Shell::libraries_show(const std::string& key, const std::vector<std::string
                 std::ifstream in(file, std::ios::binary);
                 if (in) text.assign(std::istreambuf_iterator<char>(in), {});
             }
-            const bool gz = text.size() > 2 && static_cast<unsigned char>(text[0]) == 0x1f && static_cast<unsigned char>(text[1]) == 0x8b;
-            if (gz) text.clear();   // .svgz: compressed, not read here
+            const bool gz = core::zip::gzipped(text);
+            if (gz) text = core::zip::gunzip(text);   // s249: a .svgz, opened
             m_lib_cur = SW::vector_library(a->name, SW::svg_colors(text));
             sub = "The colours this drawing is drawn in, most used first";
             if (text.empty()) {
                 bad = true;
-                err = gz ? "a compressed SVG (.svgz) isn\u2019t read here -- save it as plain .svg." : "the drawing is missing or can\u2019t be read.";
+                err = gz ? "the compressed SVG (.svgz) couldn\u2019t be opened." : "the drawing is missing or can\u2019t be read.";
             } else if (m_lib_cur.colors.empty()) {
                 sub = "No colours named in this drawing (it may take them from its text, or be all black)";
             }

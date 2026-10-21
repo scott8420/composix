@@ -92,7 +92,7 @@ void attach_ink(cairo_surface_t* s, std::vector<std::uint8_t> ink) {
                                 [](void* p) { delete static_cast<std::vector<std::uint8_t>*>(p); }, copy);
 }
 #ifdef COMPOSIX_HAVE_TIFF
-// A CMYK TIFF's separations (8 or 16 bits, chunky), the file's own size; empty otherwise.
+// A CMYK TIFF's separations (8 or 16 bits, chunky or -- s250 -- planar), the file's own size; empty otherwise.
 std::vector<std::uint8_t> tiff_ink(const std::string& path, int want_w, int want_h, int* got_w = nullptr, int* got_h = nullptr) {
     std::vector<std::uint8_t> out;
     TIFFSetWarningHandler(nullptr);
@@ -108,11 +108,23 @@ std::vector<std::uint8_t> tiff_ink(const std::string& path, int want_w, int want
     TIFFGetFieldDefaulted(t, TIFFTAG_PLANARCONFIG, &planar);
     TIFFGetFieldDefaulted(t, TIFFTAG_INKSET, &inkset);
     if (photo == PHOTOMETRIC_SEPARATED && inkset == INKSET_CMYK && spp >= 4 && (bps == 8 || bps == 16) &&
-        planar == PLANARCONFIG_CONTIG && (want_w <= 0 || (static_cast<int>(w) == want_w && static_cast<int>(h) == want_h))) {
+        (planar == PLANARCONFIG_CONTIG || planar == PLANARCONFIG_SEPARATE) && (want_w <= 0 || (static_cast<int>(w) == want_w && static_cast<int>(h) == want_h))) {
         if (got_w) *got_w = static_cast<int>(w);
         if (got_h) *got_h = static_cast<int>(h);
         std::vector<std::uint8_t> line(static_cast<std::size_t>(TIFFScanlineSize(t)));
         out.resize(static_cast<std::size_t>(w) * h * 4);
+        if (planar == PLANARCONFIG_SEPARATE) {   // s250: a plane per ink -- C, then M, Y, K (any further ones skipped)
+            const std::size_t b = bps / 8;
+            for (uint16_t c = 0; c < 4 && !out.empty(); ++c)
+                for (uint32_t y = 0; y < h; ++y) {
+                    if (TIFFReadScanline(t, line.data(), y, c) < 0) { out.clear(); break; }
+                    for (uint32_t x = 0; x < w; ++x)
+                        out[(static_cast<std::size_t>(y) * w + x) * 4 + c] =
+                            b == 1 ? line[x] : static_cast<std::uint8_t>(reinterpret_cast<const uint16_t*>(line.data() + x * 2)[0] >> 8);
+                }
+            TIFFClose(t);
+            return out;
+        }
         const std::size_t step = static_cast<std::size_t>(spp) * (bps / 8);
         for (uint32_t y = 0; y < h; ++y) {
             if (TIFFReadScanline(t, line.data(), y, 0) < 0) { out.clear(); break; }

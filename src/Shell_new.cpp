@@ -146,11 +146,90 @@ void Shell::on_import_odt() {  // handler
             return;
         }
         if (path.empty()) return;
-        confirm_discard([this, path] { import_odt_file(path); });
+        confirm_discard([this, path] { show_import_odt_sheet(path); });
     });
 }
 
-void Shell::import_odt_file(const std::string& path) {  // helper
+namespace { Gtk::Label* label(const std::string& text); }   // (below)
+
+// s247: how an ODT comes in -- its pictures (a folder of their own, a folder
+// beside the file, or left out) and its front matter as a section; kept
+// between runs.
+void Shell::show_import_odt_sheet(const std::string& path) {  // helper
+    m_import_sheet = std::make_unique<Gtk::Window>();
+    auto& win = *m_import_sheet;
+    win.set_name("import_odt");
+    win.set_title("Import ODT");
+    win.set_modal(true);
+    win.set_transient_for(*this);
+    win.set_resizable(false);
+    win.set_hide_on_close(true);
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 10);
+    box->set_name("import_odt.box");
+    box->add_css_class("cx-export");
+    box->set_margin(18);
+    auto head = Gtk::make_managed<Gtk::Label>("Import \u201c" + Glib::path_get_basename(path) + "\u201d");
+    head->set_name("import_odt.title_label");
+    head->add_css_class("cx-export-title");
+    head->set_xalign(0);
+    box->append(*head);
+    auto grid = Gtk::make_managed<Gtk::Grid>();
+    grid->set_name("import_odt.grid");
+    grid->set_row_spacing(8);
+    grid->set_column_spacing(8);
+    auto pics = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(
+        {"Linked, in a folder of their own", "Linked, in a folder beside the file", "Left out"}));
+    pics->set_name("import_odt.pictures");
+    pics->set_selected(static_cast<guint>(core::setting_int(m_settings, "import.odt.pictures", 0, 0, 2)));
+    grid->attach(*label("Pictures"), 0, 0);
+    grid->attach(*pics, 1, 0);
+    auto secs = Gtk::make_managed<Gtk::CheckButton>("Front matter its own section (i, ii, iii), the body from 1");
+    secs->set_name("import_odt.sections");
+    secs->set_active(core::setting_int(m_settings, "import.odt.sections", 1, 0, 1) == 1);
+    grid->attach(*secs, 1, 1);
+    box->append(*grid);
+    auto note = Gtk::make_managed<Gtk::Label>();
+    note->set_name("import_odt.note");
+    note->add_css_class("cx-export-note");
+    note->set_xalign(0);
+    note->set_wrap(true);
+    note->set_max_width_chars(48);
+    const auto beside = (std::filesystem::path(path).parent_path() / (std::filesystem::path(path).stem().string() + " pictures")).string();
+    const auto say = [note, pics, beside] {
+        const auto i = pics->get_selected();
+        note->set_text(i == 0 ? "Written to ~/.local/share/composix/imported/ and linked; Embed them (Links & Assets) once it's saved."
+                       : i == 1 ? "Written to \u201c" + beside + "\u201d and linked."
+                                : "Not brought in; the summary counts them.");
+    };
+    say();
+    pics->property_selected().signal_changed().connect(say);
+    box->append(*note);
+    auto buttons = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    buttons->set_halign(Gtk::Align::END);
+    auto cancel = Gtk::make_managed<Gtk::Button>("Cancel");
+    cancel->set_name("import_odt.cancel");
+    auto go = Gtk::make_managed<Gtk::Button>("Import");
+    go->set_name("import_odt.import");
+    go->add_css_class("suggested-action");
+    buttons->append(*cancel);
+    buttons->append(*go);
+    box->append(*buttons);
+    win.set_child(*box);
+    win.set_default_widget(*go);
+    cancel->signal_clicked().connect([this] { m_import_sheet->set_visible(false); });
+    go->signal_clicked().connect([this, path, pics, secs] {
+        const int p = static_cast<int>(pics->get_selected());
+        const bool s = secs->get_active();
+        m_settings["import.odt.pictures"] = std::to_string(p);
+        m_settings["import.odt.sections"] = s ? "1" : "0";
+        core::save_settings(m_settings_file, m_settings);
+        m_import_sheet->set_visible(false);
+        Glib::signal_idle().connect_once([this, path, p, s] { import_odt_file(path, p, s); });
+    });
+    win.present();
+}
+
+void Shell::import_odt_file(const std::string& path, int pictures, bool sections) {  // helper
     struct Out {
         core::Doc         doc;
         layout::FlowCache flows;
@@ -165,13 +244,14 @@ void Shell::import_odt_file(const std::string& path) {  // helper
     {
         std::string stem = std::filesystem::path(path).stem().string();
         if (stem.empty()) stem = "imported";
-        const auto root = std::filesystem::path(Glib::get_user_data_dir()) / "composix" / "imported";
-        auto dir = root / stem;
-        for (int n = 2; std::filesystem::exists(dir) && n < 1000; ++n) dir = root / (stem + "-" + std::to_string(n));
-        pics = dir.string();
+        const auto root = pictures == 1 ? std::filesystem::path(path).parent_path() : std::filesystem::path(Glib::get_user_data_dir()) / "composix" / "imported";
+        const std::string name0 = pictures == 1 ? stem + " pictures" : stem;
+        auto dir = root / name0;
+        for (int n = 2; std::filesystem::exists(dir) && n < 1000; ++n) dir = root / (name0 + "-" + std::to_string(n));
+        if (pictures != 2) pics = dir.string();
     }
     busy_thread("Importing \u201c" + name + "\u201d", "Reading it\u2026",
-        [out, path, pics](const Report& report) {
+        [out, path, pics, sections](const Report& report) {
             std::string bytes;
             {
                 std::ifstream in(path, std::ios::binary);
@@ -185,6 +265,7 @@ void Shell::import_odt_file(const std::string& path) {  // helper
             if (!book) return;
             layout::OdtOptions o;
             o.picture_dir = pics;
+            o.sections = sections;
             o.progress = [&](double f, const std::string& line) { report(0.05 + 0.7 * f, line); };
             out->ok = layout::import_odt(out->doc, *book, &out->info, o, &out->err);
             if (!out->ok) return;
@@ -213,7 +294,12 @@ void Shell::import_odt_file(const std::string& path) {  // helper
             if (i.headers) detail += "; its header / footer on the master";
             if (i.front_matter) detail += "; front matter and body as sections";
             detail += ".";
-            if (i.placed) detail += "\nIts pictures are linked from " + pics + " \u2014 Embed them (Links & Assets) to keep them in the file.";
+            if (i.placed) {
+                std::string shown = pics;   // the home folder as ~ (a long path doesn't wrap)
+                const std::string home = Glib::get_home_dir();
+                if (!home.empty() && shown.rfind(home + "/", 0) == 0) shown = "~" + shown.substr(home.size());
+                detail += "\nIts pictures are linked from " + shown + " \u2014 Embed them (Links & Assets) to keep them in the file.";
+            }
             for (const auto& s : i.notes_said) detail += "\n\u2022 " + s;
             alert("Imported \u201c" + name + "\u201d", detail);
             if (auto lg = log::get(log::Area::Io)) lg->info("import odt '{}': {} pages, {} paragraphs, {} styles", name, i.pages, i.paragraphs, i.styles);

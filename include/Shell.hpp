@@ -111,7 +111,8 @@ private:
     void on_sample();                            // category: handler: s019 -- open the built-in sample book
     void on_big_book();                          // category: handler: s100 -- the generated ~400-page test book
     void on_import_odt();                        // category: handler: s238 -- File > Import ODT...
-    void import_odt_file(const std::string& path);   // category: helper: s238 -- read, set, lay out (worker), adopt, say what came in
+    void show_import_odt_sheet(const std::string& path);   // s247: how it comes in (pictures, sections), then import_odt_file
+    void import_odt_file(const std::string& path, int pictures = 0, bool sections = true);   // pictures: 0 their own folder, 1 beside the file, 2 left out   // category: helper: s238 -- read, set, lay out (worker), adopt, say what came in
     void on_find();                              // category: handler: s022 -- Ctrl+F: show the find bar
     void on_story_editor();                      // category: handler: s033 -- Ctrl+Y: the story being edited / picked
     void on_save();                              // category: handler: save (Save As the first time)
@@ -131,7 +132,8 @@ private:
     void on_export_pdf();                        // category: handler: the Export PDF sheet -> a file -> the report
     void on_tiles_move(const std::vector<std::string>& ids, const std::string& target, bool before);  // category: handler: pages dragged
     bool page_action(const std::string& act, const std::vector<std::string>& ids);  // category: helper: add / delete / section
-    void on_asset_action(const std::string& act);   // category: handler: relink / update / embed / unembed (inspector)
+    void on_asset_action(const std::string& act);
+    void asset_action(const std::string& act, std::vector<std::string> assets);   // s247: on these (Embed All)   // category: handler: relink / update / embed / unembed (inspector)
     bool on_close_request() override;            // category: handler: unsaved changes? ask first
     void on_recent_open(const std::string& p);   // category: handler: open a recent project (parameterised)
     void on_recent_clear();                      // category: handler: empty the recents list
@@ -494,6 +496,7 @@ private:
 
     // s019: the New sheet, and what it was last set to (for the session).
     std::unique_ptr<Gtk::Window>     m_new;
+    std::unique_ptr<Gtk::Window>     m_import_sheet;   // s247: Import ODT's options
     core::NewDoc                     m_newdoc;
 
     std::unique_ptr<AboutWindow>     m_about;

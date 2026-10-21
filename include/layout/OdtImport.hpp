@@ -28,6 +28,7 @@ struct OdtInfo {
     int headers = 0;                               // s237: a header, a footer (each counted once)
     int lists = 0;                                 // s243: list styles made (a paragraph style at a list's level)
     int placed = 0;                                // s245: pictures placed
+    int header_pictures = 0;                       // s248: of them, on the master (a header's / footer's)
     bool front_matter = false;                     // s237: words before the first chapter -> their own section
     int tables = 0, pictures = 0, contents = 0;   // in the file, not brought in
     std::vector<std::string> notes_said;           // what didn't come over as it was, in words
@@ -35,6 +36,7 @@ struct OdtInfo {
 
 struct OdtOptions {
     std::function<void(double, const std::string&)> progress;   // 0..1 and what it's doing
+    bool        sections = true;   // s247: the front matter its own section (roman numbers), the body from 1
     std::string picture_dir;   // s245: where its pictures are written (and linked from); "" = left out
 };
 

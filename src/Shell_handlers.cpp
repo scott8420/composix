@@ -109,6 +109,10 @@ void Shell::on_place() {  // handler
 void Shell::on_asset_action(const std::string& act) {  // handler
     std::vector<std::string> assets;
     for (const auto& id : m_inspected) if (m_doc.as<core::Asset>(id)) assets.push_back(id);
+    asset_action(act, std::move(assets));
+}
+
+void Shell::asset_action(const std::string& act, std::vector<std::string> assets) {  // helper
     if (assets.empty()) return;
     if (act == "relink") {
         if (assets.size() > 1) {
@@ -978,7 +982,21 @@ std::vector<core::Field> Shell::section_fields(core::Segment s) const {  // help
         out.push_back(act);
         return out;
     }
-    if (s != core::Segment::Assets || m_project_dir.empty()) return out;
+    if (s != core::Segment::Assets) return out;
+    {   // s247: the linked pictures, all embedded at once (an import's, say)
+        const auto linked = core::linked_assets(m_doc, m_project_dir);
+        out.push_back({"Linked", linked.empty() ? "None" : std::to_string(linked.size()) + (linked.size() == 1 ? " picture" : " pictures")});
+        if (!linked.empty()) {
+            if (m_project_dir.empty()) {
+                out.push_back({"", "Save the document to embed them (they're copied into its folder)."});
+            } else {
+                core::Field act{"", "", "assets_linked", {{"embed", "Embed All"}}};
+                act.buttons = true;
+                out.push_back(act);
+            }
+        }
+    }
+    if (m_project_dir.empty()) return out;
     std::vector<std::string> held;
     m_journal.each_value([&](const core::Record& r) {
         if (const auto* a = std::get_if<core::Asset>(&r)) held.push_back(a->path);
@@ -1022,6 +1040,11 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         return;
     }
     if (key == "notes_panel") { open_notes_panel(); return; }   // s121
+    if (key == "assets_linked" && choice == "embed") {   // s247: Embed All
+        asset_action("embed", core::linked_assets(m_doc, m_project_dir));
+        Glib::signal_idle().connect_once([this] { on_tiles_selection(m_inspected); });
+        return;
+    }
     if (key == "swatches_unused") {   // s179: the Colors section's unused swatches (nothing picked)
         if (choice == "select") {
             const auto ids = core::doc::unused_swatches(m_doc);

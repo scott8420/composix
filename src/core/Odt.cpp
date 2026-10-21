@@ -120,7 +120,9 @@ bool read_frame(const Node& k, const Book& b, Picture& pic) {
     pic.y = length(k.attr_or("svg:y"), 0);
     pic.w = length(k.attr_or("svg:width"), 0);
     pic.h = length(k.attr_or("svg:height"), 0);
-    if (const auto it = b.graphics.find(k.attr_or("draw:style-name")); it != b.graphics.end()) {
+    auto it = b.graphics.find(k.attr_or("draw:style-name"));
+    if (it == b.graphics.end()) it = b.graphics.find("S:" + k.attr_or("draw:style-name"));   // s248: a header's, from styles.xml
+    if (it != b.graphics.end()) {
         pic.wrap = it->second.wrap;
         pic.hpos = it->second.hpos;
         pic.vpos = it->second.vpos;
@@ -355,7 +357,7 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}
                     pic.at = std::min(pic.at, static_cast<int>(p.text.size()));
                     b.images.push_back(std::move(pic));
                 }
-            p.pictures.clear();
+            if (&out == &b.body) p.pictures.clear();   // s248: a header's / footer's kept on its paragraph
             out.push_back(std::move(p));
         } else if (nm == "text:list") {   // s243: a list (inside one: a level deeper), its style or its parent's
             ListAt in = list;
@@ -463,10 +465,16 @@ std::optional<Book> read(const std::string& bytes, std::string* err) {
     read_styles(content->child("office:automatic-styles"), b, true);
     if (const auto* body = content->child("office:body"))
         if (const auto* text = body->child("office:text")) read_block(*text, b, b.body);
-    for (auto& pic : b.images)   // s244: their files, from the zip
+    const auto fetch = [&](Picture& pic) {   // s244: their files, from the zip
         if (pic.bytes.empty() && !pic.href.empty() && bytes.compare(0, 4, "PK\x03\x04") == 0 && pic.href.find("://") == std::string::npos &&
             pic.href.rfind("../", 0) != 0)
             pic.bytes = zip::entry(bytes, pic.href);
+    };
+    for (auto& pic : b.images) fetch(pic);
+    for (auto& mp : b.masters)   // s248: the headers' and footers' too
+        for (auto* part : {&mp.header, &mp.footer, &mp.header_left, &mp.footer_left})
+            for (auto& p : *part)
+                for (auto& pic : p.pictures) fetch(pic);
     if (meta)
         if (const auto* m = meta->child("office:meta")) {
             const auto words = [](const Node* n) {

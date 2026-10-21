@@ -734,6 +734,19 @@ LinkStatus link_status(const Asset& a, const std::string& dir) {
     return LinkStatus::OK;
 }
 
+std::vector<Doc::Id> linked_assets(const Doc& d, const std::string& dir) {   // s247
+    std::vector<Doc::Id> out;
+    for (const auto& id : d.ids_of<Asset>()) {
+        const auto& a = *d.as<Asset>(id);
+        if (a.embedded) continue;
+        const auto st = link_status(a, dir);
+        if (st == LinkStatus::Missing || st == LinkStatus::EmbeddedMissing) continue;
+        out.push_back(id);
+    }
+    std::stable_sort(out.begin(), out.end(), [&](const Doc::Id& x, const Doc::Id& y) { return d.as<Asset>(x)->pos < d.as<Asset>(y)->pos; });
+    return out;
+}
+
 std::string link_status_text(LinkStatus s) {
     switch (s) {
     case LinkStatus::OK:              return "OK";

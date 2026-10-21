@@ -3497,5 +3497,94 @@ void part8() {
             std::filesystem::remove_all(dir);
         }
     }
+    // ── s247: Embed All's list; an import without sections ──────────────────
+    {
+        std::cout << "--- s247 linked / sections ---\n";
+        const auto dir = std::filesystem::temp_directory_path() / "cx-s247";
+        std::filesystem::create_directories(dir);
+        { std::ofstream(dir / "here.png") << "x"; }
+        core::Doc d;
+        core::Asset here; here.name = "here.png"; here.path = (dir / "here.png").string(); here.pos = 2;
+        core::Asset gone; gone.name = "gone.png"; gone.path = (dir / "gone.png").string(); gone.pos = 1;
+        core::Asset in; in.name = "in.png"; in.path = "assets/in.png"; in.embedded = true; in.pos = 0;
+        d.put("asset.1", here);
+        d.put("asset.2", gone);
+        d.put("asset.3", in);
+        const auto l = core::linked_assets(d, "");
+        check("linked assets: the linked one there -- not the missing, not the embedded", l.size() == 1 && l[0] == "asset.1");
+        std::filesystem::remove_all(dir);
+        namespace L = composix::layout;
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        std::string body;
+        body += R"(<text:p>A title page.</text:p>)";
+        for (int k = 1; k <= 2; ++k)
+            body += "<text:h text:outline-level=\"1\" text:style-name=\"H\">Chapter " + std::to_string(k) + "</text:h><text:p>Words.</text:p>";
+        const std::string content = "<office:document-content" + ns + "><office:automatic-styles/><office:body><office:text>" + body +
+                                    "</office:text></office:body></office:document-content>";
+        const std::string styles = "<office:document-styles" + ns + R"ODT(><office:styles><style:style style:name="H" style:family="paragraph"><style:paragraph-properties fo:break-before="page"/></style:style></office:styles></office:document-styles>)ODT";
+        std::string err;
+        const auto b = core::odt::read(core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}}), &err);
+        core::Doc one, two;
+        L::OdtInfo i1, i2;
+        L::OdtOptions no;
+        no.sections = false;
+        check("import: front matter a section by default", b && L::import_odt(one, *b, &i1, {}, &err) && i1.front_matter && one.ids_of<core::Section>().size() == 2, err);
+        check("import: sections off -- one run of pages", b && L::import_odt(two, *b, &i2, no, &err) && !i2.front_matter && two.ids_of<core::Section>().size() <= 1, err);
+    }
+    // ── s248: a header's pictures, on the master ─────────────────────────────
+    {
+        std::cout << "--- s248 header pictures ---\n";
+        namespace L = composix::layout;
+        std::string png = std::string("\x89PNG\r\n\x1a\n", 8) + std::string("\0\0\0\x0dIHDR", 8) + std::string("\0\0\0\x28\0\0\0\x1e", 8) + std::string(20, '\0');
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f" xmlns:svg="v" xmlns:draw="d" xmlns:xlink="x")";
+        const std::string styles = "<office:document-styles" + ns + R"ODT(><office:styles><style:style style:name="Standard" style:family="paragraph"/></office:styles><office:automatic-styles>
+ <style:style style:name="MP1" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="center"/></style:style>
+ <style:style style:name="Mfr1" style:family="graphic"><style:graphic-properties style:wrap="none"/></style:style>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="1in" fo:margin-bottom="0.75in" fo:margin-left="1in" fo:margin-right="1in"/></style:page-layout>
+</office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">
+ <style:header><text:p text:style-name="MP1"><draw:frame draw:name="Logo" draw:style-name="Mfr1" text:anchor-type="as-char" svg:width="0.5in" svg:height="0.375in"><draw:image xlink:href="Pictures/logo.png"/></draw:frame></text:p></style:header>
+</style:master-page></office:master-styles></office:document-styles>)ODT";
+        const std::string content = "<office:document-content" + ns + "><office:body><office:text><text:p>Words.</text:p></office:text></office:body></office:document-content>";
+        std::string err;
+        const auto b = core::odt::read(core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content},
+                                                                 {"styles.xml", styles}, {"Pictures/logo.png", png}}), &err);
+        check("header picture: read on its paragraph, its file, its style found in styles.xml", b && !b->masters.empty() && !b->masters[0].header.empty() &&
+              b->masters[0].header[0].pictures.size() == 1 && b->masters[0].header[0].pictures[0].bytes == png &&
+              b->masters[0].header[0].pictures[0].wrap == 2 && b->images.empty(), err);
+        if (b) {
+            const auto dir = (std::filesystem::temp_directory_path() / "cx-s248").string();
+            std::filesystem::remove_all(dir);
+            core::Doc d;
+            L::OdtInfo info;
+            L::OdtOptions opt;
+            opt.picture_dir = dir;
+            check("header picture: imported, placed, nothing said left out", L::import_odt(d, *b, &info, opt, &err) && info.placed == 1 &&
+                  info.header_pictures == 1 && info.notes_said.empty(), err);
+            const core::Frame* pic = nullptr;
+            const core::Frame* head = nullptr;
+            for (const auto& id : d.ids_of<core::Frame>()) {
+                const auto* f = d.as<core::Frame>(id);
+                if (f->owner != "master.1") continue;
+                if (f->kind == core::FrameKind::Image) pic = f;
+                else if (f->kind == core::FrameKind::Text) head = f;
+            }
+            check("header picture: on the master, centred over the header's frame, at its top, over it",
+                  pic && head && std::abs(pic->x - (head->x + (head->w - 36) / 2)) < 0.01 && pic->y == head->y && pic->w == 36 && pic->z > head->z &&
+                  d.as<core::Asset>(pic->asset) && std::filesystem::exists(d.as<core::Asset>(pic->asset)->path));
+            std::filesystem::remove_all(dir);
+        }
+    }
+    // ── s249: a .svgz opened ─────────────────────────────────────────────────
+    {
+        std::cout << "--- s249 svgz ---\n";
+        const std::string gz("\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xb3\x29\x2e\x4b\xb7\xb3\x29\x4a\x4d\x2e\x51\x48\xcb\xcc\xc9\xb1\x55\x52\x4e\x4b\x33\x00\x02\x25\x7d\x3b\x1b\x7d\x90\x1c\x00\xf6\x2e\xc3\xd0\x21\x00\x00\x00", 49);
+        bool ok = false;
+        const auto svg = core::zip::gunzip(gz, &ok);
+        check("svgz: a gzip stream recognised and opened", core::zip::gzipped(gz) && ok && svg == "<svg><rect fill=\"#ff0000\"/></svg>", svg);
+        const auto vc = core::swatches::svg_colors(svg);
+        check("svgz: its colours read as an .svg's", vc.size() == 1);
+        bool bad = true;
+        check("svgz: plain text isn't one; a broken stream says so", !core::zip::gzipped("<svg/>") && core::zip::gunzip(gz.substr(0, 20), &bad).empty() && !bad);
+    }
 }
 }  // namespace cxtest

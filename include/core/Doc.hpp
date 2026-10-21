@@ -806,6 +806,8 @@ std::int64_t file_stamp(const std::string& path);    // 0 = no such file
 enum class LinkStatus { OK, Modified, Missing, Embedded, EmbeddedMissing };
 LinkStatus   link_status(const Asset& a, const std::string& project_dir);
 std::string  link_status_text(LinkStatus s);
+// s247: the pictures linked (not embedded) whose files are there -- what Embed All takes.
+std::vector<Doc::Id> linked_assets(const Doc& d, const std::string& project_dir);
 // The picture's rect inside a frame (both in the same coordinates): Fill
 // covers the frame (cropped by it), Fit shows it whole. iw / ih: its aspect.
 Rect   fit_rect(const Rect& frame, double iw, double ih, ImageFit fit);

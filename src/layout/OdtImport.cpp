@@ -366,6 +366,39 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     }
     };
     fit(0.15, 0.6);
+    // s245 / s248: one file, one link -- however many frames show it (the body's and the headers')
+    std::map<std::string, std::string> asset_of;   // href -> asset
+    const auto asset_for = [&](const odt::Picture& pic, std::size_t k) -> std::string {
+        std::string& aid = asset_of[pic.href.empty() ? pic.name : pic.href];
+        if (aid.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(opt.picture_dir, ec);
+            int pw = 0, ph = 0;
+            const bool sized = odt::pixel_size(pic.bytes, pw, ph);
+            const std::string ext = pic.bytes.compare(0, 4, "\x89PNG") == 0 ? ".png" : pic.bytes.compare(0, 3, "GIF") == 0 ? ".gif"
+                                  : pic.bytes.compare(0, 2, "\xFF\xD8") == 0 ? ".jpg"
+                                  : std::filesystem::path(pic.href).extension().string();
+            std::string base = std::filesystem::path(pic.href).stem().string();   // the file's own name
+            if (base.empty()) base = pic.name.empty() ? "picture-" + std::to_string(k + 1) : pic.name;
+            for (auto& c : base) if (c == '/' || c == '\\' || c == ':') c = '_';
+            for (int n = 2; std::filesystem::exists(std::filesystem::path(opt.picture_dir) / (base + ext)) && n < 10000; ++n)
+                base = std::filesystem::path(pic.href).stem().string() + "-" + std::to_string(n);
+            const auto path = (std::filesystem::path(opt.picture_dir) / (base + ext)).string();
+            { std::ofstream out(path, std::ios::binary); out << pic.bytes; }
+            core::Asset a;
+            a.name = base + ext;
+            a.pos = static_cast<double>(k + 1);
+            a.path = path;
+            a.color = core::picture_color(pic.bytes);
+            if (a.color.empty()) a.color = "RGB";
+            a.px_w = sized ? pw : 0;
+            a.px_h = sized ? ph : 0;
+            a.stamp = core::file_stamp(path);
+            aid = d.fresh_id("asset");
+            d.put(aid, a);
+        }
+        return aid;
+    };
     // s245: the pictures -- written out (opt.picture_dir) and linked, placed by their anchors;
     // then the pages fitted again, the anchored ones moved to where their paragraphs went.
     if (!opt.picture_dir.empty() && !b.images.empty()) {
@@ -377,7 +410,6 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
         while (static_cast<int>(pages.size()) < keep) add_page();
         struct Placed1 { std::size_t k; std::string frame; };
         std::vector<Placed1> placed;
-        std::map<std::string, std::string> asset_of;   // href -> asset
         const auto where = [&](const odt::Picture& pic, std::string& page, double& x, double& y) {   // on which page, at what place
             const core::Rect page_area = core::margin_rect(d, "master.1");
             if (pic.anchor == "page" || pic.para < 0 || pic.para >= static_cast<int>(first_of.size())) {
@@ -413,32 +445,7 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             std::string page;
             double x = 0, y = 0;
             if (!where(pic, page, x, y)) continue;
-            std::string& aid = asset_of[pic.href.empty() ? pic.name : pic.href];   // one file, one link -- however many frames show it
-            if (aid.empty()) {
-                int pw = 0, ph = 0;
-                const bool sized = odt::pixel_size(pic.bytes, pw, ph);
-                const std::string ext = pic.bytes.compare(0, 4, "\x89PNG") == 0 ? ".png" : pic.bytes.compare(0, 3, "GIF") == 0 ? ".gif"
-                                      : pic.bytes.compare(0, 2, "\xFF\xD8") == 0 ? ".jpg"
-                                      : std::filesystem::path(pic.href).extension().string();
-                std::string base = std::filesystem::path(pic.href).stem().string();   // the file's own name
-                if (base.empty()) base = pic.name.empty() ? "picture-" + std::to_string(k + 1) : pic.name;
-                for (auto& c : base) if (c == '/' || c == '\\' || c == ':') c = '_';
-                for (int n = 2; std::filesystem::exists(std::filesystem::path(opt.picture_dir) / (base + ext)) && n < 10000; ++n)
-                    base = std::filesystem::path(pic.href).stem().string() + "-" + std::to_string(n);
-                const auto path = (std::filesystem::path(opt.picture_dir) / (base + ext)).string();
-                { std::ofstream out(path, std::ios::binary); out << pic.bytes; }
-                core::Asset a;
-                a.name = base + ext;
-                a.pos = static_cast<double>(k + 1);
-                a.path = path;
-                a.color = core::picture_color(pic.bytes);
-                if (a.color.empty()) a.color = "RGB";
-                a.px_w = sized ? pw : 0;
-                a.px_h = sized ? ph : 0;
-                a.stamp = core::file_stamp(path);
-                aid = d.fresh_id("asset");
-                d.put(aid, a);
-            }
+            const std::string aid = asset_for(pic, k);
             core::Frame fr{page, core::FrameKind::Image, x, y, pic.w, pic.h, 0, 1e6 + static_cast<double>(k), "", "", aid};
             fr.fit = core::ImageFit::Fit;
             fr.wrap = pic.wrap == 0 ? core::Wrap::None : pic.wrap == 1 ? core::Wrap::Around : core::Wrap::Jump;
@@ -499,19 +506,42 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
                 return std::pair{id, std::max(12.0, h + 2)};
             };
             const bool two = n.facing && (std::abs(ms.margins.inside - ms.margins.outside) > 0.01 || !left.empty());
-            const auto frame = [&](const std::string& story, double h, core::Side side) {
+            const auto frame = [&](const std::string& story, double h, core::Side side, const std::vector<odt::Para>& ps) {
                 const core::Rect r = core::margin_rect(d, "master.1", side == core::Side::Any ? core::Side::Right : side);
                 const double y = top ? std::max(0.0, (ms.margins.top - h) / 2) : n.trim_h - ms.margins.bottom + std::max(0.0, (ms.margins.bottom - h) / 2);
                 core::Frame f{"master.1", core::FrameKind::Text, r.x, y, r.w, h, 0, 1, story, "", ""};
                 f.side = side;
                 d.put(d.fresh_id("frame"), f);
+                // s248: its pictures (a logo, a rule) -- by the header's frame, over it, no wrap
+                if (opt.picture_dir.empty()) return;
+                std::size_t k = 0;
+                for (const auto& p : ps)
+                    for (const auto& pic : p.pictures) {
+                        ++k;
+                        if (pic.bytes.empty()) continue;
+                        const bool centred = b.resolved(p.style).align == 1;
+                        const int hp = pic.anchor == "as-char" ? (centred ? 2 : 1) : pic.hpos;
+                        const double px = hp == 1 ? r.x : hp == 2 ? r.x + (r.w - pic.w) / 2 : hp == 3 ? r.x + r.w - pic.w : r.x + pic.x;
+                        const double py = pic.anchor == "page" ? pic.y : pic.anchor == "as-char" || pic.vpos != 0 ? y : y + pic.y;
+                        core::Frame g{"master.1", core::FrameKind::Image, px, py, pic.w, pic.h, 0, 2 + static_cast<double>(k), "", "",
+                                      asset_for(pic, 100000 + k)};
+                        g.fit = core::ImageFit::Fit;
+                        g.wrap = core::Wrap::None;
+                        g.side = side;
+                        d.put(d.fresh_id("frame"), g);
+                        if (side != core::Side::Left || &ps == &left) {   // (once for a picture shown on both sides)
+                            ++info.placed;
+                            ++info.header_pictures;
+                        }
+                    }
             };
             const auto [rs, rh] = story_of(right.empty() ? left : right, name);
-            if (!two) { frame(rs, rh, core::Side::Any); return; }
-            frame(rs, rh, core::Side::Right);
-            if (left.empty()) { frame(rs, rh, core::Side::Left); return; }   // the same words, its own place
+            const auto& rp = right.empty() ? left : right;
+            if (!two) { frame(rs, rh, core::Side::Any, rp); return; }
+            frame(rs, rh, core::Side::Right, rp);
+            if (left.empty()) { frame(rs, rh, core::Side::Left, rp); return; }   // the same words, its own place
             const auto [ls, lh] = story_of(left, std::string(name) + " (left)");
-            frame(ls, lh, core::Side::Left);
+            frame(ls, lh, core::Side::Left, left);
         };
         place(mp->header, mp->header_left, true, "Header");
         place(mp->footer, mp->footer_left, false, "Footer");
@@ -520,7 +550,7 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     }
     // s237: chapters / body -- the words before the first chapter (Heading 1) are the
     // front matter (its own section, roman numbers); the body begins on that chapter's page.
-    {
+    if (opt.sections) {   // s247: unless asked not to
         int first_ch = -1;
         for (std::size_t i = 0; i < st.paras.size() && first_ch < 0; ++i)
             if (i < heading1.size() && heading1[i]) first_ch = static_cast<int>(i);

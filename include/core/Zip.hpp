@@ -13,6 +13,10 @@ std::string entry(const std::string& zip, const std::string& name, bool* ok = nu
 // Its entries' names, in the central directory's order.
 std::vector<std::string> names(const std::string& zip);
 // s235: a zip of the given entries, stored (for tests and small writers).
+// s249: a gzip stream (a .svgz) -- whether these bytes are one, and their
+// contents ("" and ok false when they can't be read).
+bool        gzipped(const std::string& bytes);
+std::string gunzip(const std::string& bytes, bool* ok = nullptr);
 std::string make_stored(const std::vector<std::pair<std::string, std::string>>& files);
 
 }  // namespace composix::core::zip

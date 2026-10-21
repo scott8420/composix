@@ -39,11 +39,11 @@ std::vector<Central> directory(const std::string& z) {
     return out;
 }
 
-std::string inflate_raw(const char* p, std::size_t n, std::size_t hint, bool& ok) {
+std::string inflate_raw(const char* p, std::size_t n, std::size_t hint, bool& ok, int bits = -MAX_WBITS) {
     ok = false;
     std::string out(hint ? hint : n * 4 + 1024, '\0');
     z_stream zs{};
-    if (inflateInit2(&zs, -MAX_WBITS) != Z_OK) return {};
+    if (inflateInit2(&zs, bits) != Z_OK) return {};
     zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(p));
     zs.avail_in = static_cast<uInt>(n);
     int rc = Z_OK;
@@ -115,6 +115,17 @@ std::string make_stored(const std::vector<std::pair<std::string, std::string>>& 
     p16(z, 0); p16(z, 0); p16(z, static_cast<unsigned>(files.size())); p16(z, static_cast<unsigned>(files.size()));
     p32(z, static_cast<std::uint32_t>(cd.size())); p32(z, at); p16(z, 0);
     return z;
+}
+
+bool gzipped(const std::string& bytes) {   // s249
+    return bytes.size() > 2 && static_cast<unsigned char>(bytes[0]) == 0x1f && static_cast<unsigned char>(bytes[1]) == 0x8b;
+}
+
+std::string gunzip(const std::string& bytes, bool* ok) {   // s249
+    bool good = false;
+    std::string out = gzipped(bytes) ? inflate_raw(bytes.data(), bytes.size(), 0, good, 16 + MAX_WBITS) : std::string{};
+    if (ok) *ok = good;
+    return out;
 }
 
 }  // namespace composix::core::zip
