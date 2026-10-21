@@ -17,7 +17,7 @@ namespace composix::layout {
 struct Issue {
     enum class Level { Error, Warning, Info };
     Level       level = Level::Warning;
-    std::string kind;    // "overset", "missing", "modified", "lowres", "empty", "spot", "rgb", "transparency", "profile", "shift", s129 "xref"
+    std::string kind;    // "overset", "missing", "modified", "lowres", "empty", "spot", "rgb", "transparency", "profile", "shift", s129 "xref"; s312 "link", "layer", "spelling"
     std::string text;    // "Overset text: Chapters"
     std::string page;    // where (a page; "" = nowhere in particular)
     std::string frame;

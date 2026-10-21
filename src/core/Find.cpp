@@ -1,5 +1,6 @@
 // core::doc::find_all / change_hits -- Find / Change (s022).
 #include "core/Doc.hpp"
+#include "core/Spell.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -639,5 +640,40 @@ int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& 
 // s152: a string's full case fold (fold_char, a sharp s "ss", the ligatures
 // as their letters) -- for Find and the index's sorting.
 std::string fold_text(const std::string& utf8) { return narrow(folded(widen(utf8))); }
+
+std::vector<Doc::Id> stories_in_order(const Doc& d) { return reading_order(d); }   // s310
+
+SpellHit next_misspelling(const Doc& d, const Doc::Id& story, TextPos from) {   // s310
+    if (!spell::loaded()) return {};
+    const auto order = reading_order(d);
+    const auto at = std::find(order.begin(), order.end(), story);
+    const std::size_t k0 = at == order.end() ? 0 : static_cast<std::size_t>(at - order.begin());
+    const auto hit = [](const Doc::Id& sid, const spell::Word& w) { return SpellHit{sid, w.para, w.from, w.to, w.text}; };
+    for (std::size_t n = 0; n <= order.size(); ++n) {
+        const auto& sid = order[(k0 + n) % order.size()];
+        const auto& st = *d.as<Story>(sid);
+        const bool first = n == 0 && at != order.end(), last = n == order.size();
+        if (last && at == order.end()) break;
+        for (std::size_t p = 0; p < st.paras.size(); ++p)
+            for (const auto& w : spell::para_misses(st.paras[p].text, static_cast<int>(p))) {
+                const TextPos wp{static_cast<int>(p), w.from};
+                if (first && (wp < from || (w.para == from.para && w.from < from.byte))) continue;   // before it, or the word it's in
+                if (last && !(wp < from)) return {};                                               // round to where it began
+                return hit(sid, w);
+            }
+    }
+    return {};
+}
+
+SpellCount misspellings(const Doc& d) {   // s310
+    SpellCount c;
+    if (!spell::loaded()) return c;
+    for (const auto& sid : d.ids_of<Story>()) {
+        const auto m = spell::misses(*d.as<Story>(sid));
+        c.words += static_cast<int>(m.size());
+        c.stories += m.empty() ? 0 : 1;
+    }
+    return c;
+}
 
 }  // namespace composix::core::doc

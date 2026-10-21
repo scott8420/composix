@@ -5,6 +5,9 @@
 #include "layout/Flow.hpp"
 
 #include <gtkmm/box.h>
+#include <gtkmm/eventcontrollerkey.h>
+#include <gtkmm/window.h>
+#include <gtkmm/listbox.h>
 #include <gtkmm/button.h>
 #include <gtkmm/checkbutton.h>
 #include <gtkmm/dropdown.h>
@@ -382,8 +385,27 @@ void Shell::on_hyperlink() {  // handler
     entry->set_name("link.target");
     entry->set_width_chars(36);
     entry->set_placeholder_text("www.example.com, name@example.com, #anchor");
-    entry->set_text(cur);
+    entry->set_text(cur.rfind("page:", 0) == 0 ? "page " + m_doc.folio(cur.substr(5)) : cur);
     box->append(*entry);
+    // s313: or a heading / an anchored paragraph in the book
+    const auto places = core::doc::link_places(m_doc);
+    std::vector<Glib::ustring> names{"\u2014 or go to a heading \u2014"};
+    guint now = 0;
+    for (const auto& pl : places) {
+        names.push_back(pl.words);
+        const auto& para = m_doc.as<core::Story>(pl.story)->paras[static_cast<std::size_t>(pl.para)];
+        if (cur.size() > 1 && cur[0] == '#' && !para.anchors.empty() && para.anchors.front() == cur.substr(1)) now = static_cast<guint>(names.size() - 1);
+    }
+    auto to = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(names));
+    to->set_name("link.place");
+    to->set_selected(now);
+    if (now > 0) entry->set_text("");
+    to->set_sensitive(!places.empty());
+    box->append(*to);
+    auto hint = Gtk::make_managed<Gtk::Label>("A page: \u201cpage 7\u201d");
+    hint->set_xalign(0);
+    hint->add_css_class("dim-label");
+    box->append(*hint);
     auto buttons = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
     buttons->set_halign(Gtk::Align::END);
     auto remove = Gtk::make_managed<Gtk::Button>("Remove");
@@ -404,8 +426,31 @@ void Shell::on_hyperlink() {  // handler
         if (did) c.model_changed();
         Glib::signal_idle().connect_once([this] { m_canvas_view.canvas().grab_focus(); });
     };
-    ok->signal_clicked().connect([apply, entry] { apply(entry->get_text()); });
-    entry->signal_activate().connect([apply, entry] { apply(entry->get_text()); });
+    // s313: a heading picked -- linked to it; "page 7" -- to that page; else as typed
+    const auto go = [this, apply, entry, to, places, story, a, b] {
+        const guint k = to->get_selected();
+        if (k > 0 && k <= places.size()) {
+            const auto& pl = places[k - 1];
+            const bool did = core::doc::link_to_paragraph(m_journal, m_doc, story, a, b, pl.story, pl.para);
+            if (auto lg = log::get(log::Area::Shell)) lg->info("hyperlink: to \u201c{}\u201d ({})", pl.words, did);
+            if (m_xref_pop) m_xref_pop->popdown();
+            if (did) m_canvas_view.canvas().model_changed();
+            Glib::signal_idle().connect_once([this] { m_canvas_view.canvas().grab_focus(); });
+            return;
+        }
+        std::string t = entry->get_text();
+        std::string low = t;
+        std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        for (const char* pre : {"page ", "p. ", "p "})
+            if (low.rfind(pre, 0) == 0) {
+                const auto folio = t.substr(std::string(pre).size());
+                for (const auto& pid : m_doc.pages())
+                    if (m_doc.folio(pid) == folio) { apply(core::doc::page_link(pid)); return; }
+            }
+        apply(t);
+    };
+    ok->signal_clicked().connect(go);
+    entry->signal_activate().connect(go);
     remove->signal_clicked().connect([apply] { apply(""); });
     const auto r = cv.caret_screen();
     if (r.w > 0)
@@ -440,6 +485,175 @@ void Shell::ensure_spell() {  // helper
         lg->info("spelling: {} loaded", want);
     }
     m_canvas_view.canvas().marks_changed();
+}
+
+// s313: Edit > Check Spelling... (F7) -- the book's misspelled words one by
+// one, from the text cursor (else the first story's start): each shown in
+// place, what it might be, Change / Change All / Skip / Ignore All / Add.
+void Shell::on_check_spelling() {  // handler
+    ensure_spell();
+    if (!core::spell::loaded()) {
+        alert("No dictionary", core::spell::built_in() ? "No spelling dictionary was found -- install one (hunspell-en-US)."
+                                                       : "Spell check isn't built in: install hunspell-devel and hunspell-en-US, then build again.");
+        return;
+    }
+    if (!m_spell_win) {
+        m_spell_win = std::make_unique<Gtk::Window>();
+        auto& w = *m_spell_win;
+        w.set_name("spell");
+        w.set_title("Check Spelling");
+        w.set_resizable(false);
+        w.set_hide_on_close(true);
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 14);
+        box->set_margin(16);
+        auto left = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+        auto cap = Gtk::make_managed<Gtk::Label>("Not in the dictionary");
+        cap->set_xalign(0);
+        cap->add_css_class("cx-field-label");
+        left->append(*cap);
+        m_spell_word = Gtk::make_managed<Gtk::Label>();
+        m_spell_word->set_name("spell.word");
+        m_spell_word->set_xalign(0);
+        m_spell_word->add_css_class("title-3");
+        left->append(*m_spell_word);
+        m_spell_where = Gtk::make_managed<Gtk::Label>();
+        m_spell_where->set_name("spell.where");
+        m_spell_where->set_xalign(0);
+        m_spell_where->set_ellipsize(Pango::EllipsizeMode::END);
+        m_spell_where->set_max_width_chars(40);
+        m_spell_where->add_css_class("dim-label");
+        left->append(*m_spell_where);
+        auto cap2 = Gtk::make_managed<Gtk::Label>("Change to");
+        cap2->set_xalign(0);
+        cap2->set_margin_top(6);
+        cap2->add_css_class("cx-field-label");
+        left->append(*cap2);
+        m_spell_to = Gtk::make_managed<Gtk::Entry>();
+        m_spell_to->set_name("spell.to");
+        left->append(*m_spell_to);
+        m_spell_list = Gtk::make_managed<Gtk::ListBox>();
+        m_spell_list->set_name("spell.suggestions");
+        auto sc = Gtk::make_managed<Gtk::ScrolledWindow>();
+        sc->set_size_request(260, 150);
+        sc->set_child(*m_spell_list);
+        left->append(*sc);
+        m_spell_list->signal_row_selected().connect([this](Gtk::ListBoxRow* r) {
+            if (!r) return;
+            if (auto* l = dynamic_cast<Gtk::Label*>(r->get_child())) m_spell_to->set_text(l->get_text());
+        });
+        m_spell_list->signal_row_activated().connect([this](Gtk::ListBoxRow*) { m_spell_btns[0]->activate(); });
+        box->append(*left);
+        auto right = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+        const char* names[] = {"Change", "Change All", "Skip", "Ignore All", "Add", "Start Again"};
+        const char* ids[] = {"change", "change_all", "skip", "ignore", "add", "start"};
+        m_spell_btns.clear();
+        for (int k = 0; k < 6; ++k) {
+            auto b = Gtk::make_managed<Gtk::Button>(names[k]);
+            b->set_name(std::string("spell.") + ids[k]);
+            if (k == 5) b->set_margin_top(10);
+            right->append(*b);
+            m_spell_btns.push_back(b);
+        }
+        m_spell_btns[0]->add_css_class("suggested-action");
+        box->append(*right);
+        w.set_child(*box);
+        {   // Escape closes it
+            auto keys = Gtk::EventControllerKey::create();
+            keys->signal_key_pressed().connect([this](guint k, guint, Gdk::ModifierType) {
+                if (k != GDK_KEY_Escape) return false;
+                m_spell_win->set_visible(false);
+                return true;
+            }, false);
+            w.add_controller(keys);
+        }
+        m_spell_to->signal_activate().connect([this] { m_spell_btns[0]->activate(); });
+        const auto here = [this] { return core::TextPos{m_spell_hit.para, m_spell_hit.to}; };
+        m_spell_btns[0]->signal_clicked().connect([this] {   // Change
+            const auto h = m_spell_hit;
+            const std::string with = m_spell_to->get_text();
+            if (h.story.empty() || with.empty()) return;
+            core::doc::replace_word(m_journal, m_doc, h.story, h.para, h.from, h.to, h.word, with);
+            m_canvas_view.canvas().model_changed();
+            spell_next(h.story, {h.para, h.from + static_cast<int>(with.size())});
+        });
+        m_spell_btns[1]->signal_clicked().connect([this] {   // Change All
+            const auto h = m_spell_hit;
+            const std::string with = m_spell_to->get_text();
+            if (h.story.empty() || with.empty()) return;
+            const int n = core::doc::change_all_words(m_journal, m_doc, h.word, with);
+            if (auto lg = log::get(log::Area::Shell)) lg->info("spelling: '{}' -> '{}' x{}", h.word, with, n);
+            m_canvas_view.canvas().model_changed();
+            spell_next(h.story, {h.para, h.from});
+        });
+        m_spell_btns[2]->signal_clicked().connect([this, here] { if (!m_spell_hit.story.empty()) spell_next(m_spell_hit.story, here()); });
+        m_spell_btns[3]->signal_clicked().connect([this, here] {   // Ignore All
+            if (m_spell_hit.story.empty()) return;
+            core::spell::ignore(m_spell_hit.word);
+            m_canvas_view.canvas().marks_changed();
+            spell_next(m_spell_hit.story, here());
+        });
+        m_spell_btns[4]->signal_clicked().connect([this, here] {   // Add
+            if (m_spell_hit.story.empty()) return;
+            core::spell::add_word(m_spell_hit.word);
+            m_canvas_view.canvas().marks_changed();
+            spell_next(m_spell_hit.story, here());
+        });
+        m_spell_btns[5]->signal_clicked().connect([this] {   // Start Again: the book's first story
+            const auto order = core::doc::stories_in_order(m_doc);
+            if (!order.empty()) spell_next(order.front(), {0, 0});
+        });
+    }
+    if (auto* top = dynamic_cast<Gtk::Window*>(get_root())) m_spell_win->set_transient_for(*top);
+    auto& cv = m_canvas_view.canvas();
+    if (cv.editing()) spell_next(cv.edit_story_id(), cv.edit_range().first);
+    else {
+        const auto order = core::doc::stories_in_order(m_doc);
+        spell_next(order.empty() ? std::string() : order.front(), {0, 0});
+    }
+    m_spell_win->present();
+}
+
+void Shell::spell_next(const std::string& story, core::TextPos from) {  // helper
+    m_spell_hit = story.empty() ? core::doc::SpellHit{} : core::doc::next_misspelling(m_doc, story, from);
+    spell_show();
+}
+
+void Shell::spell_show() {  // helper
+    const auto& h = m_spell_hit;
+    while (auto* r = m_spell_list->get_row_at_index(0)) m_spell_list->remove(*r);
+    for (int k = 0; k < 5; ++k) m_spell_btns[static_cast<std::size_t>(k)]->set_sensitive(!h.story.empty());
+    if (h.story.empty()) {
+        m_spell_word->set_text("No more misspelled words");
+        m_spell_where->set_text("");
+        m_spell_to->set_text("");
+        return;
+    }
+    m_spell_word->set_text(h.word);
+    const auto sg = core::spell::suggest(h.word, 10);
+    for (const auto& g : sg) {
+        auto l = Gtk::make_managed<Gtk::Label>(g);
+        l->set_xalign(0);
+        l->set_margin_start(6);
+        m_spell_list->append(*l);
+    }
+    m_spell_to->set_text(sg.empty() ? h.word : sg.front());
+    if (!sg.empty()) m_spell_list->select_row(*m_spell_list->get_row_at_index(0));
+    // where: its story, its words round it; on the canvas, the word selected
+    const auto* st = m_doc.as<core::Story>(h.story);
+    std::string where = st ? st->name : std::string();
+    const auto flow = layout::flow_story(m_doc, h.story);
+    const auto c = layout::caret_at(m_doc, h.story, flow, {h.para, h.from});
+    if (c.ok) {
+        const auto* f = m_doc.as<core::Frame>(c.frame);
+        if (f && m_doc.as<core::Page>(f->owner)) where += " \u00b7 page " + m_doc.folio(f->owner);
+        Gtk::Widget* had = m_spell_win ? m_spell_win->get_focus() : nullptr;
+        if (f) m_nav.select_items({f->owner});
+        m_canvas_view.canvas().select_text(c.frame, {h.para, h.from}, {h.para, h.to}, false);
+        if (had) had->grab_focus();
+    } else {
+        where += flow.frames.empty() ? " \u00b7 not placed" : " \u00b7 overset";
+    }
+    m_spell_where->set_text(where);
 }
 
 }  // namespace composix

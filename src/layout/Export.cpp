@@ -841,7 +841,12 @@ std::vector<PdfLink> hyperlink_links(const core::Doc& d, FlowCache& flows) {   /
             }
         for (const auto& span : here) {
             PdfLink proto;
-            if (span.target[0] == '#') {
+            if (span.target.rfind("page:", 0) == 0) {   // s311: to a page's top
+                const auto pid = span.target.substr(5);
+                if (!d.as<core::Page>(pid)) continue;
+                proto.to = pid;
+                proto.to_y = 0;
+            } else if (span.target[0] == '#') {
                 const auto id = span.target.substr(1);
                 auto it = dests.find(id);
                 if (it == dests.end()) it = dests.emplace(id, anchor_dest(d, flows, id)).first;

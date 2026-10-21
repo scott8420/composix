@@ -172,7 +172,17 @@ private:
     void paste_here(bool in_place);                 // category: handler: s297 -- Ctrl+V: another program's words as a frame, else our frames
     bool paste_target(double& cx, double& cy, const core::Placed*& tp);   // category: helper: s297 -- the page Paste lands on, the view's middle
     void duplicate_picked();
-    void ensure_spell();                            // category: helper: s309 -- the document's dictionary loaded
+    void ensure_spell();
+    void on_check_spelling();                       // category: handler: s313 -- Edit > Check Spelling... (F7)
+    void spell_next(const std::string& story, core::TextPos from);   // category: helper: s313
+    void spell_show();                              // category: helper: s313
+    std::unique_ptr<Gtk::Window> m_spell_win;       // s313
+    core::doc::SpellHit m_spell_hit;                // s313: the word on show ("" none)
+    Gtk::Label* m_spell_word = nullptr;
+    Gtk::Label* m_spell_where = nullptr;
+    Gtk::Entry* m_spell_to = nullptr;
+    Gtk::ListBox* m_spell_list = nullptr;
+    std::vector<Gtk::Button*> m_spell_btns;         // Change, Change All, Skip, Ignore All, Add                            // category: helper: s309 -- the document's dictionary loaded
     struct SpellAt { std::string story; core::spell::Word word; };
     SpellAt m_spell_at;                             // s309: the misspelled word the text menu was opened on
     bool layer_edit(const std::string& key, const std::string& choice, const std::vector<std::string>& ids);   // category: handler: s308

@@ -41,7 +41,8 @@ const plate::Proof* proof_for(const std::string& path, bool perceptual) {
     return p.get();
 }
 
-bool shown(const core::Doc& d, const core::Frame& f) { return !page_of(d, f).empty(); }
+// s312: on a page, and on a layer that prints (a hidden / non-printing layer's frames aren't checked)
+bool shown(const core::Doc& d, const core::Frame& f) { return !page_of(d, f).empty() && core::doc::frame_prints(d, f); }
 
 std::string where(const core::Doc& d, const std::string& page) {
     return page.empty() ? std::string{} : " — page " + d.folio(page);
@@ -185,6 +186,35 @@ std::vector<Issue> preflight_issues(const core::Doc& d, FlowCache& flows, const 
         out.push_back({L::Error, "profile", "Output profile \u201c" + o.missing_profile + "\u201d is not on this computer (Export PDF)", {}, {}});
     if (o.standard != 0 && !o.profile && o.missing_profile.empty())
         out.push_back({L::Error, "profile", "PDF/X needs an output profile (Export PDF)", {}, {}});
+    // s312: hyperlinks that go nowhere (their anchor or page gone) -- at the link's words
+    for (const auto& l : core::doc::hyperlinks(d)) {
+        if (!l.broken) continue;
+        std::string pg, fr;
+        for (const auto& ft : flows.get(d, l.story).frames)
+            for (const auto& ln : ft.lines)
+                if (pg.empty() && ln.para == l.para && l.from >= ln.start && l.from < std::max(ln.end, ln.start + 1)) {
+                    fr = ft.frame;
+                    if (const auto* f = d.as<core::Frame>(ft.frame)) pg = page_of(d, *f);
+                }
+        std::string why = core::doc::link_where(d, l.target);
+        if (why.rfind("Gone ", 0) == 0) why = why.substr(5);   // "(its anchor deleted)"
+        else why = "(" + why + ")";
+        out.push_back({L::Warning, "link", "A hyperlink goes nowhere " + why + ": \u201c" + l.words + "\u201d" + where(d, pg), pg, fr});
+    }
+    // s312: layers left out of the PDF
+    for (const auto& lid : core::doc::layers(d)) {
+        const auto& ly = *d.as<core::Layer>(lid);
+        if (ly.visible && ly.print) continue;
+        const int n = core::doc::frames_on_layer(d, lid);
+        if (n == 0) continue;
+        out.push_back({L::Info, "layer", "Layer \u201c" + ly.name + "\u201d " + (ly.visible ? "doesn't print" : "is hidden") + " -- its " +
+                                             std::to_string(n) + (n == 1 ? " frame is" : " frames are") + " left out of the PDF", {}, {}, lid});
+    }
+    // s312: misspelled words (with a dictionary) -- worth knowing before it goes
+    if (const auto c = core::doc::misspellings(d); c.words > 0)
+        out.push_back({L::Info, "spelling", std::to_string(c.words) + (c.words == 1 ? " misspelled word" : " misspelled words") + " in " +
+                                                std::to_string(c.stories) + (c.stories == 1 ? " story" : " stories") + " (Edit \u203a Check Spelling)",
+                       {}, {}, {}});
     // Errors first, then warnings, then info; each in page order.
     std::map<std::string, int> at;
     const auto pages = d.pages();

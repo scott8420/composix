@@ -4167,6 +4167,7 @@ std::vector<LinkSpan> links_in(const Doc& d, const Doc::Id& story) {   // s303
         const auto& text = st->paras[static_cast<std::size_t>(l.para)].text;
         l.words = text.substr(static_cast<std::size_t>(l.from), static_cast<std::size_t>(l.to - l.from));
         l.broken = l.target.size() > 1 && l.target[0] == '#' && find_anchor(d, l.target.substr(1)).story.empty();
+        if (l.target.rfind("page:", 0) == 0) l.broken = !d.as<Page>(l.target.substr(5));   // s311
         if (l.target == "#") l.broken = true;
     }
     return out;
@@ -4179,6 +4180,80 @@ std::vector<LinkSpan> hyperlinks(const Doc& d) {   // s303
         out.insert(out.end(), v.begin(), v.end());
     }
     return out;
+}
+
+std::string page_link(const Doc::Id& page) { return "page:" + page; }   // s311
+
+bool link_to_paragraph(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& to_story, int to_para) {   // s311
+    const auto* ts = d.as<Story>(to_story);
+    if (!ts || to_para < 0 || to_para >= static_cast<int>(ts->paras.size()) || !d.as<Story>(story)) return false;
+    if (b < a) std::swap(a, b);
+    if (a == b) return false;
+    std::string id;
+    {
+        const auto& para = ts->paras[static_cast<std::size_t>(to_para)];
+        if (para.text.rfind(kMarkAnchor, 0) == 0 && !para.anchors.empty()) id = para.anchors.front();
+    }
+    bool did = false;
+    j.run("Hyperlink", {story, to_story}, [&] {
+        if (id.empty()) {
+            id = insert_anchor(j, d, to_story, {to_para, 0});
+            const int m = static_cast<int>(std::string(kMarkAnchor).size());
+            if (story == to_story && a.para == to_para) a.byte += m;
+            if (story == to_story && b.para == to_para) b.byte += m;
+        }
+        did = set_link(j, d, story, a, b, "#" + id) || !id.empty();
+    });
+    return did;
+}
+
+std::vector<LinkPlace> link_places(const Doc& d) {   // s311
+    std::vector<std::string> listed;
+    for (const auto& lid : d.ids_of<GenList>())
+        if (const auto& l = *d.as<GenList>(lid); l.kind == ListKind::Contents) listed.insert(listed.end(), l.from_styles.begin(), l.from_styles.end());
+    const auto heading = [&](const std::string& st) {
+        if (std::find(listed.begin(), listed.end(), st) != listed.end()) return true;
+        const auto* s = d.as<Style>(st);
+        return s && s->name.rfind("Heading", 0) == 0;
+    };
+    std::vector<LinkPlace> out;
+    for (const auto& sid : stories_in_order(d)) {
+        const auto& st = *d.as<Story>(sid);
+        for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) {
+            const auto& para = st.paras[static_cast<std::size_t>(p)];
+            bool anchored = false;
+            for (auto i = para.text.find(kMarkAnchor); i != std::string::npos && !anchored; i = para.text.find(kMarkAnchor, i + 3))
+                anchored = !note_at(para.text, i + 3);
+            if (!anchored && !heading(para.style)) continue;
+            std::string w;
+            for (std::size_t i = 0; i < para.text.size() && w.size() < 60 && para.text[i] != '\t';) {
+                if (static_cast<unsigned char>(para.text[i]) == 0xEE && i + 2 < para.text.size()) { i += 3; continue; }
+                w += para.text[i++];
+            }
+            out.push_back({sid, p, w.empty() ? std::string("(no words)") : w});
+        }
+    }
+    return out;
+}
+
+std::string link_where(const Doc& d, const std::string& target) {   // s311
+    if (target.empty()) return {};
+    if (target.rfind("page:", 0) == 0) {
+        const auto pid = target.substr(5);
+        return d.as<Page>(pid) ? "Page " + d.folio(pid) : std::string("Gone (a page deleted)");
+    }
+    if (target[0] == '#') {
+        const auto at = find_anchor(d, target.substr(1));
+        if (at.story.empty()) return "Gone (its anchor deleted)";
+        const auto& para = d.as<Story>(at.story)->paras[static_cast<std::size_t>(at.at.para)].text;
+        std::string w;
+        for (std::size_t i = 0; i < para.size() && w.size() < 50 && para[i] != '\t';) {
+            if (static_cast<unsigned char>(para[i]) == 0xEE && i + 2 < para.size()) { i += 3; continue; }
+            w += para[i++];
+        }
+        return "\u201c" + w + "\u201d";
+    }
+    return target;
 }
 
 std::string link_at(const Doc& d, const Doc::Id& story, TextPos a, TextPos b) {   // s303
@@ -6222,6 +6297,7 @@ const std::vector<Verb>& verbs() {
         {"lock_frames", [](DocJournal& j, Doc& d) { lock_frames(j, d, {"frame.2"}, true); }},          // s301
         {"set_link", [](DocJournal& j, Doc& d) { set_link(j, d, "story.1", {1, 4}, {1, 12}, "www.example.com"); }},   // s303
         {"set_language", [](DocJournal& j, Doc& d) { set_language(j, d, "en_GB"); }},   // s307
+        {"link_to_paragraph", [](DocJournal& j, Doc& d) { link_to_paragraph(j, d, "story.2", {0, 0}, {0, 4}, "story.1", 4); }},   // s311
         {"replace_word", [](DocJournal& j, Doc& d) { replace_word(j, d, "story.1", 1, 4, 10, "harbor", "harbour"); }},
         {"change_all_words", [](DocJournal& j, Doc& d) { change_all_words(j, d, "the", "thee"); }},
         {"add_layer", [](DocJournal& j, Doc& d) { add_layer(j, d, "Notes"); }},   // s305

@@ -1562,6 +1562,25 @@ struct LinkSpan {
 };
 std::vector<LinkSpan> links_in(const Doc& d, const Doc::Id& story);
 std::vector<LinkSpan> hyperlinks(const Doc& d);
+// s311: a link to a paragraph -- its anchor (the first at its start, else
+// one made there) -- over [a, b). One step.
+bool link_to_paragraph(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& to_story, int to_para);
+// s311: a link to a page: "page:" and its id (to its top). links_in calls it
+// broken when the page is gone.
+std::string page_link(const Doc::Id& page);
+// s311: the places a link can go to, in reading order -- headings
+// (paragraphs in a style named Heading..., or one a Contents list gathers)
+// and paragraphs holding an anchor of their own; their first words.
+struct LinkPlace {
+    Doc::Id story;
+    int para = 0;
+    std::string words;
+    bool operator==(const LinkPlace&) const = default;
+};
+std::vector<LinkPlace> link_places(const Doc& d);
+// s311: where a link goes, in words: "https://...", "Page 7", "\u201cChapter
+// Two\u201d" (an anchor's paragraph), "Gone".
+std::string link_where(const Doc& d, const std::string& target);
 // s303: the link at a caret / over a whole selection ("" none or mixed).
 std::string link_at(const Doc& d, const Doc::Id& story, TextPos a, TextPos b);
 // s265: Alt+Left / Right while typing (InDesign's): at a caret, the kern of
@@ -1825,6 +1844,23 @@ std::string expand_groups(const std::string& with, const std::vector<std::string
 // Every hit, in reading order: stories by the first page their thread
 // starts on (masters', then unplaced, after), then by position.
 std::vector<Hit> find_all(const Doc& d, const FindOpts& f);
+// s310: the stories in the order they read -- by the page their thread
+// starts on (masters', then unplaced, after).
+std::vector<Doc::Id> stories_in_order(const Doc& d);
+// s310: Check Spelling through the book. The next misspelled word after
+// (story, from) -- the rest of that story, then the stories after it in
+// reading order, then round from the first to where it began; story ""
+// none (or no dictionary). `from` past the word the caret is in.
+struct SpellHit {
+    Doc::Id story;
+    int para = -1, from = 0, to = 0;
+    std::string word;
+    bool operator==(const SpellHit&) const = default;
+};
+SpellHit next_misspelling(const Doc& d, const Doc::Id& story, TextPos from);
+// s310: how many misspelled words, and in how many stories.
+struct SpellCount { int words = 0, stories = 0; };
+SpellCount misspellings(const Doc& d);
 // What to do to a hit: put `with` in its place (when set_text), and / or
 // apply a paragraph or character style to what's there afterwards.
 struct ChangeOpts {

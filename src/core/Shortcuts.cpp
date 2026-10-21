@@ -114,6 +114,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         // ── Edit (s046) ───────────────────────────────────────────────────────
         // Doc-only ON PURPOSE: an accelerator would take Ctrl+Z from every text
         // box. The window hears these instead (Shell_bindings.cpp).
+        {"Edit", "win.check-spelling", {"F7"}, "", "Check Spelling -- the book's misspelled words one by one"},   // s313
         {"Edit", "", {}, "Ctrl+Z", "Undo -- anywhere but a text box (which keeps its own)"},
         {"Edit", "", {}, "Ctrl+Shift+Z  /  Ctrl+Y", "Redo"},
 

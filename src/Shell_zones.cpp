@@ -222,7 +222,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: the menubar's model (s27
     section(edit, {{"Cut", "win.cut-frames"}, {"Copy", "win.copy-frames"}, {"Paste", "win.paste-frames"},
                    {"Paste in Place", "win.paste-in-place"}, {"Duplicate", "win.duplicate-frames"},
                    {"Step and Repeat\u2026", "win.step-repeat"}});   // s282; s284
-    section(edit, {{"Find / Change\u2026", "win.find"}});
+    section(edit, {{"Find / Change\u2026", "win.find"}, {"Check Spelling\u2026", "win.check-spelling"}});   // s313
     section(edit, {{"Delete Frames", "win.delete-frames"}});
     bar->append_submenu("_Edit", edit);
 

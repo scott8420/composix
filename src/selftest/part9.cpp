@@ -2310,5 +2310,103 @@ void part9() {
         check("marks: none asked for, none given", L::text_marks(d, flows, "frame.1", false, false).empty());
         check("marks: not a text frame -- none", L::text_marks(d, flows, "frame.4", true, true).empty() || d.as<core::Frame>("frame.4")->kind == core::FrameKind::Text);
     }
+    // -- s310: Check Spelling through the book --------------------------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto order = D::stories_in_order(d);
+        check("stories in order: every story once, the book's text first", order.size() == d.ids_of<core::Story>().size() && !order.empty());
+        if (core::spell::loaded()) {
+            for (const auto& sid : d.ids_of<core::Story>()) core::spell::misses(*d.as<core::Story>(sid));   // (the sample may have its own odd words)
+            const auto c0 = D::misspellings(d);
+            D::replace_word(j, d, "story.1", 1, 11, 18, "smelled", "smeled");
+            const auto st2 = order.size() > 1 ? order[1] : order[0];
+            D::edit_text(j, d, st2, {0, 0}, {0, 0}, "Qwzx ");
+            const auto c1 = D::misspellings(d);
+            check("count: two more words", c1.words == c0.words + 2, std::to_string(c0.words) + " -> " + std::to_string(c1.words));
+            // walk from the start of the first story: every miss once, then round to the start
+            std::vector<std::string> seen;
+            auto h = D::next_misspelling(d, order.front(), {0, 0});
+            const auto first = h;
+            for (int guard = 0; !h.story.empty() && guard < 200; ++guard) {
+                seen.push_back(h.word);
+                h = D::next_misspelling(d, h.story, {h.para, h.to});
+                if (h == first) break;
+            }
+            check("walk: each miss once, round to the first", static_cast<int>(seen.size()) == c1.words &&
+                                                                std::find(seen.begin(), seen.end(), "smeled") != seen.end() &&
+                                                                std::find(seen.begin(), seen.end(), "Qwzx") != seen.end(),
+                  std::to_string(seen.size()) + " of " + std::to_string(c1.words));
+            const auto in = D::next_misspelling(d, "story.1", {1, 13});   // the caret inside "smeled": past it
+            check("walk: the word the caret is in skipped", in.word != "smeled", in.word);
+        }
+    }
+    // -- s311: links to headings and pages ------------------------------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto places = D::link_places(d);
+        const auto two = std::find_if(places.begin(), places.end(), [](const D::LinkPlace& p) { return p.words == "Chapter Two"; });
+        check("places: the headings, in reading order", two != places.end() && places.front().words == "Chapter One",
+              places.empty() ? "none" : places.front().words);
+        const auto before = d.as<core::Story>("story.1")->paras[two->para].text;
+        check("link to a heading: an anchor made at its start, one step", D::link_to_paragraph(j, d, "story.1", {1, 4}, {1, 10}, "story.1", two->para) &&
+                                                                          d.as<core::Story>("story.1")->paras[two->para].text.rfind(core::kMarkAnchor, 0) == 0);
+        auto ls = D::hyperlinks(d);
+        check("... the words link to it, not broken; where: its words", ls.size() == 1 && ls[0].words == "harbor" && !ls[0].broken &&
+                                                                        D::link_where(d, ls[0].target) == "“Chapter Two”",
+              ls.empty() ? "none" : D::link_where(d, ls[0].target));
+        check("a second link to it: the same anchor", D::link_to_paragraph(j, d, "story.1", {2, 0}, {2, 6}, "story.1", two->para) &&
+                                                      D::hyperlinks(d).size() == 2 && D::hyperlinks(d)[0].target == D::hyperlinks(d)[1].target);
+        j.undo();
+        j.undo();
+        check("undone: the anchor gone with it", d.as<core::Story>("story.1")->paras[two->para].text == before && D::hyperlinks(d).empty());
+        const auto pg = d.pages().back();
+        check("link to a page", D::set_link(j, d, "story.1", {1, 4}, {1, 10}, D::page_link(pg)) && D::hyperlinks(d)[0].target == "page:" + pg &&
+                                    D::link_where(d, "page:" + pg) == "Page " + d.folio(pg));
+        {
+            L::FlowCache flows;
+            const auto pl = L::hyperlink_links(d, flows);
+            check("... in the PDF: to that page's top", !pl.empty() && pl.front().to == pg && pl.front().uri.empty() && pl.front().to_y == 0);
+        }
+        D::remove_pages(j, d, {pg});
+        check("... the page gone: broken", D::hyperlinks(d)[0].broken && D::link_where(d, "page:" + pg).rfind("Gone", 0) == 0);
+    }
+    // -- s312: preflight -- broken links, layers left out, misspellings -------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        L::FlowCache flows;
+        const auto kinds = [&](const std::string& k) {
+            int n = 0;
+            for (const auto& i : L::preflight_issues(d, flows, {})) n += i.kind == k ? 1 : 0;
+            return n;
+        };
+        check("preflight: none of these at first", kinds("link") == 0 && kinds("layer") == 0);
+        D::set_link(j, d, "story.1", {1, 4}, {1, 10}, "#anchor.none");
+        const auto all = L::preflight_issues(d, flows, {});
+        const auto li = std::find_if(all.begin(), all.end(), [](const L::Issue& i) { return i.kind == "link"; });
+        check("preflight: a link going nowhere -- a warning at its page", li != all.end() && li->level == L::Issue::Level::Warning && !li->page.empty() &&
+                                                                         li->text.find("harbor") != std::string::npos,
+              li == all.end() ? "none" : li->text);
+        const auto ly = D::add_layer(j, d);
+        const auto f = D::add_frame(j, d, d.pages().back(), core::FrameKind::Image, {40, 40, 100, 100});   // an empty picture frame: Info
+        const int empty_before = kinds("empty");
+        D::edit_layer(j, d, ly, "Hide Layer", [](core::Layer& l) { l.visible = false; });
+        check("preflight: a hidden layer said; its frames not checked", kinds("layer") == 1 && kinds("empty") == empty_before - 1 && d.as<core::Frame>(f));
+        if (core::spell::loaded()) {
+            D::replace_word(j, d, "story.1", 1, 11, 18, "smelled", "smeled");
+            check("preflight: misspelled words counted (info)", kinds("spelling") == 1);
+        }
+    }
 }
 }  // namespace cxtest
