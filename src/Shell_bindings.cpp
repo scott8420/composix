@@ -329,6 +329,29 @@ void Shell::bind_actions() {  // bindings: actions + recents group
             return true;
         }, false);
     add_controller(keys);
+    // s265: typing on the canvas, InDesign's spacing keys -- Alt+Left / Right
+    // kern the pair at the caret (a selection: track), 20 / 1000 em (Ctrl:
+    // 100); Alt+Shift+Up / Down, the baseline shift 1 pt (Ctrl: 5). Caught
+    // first (capture), so Back / Forward keep Alt+arrows everywhere else.
+    auto spacing = Gtk::EventControllerKey::create();
+    spacing->set_propagation_phase(Gtk::PropagationPhase::CAPTURE);
+    spacing->signal_key_pressed().connect(
+        [this](guint keyval, guint, Gdk::ModifierType state) {
+            const bool alt = (state & Gdk::ModifierType::ALT_MASK) == Gdk::ModifierType::ALT_MASK;
+            const bool ctrl = (state & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
+            const bool shift = (state & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
+            const bool lr = keyval == GDK_KEY_Left || keyval == GDK_KEY_Right;
+            const bool ud = keyval == GDK_KEY_Up || keyval == GDK_KEY_Down;
+            if (!alt || (!lr && !ud) || (ud && !shift) || (lr && shift)) return false;
+            auto& cv = m_canvas_view.canvas();
+            if (!cv.editing() || focus_is_text() || m_main.get_visible_child_name() != "canvas") return false;
+            const auto [a, b] = cv.edit_range();
+            const auto story = cv.edit_story_id();
+            if (lr) core::doc::nudge_spacing(m_journal, m_doc, story, a, b, (keyval == GDK_KEY_Left ? -1 : 1) * (ctrl ? 100.0 : 20.0));
+            else core::doc::nudge_shift(m_journal, m_doc, story, a, b, (keyval == GDK_KEY_Up ? 1 : -1) * (ctrl ? 5.0 : 1.0));
+            return true;
+        }, false);
+    add_controller(spacing);
     update_undo_ui();
 }
 

@@ -158,6 +158,7 @@ private:
     // ── helpers ────────────────────────────────────────────────────────────
     std::vector<const core::Item*> resolve(const std::vector<std::string>& ids) const;  // category: helper
     void queue_refresh();
+    std::vector<std::string> next_spread();         // category: helper: s269 -- the spread after the canvas's (Forward)
     void check_reflow();                          // category: helper: s255 -- overset stories in page frames get pages                         // category: helper: one re-projection per idle, after the writes
     core::Outline project_now() const;            // category: helper: the projection, with overset measured
     void refresh();                               // category: helper: re-project; every view repaints, keeping its place

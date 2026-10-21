@@ -73,6 +73,21 @@ struct Builder {
         }
         return at;
     }
+    // s268: a paragraph naming a page style starts a new page with it (ODF);
+    // a page style for right (left) pages only: on the next right- (left-)
+    // hand page -- LibreOffice's "Right Page" chapter openings.
+    core::ParaStart start_for_master(const std::string& master) const {
+        if (master.empty()) return core::ParaStart::Anywhere;
+        for (const auto& m : b.masters) {
+            if (m.name != master) continue;
+            const auto it = b.layouts.find(m.layout);
+            if (it == b.layouts.end()) break;
+            if (it->second.side == 1) return core::ParaStart::NextRightPage;
+            if (it->second.side == 2) return core::ParaStart::NextLeftPage;
+            break;
+        }
+        return core::ParaStart::NextPage;
+    }
     std::string para_for(const std::string& odt_style) {
         const std::string named = named_of(odt_style);
         if (const auto it = para_style.find(named); it != para_style.end()) return it->second;
@@ -98,6 +113,10 @@ struct Builder {
         onto(s, char_set(pr, s.size));   // s262: a paragraph style's character attributes
         if (pr.page_break == 1) s.start = core::ParaStart::NextPage;
         if (pr.page_break == 1 && s.space_before > 0) s.top_space = true;   // s242: a chapter heading sunk down its page, as in the file
+        if (!pr.master.empty()) {   // s268: its page style -- a new page, on its side
+            s.start = start_for_master(pr.master);
+            if (s.space_before > 0) s.top_space = true;
+        }
         // s257: keeps -- keep with next (a line), orphans / widows as Keep lines
         // (the larger; 1 or none is Off, more than 3 is kept at 3).
         if (pr.keep_next == 1) s.keep_next = 1;
@@ -134,6 +153,7 @@ struct Builder {
     struct CharSet {
         std::optional<double> tracking, shift;
         int position = -1, caps = -1, underline = -1, strike = -1;
+        std::optional<core::OtFeatures> ot;   // s266
     };
     static CharSet char_set(const odt::Props& p, double size) {
         CharSet c;
@@ -147,6 +167,37 @@ struct Builder {
         c.caps = p.caps;
         c.underline = p.underline;
         c.strike = p.strike;
+        // s266: font features ("onum&liga=0&-kern&ss02") and pair kerning off.
+        core::OtFeatures f;
+        bool any = false;
+        std::size_t at = 0;
+        const std::string& fs = p.features;
+        while (at < fs.size()) {
+            std::size_t e = fs.find('&', at);
+            if (e == std::string::npos) e = fs.size();
+            std::string t = fs.substr(at, e - at);
+            at = e + 1;
+            bool on = true;
+            if (!t.empty() && (t[0] == '-' || t[0] == '+')) { on = t[0] == '+'; t.erase(0, 1); }
+            if (const auto eq = t.find('='); eq != std::string::npos) { on = std::atoi(t.c_str() + eq + 1) != 0; t.erase(eq); }
+            if (t == "liga") { f.liga = on ? 0 : 1; any = any || !on; }
+            else if (t == "kern") { f.kern = on ? 0 : 1; any = any || !on; }
+            else if (t == "lnum" && on) { f.figures = 1; any = true; }
+            else if (t == "onum" && on) { f.figures = 2; any = true; }
+            else if (t == "pnum" && on) { f.fig_space = 1; any = true; }
+            else if (t == "tnum" && on) { f.fig_space = 2; any = true; }
+            else if (t == "dlig" && on) { f.dlig = true; any = true; }
+            else if (t == "frac" && on) { f.frac = true; any = true; }
+            else if (t == "ordn" && on) { f.ordn = true; any = true; }
+            else if (t == "swsh" && on) { f.swsh = true; any = true; }
+            else if (t == "smcp" && on) c.caps = 2;
+            else if (t.size() == 4 && t[0] == 's' && t[1] == 's' && on) {
+                const int n = std::atoi(t.c_str() + 2);
+                if (n >= 1 && n <= 20) { f.sset = n; any = true; }
+            }
+        }
+        if (p.kerning == 0) { f.kern = 1; any = true; }
+        if (any) c.ot = f;
         return c;
     }
     static void onto(core::Style& s, const CharSet& c) {
@@ -156,6 +207,7 @@ struct Builder {
         if (c.caps >= 0) s.caps = c.caps;
         if (c.underline >= 0) s.underline = c.underline == 1;
         if (c.strike >= 0) s.strike = c.strike == 1;
+        if (c.ot) s.ot = *c.ot;   // s266
     }
     static void onto(core::Local& l, const CharSet& c) {
         if (c.tracking) l.tracking = c.tracking;
@@ -164,6 +216,7 @@ struct Builder {
         if (c.caps >= 0) l.caps = c.caps;
         if (c.underline >= 0) l.underline = c.underline;
         if (c.strike >= 0) l.strike = c.strike;
+        if (c.ot) l.ot = c.ot;   // s266
     }
     double cur_size = 12;   // s262: the paragraph's size, for an automatic style's letter spacing
     // What an automatic style changes, as local formatting (over the paragraph style `ps`).
@@ -204,6 +257,7 @@ struct Builder {
                     if (l.caps >= 0) r.local.caps = l.caps;
                     if (l.underline >= 0) r.local.underline = l.underline;
                     if (l.strike >= 0) r.local.strike = l.strike;
+                    if (l.ot) r.local.ot = l.ot;   // s266
                     if (!st->second.parent.empty() && b.styles.count(st->second.parent)) r.style = char_for(st->second.parent);
                 } else {
                     r.style = char_for(s->style);
@@ -267,6 +321,7 @@ struct Builder {
             if (own.before > -1e8) q.over.space_before = own.before;
             if (own.after > -1e8) q.over.space_after = own.after;
             if (own.page_break == 1) q.brk = core::ParaStart::NextPage;
+            if (!own.master.empty()) q.brk = start_for_master(own.master);   // s268
             if (own.keep_next >= 0) q.over.keep_next = own.keep_next;   // s257
         }
         q.runs = runs_of(p.text, p.spans, base);
@@ -308,6 +363,20 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     }
     n.pages = 1;
     n.facing = L && L->mirrored;
+    // s268: a page style for one side only (a front matter's "right"), or a
+    // mirrored body ("Standard"), or any side-only page style a paragraph
+    // asks for: the book has sides -- facing pages.
+    if (L && L->side != 0) n.facing = true;
+    for (const auto& m : b.masters) {
+        const auto it = b.layouts.find(m.layout);
+        if (it == b.layouts.end()) continue;
+        if (m.name == "Standard" && it->second.mirrored) n.facing = true;
+    }
+    for (const auto& [name, st] : b.styles) {
+        if (st.props.master.empty()) continue;
+        for (const auto& m : b.masters)
+            if (m.name == st.props.master && b.layouts.count(m.layout) && b.layouts.at(m.layout).side != 0) n.facing = true;
+    }
     n.text_frames = false;
     n.folios = false;
     if (!core::check_new(n).empty()) {
@@ -364,6 +433,68 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     } else if (any_end) {
         info.notes_said.push_back("its endnotes came in as footnotes");
     }
+    // s270: the page styles the book uses -- each a master of its own (its
+    // size, margins, headers / footers). The first paragraph's (else
+    // "Standard") is master.1; then every one a paragraph names, and where
+    // each goes next ("Right Page" -> "Standard").
+    const auto mp_of = [&](const std::string& nm) -> const odt::MasterPage* {
+        for (const auto& m : b.masters) if (m.name == nm) return &m;
+        return nullptr;
+    };
+    std::vector<std::string> used;
+    const auto use = [&](const std::string& nm) {
+        if (!nm.empty() && mp_of(nm) && std::find(used.begin(), used.end(), nm) == used.end()) used.push_back(nm);
+    };
+    std::string first_style = b.body.empty() ? std::string{} : b.resolved(b.body.front().style).master;
+    if (!mp_of(first_style)) first_style = mp_of("Standard") ? "Standard" : b.masters.empty() ? std::string{} : b.masters.front().name;
+    use(first_style);
+    for (const auto& p : b.body) use(b.resolved(p.style).master);
+    for (std::size_t i = 0; i < used.size(); ++i) use(mp_of(used[i])->next);
+    std::vector<std::string> para_style_page;   // each story paragraph: the page style it names ("" none)
+    for (const auto& p : b.body) {
+        const std::string want = b.resolved(p.style).master;
+        bool first = true;
+        for (const auto& piece : split_lines(p)) {
+            (void)piece;
+            para_style_page.push_back(first && mp_of(want) ? want : std::string{});
+            first = false;
+        }
+    }
+    std::map<std::string, std::string> master_id;   // page style -> master
+    std::string blank_master;   // s270: an inserted blank page's (LibreOffice prints them blank)
+    {
+        const core::Master base = *d.as<core::Master>("master.1");
+        for (std::size_t i = 0; i < used.size(); ++i) {
+            const auto* mp = mp_of(used[i]);
+            core::Master m = base;
+            m.prefix = std::string(1, static_cast<char>('A' + std::min<std::size_t>(i, 24)));
+            m.name = mp->display.empty() ? mp->name : mp->display;
+            m.pos = static_cast<double>(i + 1);
+            if (const auto it = b.layouts.find(mp->layout); it != b.layouts.end()) {
+                const auto& lay = it->second;
+                if (lay.w > 36 && lay.h > 36) { m.w = lay.w; m.h = lay.h; }
+                const auto mg = [](double v, double fb) { return v >= 0 ? v : fb; };
+                m.margins = {mg(lay.top, base.margins.top), mg(lay.bottom, base.margins.bottom), mg(lay.left, base.margins.inside),
+                             mg(lay.right, base.margins.outside)};
+            }
+            const std::string id = i == 0 ? std::string("master.1") : d.fresh_id("master");
+            d.put(id, m);
+            master_id[used[i]] = id;
+        }
+        if (used.empty()) master_id[""] = "master.1";
+    }
+    const auto blank_for = [&](const std::string& like) {   // a blank page's master: the page style's size and margins, nothing on it
+        if (blank_master.empty()) {
+            core::Master m = *d.as<core::Master>(like);
+            m.prefix = std::string(1, static_cast<char>('A' + std::min<std::size_t>(used.size(), 24)));
+            m.name = "Inserted blank";
+            m.pos = static_cast<double>(used.size() + 1);
+            blank_master = d.fresh_id("master");
+            d.put(blank_master, m);
+        }
+        return blank_master;
+    };
+
     // Pages, as many as the text takes.
     std::vector<std::string> pages, frames;
     const auto add_page = [&] {
@@ -426,6 +557,56 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     }
     };
     fit(0.15, 0.6);
+    // s270: each page its page style's master, as LibreOffice turns them --
+    // a paragraph naming one starts it on its page, and each page after takes
+    // the one before's "next"; an inserted blank page (a right-hand start's)
+    // is blank. The page's text frame in its master's margins. True when
+    // anything changed (the text then set again).
+    const auto assign_masters = [&]() {
+        if (used.empty()) return false;
+        const StoryFlow f = flow_story(d, "story.1");
+        std::map<std::string, std::string> starts;
+        std::set<std::string> empty;
+        for (const auto& ft : f.frames) {
+            const auto* tf = d.as<core::Frame>(ft.frame);
+            if (!tf) continue;
+            if (ft.lines.empty()) empty.insert(tf->owner);
+            for (const auto& l : ft.lines)
+                if (l.start == 0 && l.para < static_cast<int>(para_style_page.size()) && !para_style_page[static_cast<std::size_t>(l.para)].empty() &&
+                    !starts.count(tf->owner))
+                    starts[tf->owner] = para_style_page[static_cast<std::size_t>(l.para)];
+        }
+        bool changed = false;
+        std::string cur = first_style;
+        for (std::size_t i = 0; i < pages.size(); ++i) {
+            const auto& pid = pages[i];
+            if (const auto it = starts.find(pid); it != starts.end()) cur = it->second;
+            const bool blank = empty.count(pid) && !starts.count(pid) && i > 0 && i + 1 < pages.size() &&
+                               d.frames_on(pid).size() == 1;   // (a page with a picture on it isn't blank)
+            const std::string want = blank ? blank_for(master_id[cur]) : master_id[cur];
+            core::Page pg = *d.as<core::Page>(pid);
+            const auto* wm = d.as<core::Master>(want);
+            if (pg.master != want || (wm && (pg.w != wm->w || pg.h != wm->h))) {
+                pg.master = want;
+                if (wm) { pg.w = wm->w; pg.h = wm->h; }
+                d.put(pid, pg);
+                changed = true;
+            }
+            const core::Rect r = core::margin_rect(d, pid);
+            core::Frame fr = *d.as<core::Frame>(frames[i]);
+            if (r.w > 1 && (std::abs(fr.x - r.x) > 0.01 || std::abs(fr.y - r.y) > 0.01 || std::abs(fr.w - r.w) > 0.01 || std::abs(fr.h - r.h) > 0.01)) {
+                fr.x = r.x;
+                fr.y = r.y;
+                fr.w = r.w;
+                fr.h = r.h;
+                d.put(frames[i], fr);
+                changed = true;
+            }
+            if (const auto* m = mp_of(cur); m && !m->next.empty() && master_id.count(m->next)) cur = m->next;
+        }
+        return changed;
+    };
+    for (int round = 0; round < 4 && assign_masters(); ++round) fit(0.55, 0.6);
     // s245 / s248: one file, one link -- however many frames show it (the body's and the headers')
     std::map<std::string, std::string> asset_of;   // href -> asset
     const auto asset_for = [&](const odt::Picture& pic, std::size_t k) -> std::string {
@@ -539,22 +720,34 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             fit(0.8, 0.9);
         }
     }
+    for (int round = 0; round < 3 && assign_masters(); ++round) fit(0.9, 0.92);   // s270: after the pictures moved things
     info.pages = static_cast<int>(pages.size());
     // s237: the first master page's header and footer -- each a story in a frame on the
     // master, in the top / bottom margin; facing with uneven margins: one a side (the
     // left pages' own words when the file has them).
-    report(0.92, "Headers and footers…");
-    const odt::MasterPage* mp = nullptr;
-    {
-        std::string want;
-        if (!b.body.empty()) want = b.resolved(b.body.front().style).master;
-        for (const auto& m : b.masters) if (m.name == (want.empty() ? std::string("Standard") : want)) mp = &m;
-        if (!mp && !b.masters.empty()) mp = &b.masters.front();
+    // s270: new pages in the body take the body's page style ("Standard"), else the first.
+    const std::string body_master = master_id.count("Standard") ? master_id["Standard"] : std::string("master.1");
+    if (auto* s1 = d.as<core::Section>("section.1"); s1 && !opt.sections) {
+        auto s = *s1;
+        s.master = body_master;
+        d.put("section.1", s);
     }
-    if (mp) {
-        const auto& ms = *d.as<core::Master>("master.1");
+    report(0.92, "Headers and footers…");
+    // s270: every page style's, on its own master (was the first's alone).
+    std::vector<std::pair<const odt::MasterPage*, std::string>> heads;
+    for (const auto& nm : used) heads.push_back({mp_of(nm), master_id[nm]});
+    if (heads.empty() && !b.masters.empty()) heads.push_back({&b.masters.front(), "master.1"});
+    for (const auto& [mp, mid] : heads) {
+        const auto& ms = *d.as<core::Master>(mid);
+        const std::string tag = heads.size() > 1 ? " (" + ms.name + ")" : std::string{};
         const auto place = [&](const std::vector<odt::Para>& right, const std::vector<odt::Para>& left, bool top, const char* name) {
             if (right.empty() && left.empty()) return;
+            {   // s270: a header with no words (a page style's, switched on but empty): no frame
+                bool words = false;
+                for (const auto* side : {&right, &left})
+                    for (const auto& p : *side) words = words || !p.text.empty() || !p.pictures.empty();
+                if (!words) return;
+            }
             const auto story_of = [&](const std::vector<odt::Para>& ps, const std::string& nm) {
                 core::Story s{nm, {}};
                 for (const auto& p : ps)
@@ -567,9 +760,9 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             };
             const bool two = n.facing && (std::abs(ms.margins.inside - ms.margins.outside) > 0.01 || !left.empty());
             const auto frame = [&](const std::string& story, double h, core::Side side, const std::vector<odt::Para>& ps) {
-                const core::Rect r = core::margin_rect(d, "master.1", side == core::Side::Any ? core::Side::Right : side);
-                const double y = top ? std::max(0.0, (ms.margins.top - h) / 2) : n.trim_h - ms.margins.bottom + std::max(0.0, (ms.margins.bottom - h) / 2);
-                core::Frame f{"master.1", core::FrameKind::Text, r.x, y, r.w, h, 0, 1, story, "", ""};
+                const core::Rect r = core::margin_rect(d, mid, side == core::Side::Any ? core::Side::Right : side);
+                const double y = top ? std::max(0.0, (ms.margins.top - h) / 2) : ms.h - ms.margins.bottom + std::max(0.0, (ms.margins.bottom - h) / 2);
+                core::Frame f{mid, core::FrameKind::Text, r.x, y, r.w, h, 0, 1, story, "", ""};
                 f.side = side;
                 d.put(d.fresh_id("frame"), f);
                 // s248: its pictures (a logo, a rule) -- by the header's frame, over it, no wrap
@@ -583,7 +776,7 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
                         const int hp = pic.anchor == "as-char" ? (centred ? 2 : 1) : pic.hpos;
                         const double px = hp == 1 ? r.x : hp == 2 ? r.x + (r.w - pic.w) / 2 : hp == 3 ? r.x + r.w - pic.w : r.x + pic.x;
                         const double py = pic.anchor == "page" ? pic.y : pic.anchor == "as-char" || pic.vpos != 0 ? y : y + pic.y;
-                        core::Frame g{"master.1", core::FrameKind::Image, px, py, pic.w, pic.h, 0, 2 + static_cast<double>(k), "", "",
+                        core::Frame g{mid, core::FrameKind::Image, px, py, pic.w, pic.h, 0, 2 + static_cast<double>(k), "", "",
                                       asset_for(pic, 100000 + k)};
                         g.fit = core::ImageFit::Fit;
                         g.wrap = core::Wrap::None;
@@ -599,12 +792,16 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             const auto& rp = right.empty() ? left : right;
             if (!two) { frame(rs, rh, core::Side::Any, rp); return; }
             frame(rs, rh, core::Side::Right, rp);
-            if (left.empty()) { frame(rs, rh, core::Side::Left, rp); return; }   // the same words, its own place
+            if (left.empty()) {   // the same words, its own place -- s270: its own story (one story in two frames threads them: the second got nothing)
+                const auto [cs, ch] = story_of(rp, std::string(name) + " (left)");
+                frame(cs, ch, core::Side::Left, rp);
+                return;
+            }
             const auto [ls, lh] = story_of(left, std::string(name) + " (left)");
             frame(ls, lh, core::Side::Left, left);
         };
-        place(mp->header, mp->header_left, true, "Header");
-        place(mp->footer, mp->footer_left, false, "Footer");
+        place(mp->header, mp->header_left, true, ("Header" + tag).c_str());
+        place(mp->footer, mp->footer_left, false, ("Footer" + tag).c_str());
         if (!mp->header.empty() || !mp->header_left.empty()) ++info.headers;
         if (!mp->footer.empty() || !mp->footer_left.empty()) ++info.headers;
     }
@@ -623,8 +820,9 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
                 if (!page.empty()) break;
             }
             if (!page.empty() && page != pages.front()) {
-                d.put("section.1", core::Section{"Front matter", pages.front(), core::Numbering::RomanLower, 1, core::Side::Any, "master.1"});
-                d.put("section.2", core::Section{"Body", page, core::Numbering::Arabic, 1, core::Side::Any, "master.1"});
+                d.put("section.1", core::Section{"Front matter", pages.front(), core::Numbering::RomanLower, 1, core::Side::Any,
+                                                 d.as<core::Page>(pages.front())->master});
+                d.put("section.2", core::Section{"Body", page, core::Numbering::Arabic, 1, core::Side::Any, body_master});   // s270
                 info.front_matter = true;
             }
         }

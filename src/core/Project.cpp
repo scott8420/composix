@@ -27,6 +27,33 @@ const std::vector<Choice>& keep_next_choices() {
     static const std::vector<Choice> ch{{"0", "Off"}, {"1", "1 line"}, {"2", "2 lines"}, {"3", "3 lines"}, {"4", "4 lines"}, {"5", "5 lines"}};
     return ch;
 }
+// s267: the OpenType rows -- a style's (keys ot_*; `dflt` the 0 choice's
+// label: "Default" / "Inherit"), or the words' own (keys lot_*, "Style's"
+// first, `set` false when they have none of their own).
+void ot_rows(std::vector<Field>& f, const OtFeatures& o, const std::string& prefix, const std::string& dflt, bool own, bool set) {
+    const auto row = [&](const char* label, const char* key, int v, std::vector<std::pair<std::string, std::string>> ch) {
+        std::vector<Choice> c;
+        if (own) c.push_back({"-1", "Style's"});
+        for (auto& [id, lb] : ch) c.push_back({id, lb});
+        std::string val = own && !set ? "Style's" : "";
+        if (val.empty())
+            for (const auto& x : c) if (x.id == std::to_string(v)) val = x.label;
+        f.push_back({label, val, prefix + key, c});
+    };
+    row("Ligatures", "liga", o.liga, {{"0", own ? "On" : dflt == "Inherit" ? "Inherit" : "On"}, {"1", "Off"}});
+    row("Kerning", "kern", o.kern, {{"0", own ? "Metrics" : dflt == "Inherit" ? "Inherit" : "Metrics"}, {"1", "None"}});
+    row("Figures", "fig", o.figures, {{"0", own ? "Default" : dflt}, {"1", "Lining"}, {"2", "Oldstyle"}});
+    row("Figure spacing", "figsp", o.fig_space, {{"0", own ? "Default" : dflt}, {"1", "Proportional"}, {"2", "Tabular"}});
+    row("Fractions", "frac", o.frac, {{"0", own ? "Off" : dflt == "Inherit" ? "Inherit" : "Off"}, {"1", "On"}});
+    row("Ordinals", "ordn", o.ordn, {{"0", own ? "Off" : dflt == "Inherit" ? "Inherit" : "Off"}, {"1", "On"}});
+    if (own) return;   // the words: the everyday ones
+    row("Discretionary ligatures", "dlig", o.dlig, {{"0", dflt == "Inherit" ? "Inherit" : "Off"}, {"1", "On"}});
+    row("Swash", "swsh", o.swsh, {{"0", dflt == "Inherit" ? "Inherit" : "Off"}, {"1", "On"}});
+    std::vector<std::pair<std::string, std::string>> ss{{"0", dflt == "Inherit" ? "Inherit" : "None"}};
+    for (int k = 1; k <= 20; ++k) ss.push_back({std::to_string(k), "Set " + std::to_string(k)});
+    row("Stylistic set", "sset", o.sset, ss);
+}
+
 std::string keep_next_label(int n) {
     for (const auto& c : keep_next_choices()) if (c.id == std::to_string(n)) return c.label;
     return "Off";
@@ -78,6 +105,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"mgutter", 1, 0, 500}, {"gutter", 1, 0, 500}, {"inset", 1, 0, 500}, {"wrap_off", 1, 0, 500}, {"colw", 1, 1, 20000},
         {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
         {"track", 1, -1000, 10000}, {"bshift", 1, -1000, 1000}, {"ltrack", 1, -1000, 10000}, {"lshift", 1, -1000, 1000},   // s263
+        {"lkern", 1, -1000, 10000},   // s267
         {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500},
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
         {"dnote_rule_w", 1, 0.1, 6}, {"dnote_space", 1, 0, 36},   // s118
@@ -153,6 +181,8 @@ std::string style_group(const Field& f) {
         {"color", "Text"}, {"color_tint", "Text"}, {"clang", "Text"},
         {"track", "Character"}, {"bshift", "Character"}, {"cpos", "Character"}, {"ccase", "Character"}, {"uline", "Character"},
         {"strike", "Character"},   // s263
+        {"ot_liga", "OpenType"}, {"ot_kern", "OpenType"}, {"ot_fig", "OpenType"}, {"ot_figsp", "OpenType"}, {"ot_dlig", "OpenType"},
+        {"ot_frac", "OpenType"}, {"ot_ordn", "OpenType"}, {"ot_swsh", "OpenType"}, {"ot_sset", "OpenType"},   // s267
         {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"top_space", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
         {"findent", "Paragraph"}, {"indent_after", "Paragraph"}, {"tabs", "Paragraph"}, {"drop_lines", "Paragraph"},
         {"drop_chars", "Paragraph"}, {"span", "Paragraph"}, {"split_gutter", "Paragraph"},
@@ -531,6 +561,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 f.push_back({"Underline", s.underline ? "On" : off, "uline", {{"0", off}, {"1", "On"}}});
                 f.push_back({"Strikethrough", s.strike ? "On" : off, "strike", {{"0", off}, {"1", "On"}}});
             }
+            ot_rows(f, s.ot, "ot_", para ? "Default" : "Inherit", false, true);   // s267
             if (para) {
                 f.push_back({"Align", align_text(s.align), "align", align_ch});
                 f.push_back({"Space before", pt(s.space_before), "before", space_ch});
@@ -1348,6 +1379,15 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
                            {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
             out.push_back({"Strikethrough", l.strike < 0 ? "Style's" : l.strike ? "On" : "Off", "lstrike",
                            {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
+            // s267: the pair's kerning at a caret (on the character before it).
+            if (a == b && a.byte > 0) {
+                const Local kl = local_at(para, a.byte);
+                std::vector<Choice> kc{{"0", "0"}};
+                for (const double v : {-100.0, -50.0, -20.0, -10.0, 10.0, 20.0, 50.0, 100.0}) kc.push_back({num(v), num(v)});
+                Field kf{"Kerning (pair)", kl.kern ? num(*kl.kern) + " /1000 em" : "0", "lkern", kc};
+                out.push_back(kf);
+            }
+            ot_rows(out, l.ot ? *l.ot : OtFeatures{}, "lot_", "Default", true, l.ot.has_value());
         }
         mark_typed(out, unit_pt(d.settings().units));   // s041: Size typed
         Field fx{"", "", "local", {{"bold", "Bold"}, {"italic", "Italic"}, {"clear", "Clear overrides"}}};

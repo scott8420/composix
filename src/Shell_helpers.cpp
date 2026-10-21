@@ -165,6 +165,18 @@ void Shell::refresh() {  // helper
 
 // s068: up a level follows what's open -- enabled (and the views' back
 // arrows named for the section above) when items are open.
+// s269 (N1): the spread after the one the canvas shows (empty: none, or no pages open).
+std::vector<std::string> Shell::next_spread() {  // helper
+    if (m_main.get_visible_child_name() != "canvas") return {};
+    const auto& now = m_canvas_view.canvas().shown();
+    if (now.empty() || !m_doc.as<core::Page>(now.front())) return {};
+    const auto all = core::spreads(m_doc);
+    for (std::size_t i = 0; i < all.size(); ++i)
+        if (std::find(all[i].begin(), all[i].end(), now.front()) != all[i].end())
+            return i + 1 < all.size() ? all[i + 1] : std::vector<std::string>{};
+    return {};
+}
+
 void Shell::sync_up() {  // helper
     std::optional<core::Segment> parent;
     if (!m_pick.segment && !m_pick.items.empty() && m_main.get_visible_child_name() != "start")
@@ -173,12 +185,17 @@ void Shell::sync_up() {  // helper
     // Forward: what Back left, while the section it went to is shown.
     const bool fwd = !m_fwd_items.empty() && m_fwd_from && m_pick.segment == m_fwd_from &&
                      m_main.get_visible_child_name() != "start";
-    if (m_act_fwd) m_act_fwd->set_enabled(fwd);
+    // s269 (Scott, N1): else, with pages open, the next spread.
+    const auto next = fwd ? std::vector<std::string>{} : next_spread();
+    if (m_act_fwd) m_act_fwd->set_enabled(fwd || !next.empty());
     std::string fwd_to;
     if (fwd) {
         std::vector<const core::Item*> its;
         for (const auto& id : m_fwd_items) if (const auto* it = m_outline.find(id)) its.push_back(it);
         fwd_to = its.empty() ? std::string{} : core::selection_title(its);
+    } else if (!next.empty()) {   // "Page 12" / "Pages 8\u20139"
+        fwd_to = next.size() == 1 ? "Page " + m_doc.folio(next.front())
+                                  : "Pages " + m_doc.folio(next.front()) + "\u2013" + m_doc.folio(next.back());
     }
     const std::string back_to = parent ? core::segment_info(*parent).title : std::string{};
     // The buttons before every view's title say where they go.

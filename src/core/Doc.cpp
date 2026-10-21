@@ -270,8 +270,59 @@ std::vector<ByteSpan> no_break_spans(const Doc& d, const Para& p) {   // s075
     return out;
 }
 
+OtFeatures ot_over(const OtFeatures& under, const OtFeatures& over) {   // s264
+    OtFeatures f = under;
+    if (over.liga) f.liga = over.liga;
+    if (over.kern) f.kern = over.kern;
+    if (over.figures) f.figures = over.figures;
+    if (over.fig_space) f.fig_space = over.fig_space;
+    if (over.sset) f.sset = over.sset;
+    f.dlig = f.dlig || over.dlig;
+    f.frac = f.frac || over.frac;
+    f.ordn = f.ordn || over.ordn;
+    f.swsh = f.swsh || over.swsh;
+    return f;
+}
+
+std::string ot_settings(const OtFeatures& f, const OtFeatures& base) {   // s264
+    std::string out;
+    const auto put = [&](const std::string& tag, int v) { out += (out.empty() ? "" : ",") + tag + "=" + std::to_string(v); };
+    if (f.liga || base.liga) { put("liga", f.liga ? 0 : 1); put("clig", f.liga ? 0 : 1); }
+    if (f.kern || base.kern) put("kern", f.kern ? 0 : 1);
+    if (f.figures || base.figures) { put("lnum", f.figures == 1); put("onum", f.figures == 2); }
+    if (f.fig_space || base.fig_space) { put("pnum", f.fig_space == 1); put("tnum", f.fig_space == 2); }
+    if (f.dlig || base.dlig) put("dlig", f.dlig);
+    if (f.frac || base.frac) put("frac", f.frac);
+    if (f.ordn || base.ordn) put("ordn", f.ordn);
+    if (f.swsh || base.swsh) put("swsh", f.swsh);
+    if (base.sset && base.sset != f.sset) {
+        char t[8];
+        std::snprintf(t, sizeof t, "ss%02d", std::clamp(base.sset, 1, 20));
+        put(t, 0);
+    }
+    if (f.sset) {
+        char t[8];
+        std::snprintf(t, sizeof t, "ss%02d", std::clamp(f.sset, 1, 20));
+        put(t, 1);
+    }
+    return out;
+}
+
+void ot_edit(OtFeatures& f, const std::string& key, const std::string& choice) {   // s264
+    const int v = std::stoi(choice);
+    if (key == "ot_liga") f.liga = std::clamp(v, 0, 1);
+    else if (key == "ot_kern") f.kern = std::clamp(v, 0, 1);
+    else if (key == "ot_fig") f.figures = std::clamp(v, 0, 2);
+    else if (key == "ot_figsp") f.fig_space = std::clamp(v, 0, 2);
+    else if (key == "ot_sset") f.sset = std::clamp(v, 0, 20);
+    else if (key == "ot_dlig") f.dlig = v != 0;
+    else if (key == "ot_frac") f.frac = v != 0;
+    else if (key == "ot_ordn") f.ordn = v != 0;
+    else if (key == "ot_swsh") f.swsh = v != 0;
+}
+
 CharLook char_look(const Style& para, const Style* cs, const Local* own) {   // s260
-    CharLook k{para.tracking, para.shift, para.position, para.caps, para.underline, para.strike};
+    CharLook k{para.tracking, para.shift, para.position, para.caps, para.underline, para.strike, para.ot};
     if (cs && cs->kind == StyleKind::Character) {
         if (cs->tracking != 0) k.tracking = cs->tracking;
         if (cs->shift != 0) k.shift = cs->shift;
@@ -279,6 +330,7 @@ CharLook char_look(const Style& para, const Style* cs, const Local* own) {   // 
         if (cs->caps != 0) k.caps = cs->caps;
         k.underline = k.underline || cs->underline;
         k.strike = k.strike || cs->strike;
+        k.ot = ot_over(k.ot, cs->ot);   // s264
     }
     if (own) {
         if (own->tracking) k.tracking = *own->tracking;
@@ -287,6 +339,7 @@ CharLook char_look(const Style& para, const Style* cs, const Local* own) {   // 
         if (own->caps >= 0) k.caps = std::clamp(own->caps, 0, 2);
         if (own->underline >= 0) k.underline = own->underline == 1;
         if (own->strike >= 0) k.strike = own->strike == 1;
+        if (own->ot) k.ot = *own->ot;   // s264
     }
     return k;
 }
@@ -3142,8 +3195,9 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     // character's style (as InDesign); typing at a caret, the one before it.
     const std::string cstyle = (b != a && a.byte < static_cast<int>(pa.text.size())) ? char_style_at(pa, a.byte + 1)
                                                                                      : char_style_at(pa, a.byte);
-    const Local local = (b != a && a.byte < static_cast<int>(pa.text.size())) ? local_at(pa, a.byte + 1)
-                                                                              : local_at(pa, a.byte);   // s030
+    Local local = (b != a && a.byte < static_cast<int>(pa.text.size())) ? local_at(pa, a.byte + 1)
+                                                                        : local_at(pa, a.byte);   // s030
+    local.kern.reset();   // s265: a kern belongs to its pair -- what's typed doesn't take it
     const std::string style = pa.style;
     const int restart = pa.restart;   // s047: the first paragraph keeps its restart
     const ParaStart brk = pa.brk;     // s055: and its break
@@ -3304,7 +3358,7 @@ bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
 }
 
 bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
-               const std::function<void(Local&)>& f) {
+               const std::function<void(Local&)>& f, const std::string& merge_key) {
     const auto* st = d.as<Story>(story);
     if (!st || st->paras.empty()) return false;
     a = clamp_pos(*st, a);
@@ -3331,7 +3385,50 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
         para.index = std::move(was.index);     // s134
     }
     if (s == *st) return false;
-    return j.run(label, {story}, [&] { d.put(story, s); });
+    return j.run(label, {story}, [&] { d.put(story, s); }, merge_key);
+}
+
+namespace {
+// s265: the character look at byte `byte` of paragraph p (its first character's for a range).
+CharLook look_at(const Doc& d, const Para& para, int byte) {
+    const Style ps = para_style(d, para);
+    const Local l = local_at(para, byte + 1);
+    return char_look(ps, d.as<Style>(char_style_at(para, byte + 1)), &l);
+}
+}  // namespace
+
+bool nudge_spacing(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, double by) {   // s265
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return false;
+    a = clamp_pos(*st, a);
+    b = clamp_pos(*st, b);
+    if (b < a) std::swap(a, b);
+    if (a == b) {   // a caret: the pair it stands in
+        const TextPos p = prev_char(*st, a);
+        if (p.para != a.para || !(p < a)) return false;
+        const auto& para = st->paras[static_cast<std::size_t>(a.para)];
+        const double now = local_at(para, p.byte + 1).kern.value_or(0);
+        const double to = std::clamp(now + by, -1000.0, 10000.0);
+        return set_local(j, d, story, p, a, "Kerning", [&](Local& l) {
+            if (std::abs(to) < 0.5) l.kern.reset(); else l.kern = to;
+        }, "kern:" + story);
+    }
+    const auto& para = st->paras[static_cast<std::size_t>(a.para)];
+    const double to = std::clamp(look_at(d, para, a.byte).tracking + by, -1000.0, 10000.0);
+    return set_local(j, d, story, a, b, "Tracking", [&](Local& l) { l.tracking = to; }, "track:" + story);
+}
+
+bool nudge_shift(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, double by) {   // s265
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return false;
+    a = clamp_pos(*st, a);
+    b = clamp_pos(*st, b);
+    if (b < a) std::swap(a, b);
+    if (a == b) std::tie(a, b) = word_at(*st, a);
+    if (a == b) return false;
+    const auto& para = st->paras[static_cast<std::size_t>(a.para)];
+    const double to = std::clamp(look_at(d, para, a.byte).shift + by, -1000.0, 1000.0);
+    return set_local(j, d, story, a, b, "Baseline shift", [&](Local& l) { l.shift = to; }, "bshift:" + story);
 }
 
 // ── Based on / Next style (s037) ────────────────────────────────────────────
@@ -3358,6 +3455,7 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("caps", "Case", caps),
         COMPOSIX_SF("underline", "Underline", underline),
         COMPOSIX_SF("strike", "Strikethrough", strike),
+        COMPOSIX_SF("ot", "OpenType", ot),   // s264
         COMPOSIX_SF("color", "Color", color),
         COMPOSIX_SF("color_tint", "Tint", color_tint),
         COMPOSIX_SF("align", "Align", align),
@@ -3594,6 +3692,13 @@ std::string style_edit_label(const std::string& key) {   // s164
         {"track", "Tracking"}, {"bshift", "Baseline shift"}, {"cpos", "Position"}, {"ccase", "Case"}, {"uline", "Underline"},
         {"strike", "Strikethrough"}};   // s263
     if (const auto it = labels.find(key); it != labels.end()) return it->second;
+    if (key.rfind("ot_", 0) == 0) {   // s264
+        static const std::map<std::string, std::string> ol{{"ot_liga", "Ligatures"}, {"ot_kern", "Kerning"}, {"ot_fig", "Figures"},
+                                                           {"ot_figsp", "Figure spacing"}, {"ot_sset", "Stylistic set"},
+                                                           {"ot_dlig", "Discretionary ligatures"}, {"ot_frac", "Fractions"},
+                                                           {"ot_ordn", "Ordinals"}, {"ot_swsh", "Swash"}};
+        if (const auto it = ol.find(key); it != ol.end()) return it->second;
+    }
     if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {
         static const std::map<char, std::string> rl{{'w', "Rule"}, {'c', "Rule colour"}, {'t', "Rule tint"}, {'o', "Rule offset"},
                                                     {'x', "Rule width"}};
@@ -3631,6 +3736,7 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
     if (key == "ccase") { st.caps = std::clamp(std::stoi(choice), 0, 2); return; }
     if (key == "uline") { st.underline = choice == "1"; return; }
     if (key == "strike") { st.strike = choice == "1"; return; }
+    if (key.rfind("ot_", 0) == 0) { ot_edit(st.ot, key, choice); return; }   // s264
     if (key == "clang") { if (!para) st.lang = choice; return; }   // s226: "" the paragraph's, "none" no language
     if (!para) return;   // the rest: paragraph styles'
     if (key == "lindent") st.left_indent = std::stod(choice);
@@ -3720,6 +3826,7 @@ std::string style_key_of_edit(const std::string& e) {   // s092
         {"keep_lines", "keep_lines"}, {"pstart", "start"},
         {"track", "tracking"}, {"bshift", "shift"}, {"cpos", "position"}, {"ccase", "caps"}, {"uline", "underline"}, {"strike", "strike"}};   // s260
     if (const auto it = m.find(e); it != m.end()) return it->second;
+    if (e.rfind("ot_", 0) == 0) return "ot";   // s264
     if (e.rfind("rule_a", 0) == 0) return "rule_above";
     if (e.rfind("rule_b", 0) == 0) return "rule_below";
     if (e.rfind("list_", 0) == 0) return "list";

@@ -107,6 +107,41 @@ void add_look(PangoAttrList* attrs, const core::CharLook& k, const core::CharLoo
 #endif
     if (k.underline || base.underline) add(pango_attr_underline_new(k.underline ? PANGO_UNDERLINE_SINGLE : PANGO_UNDERLINE_NONE));
     if (k.strike || base.strike) add(pango_attr_strikethrough_new(k.strike ? TRUE : FALSE));
+    if (const auto feats = core::ot_settings(k.ot, base.ot); !feats.empty()) add(pango_attr_font_features_new(feats.c_str()));   // s264
+}
+
+// s265: manual kerning. Pango's letter spacing goes half before a character
+// and half after it; a kern is space AFTER it. So the kerned character gets
+// letter spacing (its tracking + the kern -- the line is broken knowing the
+// whole of it) and then its glyph is moved back by the kern's share of the
+// left half, so the character stays and what follows moves. A line's first
+// character: Pango trims its left half from the width as well, so the kern's
+// share of it goes back into the width (the glyph already stands still).
+struct KernAt { int byte; int total, track; };   // layout bytes; Pango units
+void kern_fixup(PangoLayout* l, const std::vector<KernAt>& ks) {
+    if (ks.empty()) return;
+    const auto left = [](int ls) {   // as Pango splits letter spacing
+        int a = ls / 2;
+        if ((ls & (PANGO_SCALE - 1)) == 0) a = PANGO_UNITS_ROUND(a);
+        return a;
+    };
+    for (GSList* li = pango_layout_get_lines(l); li; li = li->next) {
+        auto* line = static_cast<PangoLayoutLine*>(li->data);
+        for (GSList* r = line->runs; r; r = r->next) {
+            auto* gi = static_cast<PangoGlyphItem*>(r->data);
+            for (int i = 0; i < gi->glyphs->num_glyphs; ++i) {
+                if (!gi->glyphs->glyphs[i].attr.is_cluster_start) continue;
+                const int byte = gi->item->offset + gi->glyphs->log_clusters[i];
+                for (const auto& k : ks) {
+                    if (k.byte != byte) continue;
+                    auto& g = gi->glyphs->glyphs[i].geometry;
+                    if (byte == line->start_index) g.width += left(k.total) - left(k.track);
+                    else g.x_offset -= left(k.total) - left(k.track);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // s260: a line's logical box without its runs' rise -- a raised or lowered
@@ -148,6 +183,7 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
     const int n = static_cast<int>(p.text.size());
     const double psize = ps.size > 0 ? ps.size : 11;
     if (plook != core::CharLook{} && n > from) add_look(attrs, plook, {}, 0, n - from, psize);
+    std::vector<KernAt> kerns;   // s265
     for (const auto& r : p.runs) {
         const int a = std::max(r.start, from), b = std::min(r.end, n);
         if (b <= a) continue;
@@ -180,10 +216,21 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
         const double rsize = l.size > 0 ? l.size : cs && cs->size > 0 ? cs->size : psize;
         const auto look = core::char_look(ps, cs, &l);
         if (look != plook || (rsize != psize && look != core::CharLook{})) add_look(attrs, look, plook, a - from, b - from, rsize);
+        if (l.kern && *l.kern != 0) {   // s265: the kern on each of its characters (one, as set)
+            const int track = static_cast<int>(std::lround(look.tracking / 1000.0 * rsize * PANGO_SCALE));
+            const int total = track + static_cast<int>(std::lround(*l.kern / 1000.0 * rsize * PANGO_SCALE));
+            add(pango_attr_letter_spacing_new(total));
+            for (int i = a; i < b;) {
+                kerns.push_back({i - from, total, track});
+                ++i;
+                while (i < b && (static_cast<unsigned char>(p.text[static_cast<std::size_t>(i)]) & 0xC0) == 0x80) ++i;
+            }
+        }
     }
     if (marks) add_mark_shapes(l, attrs, d, p, from);
     pango_layout_set_attributes(l, attrs);
     pango_attr_list_unref(attrs);
+    kern_fixup(l, kerns);   // s265
 }
 
 LayoutPtr make_layout(const core::Style& st, const char* text, int len, double width, bool justify_last,

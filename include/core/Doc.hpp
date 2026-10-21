@@ -338,6 +338,25 @@ struct Frame {
 // run is in the paragraph style alone.
 // s030: formatting set on words directly, over their styles: -1 / 0 /
 // "" = leave it to the styles.
+// s264: OpenType features (InDesign's Character panel menu). 0 / false: the
+// font's default (a character style's: its paragraph's). `liga` 1 off;
+// `kern` 1 none (metrics off); `figures` 1 lining, 2 oldstyle; `fig_space` 1
+// proportional, 2 tabular; `sset` a stylistic set 1 - 20 (ss01 ...).
+struct OtFeatures {
+    int  liga = 0, kern = 0, figures = 0, fig_space = 0, sset = 0;
+    bool dlig = false, frac = false, ordn = false, swsh = false;
+    bool any() const { return liga || kern || figures || fig_space || sset || dlig || frac || ordn || swsh; }
+    bool operator==(const OtFeatures&) const = default;
+};
+// s264: `over` on `under`: what `over` sets (non-default) wins.
+OtFeatures ot_over(const OtFeatures& under, const OtFeatures& over);
+// s264: as HarfBuzz feature settings ("liga=0,onum=1"); `base`: what's set
+// under it -- what it set and this doesn't is set back ("liga=1"). "" none.
+std::string ot_settings(const OtFeatures& f, const OtFeatures& base = {});
+// s264: one feature set from an edit key (ot_liga, ot_kern, ot_fig, ot_figsp,
+// ot_sset, ot_dlig, ot_frac, ot_ordn, ot_swsh) and its choice.
+void ot_edit(OtFeatures& f, const std::string& key, const std::string& choice);
+
 struct Local {
     int         bold = -1, italic = -1;   // -1 the styles', 0 off, 1 on
     double      size = 0;                 // points
@@ -346,9 +365,11 @@ struct Local {
     // s260: character attributes (unset / -1: the styles') -- see Style.
     std::optional<double> tracking, shift;
     int         position = -1, caps = -1, underline = -1, strike = -1;
+    std::optional<OtFeatures> ot;         // s264: the words' own features (all of them, over the styles')
+    std::optional<double> kern;           // s265: manual kerning after this character (1/1000 em)
     bool empty() const {
         return bold < 0 && italic < 0 && size <= 0 && color.empty() && no_break < 0 && !tracking && !shift && position < 0 &&
-               caps < 0 && underline < 0 && strike < 0;
+               caps < 0 && underline < 0 && strike < 0 && !ot && !kern;
     }
     bool operator==(const Local&) const = default;
 };
@@ -565,6 +586,7 @@ struct Style {
     double      tracking = 0, shift = 0;
     int         position = 0, caps = 0;
     bool        underline = false, strike = false;
+    OtFeatures  ot;                      // s264
     // s166 (Scott): a paragraph style across ALL the frame's columns -- the
     // text before it balanced over the columns above it, the text after
     // going on in columns below it.
@@ -751,6 +773,7 @@ struct CharLook {
     double tracking = 0, shift = 0;
     int    position = 0, caps = 0;
     bool   underline = false, strike = false;
+    OtFeatures ot;   // s264
     bool operator==(const CharLook&) const = default;
 };
 CharLook char_look(const Style& para, const Style* cs = nullptr, const Local* own = nullptr);
@@ -1375,7 +1398,15 @@ bool set_para_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
 // s030: formatting on the words of [a, b) directly -- `f` changes each
 // piece's Local (Clear overrides: f = reset). One step.
 bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
-               const std::function<void(Local&)>& f);
+               const std::function<void(Local&)>& f, const std::string& merge_key = {});
+// s265: Alt+Left / Right while typing (InDesign's): at a caret, the kern of
+// the pair it stands in (on the character before it; not at a paragraph's
+// start); a selection, its tracking -- `by` thousandths of an em, presses
+// in a row one step. 0 again: the kern goes.
+bool nudge_spacing(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, double by);
+// s265: Alt+Shift+Up / Down: the selection's (or the caret's word's)
+// baseline shift by `by` points, presses in a row one step.
+bool nudge_shift(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, double by);
 bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style);
 // Change styles' settings: `f` edits each; one step for all of them.
 // s037: what `f` changes on a based-on style becomes its own, and the

@@ -36,6 +36,11 @@ struct Props {
     // underline / strike: style:text-underline-style / -line-through-style.
     double      letter = -1e9, rise = -1e9, scale = -1;
     int         caps = -1, underline = -1, strike = -1;
+    // s266: font features -- LibreOffice writes them into the font's name
+    // ("Linux Libertine G:onum&liga=0"), the family is what's before the
+    // colon; `kerning` 0: style:letter-kerning="false" (pair kerning off).
+    std::string features;
+    int         kerning = -1;
     std::string master;                 // style:master-page-name (a new page with that master)
 };
 
@@ -99,6 +104,7 @@ struct PageLayout {
     double w = 0, h = 0;                // points
     double top = -1, right = -1, bottom = -1, left = -1;
     bool   mirrored = false;            // s236: style:page-usage="mirrored" -- facing pages
+    int    side = 0;                    // s268: style:page-usage "right" 1, "left" 2 -- a page style only for that side
 };
 
 struct MasterPage {
@@ -127,6 +133,8 @@ struct Book {
 std::optional<Book> read(const std::string& bytes, std::string* err = nullptr);
 // "2.54cm", "1in", "12pt", "10mm", "1pc" -> points; `fallback` when it isn't a length.
 double length(const std::string& v, double fallback = -1);
+// s266: "Family:feat&feat=1" -> "Family", the features ("" none).
+std::string split_features(std::string& family);
 // s244: a picture's size in pixels from its file's header (PNG, JPEG, GIF); false if not one.
 bool pixel_size(const std::string& bytes, int& w, int& h);
 // s244: base64 (a flat file's office:binary-data), white space ignored.

@@ -176,6 +176,8 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Text", "win.subscript",           {"<Ctrl><Alt>minus"}, "", "Subscript (smaller, lowered) -- again: normal"},
         {"Text", "win.all-caps",            {"<Ctrl><Shift>k"}, "", "All caps (the letters as typed are kept) -- again: off"},
         {"Text", "win.small-caps",          {"<Ctrl><Shift>h"}, "", "Small caps -- again: off"},
+        {"Text", "", {}, "Alt+Left / Right (typing)", "Kerning at the caret, 20/1000 em (Ctrl: 100); a selection: tracking"},   // s265
+        {"Text", "", {}, "Alt+Shift+Up / Down (typing)", "Baseline shift of the selection (or word), 1 pt (Ctrl: 5)"},
         {"Text", "win.insert-page-number",  {"<Ctrl><Alt><Shift>n"}, "", "Insert the page number (each page shows its own)"},
         {"Text", "win.insert-section-name", {"<Ctrl><Alt><Shift>e"}, "", "Insert the section name (a running head)"},
         {"Text", "win.insert-next-page",    {"<Ctrl><Alt>bracketright"}, "", "Insert the next frame's page number (\"continued on\")"},

@@ -35,6 +35,35 @@ template <class T> T val(const json& j, const char* k, T dflt) {
     return j.contains(k) ? j.at(k).get<T>() : dflt;
 }
 
+// s264: OpenType features -- what's set only.
+json ot_json(const OtFeatures& f) {
+    json o = json::object();
+    if (f.liga) o["liga"] = f.liga;
+    if (f.kern) o["kern"] = f.kern;
+    if (f.figures) o["figures"] = f.figures;
+    if (f.fig_space) o["fig_space"] = f.fig_space;
+    if (f.sset) o["sset"] = f.sset;
+    if (f.dlig) o["dlig"] = true;
+    if (f.frac) o["frac"] = true;
+    if (f.ordn) o["ordn"] = true;
+    if (f.swsh) o["swsh"] = true;
+    return o;
+}
+OtFeatures ot_of_json(const json& o) {
+    OtFeatures f;
+    if (!o.is_object()) return f;
+    f.liga = std::clamp(val(o, "liga", 0), 0, 1);
+    f.kern = std::clamp(val(o, "kern", 0), 0, 1);
+    f.figures = std::clamp(val(o, "figures", 0), 0, 2);
+    f.fig_space = std::clamp(val(o, "fig_space", 0), 0, 2);
+    f.sset = std::clamp(val(o, "sset", 0), 0, 20);
+    f.dlig = val(o, "dlig", false);
+    f.frac = val(o, "frac", false);
+    f.ordn = val(o, "ordn", false);
+    f.swsh = val(o, "swsh", false);
+    return f;
+}
+
 // s030 / s159 / s260: a run's own formatting, as written (what's set only, past the first four).
 json local_json(const Local& l) {
     json o = {{"bold", l.bold}, {"italic", l.italic}, {"size", l.size}, {"color", l.color}};
@@ -45,6 +74,8 @@ json local_json(const Local& l) {
     if (l.caps >= 0) o["caps"] = l.caps;
     if (l.underline >= 0) o["underline"] = l.underline;
     if (l.strike >= 0) o["strike"] = l.strike;
+    if (l.ot) o["ot"] = ot_json(*l.ot);   // s264
+    if (l.kern) o["kern"] = *l.kern;     // s265
     return o;
 }
 Local local_of_json(const json& l) {
@@ -56,6 +87,8 @@ Local local_of_json(const json& l) {
     o.caps = std::clamp(val(l, "caps", -1), -1, 2);
     o.underline = std::clamp(val(l, "underline", -1), -1, 1);
     o.strike = std::clamp(val(l, "strike", -1), -1, 1);
+    if (l.contains("ot")) o.ot = ot_of_json(l.at("ot"));   // s264
+    if (l.contains("kern") && l.at("kern").is_number()) o.kern = l.at("kern").get<double>();   // s265
     return o;
 }
 
@@ -255,6 +288,7 @@ json to(const Record& r) {
             if (v.caps != 0) j["caps"] = v.caps;
             if (v.underline) j["underline"] = true;
             if (v.strike) j["strike"] = true;
+            if (v.ot.any()) j["ot"] = ot_json(v.ot);   // s264
             if (v.span) j["span"] = true;           // s166
             if (v.split >= 2) j["split"] = v.split;   // s183
             if (!v.lang.empty()) j["lang"] = v.lang;   // s190
@@ -571,6 +605,7 @@ std::optional<Record> from(const json& j) {
         v.caps = std::clamp(val(j, "caps", 0), 0, 2);
         v.underline = val(j, "underline", false);
         v.strike = val(j, "strike", false);
+        v.ot = j.contains("ot") ? ot_of_json(j["ot"]) : OtFeatures{};   // s264
         v.span = val(j, "span", false);           // s166
         v.split = std::clamp(val(j, "split", 0), 0, 4);   // s183
         v.lang = val(j, "lang", std::string{});   // s190

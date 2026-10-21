@@ -750,5 +750,407 @@ void part9() {
         const auto col = core::find_accel_collisions();
         check("no chord claimed twice", col.empty(), col.empty() ? "" : col.front());
     }
+    // ── s264: OpenType features ──────────────────────────────────────────────
+    {
+        std::cout << "--- s264 OpenType features ---\n";
+        core::OtFeatures f;
+        check("none set: no settings", core::ot_settings(f).empty() && !f.any());
+        f.liga = 1;
+        f.figures = 2;
+        f.sset = 3;
+        check("ligatures off, oldstyle figures, set 3", core::ot_settings(f) == "liga=0,clig=0,lnum=0,onum=1,ss03=1", core::ot_settings(f));
+        core::OtFeatures g;
+        g.frac = true;
+        check("over a paragraph's: what it set is set back", core::ot_settings(g, f) == "liga=1,clig=1,lnum=0,onum=0,frac=1,ss03=0",
+              core::ot_settings(g, f));
+        const auto m = core::ot_over(f, g);
+        check("a character style's over the paragraph's: both", m.liga == 1 && m.figures == 2 && m.frac && m.sset == 3);
+        core::OtFeatures e;
+        core::ot_edit(e, "ot_figsp", "2");
+        core::ot_edit(e, "ot_ordn", "1");
+        core::ot_edit(e, "ot_sset", "99");
+        check("edits: tabular, ordinals, a set clamped to 20", e.fig_space == 2 && e.ordn && e.sset == 20);
+
+        // Ligatures off: a glyph for every letter (whatever the font joins).
+        const auto glyphs = [](const core::Doc& d, bool& feats) {
+            const auto fl = L::flow_story(d, "story.1");
+            int n = -1;
+            feats = false;
+            L::visit_lines(d, "story.1", fl, fl.frames.at(0).frame, [&](const L::LineVisit& v) {
+                if (n >= 0 || v.from < 0) return;
+                n = 0;
+                for (GSList* l = v.line->runs; l; l = l->next) n += static_cast<PangoGlyphItem*>(l->data)->glyphs->num_glyphs;
+                if (PangoAttrList* al = pango_layout_get_attributes(v.line->layout)) {
+                    PangoAttrIterator* it = pango_attr_list_get_iterator(al);
+                    do feats = feats || pango_attr_iterator_get(it, PANGO_ATTR_FONT_FEATURES);
+                    while (pango_attr_iterator_next(it));
+                    pango_attr_iterator_destroy(it);
+                }
+            });
+            return n;
+        };
+        const auto make = [](core::Doc& d, const core::OtFeatures& ot) {
+            core::NewDoc n;
+            n.pages = 1;
+            n.folios = false;
+            core::new_document(d, n);
+            core::Style ps;
+            ps.kind = core::StyleKind::Paragraph;
+            ps.family = "Serif";
+            ps.size = 20;
+            ps.leading = 24;
+            ps.ot = ot;
+            d.put("style.p", ps);
+            core::Story st = *d.as<core::Story>("story.1");
+            st.paras.clear();
+            st.paras.push_back({"style.p", "officeffifl"});
+            d.put("story.1", st);
+        };
+        core::Doc d0, d1;
+        make(d0, {});
+        core::OtFeatures off;
+        off.liga = 1;
+        make(d1, off);
+        bool f0 = false, f1 = false;
+        const int g0 = glyphs(d0, f0), g1 = glyphs(d1, f1);
+        check("ligatures off: one glyph a letter; the features reach the layout", g1 == 11 && g0 <= g1 && f1 && !f0,
+              std::to_string(g0) + " -> " + std::to_string(g1));
+        std::string err;
+        core::Doc back;
+        check("kept in the file", core::from_json(back, core::to_json(d1), &err) && back.records() == d1.records(), err);
+        core::Local own;
+        own.ot = off;
+        core::Doc d2;
+        make(d2, {});
+        core::Story st = *d2.as<core::Story>("story.1");
+        st.paras[0].runs.push_back({0, 6, "", own});
+        d2.put("story.1", st);
+        bool f2 = false;
+        check("the words' own: the first word's ligatures off", glyphs(d2, f2) >= g0 && f2);
+        check("the words' own kept in the file", core::from_json(back, core::to_json(d2), &err) && back.records() == d2.records(), err);
+        check("a style edit names the field", core::doc::style_key_of_edit("ot_frac") == "ot" && core::doc::style_edit_label("ot_fig") == "Figures");
+    }
+    // ── s265: manual kerning, the spacing keys ───────────────────────────────
+    {
+        std::cout << "--- s265 kerning ---\n";
+        const auto make = [](core::Doc& d, const std::vector<core::Run>& runs, double tracking = 0) {
+            core::NewDoc n;
+            n.pages = 1;
+            n.folios = false;
+            core::new_document(d, n);
+            core::Style ps;
+            ps.kind = core::StyleKind::Paragraph;
+            ps.family = "Serif";
+            ps.size = 20;
+            ps.leading = 24;
+            ps.tracking = tracking;
+            d.put("style.p", ps);
+            core::Story st = *d.as<core::Story>("story.1");
+            st.paras.clear();
+            core::Para p{"style.p", "abcdef"};
+            p.runs = runs;
+            st.paras.push_back(p);
+            d.put("story.1", st);
+        };
+        // Each glyph's ink left on the first line (pen + its offset), points.
+        const auto inks = [](const core::Doc& d) {
+            const auto fl = L::flow_story(d, "story.1");
+            std::vector<double> out;
+            L::visit_lines(d, "story.1", fl, fl.frames.at(0).frame, [&](const L::LineVisit& v) {
+                if (!out.empty() || v.from < 0) return;
+                double pen = 0;
+                for (GSList* l = v.line->runs; l; l = l->next) {
+                    auto* gi = static_cast<PangoGlyphItem*>(l->data);
+                    for (int i = 0; i < gi->glyphs->num_glyphs; ++i) {
+                        out.push_back((pen + gi->glyphs->glyphs[i].geometry.x_offset) / PANGO_SCALE);
+                        pen += gi->glyphs->glyphs[i].geometry.width;
+                    }
+                }
+            });
+            return out;
+        };
+        core::Local k;
+        k.kern = 500.0;   // 10 pt at 20 pt
+        core::Doc d0, d1, d2, d3, d4;
+        make(d0, {});
+        make(d1, {{2, 3, "", k}});
+        make(d2, {{0, 1, "", k}});
+        const auto i0 = inks(d0), i1 = inks(d1), i2 = inks(d2);
+        const auto near = [](double a, double b) { return std::abs(a - b) < 0.05; };
+        check("a kern after c: c stays, d on moves 10 pt", i0.size() == 6 && i1.size() == 6 && near(i1[2], i0[2]) && near(i1[3], i0[3] + 10) &&
+                                                          near(i1[5], i0[5] + 10) && near(i1[1], i0[1]),
+              i0.size() == 6 && i1.size() == 6 ? std::to_string(i1[2] - i0[2]) + " / " + std::to_string(i1[3] - i0[3]) : "?");
+        check("a kern on the line's first letter: it stays, the rest move", i2.size() == 6 && near(i2[0], i0[0]) && near(i2[1], i0[1] + 10),
+              i2.size() == 6 ? std::to_string(i2[0] - i0[0]) + " / " + std::to_string(i2[1] - i0[1]) : "?");
+        make(d3, {}, 50);
+        make(d4, {{2, 3, "", k}}, 50);   // tracking 1 pt a letter under it
+        const auto i3 = inks(d3), i4 = inks(d4);
+        check("with tracking: the kern on top of it, c still in place", i3.size() == 6 && i4.size() == 6 && near(i4[2], i3[2]) && near(i4[3], i3[3] + 10),
+              i3.size() == 6 && i4.size() == 6 ? std::to_string(i4[2] - i3[2]) + " / " + std::to_string(i4[3] - i3[3]) : "?");
+
+        // The keys' verbs.
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        make(d, {});
+        const auto steps = j.size();
+        core::doc::nudge_spacing(j, d, "story.1", {0, 3}, {0, 3}, 20);
+        core::doc::nudge_spacing(j, d, "story.1", {0, 3}, {0, 3}, 20);
+        const auto& p = d.as<core::Story>("story.1")->paras[0];
+        check("Alt+Right twice at the caret after c: kern 40 on c, one step", core::local_at(p, 3).kern.value_or(0) == 40 && j.size() == steps + 1 &&
+                                                                            j.undo_label() == "Kerning");
+        core::doc::nudge_spacing(j, d, "story.1", {0, 3}, {0, 3}, -40);
+        check("back to 0: the kern gone", !core::local_at(d.as<core::Story>("story.1")->paras[0], 3).kern);
+        check("at a paragraph's start: nothing", !core::doc::nudge_spacing(j, d, "story.1", {0, 0}, {0, 0}, 20));
+        core::doc::nudge_spacing(j, d, "story.1", {0, 1}, {0, 4}, -20);
+        check("a selection: tracking -20 on it", core::local_at(d.as<core::Story>("story.1")->paras[0], 2).tracking.value_or(0) == -20);
+        core::doc::nudge_shift(j, d, "story.1", {0, 2}, {0, 2}, 1);
+        core::doc::nudge_shift(j, d, "story.1", {0, 2}, {0, 2}, 1);
+        check("Alt+Shift+Up twice on the caret's word: shift 2 pt", core::local_at(d.as<core::Story>("story.1")->paras[0], 1).shift.value_or(0) == 2 &&
+                                                                  j.undo_label() == "Baseline shift");
+        // Typing after a kerned letter: the new text takes no kern.
+        core::doc::nudge_spacing(j, d, "story.1", {0, 3}, {0, 3}, 100);
+        core::doc::edit_text(j, d, "story.1", {0, 3}, {0, 3}, "x", "Type");
+        const auto& q = d.as<core::Story>("story.1")->paras[0];
+        check("typed after it: the kern stays on c, x has none", core::local_at(q, 3).kern.value_or(0) == 100 && !core::local_at(q, 4).kern,
+              q.text);
+        std::string err;
+        core::Doc e;
+        check("kept in the file", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+    }
+    // ── s266: an ODT's font features ─────────────────────────────────────────
+    {
+        std::cout << "--- s266 an ODT's font features ---\n";
+        std::string fam = "Linux Libertine G:onum&liga=0";
+        check("split_features: the family and its features", core::odt::split_features(fam) == "onum&liga=0" && fam == "Linux Libertine G");
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f" xmlns:svg="g")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:font-face-decls>
+ <style:font-face style:name="Libertine" svg:font-family="'Linux Libertine G:onum&amp;liga=0&amp;ss02'"/>
+</office:font-face-decls><office:styles>
+ <style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style>
+ <style:style style:name="Standard" style:family="paragraph"><style:text-properties style:font-name="Libertine"/></style:style>
+</office:styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:automatic-styles>
+ <style:style style:name="T1" style:family="text"><style:text-properties fo:font-family="'Linux Libertine G:smcp&amp;tnum'"/></style:style>
+ <style:style style:name="T2" style:family="text"><style:text-properties style:letter-kerning="false"/></style:style>
+</office:automatic-styles><office:body><office:text>)"
+            R"(<text:p text:style-name="Standard">In 1923 the <text:span text:style-name="T1">NATO</text:span> line, <text:span text:style-name="T2">AV</text:span>.</text:p>)"
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        core::Doc d;
+        const bool ok = book && L::import_odt(d, *book, nullptr, {}, &err);
+        check("import: made", ok, err);
+        if (ok) {
+            const auto& st = *d.as<core::Story>(d.ids_of<core::Story>().front());
+            const auto& p = st.paras.at(0);
+            const auto ps = core::doc::para_style(d, p);
+            check("the family without its features; oldstyle figures, ligatures off, set 2",
+                  ps.family == "Linux Libertine G" && ps.ot.figures == 2 && ps.ot.liga == 1 && ps.ot.sset == 2, ps.family);
+            const auto look = [&](const std::string& w) {
+                const int b = static_cast<int>(p.text.find(w));
+                const auto l = core::local_at(p, b + 1);
+                return core::char_look(ps, d.as<core::Style>(core::char_style_at(p, b + 1)), &l);
+            };
+            check("a span's features: small caps, tabular figures", look("NATO").caps == 2 && look("NATO").ot.fig_space == 2);
+            check("letter-kerning false: kerning off", look("AV").ot.kern == 1);
+        }
+    }
+    // ── s267: the OpenType rows; the pair's kerning row ──────────────────────
+    {
+        std::cout << "--- s267 OpenType rows ---\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto ps = *d.as<core::Style>("style.1");
+        ps.ot.figures = 2;
+        ps.ot.sset = 4;
+        d.put("style.1", ps);
+        const auto o = core::project(d, "");
+        std::map<std::string, std::pair<std::string, std::string>> rows;
+        std::size_t sets = 0;
+        for (const auto& f : o.find("style.1")->fields) {
+            rows[f.edit] = {f.group, f.value};
+            if (f.edit == "ot_sset") sets = f.choices.size();
+        }
+        bool all = true;
+        for (const char* k : {"ot_liga", "ot_kern", "ot_fig", "ot_figsp", "ot_frac", "ot_ordn", "ot_dlig", "ot_swsh", "ot_sset"})
+            all = all && rows.count(k) && rows.at(k).first == "OpenType";
+        check("a style's OpenType group: nine rows", all);
+        check("their values: Oldstyle, Set 4 (of None + 20), Ligatures On",
+              rows["ot_fig"].second == "Oldstyle" && rows["ot_sset"].second == "Set 4" && sets == 21 && rows["ot_liga"].second == "On",
+              rows["ot_fig"].second + " / " + rows["ot_sset"].second);
+        // The words': "Style's" until set; the pair's kerning at a caret.
+        auto st = *d.as<core::Story>("story.1");
+        core::Local own;
+        own.ot = core::OtFeatures{};
+        own.ot->frac = true;
+        own.kern = 30.0;
+        st.paras[3].runs.push_back({0, 1, "", own});
+        std::sort(st.paras[3].runs.begin(), st.paras[3].runs.end(), [](const core::Run& x, const core::Run& y) { return x.start < y.start; });
+        d.put("story.1", st);
+        std::map<std::string, std::string> v;
+        for (const auto& x : core::text_fields(d, "story.1", {3, 1}, {3, 1})) v[x.edit] = x.value;
+        check("the words' rows: fractions On (their own), the pair's kerning 30", v["lot_frac"] == "On" && v["lot_liga"] == "On" &&
+                                                                                 v["lkern"] == "30 /1000 em", v["lot_frac"] + " / " + v["lkern"]);
+        std::map<std::string, std::string> w;
+        for (const auto& x : core::text_fields(d, "story.1", {4, 2}, {4, 2})) w[x.edit] = x.value;
+        check("words with none of their own: Style's", w["lot_frac"] == "Style's" && w["lkern"] == "0");
+    }
+    // ── s268: an ODT's chapters on right-hand pages (a page style per side) ──
+    {
+        std::cout << "--- s268 an ODT's right-hand chapter starts ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:default-style style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:default-style>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1" style:master-page-name="Right_20_Page"><style:paragraph-properties fo:margin-top="0.5in"/></style:style>
+ <style:style style:name="Coda" style:family="paragraph" style:master-page-name="Left_20_Page"/>
+ <style:style style:name="Plate" style:family="paragraph" style:master-page-name="Blank"/>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1" style:page-usage="right"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+ <style:page-layout style:name="pm2" style:page-usage="left"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in"/></style:page-layout>
+ <style:page-layout style:name="pm3" style:page-usage="all"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm3"/>
+ <style:master-page style:name="Right_20_Page" style:display-name="Right Page" style:page-layout-name="pm1" style:next-style-name="Standard"/>
+ <style:master-page style:name="Left_20_Page" style:display-name="Left Page" style:page-layout-name="pm2"/>
+ <style:master-page style:name="Blank" style:page-layout-name="pm3"/>
+</office:master-styles></office:document-styles>)";
+        std::string body = R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter One</text:h>)"
+                           R"(<text:p text:style-name="Standard">A short first chapter.</text:p>)"
+                           R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter Two</text:h>)"
+                           R"(<text:p text:style-name="Standard">Short again.</text:p>)"
+                           R"(<text:p text:style-name="Plate">A plate.</text:p>)"
+                           R"(<text:p text:style-name="Coda">The end.</text:p>)";
+        const std::string content = "<office:document-content" + ns + "><office:body><office:text>" + body + "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        core::Doc d;
+        const bool ok = book && L::import_odt(d, *book, nullptr, {}, &err);
+        check("import: made", ok, err);
+        if (ok) {
+            check("a right-only page style: facing pages", d.settings().facing || core::any_facing(d));
+            const auto sid = d.ids_of<core::Story>().front();
+            const auto* st = d.as<core::Story>(sid);
+            std::vector<std::string> sty;
+            const auto start = [&](int i) { return core::doc::start_of(d, st->paras.at(static_cast<std::size_t>(i))); };
+            check("Heading 1 (Right Page): next right-hand page; Coda (Left Page): left; Plate (Blank, any side): next page",
+                  start(0) == core::ParaStart::NextRightPage && start(2) == core::ParaStart::NextRightPage &&
+                      start(4) == core::ParaStart::NextPage && start(5) == core::ParaStart::NextLeftPage);
+            // Where they land: chapter one on page 1 (right), page 2 left blank, chapter two on 3.
+            const auto fl = L::flow_story(d, sid);
+            std::map<int, int> page_of;   // paragraph -> page index
+            std::set<int> blank;
+            for (const auto& ft : fl.frames) {
+                const int pi = d.page_index(d.as<core::Frame>(ft.frame)->owner);
+                if (ft.lines.empty()) blank.insert(pi);
+                for (const auto& l : ft.lines) if (!page_of.count(l.para)) page_of[l.para] = pi;
+            }
+            check("chapter one on page 1, page 2 blank, chapter two on page 3 (right-hand)",
+                  page_of[0] == 0 && blank.count(1) && page_of[2] == 2 && !fl.overset &&
+                      d.side_of(d.pages().at(2)) == core::Side::Right,
+                  std::to_string(page_of[0]) + " / " + std::to_string(page_of[2]));
+            check("the plate on the next page; the coda on a left-hand one after it",
+                  page_of[4] == 3 && page_of[5] > page_of[4] && d.side_of(d.pages().at(static_cast<std::size_t>(page_of[5]))) == core::Side::Left,
+                  std::to_string(page_of[4]) + " / " + std::to_string(page_of[5]));
+        }
+    }
+    // ── s270: a master for each page style; their headers / footers ─────────
+    {
+        std::cout << "--- s270 an ODT's page styles as masters ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:default-style style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:default-style>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Title" style:family="paragraph" style:master-page-name="FrontMatter"/>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1" style:master-page-name="Right_20_Page"/>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="1in"/></style:page-layout>
+ <style:page-layout style:name="pm2" style:page-usage="right"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="2in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+ <style:page-layout style:name="pm3" style:page-usage="right"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1">
+  <style:header><text:p text:style-name="Standard"><text:chapter text:display="name" text:outline-level="1">X</text:chapter></text:p></style:header>
+  <style:header-left><text:p text:style-name="Standard">The Book</text:p></style:header-left>
+  <style:footer><text:p text:style-name="Standard"><text:page-number>1</text:page-number></text:p></style:footer>
+ </style:master-page>
+ <style:master-page style:name="Right_20_Page" style:display-name="Right Page" style:page-layout-name="pm2" style:next-style-name="Standard">
+  <style:footer><text:p text:style-name="Standard"><text:page-number>1</text:page-number></text:p></style:footer>
+ </style:master-page>
+ <style:master-page style:name="FrontMatter" style:page-layout-name="pm3" style:next-style-name="Standard">
+  <style:header><text:p text:style-name="Standard"/></style:header>
+ </style:master-page>
+</office:master-styles></office:document-styles>)";
+        std::string body = R"(<text:p text:style-name="Title">The Book</text:p>)";
+        std::string lots;
+        for (int i = 0; i < 70; ++i) lots += R"(<text:p text:style-name="Standard">The ship came in, and nobody on the quay expected her that morning, nor the next.</text:p>)";
+        body += R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter One</text:h>)" + lots;
+        body += R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Chapter Two</text:h>)" + lots;
+        const std::string content = "<office:document-content" + ns + "><office:body><office:text>" + body + "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        core::Doc d;
+        const bool ok = book && L::import_odt(d, *book, nullptr, {}, &err);
+        check("import: made", ok, err);
+        if (ok) {
+            std::map<std::string, std::string> by;   // master name -> id
+            for (const auto& m : d.ids_of<core::Master>()) by[d.as<core::Master>(m)->name] = m;
+            check("a master for each page style used, and one for inserted blank pages",
+                  by.count("FrontMatter") && by.count("Right Page") && by.count("Standard") && by.count("Inserted blank") && by.size() == 4,
+                  std::to_string(by.size()));
+            const auto words_on = [&](const std::string& mid) {
+                std::vector<std::string> w;
+                for (const auto& f : d.frames_on(mid))
+                    if (const auto* st = d.as<core::Story>(d.as<core::Frame>(f)->story)) w.push_back(st->paras.at(0).text);
+                return w;
+            };
+            const auto std_w = words_on(by["Standard"]), right_w = words_on(by["Right Page"]);
+            // (uneven margins: the one footer on each side, its own place -- 4 frames)
+            check("Standard: a running head right, the book's title left, the page number below each side (4 frames)",
+                  std_w.size() == 4 && std::count(std_w.begin(), std_w.end(), std::string("The Book")) == 1 &&
+                      std::count(std_w.begin(), std_w.end(), std::string(core::kMarkChapter)) == 1 &&
+                      std::count(std_w.begin(), std_w.end(), std::string(core::kMarkPage)) == 2,
+                  std::to_string(std_w.size()));
+            check("Right Page: its footer only; FrontMatter's empty header: no frame; inserted blank: nothing",
+                  right_w.size() == 1 && right_w[0] == core::kMarkPage && words_on(by["FrontMatter"]).empty() && words_on(by["Inserted blank"]).empty(),
+                  std::to_string(right_w.size()));
+            {   // one story, one frame: the same words on both sides are two stories (one in two frames threads them)
+                std::map<std::string, int> uses;
+                for (const auto& m : d.ids_of<core::Master>())
+                    for (const auto& f : d.frames_on(m))
+                        if (const auto& sid = d.as<core::Frame>(f)->story; !sid.empty()) ++uses[sid];
+                bool once = !uses.empty();
+                for (const auto& [sid, n] : uses) once = once && n == 1;
+                check("every header / footer story in one frame (the left page's footer shows its number)", once);
+            }
+            check("Right Page's own margins: 2 in at the top", std::abs(d.as<core::Master>(by["Right Page"])->margins.top - 144) < 0.01);
+            // The pages: the title FrontMatter, chapters on Right Page, the rest Standard; blanks blank.
+            const auto fl = L::flow_story(d, "story.1");
+            const auto& st = *d.as<core::Story>("story.1");
+            bool chapters_right = true, body_std = true, blanks_ok = true, frame_margins = true;
+            int chapters = 0, blanks = 0;
+            for (const auto& ft : fl.frames) {
+                const auto* fr = d.as<core::Frame>(ft.frame);
+                const auto& pg = *d.as<core::Page>(fr->owner);
+                const auto mname = d.as<core::Master>(pg.master)->name;
+                const auto r = core::margin_rect(d, fr->owner);
+                frame_margins = frame_margins && std::abs(fr->y - r.y) < 0.01 && std::abs(fr->h - r.h) < 0.01;
+                if (ft.lines.empty()) { ++blanks; blanks_ok = blanks_ok && mname == "Inserted blank"; continue; }
+                const bool opens = ft.lines.front().start == 0 && st.paras[static_cast<std::size_t>(ft.lines.front().para)].text.rfind("Chapter", 0) == 0;
+                if (opens) { ++chapters; chapters_right = chapters_right && mname == "Right Page" && d.side_of(fr->owner) == core::Side::Right; }
+                else if (ft.lines.front().para > 0) body_std = body_std && mname == "Standard";
+            }
+            check("chapter pages on Right Page (right-hand), body pages on Standard", chapters == 2 && chapters_right && body_std,
+                  std::to_string(chapters));
+            check("inserted blank pages on the blank master; every text frame in its master's margins", blanks_ok && frame_margins && !fl.overset,
+                  std::to_string(blanks) + " blank");
+            check("the title page on FrontMatter", d.as<core::Master>(d.as<core::Page>(d.pages().front())->master)->name == "FrontMatter");
+        }
+    }
 }
 }  // namespace cxtest

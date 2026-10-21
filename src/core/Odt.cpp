@@ -13,6 +13,15 @@ namespace composix::core::odt {
 
 constexpr double kOdtSuper = 33;   // s262: "super" / "sub" -- LibreOffice's 33%
 
+std::string split_features(std::string& family) {   // s266
+    const auto c = family.find(':');
+    if (c == std::string::npos) return {};
+    std::string feats = family.substr(c + 1);
+    family.erase(c);
+    while (!family.empty() && family.back() == ' ') family.pop_back();
+    return feats;
+}
+
 double length(const std::string& v, double fallback) {
     if (v.empty()) return fallback;
     char* end = nullptr;
@@ -101,6 +110,8 @@ Props Book::resolved(const std::string& name) const {
         if (out.caps < 0) out.caps = p.caps;
         if (out.underline < 0) out.underline = p.underline;
         if (out.strike < 0) out.strike = p.strike;
+        if (out.features.empty()) out.features = p.features;   // s266
+        if (out.kerning < 0) out.kerning = p.kerning;
         if (out.orphans < 0) out.orphans = p.orphans;
         if (out.widows < 0) out.widows = p.widows;
         if (out.master.empty()) out.master = p.master;
@@ -184,6 +195,11 @@ void read_props(const Node& st, Props& p, const std::map<std::string, std::strin
         } else if (const auto* ff = tp->attr("fo:font-family")) {
             p.family = unquote(*ff);
         }
+        if (!p.family.empty()) {   // s266: its features, apart
+            const auto feats = split_features(p.family);
+            if (!feats.empty()) p.features = feats;
+        }
+        if (const auto* lk = tp->attr("style:letter-kerning")) p.kerning = *lk == "false" ? 0 : 1;
         if (const auto* fs = tp->attr("fo:font-size"); fs && !fs->empty() && fs->back() != '%') p.size = length(*fs, -1);
         if (const auto* fw = tp->attr("fo:font-weight")) p.bold = (*fw == "bold" || std::atoi(fw->c_str()) >= 600) ? 1 : 0;
         if (const auto* fst = tp->attr("fo:font-style")) p.italic = (*fst == "italic" || *fst == "oblique") ? 1 : 0;
@@ -277,6 +293,7 @@ void read_styles(const Node* group, Book& b, bool automatic, const std::string& 
                 L.right = length(pl->attr_or("fo:margin-right"), -1);
             }
             L.mirrored = k.attr_or("style:page-usage") == "mirrored";
+            L.side = k.attr_or("style:page-usage") == "right" ? 1 : k.attr_or("style:page-usage") == "left" ? 2 : 0;   // s268
             b.layouts[k.attr_or("style:name")] = L;
         }
     }

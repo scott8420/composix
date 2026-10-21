@@ -891,7 +891,15 @@ void Shell::on_canvas_context(const views::Canvas::ContextHit& h) {  // handler
 
 // s068: Forward -- back into what Back left, while its section is shown.
 void Shell::on_go_forward() {  // handler
-    if (m_fwd_items.empty() || !m_fwd_from || m_pick.segment != m_fwd_from) return;
+    if (m_fwd_items.empty() || !m_fwd_from || m_pick.segment != m_fwd_from) {
+        // s269 (Scott, N1): no Back to undo -- with pages open, the next spread (as Page Down).
+        const auto next = next_spread();
+        if (next.empty()) return;
+        if (auto lg = log::get(log::Area::Shell)) lg->info("forward: the next spread ({})", next.front());
+        m_nav.select_items({next.front()});
+        sync_up();
+        return;
+    }
     const auto items = m_fwd_items;
     if (auto lg = log::get(log::Area::Shell)) lg->info("forward: {} item(s)", items.size());
     m_fwd_items.clear();
@@ -1198,7 +1206,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::set_starts(m_journal, m_doc, m_inspected,
                                         static_cast<core::Side>(std::stoi(choice)));
         } else if (key == "local" || key == "lsize" || key == "lcolor" || key == "lnobreak" || key == "ltrack" || key == "lshift" ||
-                   key == "lpos" || key == "lcase" || key == "luline" || key == "lstrike") {   // s030: formatting on the words (s263: and its character attributes)
+                   key == "lpos" || key == "lcase" || key == "luline" || key == "lstrike" || key == "lkern" || key.rfind("lot_", 0) == 0) {   // s030: formatting on the words (s263: and its character attributes)
             if (key == "local" && (choice == "bold" || choice == "italic")) { activate_action(choice == "bold" ? "win.bold" : "win.italic"); return; }
             auto& cv = m_canvas_view.canvas();
             if (!cv.editing()) return;
@@ -1216,6 +1224,30 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 if (choice != "style") v = std::clamp(std::stod(choice), key == "ltrack" ? -1000.0 : -1000.0, key == "ltrack" ? 10000.0 : 1000.0);
                 did = core::doc::set_local(m_journal, m_doc, story, a, b, key == "ltrack" ? "Tracking" : "Baseline shift",
                                            [&](core::Local& l) { (key == "ltrack" ? l.tracking : l.shift) = v; });
+            } else if (key == "lkern") {   // s267: the pair at the caret (as Alt+arrows)
+                const auto [c0, c1] = cv.edit_range();
+                if (const auto* st = m_doc.as<core::Story>(story); st && c0 == c1) {
+                    const auto p = core::prev_char(*st, c0);
+                    const double v = std::clamp(std::stod(choice), -1000.0, 10000.0);
+                    if (p.para == c0.para && p < c0)
+                        did = core::doc::set_local(m_journal, m_doc, story, p, c0, "Kerning",
+                                                   [&](core::Local& l) { if (std::abs(v) < 0.5) l.kern.reset(); else l.kern = v; });
+                }
+            } else if (key.rfind("lot_", 0) == 0) {   // s267: the words' OpenType features -- from what they show now
+                const auto* st = m_doc.as<core::Story>(story);
+                if (st) {
+                    const auto& para = st->paras[static_cast<std::size_t>(a.para)];
+                    const auto here = core::local_at(para, a.byte + 1);
+                    const auto now = core::char_look(core::doc::para_style(m_doc, para),
+                                                     m_doc.as<core::Style>(core::char_style_at(para, a.byte + 1)), &here).ot;
+                    did = core::doc::set_local(m_journal, m_doc, story, a, b, core::doc::style_edit_label("ot_" + key.substr(4)),
+                                               [&](core::Local& l) {
+                                                   if (choice == "-1") { l.ot.reset(); return; }
+                                                   auto o = l.ot ? *l.ot : now;
+                                                   core::ot_edit(o, "ot_" + key.substr(4), choice);
+                                                   l.ot = o;
+                                               });
+                }
             } else if (key == "lpos" || key == "lcase" || key == "luline" || key == "lstrike") {
                 const int v = std::clamp(std::stoi(choice), -1, key == "lpos" || key == "lcase" ? 2 : 1);
                 did = core::doc::set_local(m_journal, m_doc, story, a, b,
