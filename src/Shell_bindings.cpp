@@ -40,6 +40,34 @@ void Shell::bind_actions() {  // bindings: actions + recents group
                                  [&](core::Local& l) { (bold ? l.bold : l.italic) = on ? 1 : 0; });
             cv.grab_focus();
         });
+    // s263: character attributes toggled on the words being edited (as bold).
+    struct CharToggle {
+        const char* action;
+        const char* label;
+        std::function<bool(const core::CharLook&)> has;
+        std::function<void(core::Local&, bool)> set;
+    };
+    const std::vector<CharToggle> toggles{
+        {"underline", "Underline", [](const core::CharLook& k) { return k.underline; }, [](core::Local& l, bool on) { l.underline = on ? 1 : 0; }},
+        {"strikethrough", "Strikethrough", [](const core::CharLook& k) { return k.strike; }, [](core::Local& l, bool on) { l.strike = on ? 1 : 0; }},
+        {"superscript", "Superscript", [](const core::CharLook& k) { return k.position == 1; }, [](core::Local& l, bool on) { l.position = on ? 1 : 0; }},
+        {"subscript", "Subscript", [](const core::CharLook& k) { return k.position == 2; }, [](core::Local& l, bool on) { l.position = on ? 2 : 0; }},
+        {"all-caps", "All caps", [](const core::CharLook& k) { return k.caps == 1; }, [](core::Local& l, bool on) { l.caps = on ? 1 : 0; }},
+        {"small-caps", "Small caps", [](const core::CharLook& k) { return k.caps == 2; }, [](core::Local& l, bool on) { l.caps = on ? 2 : 0; }}};
+    for (const auto& t : toggles)
+        add_action(t.action, [this, t] {
+            if (m_story_ed.text_has_focus()) { m_story_ed.toggle_char(t.label, t.has, t.set); return; }
+            auto& cv = m_canvas_view.canvas();
+            if (!cv.editing()) return;
+            auto [a, b] = cv.edit_range();
+            const auto story = cv.edit_story_id();
+            const auto* st = m_doc.as<core::Story>(story);
+            if (!st) return;
+            if (a == b) std::tie(a, b) = core::word_at(*st, a);
+            const bool on = !core::all_look(m_doc, *st, a, b, t.has);
+            core::doc::set_local(m_journal, m_doc, story, a, b, t.label, [&](core::Local& l) { t.set(l, on); });
+            cv.grab_focus();
+        });
     // s023: special characters, at the caret while editing text.
     for (const auto& [name, mark, label] : std::initializer_list<std::tuple<const char*, const char*, const char*>>{
              {"insert-page-number", core::kMarkPage, "Insert page number"},

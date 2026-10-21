@@ -19,6 +19,26 @@
 namespace composix {
 
 // s023: Edit > Insert Special Character.
+// s263: the words' type style -- a toggle each (the inspector's rows too).
+Glib::RefPtr<Gio::Menu> Shell::type_style_menu() {  // zone
+    auto ts = Gio::Menu::create();
+    auto look = Gio::Menu::create();
+    look->append("Bold", "win.bold");
+    look->append("Italic", "win.italic");
+    look->append("Underline", "win.underline");
+    look->append("Strikethrough", "win.strikethrough");
+    ts->append_section(look);
+    auto pos = Gio::Menu::create();
+    pos->append("Superscript", "win.superscript");
+    pos->append("Subscript", "win.subscript");
+    ts->append_section(pos);
+    auto cas = Gio::Menu::create();
+    cas->append("All Caps", "win.all-caps");
+    cas->append("Small Caps", "win.small-caps");
+    ts->append_section(cas);
+    return ts;
+}
+
 Glib::RefPtr<Gio::Menu> Shell::special_menu() {  // zone
     auto m = Gio::Menu::create();
     m->append("Page Number", "win.insert-page-number");

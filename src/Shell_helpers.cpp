@@ -512,6 +512,7 @@ void Shell::update_undo_ui() {  // helper
         m_edit_menu->append(r.empty() ? "Redo" : "Redo " + r, "win.redo");
         m_edit_menu->append("Find / Change\u2026", "win.find");   // s022
         m_edit_menu->append_submenu("Insert Special Character", special_menu());   // s023
+        m_edit_menu->append_submenu("Type Style", type_style_menu());   // s263
         if (m_arrange_menu) m_edit_menu->append_submenu("Arrange", m_arrange_menu);   // s070
     }
 }

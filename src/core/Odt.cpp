@@ -7,8 +7,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <sstream>
 
 namespace composix::core::odt {
+
+constexpr double kOdtSuper = 33;   // s262: "super" / "sub" -- LibreOffice's 33%
 
 double length(const std::string& v, double fallback) {
     if (v.empty()) return fallback;
@@ -93,6 +96,11 @@ Props Book::resolved(const std::string& name) const {
         if (out.leading < 0 && out.leading_pct < 0) { out.leading = p.leading; out.leading_pct = p.leading_pct; }
         if (out.page_break < 0) out.page_break = p.page_break;
         if (out.keep_next < 0) out.keep_next = p.keep_next;   // s257
+        if (out.letter <= -1e8) out.letter = p.letter;   // s262
+        if (out.rise <= -1e8) { out.rise = p.rise; out.scale = p.scale; }
+        if (out.caps < 0) out.caps = p.caps;
+        if (out.underline < 0) out.underline = p.underline;
+        if (out.strike < 0) out.strike = p.strike;
         if (out.orphans < 0) out.orphans = p.orphans;
         if (out.widows < 0) out.widows = p.widows;
         if (out.master.empty()) out.master = p.master;
@@ -180,6 +188,24 @@ void read_props(const Node& st, Props& p, const std::map<std::string, std::strin
         if (const auto* fw = tp->attr("fo:font-weight")) p.bold = (*fw == "bold" || std::atoi(fw->c_str()) >= 600) ? 1 : 0;
         if (const auto* fst = tp->attr("fo:font-style")) p.italic = (*fst == "italic" || *fst == "oblique") ? 1 : 0;
         if (const auto* c = tp->attr("fo:color"); c && c->size() == 7 && (*c)[0] == '#') p.color = *c;
+        // s262: character attributes.
+        if (const auto* ls = tp->attr("fo:letter-spacing")) p.letter = *ls == "normal" ? 0 : length(*ls, 0);
+        if (const auto* tpos = tp->attr("style:text-position")) {
+            std::istringstream in(*tpos);
+            std::string a, s;
+            in >> a >> s;
+            if (a == "super") p.rise = kOdtSuper;
+            else if (a == "sub") p.rise = -kOdtSuper;
+            else p.rise = std::strtod(a.c_str(), nullptr);   // "33%", "-33%", "0%"
+            p.scale = s.empty() ? (p.rise != 0 ? 58 : 100) : std::strtod(s.c_str(), nullptr);
+        }
+        const auto* fv = tp->attr("fo:font-variant");
+        const auto* tt = tp->attr("fo:text-transform");
+        if (fv && *fv == "small-caps") p.caps = 2;
+        else if (tt && *tt == "uppercase") p.caps = 1;
+        else if (fv || tt) p.caps = 0;
+        if (const auto* u = tp->attr("style:text-underline-style")) p.underline = *u == "none" ? 0 : 1;
+        if (const auto* k = tp->attr("style:text-line-through-style")) p.strike = *k == "none" ? 0 : 1;
     }
     if (const auto* m = st.attr("style:master-page-name"); m && !m->empty()) p.master = *m;
 }

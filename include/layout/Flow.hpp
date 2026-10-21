@@ -269,6 +269,18 @@ struct LineVisit {
 };
 void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
                  const std::function<void(const LineVisit&)>& f, const core::Story* text = nullptr);
+// s261: a line's underlines and strikethroughs, for a writer that sets glyphs
+// itself (the print PDF) -- Pango's renderer draws its own. Each run that has
+// either: its byte offset in the layout, its left and right, and each
+// stroke's top and thickness (points; the line's left at x, its baseline at
+// `baseline`, y down; a raised run's strokes raised with it).
+struct TextDeco {
+    int    start = 0;
+    double x0 = 0, x1 = 0;
+    bool   under = false, strike = false;
+    double under_y = 0, under_t = 0, strike_y = 0, strike_t = 0;
+};
+std::vector<TextDeco> text_decorations(PangoLayoutLine* line, double x, double baseline);
 
 // ── editing geometry (s010) ─────────────────────────────────────────────────
 // All in FRAME coordinates (points), from the same layouts the drawing uses,

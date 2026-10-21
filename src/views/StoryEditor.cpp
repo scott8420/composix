@@ -388,6 +388,22 @@ bool StoryEditor::toggle_look(bool bold) {
     return did;
 }
 
+bool StoryEditor::toggle_char(const std::string& label, const std::function<bool(const core::CharLook&)>& has,
+                              const std::function<void(core::Local&, bool on)>& set) {   // s263
+    const auto* st = m_doc.as<core::Story>(m_story);
+    if (!st) return false;
+    auto buf = m_view.get_buffer();
+    Gtk::TextBuffer::iterator ia, ib;
+    buf->get_selection_bounds(ia, ib);
+    core::TextPos a{ia.get_line(), ia.get_line_index()}, b{ib.get_line(), ib.get_line_index()};
+    if (a == b) std::tie(a, b) = core::word_at(*st, a);
+    if (a == b) return false;
+    const bool on = !core::all_look(m_doc, *st, a, b, has);
+    const bool did = core::doc::set_local(m_journal, m_doc, m_story, a, b, label, [&](core::Local& l) { set(l, on); });
+    if (did) m_edited.emit();
+    return did;
+}
+
 void StoryEditor::show_looks() {
     auto buf = m_view.get_buffer();
     for (const char* t : {"bold", "italic", "cstyle"}) buf->remove_tag_by_name(t, buf->begin(), buf->end());

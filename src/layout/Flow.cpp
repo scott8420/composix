@@ -83,12 +83,71 @@ double leading_of(const core::Style& s) { return s.leading > 0 ? s.leading : std
 // its text this layout holds (bytes from `from`).
 void add_mark_shapes(PangoLayout* l, PangoAttrList* attrs, const core::Doc& d, const core::Para& p, int from);
 
+// s260: a character look over [a, b) of the layout's bytes, set `size`
+// points: tracking, baseline shift, super- / subscript, caps, underline,
+// strikethrough. `base`: the look already under it (the paragraph's) --
+// what it sets and this doesn't is set back.
+void add_look(PangoAttrList* attrs, const core::CharLook& k, const core::CharLook& base, int a, int b, double size) {
+    const auto add = [&](PangoAttribute* at) {
+        at->start_index = static_cast<guint>(a);
+        at->end_index = static_cast<guint>(b);
+        pango_attr_list_insert(attrs, at);
+    };
+    if (k.tracking != 0 || base.tracking != 0)
+        add(pango_attr_letter_spacing_new(static_cast<int>(std::lround(k.tracking / 1000.0 * size * PANGO_SCALE))));
+    const auto rise_of = [&](const core::CharLook& x) {
+        return x.shift + (x.position == 1 ? core::kSuperRise * size : x.position == 2 ? -core::kSubDrop * size : 0.0);
+    };
+    if (rise_of(k) != 0 || rise_of(base) != 0) add(pango_attr_rise_new(static_cast<int>(std::lround(rise_of(k) * PANGO_SCALE))));
+    if (k.position != 0 || base.position != 0) add(pango_attr_scale_new(k.position != 0 ? core::kScriptSize : 1.0));
+    if (k.caps == 2 || base.caps == 2) add(pango_attr_variant_new(k.caps == 2 ? PANGO_VARIANT_SMALL_CAPS : PANGO_VARIANT_NORMAL));
+#if PANGO_VERSION_CHECK(1, 50, 0)
+    if (k.caps == 1 || base.caps == 1)
+        add(pango_attr_text_transform_new(k.caps == 1 ? PANGO_TEXT_TRANSFORM_UPPERCASE : PANGO_TEXT_TRANSFORM_NONE));
+#endif
+    if (k.underline || base.underline) add(pango_attr_underline_new(k.underline ? PANGO_UNDERLINE_SINGLE : PANGO_UNDERLINE_NONE));
+    if (k.strike || base.strike) add(pango_attr_strikethrough_new(k.strike ? TRUE : FALSE));
+}
+
+// s260: a line's logical box without its runs' rise -- a raised or lowered
+// word (superscript, baseline shift) doesn't move its line in the leading.
+// (ascent above the baseline, height; points)
+struct LineBox { double asc, h; };
+LineBox line_box(PangoLayoutLine* line) {
+    PangoRectangle lg;
+    pango_layout_line_get_extents(line, nullptr, &lg);
+    LineBox out{-lg.y / static_cast<double>(PANGO_SCALE), lg.height / static_cast<double>(PANGO_SCALE)};
+#if PANGO_VERSION_CHECK(1, 50, 0)
+    bool risen = false;
+    for (GSList* l = line->runs; l && !risen; l = l->next) risen = static_cast<PangoGlyphItem*>(l->data)->y_offset != 0;
+    if (!risen) return out;
+    int top = 0, bot = 0;
+    bool any = false;
+    for (GSList* l = line->runs; l; l = l->next) {
+        auto* gi = static_cast<PangoGlyphItem*>(l->data);
+        PangoRectangle r;
+        pango_glyph_string_extents(gi->glyphs, gi->item->analysis.font, nullptr, &r);
+        if (r.height <= 0) continue;
+        top = any ? std::min(top, r.y) : r.y;
+        bot = any ? std::max(bot, r.y + r.height) : r.y + r.height;
+        any = true;
+    }
+    if (any) out = {-top / static_cast<double>(PANGO_SCALE), (bot - top) / static_cast<double>(PANGO_SCALE)};
+#endif
+    return out;
+}
+
 void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int from) {
     // s109: a footnote's mark holds the room its number takes.
     const bool marks = p.text.find(core::kMarkNote, static_cast<std::size_t>(std::max(0, from))) != std::string::npos;
-    if (p.runs.empty() && !marks) return;
+    // s260: the paragraph's own character look (its style's), under its runs'.
+    const core::Style ps = core::doc::para_style(d, p);
+    const core::CharLook plook = core::char_look(ps);
+    if (p.runs.empty() && !marks && plook == core::CharLook{}) return;
     PangoAttrList* attrs = pango_attr_list_new();
     const int n = static_cast<int>(p.text.size());
+    const double psize = ps.size > 0 ? ps.size : 11;
+    if (plook != core::CharLook{} && n > from) add_look(attrs, plook, {}, 0, n - from, psize);
     for (const auto& r : p.runs) {
         const int a = std::max(r.start, from), b = std::min(r.end, n);
         if (b <= a) continue;
@@ -117,6 +176,10 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
         if (l.italic >= 0) add(pango_attr_style_new(l.italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL));
         if (l.size > 0) add(pango_attr_size_new(static_cast<int>(std::lround(l.size * PANGO_SCALE))));
         if (const auto* sw = d.as<core::Swatch>(l.color)) colour(sw, 1);
+        // s260: its character look, where it differs from the paragraph's (or its size does).
+        const double rsize = l.size > 0 ? l.size : cs && cs->size > 0 ? cs->size : psize;
+        const auto look = core::char_look(ps, cs, &l);
+        if (look != plook || (rsize != psize && look != core::CharLook{})) add_look(attrs, look, plook, a - from, b - from, rsize);
     }
     if (marks) add_mark_shapes(l, attrs, d, p, from);
     pango_layout_set_attributes(l, attrs);
@@ -2157,12 +2220,11 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
         for (std::size_t k = i; k < j; ++k) {
             PangoRectangle logical;
             pango_layout_iter_get_line_extents(it, nullptr, &logical);
-            const double bl = pango_layout_iter_get_baseline(it) / static_cast<double>(PANGO_SCALE);
-            const double top = logical.y / static_cast<double>(PANGO_SCALE);
-            const double h = logical.height / static_cast<double>(PANGO_SCALE);
             const double x = logical.x / static_cast<double>(PANGO_SCALE);
             const auto& ln = ft->lines[k];
             PangoLayoutLine* pll = pango_layout_iter_get_line_readonly(it);
+            const LineBox box = line_box(pll);   // s260: its rise left out
+            const double h = box.h;
             // s045: a list paragraph's first line carries its marker, hung left of
             // the text (not past the column's edge).
             std::string mk;
@@ -2171,7 +2233,7 @@ void walk_frame(const core::Doc& d, const std::string& story, const StoryFlow& f
                 mk = core::doc::list_marker(d, *st, p);
                 mx = std::max(ln.x - std::max(0.0, style.list.hang), ln.x - std::max(0.0, ind.left));
             }
-            f(Placed{&ln, lay.get(), pll, from, ln.x + x, ln.cap > 0 ? ln.base : ln.y + (ln.h - h) / 2 + (bl - top),
+            f(Placed{&ln, lay.get(), pll, from, ln.x + x, ln.cap > 0 ? ln.base : ln.y + (ln.h - h) / 2 + box.asc,
                      leader_gaps(lay.get(), pll, style, ln.x), &style, mk, mx});
             if (!pango_layout_iter_next_line(it)) break;
         }
@@ -2352,6 +2414,39 @@ std::vector<HiddenMark> hidden_marks(const core::Doc& d, const std::string& stor
         m.x1 = m.x0;
         out.push_back(m);
     }, text);
+    return out;
+}
+
+std::vector<TextDeco> text_decorations(PangoLayoutLine* line, double x, double baseline) {   // s261
+    std::vector<TextDeco> out;
+    if (!line) return out;
+    constexpr double S = PANGO_SCALE;
+    double pen = x;
+    for (GSList* l = line->runs; l; l = l->next) {
+        auto* gi = static_cast<PangoGlyphItem*>(l->data);
+        const double w = pango_glyph_string_get_width(gi->glyphs) / S;
+        bool u = false, k = false;
+        for (GSList* a = gi->item->analysis.extra_attrs; a; a = a->next) {
+            const auto* at = static_cast<PangoAttribute*>(a->data);
+            if (at->klass->type == PANGO_ATTR_UNDERLINE) u = reinterpret_cast<const PangoAttrInt*>(at)->value != PANGO_UNDERLINE_NONE;
+            if (at->klass->type == PANGO_ATTR_STRIKETHROUGH) k = reinterpret_cast<const PangoAttrInt*>(at)->value != 0;
+        }
+        if ((u || k) && w > 0) {
+            double base = baseline;
+#if PANGO_VERSION_CHECK(1, 50, 0)
+            base -= gi->y_offset / S;
+#endif
+            TextDeco t{gi->item->offset, pen, pen + w, u, k};
+            PangoFontMetrics* m = pango_font_get_metrics(gi->item->analysis.font, nullptr);
+            t.under_t = std::max(0.25, pango_font_metrics_get_underline_thickness(m) / S);
+            t.under_y = base - pango_font_metrics_get_underline_position(m) / S;
+            t.strike_t = std::max(0.25, pango_font_metrics_get_strikethrough_thickness(m) / S);
+            t.strike_y = base - pango_font_metrics_get_strikethrough_position(m) / S;
+            pango_font_metrics_unref(m);
+            out.push_back(t);
+        }
+        pen += w;
+    }
     return out;
 }
 

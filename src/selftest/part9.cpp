@@ -1,5 +1,6 @@
 // composix_selftest, part 9 (s256: part8 had grown to 3800 lines).
 #include "Selftest.hpp"
+#include <plate/pango.hpp>
 
 namespace cxtest {
 namespace {
@@ -390,6 +391,364 @@ void part9() {
                                                       lines.back() == "Writing\u2026",
               std::to_string(fr.size()) + " reports");
         check("a list gone meanwhile: left out", L::settle_lists(scratch, {"list.none"}).empty());
+    }
+    // ── s260: character attributes ───────────────────────────────────────────
+    {
+        std::cout << "--- s260 character attributes ---\n";
+        // A one-frame document; paragraph 0 set as given; the first line's visit.
+        const auto doc_with = [](core::Doc& d, const std::string& text, const core::Style& ps, const std::vector<core::Run>& runs) {
+            core::NewDoc n;
+            n.pages = 1;
+            n.folios = false;
+            core::new_document(d, n);
+            d.put("style.p", ps);
+            core::Story st = *d.as<core::Story>("story.1");
+            st.paras.clear();
+            core::Para p{"style.p", text};
+            p.runs = runs;
+            st.paras.push_back(p);
+            d.put("story.1", st);
+        };
+        // The first line, measured while its layout lives: baseline, width,
+        // each run's (offset, rise, size), the print PDF's run baselines, and
+        // whether underline / strikethrough are set.
+        struct RunInfo { int offset = 0; double rise = 0, size = 0; };
+        struct Probe { double baseline = 0, width = 0; std::vector<RunInfo> runs; std::vector<double> plate_bases; bool u = false, s = false; };
+        const auto first_line = [](const core::Doc& d) {
+            const auto fl = L::flow_story(d, "story.1");
+            Probe out;
+            bool got = false;
+            L::visit_lines(d, "story.1", fl, fl.frames.at(0).frame, [&](const L::LineVisit& v) {
+                if (got || v.from < 0) return;
+                got = true;
+                out.baseline = v.baseline;
+                PangoRectangle r;
+                pango_layout_line_get_extents(v.line, nullptr, &r);
+                out.width = r.width / static_cast<double>(PANGO_SCALE);
+                for (GSList* l = v.line->runs; l; l = l->next) {
+                    auto* gi = static_cast<PangoGlyphItem*>(l->data);
+                    RunInfo ri;
+                    ri.offset = gi->item->offset;
+#if PANGO_VERSION_CHECK(1, 50, 0)
+                    ri.rise = gi->y_offset / static_cast<double>(PANGO_SCALE);
+#endif
+                    PangoFontDescription* fd = pango_font_describe_with_absolute_size(gi->item->analysis.font);
+                    ri.size = pango_font_description_get_size(fd) / static_cast<double>(PANGO_SCALE);
+                    pango_font_description_free(fd);
+                    out.runs.push_back(ri);
+                }
+                for (const auto& pr : plate::pango::runs(v.line, 0, 100)) out.plate_bases.push_back(pr.baseline);
+                if (PangoAttrList* al = pango_layout_get_attributes(v.line->layout)) {
+                    PangoAttrIterator* it = pango_attr_list_get_iterator(al);
+                    do {
+                        out.u = out.u || pango_attr_iterator_get(it, PANGO_ATTR_UNDERLINE);
+                        out.s = out.s || pango_attr_iterator_get(it, PANGO_ATTR_STRIKETHROUGH);
+                    } while (pango_attr_iterator_next(it));
+                    pango_attr_iterator_destroy(it);
+                }
+            });
+            return out;
+        };
+        const auto width = [](const Probe& v) { return v.width; };
+        core::Style base;
+        base.kind = core::StyleKind::Paragraph;
+        base.family = "Serif";
+        base.size = 20;
+        base.leading = 24;
+        const std::string word = "abcdefghij";
+
+        // Resolving: paragraph, character style over it, the words' own over both.
+        core::Style ps = base;
+        ps.tracking = 50;
+        ps.underline = true;
+        core::Style cs;
+        cs.kind = core::StyleKind::Character;
+        cs.tracking = 100;
+        cs.position = 1;
+        core::Local own;
+        own.tracking = 0.0;
+        own.underline = 0;
+        const auto k1 = core::char_look(ps, &cs);
+        const auto k2 = core::char_look(ps, &cs, &own);
+        check("char_look: a character style over the paragraph's", k1.tracking == 100 && k1.position == 1 && k1.underline);
+        check("char_look: the words' own over both (0 tracking, no underline)", k2.tracking == 0 && k2.position == 1 && !k2.underline);
+
+        // Tracking widens by about (letters) x tracking/1000 em.
+        core::Doc d0, d1;
+        doc_with(d0, word, base, {});
+        core::Style tr = base;
+        tr.tracking = 100;   // 2 pt at 20 pt
+        doc_with(d1, word, tr, {});
+        const double w0 = width(first_line(d0)), w1 = width(first_line(d1));
+        check("tracking 100: ten letters about 18 - 20 pt wider", w1 - w0 > 17.5 && w1 - w0 < 20.5,
+              std::to_string(w0) + " -> " + std::to_string(w1));
+
+        // A superscript: raised, smaller, and its line's baseline where it was.
+        core::Local sup;
+        sup.position = 1;
+        core::Doc d2;
+        doc_with(d2, word, base, {{5, 10, "", sup}});
+        const auto v0 = first_line(d0), v2 = first_line(d2);
+        double up = 0, small = 0;
+        for (const auto& ri : v2.runs)
+            if (ri.offset >= 5) { up = ri.rise; small = ri.size; }
+        check("superscript: raised a third of the size, set at 58.3%", std::abs(up - 20 * core::kSuperRise) < 0.1 &&
+                                                                     std::abs(small - 20 * core::kScriptSize) < 0.6,
+              std::to_string(up) + " up, " + std::to_string(small) + " pt");
+        check("superscript: its line's baseline unmoved", std::abs(v2.baseline - v0.baseline) < 0.01,
+              std::to_string(v0.baseline) + " / " + std::to_string(v2.baseline));
+        {   // The print PDF's runs: the raised one's baseline up by as much.
+            double lo = 100, hi = 100;
+            for (const double pb : v2.plate_bases) { lo = std::min(lo, pb); hi = std::max(hi, pb); }
+            check("print PDF: the superscript's glyphs raised with it", v2.plate_bases.size() >= 2 && std::abs((hi - lo) - 20 * core::kSuperRise) < 0.1 && hi == 100,
+                  std::to_string(lo) + " .. " + std::to_string(hi));
+        }
+        // A subscript and a baseline shift.
+        core::Local sub, sh;
+        sub.position = 2;
+        sh.shift = -3.0;
+        core::Doc d3;
+        doc_with(d3, word, base, {{0, 3, "", sub}, {6, 9, "", sh}});
+        double down = 0, shifted = 0;
+        for (const auto& ri : first_line(d3).runs) {
+            if (ri.offset < 3) down = ri.rise;
+            if (ri.offset >= 6 && ri.offset < 9) shifted = ri.rise;
+        }
+        check("subscript lowered; a baseline shift of -3 pt lowered 3", down < 0 && std::abs(shifted + 3) < 0.05,
+              std::to_string(down) + " / " + std::to_string(shifted));
+        check("their line's baseline unmoved too", std::abs(first_line(d3).baseline - v0.baseline) < 0.01);
+
+        // Caps: all caps and small caps set other glyphs than as typed.
+        core::Style ac = base, sc = base;
+        ac.caps = 1;
+        sc.caps = 2;
+        core::Doc d4, d5;
+        doc_with(d4, word, ac, {});
+        doc_with(d5, word, sc, {});
+        const double w4 = width(first_line(d4)), w5 = width(first_line(d5));
+        check("all caps: wider than as typed; small caps: between", w4 > w0 + 1 && w5 > w0 - 0.01 && w5 < w4 - 0.5,
+              std::to_string(w0) + " / " + std::to_string(w4) + " / " + std::to_string(w5));
+
+        // Underline and strikethrough reach the layout.
+        core::Local ul;
+        ul.underline = 1;
+        ul.strike = 1;
+        core::Doc d6;
+        doc_with(d6, word, base, {{2, 4, "", ul}});
+        const auto v6 = first_line(d6);
+        const bool has_u = v6.u, has_s = v6.s;
+        check("underline and strikethrough set on the words", has_u && has_s);
+
+        // Kept in the file: a style's and the words' own.
+        core::Style all = base;
+        all.tracking = -20;
+        all.shift = 1.5;
+        all.position = 2;
+        all.caps = 2;
+        all.underline = all.strike = true;
+        core::Local mine;
+        mine.tracking = 0.0;
+        mine.shift = 2.0;
+        mine.position = 0;
+        mine.caps = 1;
+        mine.underline = 0;
+        mine.strike = 1;
+        core::Doc d7;
+        doc_with(d7, word, all, {{1, 3, "", mine}});
+        std::string err;
+        core::Doc e;
+        check("kept in the file", core::from_json(e, core::to_json(d7), &err) && e.records() == d7.records(), err);
+        check("Local::empty knows them", !mine.empty() && core::Local{}.empty());
+
+        // The style editor's keys.
+        core::Style ed = base;
+        core::doc::style_edit(d7, ed, "track", "75");
+        core::doc::style_edit(d7, ed, "bshift", "-2");
+        core::doc::style_edit(d7, ed, "cpos", "1");
+        core::doc::style_edit(d7, ed, "ccase", "2");
+        core::doc::style_edit(d7, ed, "uline", "1");
+        core::doc::style_edit(d7, ed, "strike", "1");
+        check("style edits: tracking, shift, position, case, underline, strike",
+              ed.tracking == 75 && ed.shift == -2 && ed.position == 1 && ed.caps == 2 && ed.underline && ed.strike);
+        check("their keys name the style's fields", core::doc::style_key_of_edit("track") == "tracking" &&
+                                                     core::doc::style_key_of_edit("ccase") == "caps");
+    }
+    // ── s261: underline / strikethrough in the print PDF ─────────────────────
+    {
+        std::cout << "--- s261 underline and strikethrough drawn ---\n";
+        namespace fs = std::filesystem;
+        const auto make = [](core::Doc& d, const std::vector<core::Run>& runs) {
+            core::NewDoc n;
+            n.pages = 1;
+            n.folios = false;
+            core::new_document(d, n);
+            core::Style ps;
+            ps.kind = core::StyleKind::Paragraph;
+            ps.family = "Serif";
+            ps.size = 20;
+            ps.leading = 24;
+            d.put("style.p", ps);
+            core::Story st = *d.as<core::Story>("story.1");
+            st.paras.clear();
+            core::Para p{"style.p", "abcdefghij klmnop"};
+            p.runs = runs;
+            st.paras.push_back(p);
+            d.put("story.1", st);
+        };
+        core::Local ul, sk, both_up;
+        ul.underline = 1;
+        sk.strike = 1;
+        both_up.underline = 1;
+        both_up.position = 1;
+        core::Doc d;
+        make(d, {{0, 4, "", ul}, {5, 8, "", sk}, {11, 15, "", both_up}});
+        const auto fl = L::flow_story(d, "story.1");
+        std::vector<L::TextDeco> decos;
+        double base = 0;
+        L::visit_lines(d, "story.1", fl, fl.frames.at(0).frame, [&](const L::LineVisit& v) {
+            if (v.from < 0 || !decos.empty()) return;
+            base = v.baseline;
+            decos = L::text_decorations(v.line, v.x, v.baseline);
+        });
+        const auto at = [&](int start) {
+            for (const auto& t : decos) if (t.start == start) return t;
+            return L::TextDeco{-1};
+        };
+        const auto u = at(0), k = at(5), up = at(11);
+        check("three runs marked: underline, strikethrough, a raised underline", decos.size() == 3 && u.under && !u.strike &&
+                                                                                  k.strike && !k.under && up.under,
+              std::to_string(decos.size()));
+        check("underline under the baseline, strikethrough over it, both with thickness",
+              u.under_y > base && u.under_y < base + 6 && k.strike_y < base && k.strike_y > base - 15 && u.under_t > 0 && k.strike_t > 0,
+              std::to_string(base) + ": " + std::to_string(u.under_y) + " / " + std::to_string(k.strike_y));
+        check("a run's width: four letters wider than three", u.x1 - u.x0 > k.x1 - k.x0 && u.x0 >= 0);
+        check("a superscript's underline raised with it", up.under_y < u.under_y - 4, std::to_string(up.under_y));
+
+        // The print PDF: two more rectangles than without (the strokes), uncompressed.
+        const auto rects = [](const core::Doc& doc, const std::string& name) {
+            const auto dir = fs::temp_directory_path() / "composix_selftest_s261";
+            std::error_code ec;
+            fs::create_directories(dir, ec);
+            const auto out = (dir / name).string();
+            L::PdfOptions opt;
+            opt.compress = false;
+            std::string err;
+            if (!L::export_print_pdf(doc, out, opt, {}, nullptr, &err)) return -1;
+            std::ifstream f(out, std::ios::binary);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            const std::string pdf = ss.str();
+            int n = 0;
+            for (std::size_t i = pdf.find(" re\n"); i != std::string::npos; i = pdf.find(" re\n", i + 1)) ++n;
+            return n;
+        };
+        core::Doc plain;
+        make(plain, {});
+        core::Doc two;
+        make(two, {{0, 4, "", ul}, {5, 8, "", sk}});
+        const int r0 = rects(plain, "plain.pdf"), r2 = rects(two, "two.pdf");
+        check("print PDF: an underline and a strikethrough drawn (2 more rectangles)", r0 >= 0 && r2 == r0 + 2,
+              std::to_string(r0) + " -> " + std::to_string(r2));
+    }
+    // ── s262: an ODT's character attributes ──────────────────────────────────
+    {
+        std::cout << "--- s262 an ODT's character attributes ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Spaced" style:family="paragraph"><style:text-properties fo:letter-spacing="1pt" fo:text-transform="uppercase"/></style:style>
+ <style:style style:name="Smallcaps" style:family="text"><style:text-properties fo:font-variant="small-caps" style:text-underline-style="solid"/></style:style>
+</office:styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:automatic-styles>
+ <style:style style:name="T1" style:family="text"><style:text-properties style:text-position="super 58%"/></style:style>
+ <style:style style:name="T2" style:family="text"><style:text-properties style:text-line-through-style="solid"/></style:style>
+ <style:style style:name="T3" style:family="text"><style:text-properties style:text-position="20% 100%"/></style:style>
+ <style:style style:name="T4" style:family="text"><style:text-properties style:text-position="sub 58%" fo:letter-spacing="normal"/></style:style>
+</office:automatic-styles><office:body><office:text>)"
+            R"(<text:p text:style-name="Spaced">Heading</text:p>)"
+            R"(<text:p text:style-name="Standard">E=mc<text:span text:style-name="T1">2</text:span> <text:span text:style-name="T2">gone</text:span> )"
+            R"(<text:span text:style-name="T3">up</text:span> H<text:span text:style-name="T4">2</text:span>O <text:span text:style-name="Smallcaps">Names</text:span></text:p>)"
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        core::Doc d;
+        const bool ok = book && L::import_odt(d, *book, nullptr, {}, &err);
+        check("import: made", ok, err);
+        if (ok) {
+            const auto& st = *d.as<core::Story>(d.ids_of<core::Story>().front());
+            const auto h = core::doc::para_style(d, st.paras.at(0));
+            check("a paragraph style's letter spacing 1 pt at 10 pt: tracking 100; uppercase: all caps", h.tracking == 100 && h.caps == 1,
+                  std::to_string(h.tracking) + " / " + std::to_string(h.caps));
+            const auto& p = st.paras.at(1);
+            const auto look_at = [&](int byte) {
+                for (const auto& r : p.runs)
+                    if (r.start <= byte && byte < r.end) return core::char_look(core::doc::para_style(d, p), d.as<core::Style>(r.style), &r.local);
+                return core::char_look(core::doc::para_style(d, p));
+            };
+            const auto at = [&](const std::string& w) { return static_cast<int>(p.text.find(w)); };
+            check("super 58%: a superscript", look_at(at("2 ")).position == 1);
+            check("line-through: struck", look_at(at("gone")).strike && !look_at(at("E=")).strike);
+            check("20% 100%: a baseline shift of 2 pt", std::abs(look_at(at("up")).shift - 2) < 0.01, std::to_string(look_at(at("up")).shift));
+            check("sub 58%: a subscript; normal spacing: tracking 0", look_at(at("2O") ).position == 2 && look_at(at("2O")).tracking == 0);
+            const auto nm = look_at(at("Names"));
+            check("a text style: small caps, underlined -- a character style", nm.caps == 2 && nm.underline, std::to_string(nm.caps));
+        }
+    }
+    // ── s263: the rows, the toggles' test, the shortcuts ─────────────────────
+    {
+        std::cout << "--- s263 type style rows and shortcuts ---\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto o = core::project(d, "");
+        const auto rows_of = [&](core::StyleKind kind) {
+            std::map<std::string, std::pair<std::string, std::string>> m;   // edit -> (group, value)
+            for (const auto* it : o.in(core::Segment::Styles))
+                if (const auto* st = d.as<core::Style>(it->id); st && st->kind == kind) {
+                    for (const auto& f : it->fields) m[f.edit] = {f.group, f.value};
+                    break;
+                }
+            return m;
+        };
+        const auto pr = rows_of(core::StyleKind::Paragraph), cr = rows_of(core::StyleKind::Character);
+        bool grouped = true;
+        for (const char* k : {"track", "bshift", "cpos", "ccase", "uline", "strike"})
+            grouped = grouped && pr.count(k) && cr.count(k) && pr.at(k).first == "Character" && cr.at(k).first == "Character";
+        check("style rows: Tracking .. Strikethrough, a Character group, both kinds", grouped);
+        check("a paragraph style says None / Normal / As typed / Off; a character style Inherit",
+              pr.at("track").second == "None" && pr.at("cpos").second == "Normal" && pr.at("ccase").second == "As typed" &&
+                  pr.at("uline").second == "Off" && cr.at("track").second == "Inherit" && cr.at("uline").second == "Inherit");
+        check("the labels name the steps", core::doc::style_edit_label("track") == "Tracking" && core::doc::style_edit_label("strike") == "Strikethrough");
+
+        // The words' own rows, and a toggle's test.
+        core::Story st = *d.as<core::Story>("story.1");
+        const int p = 3;
+        core::Local mine;
+        mine.underline = 1;
+        mine.tracking = 25.0;
+        const int n = static_cast<int>(st.paras[p].text.size());
+        core::doc::set_local(j, d, "story.1", {p, 0}, {p, n}, "Underline", [&](core::Local& l) { l.underline = 1; l.tracking = 25.0; });
+        const auto f = core::text_fields(d, "story.1", {p, 0}, {p, 2});
+        std::map<std::string, std::string> v;
+        for (const auto& x : f) v[x.edit] = x.value;
+        check("the words' rows: tracking 25, underline On, the rest the style's",
+              v["ltrack"] == "25 /1000 em" && v["luline"] == "On" && v["lpos"] == "Style's" && v["lstrike"] == "Style's", v["ltrack"]);
+        const auto& sp = *d.as<core::Story>("story.1");
+        const auto ul = [](const core::CharLook& k) { return k.underline; };
+        check("all_look: the paragraph underlined throughout; the next not", core::all_look(d, sp, {p, 0}, {p, n}, ul) &&
+                                                                             !core::all_look(d, sp, {p + 1, 0}, {p + 1, 2}, ul));
+        // Shortcuts: wired, and no chord claimed twice.
+        std::set<std::string> acts;
+        for (const auto& sc : core::shortcut_registry()) acts.insert(sc.action);
+        bool all = true;
+        for (const char* a : {"win.underline", "win.strikethrough", "win.superscript", "win.subscript", "win.all-caps", "win.small-caps"})
+            all = all && acts.count(a);
+        check("shortcuts: the six toggles listed", all);
+        const auto col = core::find_accel_collisions();
+        check("no chord claimed twice", col.empty(), col.empty() ? "" : col.front());
     }
 }
 }  // namespace cxtest

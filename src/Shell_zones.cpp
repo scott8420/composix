@@ -216,6 +216,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
     m_edit_menu->append("Redo", "win.redo");
     m_edit_menu->append("Find / Change\u2026", "win.find");   // s022
     m_edit_menu->append_submenu("Insert Special Character", special_menu());   // s023
+    m_edit_menu->append_submenu("Type Style", type_style_menu());   // s263
     {   // s070
         m_arrange_menu = Gio::Menu::create();
         m_arrange_menu->append("Bring to Front", "win.bring-front");

@@ -95,6 +95,7 @@ struct Builder {
         set(pr.before, s.space_before);
         set(pr.after, s.space_after);
         s.color = swatch_for(pr.color);
+        onto(s, char_set(pr, s.size));   // s262: a paragraph style's character attributes
         if (pr.page_break == 1) s.start = core::ParaStart::NextPage;
         if (pr.page_break == 1 && s.space_before > 0) s.top_space = true;   // s242: a chapter heading sunk down its page, as in the file
         // s257: keeps -- keep with next (a line), orphans / widows as Keep lines
@@ -120,12 +121,51 @@ struct Builder {
         core::Style s{sit != b.styles.end() ? sit->second.display : named, core::StyleKind::Character, pos++, pp.family, pp.size > 0 ? pp.size : 0, 0,
                       pp.bold == 1, pp.italic == 1, core::Align::Left};
         s.color = swatch_for(pp.color);
+        onto(s, char_set(pp, pp.size > 0 ? pp.size : cur_size));   // s262
         const auto id = d.fresh_id("style");
         char_style[named] = id;
         d.put(id, s);
         ++info.styles;
         return id;
     }
+    // s262: an ODT's character attributes at `size` points -- letter spacing
+    // as tracking (thousandths of an em), a raised / lowered smaller run as a
+    // superscript / subscript, a raised one at full size as a baseline shift.
+    struct CharSet {
+        std::optional<double> tracking, shift;
+        int position = -1, caps = -1, underline = -1, strike = -1;
+    };
+    static CharSet char_set(const odt::Props& p, double size) {
+        CharSet c;
+        if (size <= 0) size = 12;
+        if (p.letter > -1e8) c.tracking = std::round(p.letter / size * 1000);
+        if (p.rise > -1e8) {
+            if (p.rise == 0) { c.position = 0; c.shift = 0.0; }
+            else if (p.scale > 0 && p.scale < 100) c.position = p.rise > 0 ? 1 : 2;
+            else c.shift = std::round(p.rise / 100 * size * 100) / 100;
+        }
+        c.caps = p.caps;
+        c.underline = p.underline;
+        c.strike = p.strike;
+        return c;
+    }
+    static void onto(core::Style& s, const CharSet& c) {
+        if (c.tracking) s.tracking = *c.tracking;
+        if (c.shift) s.shift = *c.shift;
+        if (c.position >= 0) s.position = c.position;
+        if (c.caps >= 0) s.caps = c.caps;
+        if (c.underline >= 0) s.underline = c.underline == 1;
+        if (c.strike >= 0) s.strike = c.strike == 1;
+    }
+    static void onto(core::Local& l, const CharSet& c) {
+        if (c.tracking) l.tracking = c.tracking;
+        if (c.shift) l.shift = c.shift;
+        if (c.position >= 0) l.position = c.position;
+        if (c.caps >= 0) l.caps = c.caps;
+        if (c.underline >= 0) l.underline = c.underline;
+        if (c.strike >= 0) l.strike = c.strike;
+    }
+    double cur_size = 12;   // s262: the paragraph's size, for an automatic style's letter spacing
     // What an automatic style changes, as local formatting (over the paragraph style `ps`).
     core::Local local_of(const odt::Props& p) {
         core::Local l;
@@ -133,6 +173,7 @@ struct Builder {
         if (p.italic >= 0) l.italic = p.italic;
         if (p.size > 0) l.size = p.size;
         l.color = swatch_for(p.color);
+        onto(l, char_set(p, p.size > 0 ? p.size : cur_size));   // s262
         return l;
     }
     // Spans (nested, overlapping) -> sorted runs that don't overlap; `base` over the whole text.
@@ -157,6 +198,12 @@ struct Builder {
                     if (l.italic >= 0) r.local.italic = l.italic;
                     if (l.size > 0) r.local.size = l.size;
                     if (!l.color.empty()) r.local.color = l.color;
+                    if (l.tracking) r.local.tracking = l.tracking;   // s262
+                    if (l.shift) r.local.shift = l.shift;
+                    if (l.position >= 0) r.local.position = l.position;
+                    if (l.caps >= 0) r.local.caps = l.caps;
+                    if (l.underline >= 0) r.local.underline = l.underline;
+                    if (l.strike >= 0) r.local.strike = l.strike;
                     if (!st->second.parent.empty() && b.styles.count(st->second.parent)) r.style = char_for(st->second.parent);
                 } else {
                     r.style = char_for(s->style);
@@ -208,6 +255,7 @@ struct Builder {
             q.restart = std::max(0, p.start);
         }
         q.text = p.text;
+        if (const auto* qs = d.as<core::Style>(q.style)) cur_size = qs->size > 0 ? qs->size : 12;   // s262
         core::Local base;
         if (const auto it = b.styles.find(p.style); it != b.styles.end() && it->second.automatic) {   // its own look
             const auto& own = it->second.props;

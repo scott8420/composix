@@ -1197,7 +1197,8 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "starts") {
             did = core::doc::set_starts(m_journal, m_doc, m_inspected,
                                         static_cast<core::Side>(std::stoi(choice)));
-        } else if (key == "local" || key == "lsize" || key == "lcolor" || key == "lnobreak") {   // s030: formatting on the words
+        } else if (key == "local" || key == "lsize" || key == "lcolor" || key == "lnobreak" || key == "ltrack" || key == "lshift" ||
+                   key == "lpos" || key == "lcase" || key == "luline" || key == "lstrike") {   // s030: formatting on the words (s263: and its character attributes)
             if (key == "local" && (choice == "bold" || choice == "italic")) { activate_action(choice == "bold" ? "win.bold" : "win.italic"); return; }
             auto& cv = m_canvas_view.canvas();
             if (!cv.editing()) return;
@@ -1210,6 +1211,17 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 did = core::doc::set_local(m_journal, m_doc, story, a, b, "Size", [&](core::Local& l) { l.size = std::stod(choice); });
             else if (key == "lnobreak")   // s159
                 did = core::doc::set_local(m_journal, m_doc, story, a, b, "No break", [&](core::Local& l) { l.no_break = std::clamp(std::stoi(choice), -1, 1); });
+            else if (key == "ltrack" || key == "lshift") {   // s263
+                std::optional<double> v;
+                if (choice != "style") v = std::clamp(std::stod(choice), key == "ltrack" ? -1000.0 : -1000.0, key == "ltrack" ? 10000.0 : 1000.0);
+                did = core::doc::set_local(m_journal, m_doc, story, a, b, key == "ltrack" ? "Tracking" : "Baseline shift",
+                                           [&](core::Local& l) { (key == "ltrack" ? l.tracking : l.shift) = v; });
+            } else if (key == "lpos" || key == "lcase" || key == "luline" || key == "lstrike") {
+                const int v = std::clamp(std::stoi(choice), -1, key == "lpos" || key == "lcase" ? 2 : 1);
+                did = core::doc::set_local(m_journal, m_doc, story, a, b,
+                                           key == "lpos" ? "Position" : key == "lcase" ? "Case" : key == "luline" ? "Underline" : "Strikethrough",
+                                           [&](core::Local& l) { (key == "lpos" ? l.position : key == "lcase" ? l.caps : key == "luline" ? l.underline : l.strike) = v; });
+            }
             else
                 did = core::doc::set_local(m_journal, m_doc, story, a, b, "Colour", [&](core::Local& l) { l.color = choice; });
             cv.grab_focus();

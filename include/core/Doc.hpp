@@ -343,7 +343,13 @@ struct Local {
     double      size = 0;                 // points
     std::string color;                    // a swatch id
     int         no_break = -1;            // s159: -1 the styles', 0 may break, 1 kept on one line
-    bool empty() const { return bold < 0 && italic < 0 && size <= 0 && color.empty() && no_break < 0; }
+    // s260: character attributes (unset / -1: the styles') -- see Style.
+    std::optional<double> tracking, shift;
+    int         position = -1, caps = -1, underline = -1, strike = -1;
+    bool empty() const {
+        return bold < 0 && italic < 0 && size <= 0 && color.empty() && no_break < 0 && !tracking && !shift && position < 0 &&
+               caps < 0 && underline < 0 && strike < 0;
+    }
     bool operator==(const Local&) const = default;
 };
 
@@ -551,6 +557,14 @@ struct Style {
     std::string next;
     std::vector<std::string> own;
     bool        no_break = false;        // s075: character style -- its words stay on one line
+    // s260: character attributes -- a paragraph style's for all its text, a
+    // character style's over it (0 / false there: the paragraph's).
+    // `tracking`: thousandths of an em after each character; `shift`: the
+    // baseline moved up (points, down < 0); `position`: 0 normal, 1
+    // superscript, 2 subscript; `caps`: 0 as typed, 1 all caps, 2 small caps.
+    double      tracking = 0, shift = 0;
+    int         position = 0, caps = 0;
+    bool        underline = false, strike = false;
     // s166 (Scott): a paragraph style across ALL the frame's columns -- the
     // text before it balanced over the columns above it, the text after
     // going on in columns below it.
@@ -731,6 +745,18 @@ std::optional<double> parse_length(std::string_view text, double unit = 1);
 // character style with No Break (or one it's based on), merged. Bytes.
 struct ByteSpan { int a = 0, b = 0; };
 std::vector<ByteSpan> no_break_spans(const Doc& d, const Para& p);
+// s260: a run's character attributes, resolved -- the paragraph's style, a
+// character style's over it, the words' own over both.
+struct CharLook {
+    double tracking = 0, shift = 0;
+    int    position = 0, caps = 0;
+    bool   underline = false, strike = false;
+    bool operator==(const CharLook&) const = default;
+};
+CharLook char_look(const Style& para, const Style* cs = nullptr, const Local* own = nullptr);
+// The superscript / subscript set: this much of the size, raised (or
+// lowered) this much of it (InDesign's 58.3% / 33.3%).
+constexpr double kScriptSize = 0.583, kSuperRise = 0.333, kSubDrop = 0.333;
 // s075: a line from `pos` that Pango ends after `took` bytes: pulled back
 // to before a no-break span it would split (to the last space before the
 // span, else the span's start) -- unless the span starts the line (too
@@ -795,6 +821,8 @@ struct WordLook {
 };
 std::vector<WordLook> word_looks(const Doc& d, const Para& p);
 bool all_bold(const Doc& d, const Story& s, TextPos a, TextPos b);
+// s263: every character in [a, b) has the look `f` asks for (a toggle's test).
+bool all_look(const Doc& d, const Story& s, TextPos a, TextPos b, const std::function<bool(const CharLook&)>& f);
 bool all_italic(const Doc& d, const Story& s, TextPos a, TextPos b);
 
 // ── images (s009) ───────────────────────────────────────────────────────────

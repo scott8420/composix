@@ -35,6 +35,30 @@ template <class T> T val(const json& j, const char* k, T dflt) {
     return j.contains(k) ? j.at(k).get<T>() : dflt;
 }
 
+// s030 / s159 / s260: a run's own formatting, as written (what's set only, past the first four).
+json local_json(const Local& l) {
+    json o = {{"bold", l.bold}, {"italic", l.italic}, {"size", l.size}, {"color", l.color}};
+    if (l.no_break >= 0) o["no_break"] = l.no_break;
+    if (l.tracking) o["tracking"] = *l.tracking;
+    if (l.shift) o["shift"] = *l.shift;
+    if (l.position >= 0) o["position"] = l.position;
+    if (l.caps >= 0) o["caps"] = l.caps;
+    if (l.underline >= 0) o["underline"] = l.underline;
+    if (l.strike >= 0) o["strike"] = l.strike;
+    return o;
+}
+Local local_of_json(const json& l) {
+    Local o{val(l, "bold", -1), val(l, "italic", -1), val(l, "size", 0.0), val<std::string>(l, "color", "")};
+    o.no_break = val(l, "no_break", -1);
+    if (l.contains("tracking") && l.at("tracking").is_number()) o.tracking = l.at("tracking").get<double>();
+    if (l.contains("shift") && l.at("shift").is_number()) o.shift = l.at("shift").get<double>();
+    o.position = std::clamp(val(l, "position", -1), -1, 2);
+    o.caps = std::clamp(val(l, "caps", -1), -1, 2);
+    o.underline = std::clamp(val(l, "underline", -1), -1, 1);
+    o.strike = std::clamp(val(l, "strike", -1), -1, 1);
+    return o;
+}
+
 json to(const Record& r) {
     return std::visit([](const auto& v) -> json {
         using T = std::decay_t<decltype(v)>;
@@ -143,10 +167,7 @@ json to(const Record& r) {
                     json runs = json::array();
                     for (const auto& r : p.runs) {
                         json jr = {{"start", r.start}, {"end", r.end}, {"style", r.style}};
-                        if (!r.local.empty())   // s030
-                            jr["local"] = {{"bold", r.local.bold}, {"italic", r.local.italic},
-                                           {"size", r.local.size}, {"color", r.local.color}};
-                            if (r.local.no_break >= 0) jr["local"]["no_break"] = r.local.no_break;   // s159
+                        if (!r.local.empty()) jr["local"] = local_json(r.local);   // s030; s159, s260: all of it
                         runs.push_back(jr);
                     }
                     jp["runs"] = runs;
@@ -179,10 +200,7 @@ json to(const Record& r) {
                             json runs = json::array();
                             for (const auto& r : n.runs) {
                                 json jr = {{"start", r.start}, {"end", r.end}, {"style", r.style}};
-                                if (!r.local.empty())
-                                    jr["local"] = {{"bold", r.local.bold}, {"italic", r.local.italic},
-                                                   {"size", r.local.size}, {"color", r.local.color}};
-                            if (r.local.no_break >= 0) jr["local"]["no_break"] = r.local.no_break;   // s159
+                                if (!r.local.empty()) jr["local"] = local_json(r.local);   // s030; s159, s260: all of it
                                 runs.push_back(jr);
                             }
                             jn["runs"] = runs;
@@ -231,6 +249,12 @@ json to(const Record& r) {
                  {"hyph_limit", v.hyph_limit}, {"hyph_shortest", v.hyph_shortest}, {"hyph_last_word", v.hyph_last_word},
                  {"keep_next", v.keep_next}, {"keep_lines", v.keep_lines}, {"start", en(v.start)}};
             if (v.no_break) j["no_break"] = true;   // s075
+            if (v.tracking != 0) j["tracking"] = v.tracking;   // s260
+            if (v.shift != 0) j["shift"] = v.shift;
+            if (v.position != 0) j["position"] = v.position;
+            if (v.caps != 0) j["caps"] = v.caps;
+            if (v.underline) j["underline"] = true;
+            if (v.strike) j["strike"] = true;
             if (v.span) j["span"] = true;           // s166
             if (v.split >= 2) j["split"] = v.split;   // s183
             if (!v.lang.empty()) j["lang"] = v.lang;   // s190
@@ -471,7 +495,7 @@ std::optional<Record> from(const json& j) {
                         Run run{val(r, "start", 0), val(r, "end", 0), val<std::string>(r, "style", "")};
                         if (r.contains("local")) {
                             const auto& l = r.at("local");
-                            run.local = {val(l, "bold", -1), val(l, "italic", -1), val(l, "size", 0.0), val<std::string>(l, "color", "")}; run.local.no_break = val(l, "no_break", -1);   // s159
+                            run.local = local_of_json(l);   // s030; s159, s260
                         }
                         para.runs.push_back(run);
                     }
@@ -504,7 +528,7 @@ std::optional<Record> from(const json& j) {
                                 Run run{val(r, "start", 0), val(r, "end", 0), val<std::string>(r, "style", "")};
                                 if (r.contains("local")) {
                                     const auto& l = r.at("local");
-                                    run.local = {val(l, "bold", -1), val(l, "italic", -1), val(l, "size", 0.0), val<std::string>(l, "color", "")}; run.local.no_break = val(l, "no_break", -1);   // s159
+                                    run.local = local_of_json(l);   // s030; s159, s260
                                 }
                                 note.runs.push_back(run);
                             }
@@ -541,6 +565,12 @@ std::optional<Record> from(const json& j) {
         v.bold = val(j, "bold", false);
         v.italic = val(j, "italic", false);
         v.no_break = val(j, "no_break", false);   // s075
+        v.tracking = val(j, "tracking", 0.0);   // s260
+        v.shift = val(j, "shift", 0.0);
+        v.position = std::clamp(val(j, "position", 0), 0, 2);
+        v.caps = std::clamp(val(j, "caps", 0), 0, 2);
+        v.underline = val(j, "underline", false);
+        v.strike = val(j, "strike", false);
         v.span = val(j, "span", false);           // s166
         v.split = std::clamp(val(j, "split", 0), 0, 4);   // s183
         v.lang = val(j, "lang", std::string{});   // s190

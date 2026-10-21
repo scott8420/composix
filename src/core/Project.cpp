@@ -77,6 +77,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"mtop", 72, 0, 5000}, {"mbottom", 72, 0, 5000}, {"minside", 72, 0, 5000}, {"moutside", 72, 0, 5000},
         {"mgutter", 1, 0, 500}, {"gutter", 1, 0, 500}, {"inset", 1, 0, 500}, {"wrap_off", 1, 0, 500}, {"colw", 1, 1, 20000},
         {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
+        {"track", 1, -1000, 10000}, {"bshift", 1, -1000, 1000}, {"ltrack", 1, -1000, 10000}, {"lshift", 1, -1000, 1000},   // s263
         {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500},
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
         {"dnote_rule_w", 1, 0.1, 6}, {"dnote_space", 1, 0, 36},   // s118
@@ -150,6 +151,8 @@ std::string style_group(const Field& f) {
     static const std::map<std::string, std::string> by_edit{
         {"font", "Text"}, {"ssize", "Text"}, {"leading", "Text"}, {"bold", "Text"}, {"italic", "Text"}, {"nobreak", "Text"},
         {"color", "Text"}, {"color_tint", "Text"}, {"clang", "Text"},
+        {"track", "Character"}, {"bshift", "Character"}, {"cpos", "Character"}, {"ccase", "Character"}, {"uline", "Character"},
+        {"strike", "Character"},   // s263
         {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"top_space", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
         {"findent", "Paragraph"}, {"indent_after", "Paragraph"}, {"tabs", "Paragraph"}, {"drop_lines", "Paragraph"},
         {"drop_chars", "Paragraph"}, {"span", "Paragraph"}, {"split_gutter", "Paragraph"},
@@ -509,6 +512,24 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 const auto* cur = d.as<Swatch>(s.color);
                 f.push_back({"Color", cur ? cur->name : (para ? "Black" : "Inherit"), "color", col});
                 if (cur || para) f.push_back({"Tint", tint_text(s.color_tint), "color_tint", tint_choices()});   // s021
+            }
+            {   // s263: character attributes (a character style's "Inherit": its paragraph's)
+                const std::string none = para ? "None" : "Inherit";
+                const auto num = [](double v) { return pts(v); };
+                std::vector<Choice> tr{{"0", none}};
+                for (const double v : {-50.0, -25.0, -10.0, 10.0, 25.0, 50.0, 100.0, 200.0}) tr.push_back({num(v), num(v)});
+                f.push_back({"Tracking", s.tracking == 0 ? none : num(s.tracking) + " /1000 em", "track", tr});
+                std::vector<Choice> bs{{"0", none}};
+                for (const double v : {-3.0, -2.0, -1.0, 1.0, 2.0, 3.0}) bs.push_back({num(v), num(v) + " pt"});
+                f.push_back({"Baseline shift", s.shift == 0 ? none : num(s.shift) + " pt", "bshift", bs});
+                static const char* pos[] = {"Normal", "Superscript", "Subscript"};
+                static const char* cas[] = {"As typed", "All caps", "Small caps"};
+                const std::string p0 = para ? pos[0] : "Inherit", c0 = para ? cas[0] : "Inherit";
+                f.push_back({"Position", s.position == 0 ? p0 : pos[s.position], "cpos", {{"0", p0}, {"1", pos[1]}, {"2", pos[2]}}});
+                f.push_back({"Case", s.caps == 0 ? c0 : cas[s.caps], "ccase", {{"0", c0}, {"1", cas[1]}, {"2", cas[2]}}});
+                const std::string off = para ? "Off" : "Inherit";
+                f.push_back({"Underline", s.underline ? "On" : off, "uline", {{"0", off}, {"1", "On"}}});
+                f.push_back({"Strikethrough", s.strike ? "On" : off, "strike", {{"0", off}, {"1", "On"}}});
             }
             if (para) {
                 f.push_back({"Align", align_text(s.align), "align", align_ch});
@@ -1309,6 +1330,25 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
         // s159: No break on the words themselves (a character style's before).
         out.push_back({"No break", l.no_break < 0 ? "Style's" : l.no_break ? "On" : "Off", "lnobreak",
                        {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
+        {   // s263: the words' own character attributes ("Style's": none of their own)
+            const auto num = [](double v) { return pts(v); };
+            std::vector<Choice> tr{{"style", "Style's"}, {"0", "0"}};
+            for (const double v : {-50.0, -25.0, -10.0, 10.0, 25.0, 50.0, 100.0, 200.0}) tr.push_back({num(v), num(v)});
+            out.push_back({"Tracking", l.tracking ? num(*l.tracking) + " /1000 em" : "Style's", "ltrack", tr});
+            std::vector<Choice> bs{{"style", "Style's"}, {"0", "0 pt"}};
+            for (const double v : {-3.0, -2.0, -1.0, 1.0, 2.0, 3.0}) bs.push_back({num(v), num(v) + " pt"});
+            out.push_back({"Baseline shift", l.shift ? num(*l.shift) + " pt" : "Style's", "lshift", bs});
+            static const char* pos[] = {"Normal", "Superscript", "Subscript"};
+            static const char* cas[] = {"As typed", "All caps", "Small caps"};
+            out.push_back({"Position", l.position < 0 ? "Style's" : pos[std::clamp(l.position, 0, 2)], "lpos",
+                           {{"-1", "Style's"}, {"0", pos[0]}, {"1", pos[1]}, {"2", pos[2]}}});
+            out.push_back({"Case", l.caps < 0 ? "Style's" : cas[std::clamp(l.caps, 0, 2)], "lcase",
+                           {{"-1", "Style's"}, {"0", cas[0]}, {"1", cas[1]}, {"2", cas[2]}}});
+            out.push_back({"Underline", l.underline < 0 ? "Style's" : l.underline ? "On" : "Off", "luline",
+                           {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
+            out.push_back({"Strikethrough", l.strike < 0 ? "Style's" : l.strike ? "On" : "Off", "lstrike",
+                           {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
+        }
         mark_typed(out, unit_pt(d.settings().units));   // s041: Size typed
         Field fx{"", "", "local", {{"bold", "Bold"}, {"italic", "Italic"}, {"clear", "Clear overrides"}}};
         fx.buttons = true;

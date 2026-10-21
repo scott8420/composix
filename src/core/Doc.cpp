@@ -270,6 +270,27 @@ std::vector<ByteSpan> no_break_spans(const Doc& d, const Para& p) {   // s075
     return out;
 }
 
+CharLook char_look(const Style& para, const Style* cs, const Local* own) {   // s260
+    CharLook k{para.tracking, para.shift, para.position, para.caps, para.underline, para.strike};
+    if (cs && cs->kind == StyleKind::Character) {
+        if (cs->tracking != 0) k.tracking = cs->tracking;
+        if (cs->shift != 0) k.shift = cs->shift;
+        if (cs->position != 0) k.position = cs->position;
+        if (cs->caps != 0) k.caps = cs->caps;
+        k.underline = k.underline || cs->underline;
+        k.strike = k.strike || cs->strike;
+    }
+    if (own) {
+        if (own->tracking) k.tracking = *own->tracking;
+        if (own->shift) k.shift = *own->shift;
+        if (own->position >= 0) k.position = std::clamp(own->position, 0, 2);
+        if (own->caps >= 0) k.caps = std::clamp(own->caps, 0, 2);
+        if (own->underline >= 0) k.underline = own->underline == 1;
+        if (own->strike >= 0) k.strike = own->strike == 1;
+    }
+    return k;
+}
+
 int keep_together(const std::string& text, const std::vector<ByteSpan>& spans, int pos, int took) {
     const int end = pos + took;
     for (const auto& s : spans) {
@@ -657,6 +678,12 @@ bool all_bold(const Doc& d, const Story& s, TextPos a, TextPos b) {
         if (l.bold >= 0) return l.bold == 1;
         if (cs && cs->bold) return true;
         return ps && ps->bold;
+    });
+}
+
+bool all_look(const Doc& d, const Story& s, TextPos a, TextPos b, const std::function<bool(const CharLook&)>& f) {   // s263
+    return all_chars(d, s, a, b, [&](const Local& l, const Style* cs, const Style* ps) {
+        return f(char_look(ps ? *ps : Style{}, cs, &l));
     });
 }
 
@@ -3325,6 +3352,12 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("bold", "Weight", bold),
         COMPOSIX_SF("italic", "Slant", italic),
         COMPOSIX_SF("no_break", "No break", no_break),   // s075
+        COMPOSIX_SF("tracking", "Tracking", tracking),   // s260
+        COMPOSIX_SF("shift", "Baseline shift", shift),
+        COMPOSIX_SF("position", "Position", position),
+        COMPOSIX_SF("caps", "Case", caps),
+        COMPOSIX_SF("underline", "Underline", underline),
+        COMPOSIX_SF("strike", "Strikethrough", strike),
         COMPOSIX_SF("color", "Color", color),
         COMPOSIX_SF("color_tint", "Tint", color_tint),
         COMPOSIX_SF("align", "Align", align),
@@ -3557,7 +3590,9 @@ std::string style_edit_label(const std::string& key) {   // s164
         {"pstart", "Start"}, {"keep_next", "Keep with next"}, {"keep_lines", "Keep lines"},
         {"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"}, {"hyph_last_word", "Hyphenate last word"},
         {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}, {"span", "Span columns"}, {"lang", "Language"}, {"clang", "Language"},
-        {"split_gutter", "Split gutter"}};
+        {"split_gutter", "Split gutter"},
+        {"track", "Tracking"}, {"bshift", "Baseline shift"}, {"cpos", "Position"}, {"ccase", "Case"}, {"uline", "Underline"},
+        {"strike", "Strikethrough"}};   // s263
     if (const auto it = labels.find(key); it != labels.end()) return it->second;
     if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {
         static const std::map<char, std::string> rl{{'w', "Rule"}, {'c', "Rule colour"}, {'t', "Rule tint"}, {'o', "Rule offset"},
@@ -3589,6 +3624,13 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
     if (key == "color") { st.color = choice; return; }
     if (key == "color_tint") { st.color_tint = std::stod(choice) / 100; return; }
     if (key == "nobreak") { if (!para) st.no_break = choice == "1"; return; }
+    // s260: character attributes -- either kind of style.
+    if (key == "track") { st.tracking = std::clamp(std::stod(choice), -1000.0, 10000.0); return; }
+    if (key == "bshift") { st.shift = std::clamp(std::stod(choice), -1000.0, 1000.0); return; }
+    if (key == "cpos") { st.position = std::clamp(std::stoi(choice), 0, 2); return; }
+    if (key == "ccase") { st.caps = std::clamp(std::stoi(choice), 0, 2); return; }
+    if (key == "uline") { st.underline = choice == "1"; return; }
+    if (key == "strike") { st.strike = choice == "1"; return; }
     if (key == "clang") { if (!para) st.lang = choice; return; }   // s226: "" the paragraph's, "none" no language
     if (!para) return;   // the rest: paragraph styles'
     if (key == "lindent") st.left_indent = std::stod(choice);
@@ -3675,7 +3717,8 @@ std::string style_key_of_edit(const std::string& e) {   // s092
         {"findent", "first_indent"}, {"indent_after", "skip_after_heading"}, {"tabs", "tabs"}, {"drop_lines", "drop_lines"},
         {"drop_chars", "drop_chars"}, {"span", "span"}, {"split_gutter", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"lang", "lang"}, {"clang", "lang"}, {"hyph_limit", "hyph_limit"},
         {"hyph_shortest", "hyph_shortest"}, {"hyph_last_word", "hyph_last_word"}, {"keep_next", "keep_next"},
-        {"keep_lines", "keep_lines"}, {"pstart", "start"}};
+        {"keep_lines", "keep_lines"}, {"pstart", "start"},
+        {"track", "tracking"}, {"bshift", "shift"}, {"cpos", "position"}, {"ccase", "caps"}, {"uline", "underline"}, {"strike", "strike"}};   // s260
     if (const auto it = m.find(e); it != m.end()) return it->second;
     if (e.rfind("rule_a", 0) == 0) return "rule_above";
     if (e.rfind("rule_b", 0) == 0) return "rule_below";

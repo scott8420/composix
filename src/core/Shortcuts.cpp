@@ -170,6 +170,12 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         // ── Text (s023: special characters, while editing) ─────────────────
         {"Text", "win.bold",                {"<Ctrl>b"}, "", "Bold the selected words (or the word at the caret) -- again: off"},
         {"Text", "win.italic",              {"<Ctrl>i"}, "", "Italic the selected words (or the word at the caret) -- again: off"},
+        {"Text", "win.underline",           {"<Ctrl>u"}, "", "Underline the selected words -- again: off"},   // s263
+        {"Text", "win.strikethrough",       {"<Ctrl><Alt>s"}, "", "Strike through the selected words -- again: off"},
+        {"Text", "win.superscript",         {"<Ctrl><Alt>equal", "<Ctrl><Alt>plus"}, "Ctrl+Alt+=", "Superscript (smaller, raised) -- again: normal"},
+        {"Text", "win.subscript",           {"<Ctrl><Alt>minus"}, "", "Subscript (smaller, lowered) -- again: normal"},
+        {"Text", "win.all-caps",            {"<Ctrl><Shift>k"}, "", "All caps (the letters as typed are kept) -- again: off"},
+        {"Text", "win.small-caps",          {"<Ctrl><Shift>h"}, "", "Small caps -- again: off"},
         {"Text", "win.insert-page-number",  {"<Ctrl><Alt><Shift>n"}, "", "Insert the page number (each page shows its own)"},
         {"Text", "win.insert-section-name", {"<Ctrl><Alt><Shift>e"}, "", "Insert the section name (a running head)"},
         {"Text", "win.insert-next-page",    {"<Ctrl><Alt>bracketright"}, "", "Insert the next frame's page number (\"continued on\")"},

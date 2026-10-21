@@ -16,6 +16,9 @@ std::vector<Run> runs(PangoLayoutLine* line, double x, double baseline) {
         Run r;
         r.x = pen;
         r.baseline = baseline;
+#if PANGO_VERSION_CHECK(1, 50, 0)
+        r.baseline -= gi->y_offset / static_cast<double>(PANGO_SCALE);   // a raised run (rise, a superscript): up from the line's
+#endif
         r.start = item->offset;
         r.end = item->offset + item->length;
         if (hb_font_t* hf = pango_font_get_hb_font(item->analysis.font)) r.face = hb_font_get_face(hf);

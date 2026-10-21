@@ -187,6 +187,15 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
         }
         const auto& para = st->paras[static_cast<std::size_t>(v.para)];
         const auto* ps = c.d.as<core::Style>(para.style);
+        // s261: underlines / strikethroughs, each in its run's ink, after its glyphs.
+        const auto decos = on_path ? std::vector<TextDeco>{} : text_decorations(v.line, f.x + v.x, f.y + v.baseline);
+        const auto strokes = [&](const plate::pango::Run& run) {
+            for (const auto& t : decos) {
+                if (t.start != run.start) continue;
+                if (t.under) { pg.rect({t.x0, t.under_y, t.x1 - t.x0, t.under_t}); pg.fill(); }
+                if (t.strike) { pg.rect({t.x0, t.strike_y, t.x1 - t.x0, t.strike_t}); pg.fill(); }
+            }
+        };
         for (const auto& run : plate::pango::runs(v.line, f.x + v.x, f.y + v.baseline)) {
             // The run's colour: its character style's, else the paragraph's.
             std::string sw = ps ? ps->color : std::string{};
@@ -197,6 +206,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
                 if (const auto lc = core::local_at(para, v.from + run.start + 1).color; c.d.as<core::Swatch>(lc)) {
                     pg.set_fill(ink_of(c.d, lc, 1));
                     show(run);
+                    strokes(run);
                     continue;
                 }
             if (const auto* cs = v.from < 0 ? nullptr : c.d.as<core::Style>(core::char_style_at(para, v.from + run.start + 1));
@@ -206,6 +216,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             }
             pg.set_fill(ink_of(c.d, sw, tint));
             show(run);
+            strokes(run);
         }
     }, rs.any ? &rs.text : nullptr);
 }

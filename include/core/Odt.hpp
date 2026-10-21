@@ -29,6 +29,13 @@ struct Props {
     int         page_break = -1;        // 1: starts a page (fo:break-before="page")
     int         keep_next = -1;         // s257: 1 fo:keep-with-next="always", 0 "auto"
     int         orphans = -1, widows = -1;   // s257: fo:orphans / fo:widows (lines)
+    // s262: character attributes. letter: fo:letter-spacing (points; 0
+    // "normal"); rise / scale: style:text-position (percent of the size --
+    // "super" 33 / "sub" -33, the size 58 unless given); caps: 1 uppercase
+    // (fo:text-transform), 2 small caps (fo:font-variant), 0 neither;
+    // underline / strike: style:text-underline-style / -line-through-style.
+    double      letter = -1e9, rise = -1e9, scale = -1;
+    int         caps = -1, underline = -1, strike = -1;
     std::string master;                 // style:master-page-name (a new page with that master)
 };
 

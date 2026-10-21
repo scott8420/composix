@@ -45,6 +45,10 @@ public:
     // Italic) then act here: the selection, or the word at the cursor.
     bool text_has_focus() const { return m_view.has_focus(); }
     bool toggle_look(bool bold);
+    // s263: a character attribute toggled on its words (the selection, or the
+    // word at the caret): on unless every character `has` it already.
+    bool toggle_char(const std::string& label, const std::function<bool(const core::CharLook&)>& has,
+                     const std::function<void(core::Local&, bool on)>& set);
 
     sigc::signal<void()>& signal_edited() { return m_edited; }
 

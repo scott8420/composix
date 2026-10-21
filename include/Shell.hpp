@@ -182,6 +182,7 @@ private:
     void show_new_sheet();                        // category: helper: s019 -- the New sheet
     void build_find_bar();                        // category: zone: s022 -- Find / Change, over the main area
     Glib::RefPtr<Gio::Menu> special_menu();       // category: zone: s023 -- Insert Special Character
+    Glib::RefPtr<Gio::Menu> type_style_menu();    // category: zone: s263 -- Edit > Type Style
     void build_preflight();                       // category: zone: s024 -- the header's Preflight button + list
     void update_preflight();                      // category: helper: s024 -- the checks again; the count, the list
     void finish_flows();
