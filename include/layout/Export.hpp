@@ -149,6 +149,19 @@ std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& fl
 // written -- worked out on a copy until the folios stop moving (a longer
 // contents page can push the headings on), at most a few rounds. One step.
 bool build_list(core::DocJournal& j, core::Doc& d, const std::string& list);
+// s258: build_list's slow half, apart -- the settled entries of each list in
+// `lists`, in order, each written into `scratch` before the next is settled
+// (a contents page grown by one pushes the next list's pages on, as building
+// them one by one does). `scratch` is the caller's own copy (records only, so
+// it may be worked on a worker thread); `progress` (0..1, a line) as it goes.
+// Then core::doc::build_list(j, d, l.list, l.entries) for each, in order,
+// writes what building them one by one would have.
+struct ListBuild {
+    std::string                       list;
+    std::vector<core::doc::ListEntry> entries;
+};
+using ListProgress = std::function<void(double fraction, const std::string& line)>;
+std::vector<ListBuild> settle_lists(core::Doc& scratch, const std::vector<std::string>& lists, const ListProgress& progress = {});
 
 // s089: the Contents lists whose written entries no longer say what the
 // headings do -- a heading renamed, moved to another page, added or gone --

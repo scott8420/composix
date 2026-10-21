@@ -105,7 +105,7 @@ void Shell::update_preflight() {  // helper
             b->set_valign(Gtk::Align::CENTER);
             const std::string lid = i.item;
             b->signal_clicked().connect([this, lid] {
-                if (layout::build_list(m_journal, m_doc, lid)) queue_refresh();
+                build_lists({lid});   // s259: the progress dialog on a long document
             });
             row->append(*b);
         }

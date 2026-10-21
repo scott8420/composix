@@ -452,6 +452,8 @@ int lines_left(const core::Doc& d, const core::Para& para, const core::Style& st
 //     on with them, if N stay here at its start (else the whole of it).
 //   * Keep with next: a paragraph ending here whose next starts in the next
 //     column goes on with it (and one before it that keeps with it, too).
+//     s257: N lines -- also when the next starts here with fewer than N of
+//     its lines (all it has, if fewer) before the break: both go on.
 void apply_keeps(const core::Doc& d, const core::Story& st, const core::Frame& fr, int col, Cursor& c, FrameText& ft) {
     const int paras = static_cast<int>(st.paras.size());
     if (c.p >= paras) return;
@@ -503,12 +505,28 @@ void apply_keeps(const core::Doc& d, const core::Story& st, const core::Frame& f
             }
         }
     }
+    // s257: keep with next N lines -- the paragraph split here began in this
+    // column with fewer than N lines, under one that keeps with it and is
+    // wholly here (not all the column holds): that one goes on, and this
+    // with it. (One split before this column is let be, as for N = 1.)
+    if (c.start > 0 && c.p > 0) {
+        const int q = c.p, prev = q - 1;
+        const std::size_t a = here_of(q);
+        const int n = style_of(d, st.paras[static_cast<std::size_t>(prev)]).keep_next;
+        if (n > 1 && a < L.size() && L[a].start == 0 && a > begin) {
+            int here = 0;
+            for (std::size_t i = a; i < L.size(); ++i) here += L[i].cap <= 0;
+            std::size_t ap = a;
+            while (ap > begin && L[ap - 1].para == prev) --ap;
+            if (here < n && ap < a && L[ap].start == 0 && ap > begin) send_on(ap, prev, 0);
+        }
+    }
     // Keep with next: the paragraph before one that starts in the next column.
     while (c.start == 0 && c.p > 0) {
         const int prev = c.p - 1;
         const std::size_t a = here_of(prev);
         if (a == L.size() || L[a].start != 0 || a == begin) break;   // not wholly here, or all the column holds
-        if (!style_of(d, st.paras[static_cast<std::size_t>(prev)]).keep_next) break;
+        if (style_of(d, st.paras[static_cast<std::size_t>(prev)]).keep_next <= 0) break;
         send_on(a, prev, 0);
     }
 }
@@ -1742,6 +1760,40 @@ int reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story) { 
         return made;
     });
     return added;
+}
+
+// s256: InDesign's "Delete Empty Pages" -- from the thread's end back, the
+// pages whose one frame is the story's empty margin frame.
+std::vector<std::string> empty_reflow_pages(const core::Doc& d, const std::string& story, const StoryFlow& f) {
+    std::vector<std::string> out;
+    const auto chain = thread_frames(d, story);
+    if (f.overset || f.provisional || f.frames.size() != chain.size()) return out;
+    for (std::size_t i = chain.size(); i-- > 1;) {
+        if (f.frames[i].frame != chain[i] || !f.frames[i].lines.empty()) break;
+        const auto* fr = d.as<core::Frame>(chain[i]);
+        if (!fr || fr->kind != core::FrameKind::Text || fr->rot != 0 || !d.as<core::Page>(fr->owner)) break;
+        const core::Rect m = core::margin_rect(d, fr->owner);
+        if (std::abs(fr->x - m.x) >= 1 || std::abs(fr->y - m.y) >= 1 || std::abs(fr->w - m.w) >= 1 || std::abs(fr->h - m.h) >= 1) break;
+        if (d.frames_on(fr->owner).size() != 1) break;   // something else on the page: kept
+        out.push_back(fr->owner);
+    }
+    return out;
+}
+
+int trim_reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story) {   // s256
+    const auto pages = empty_reflow_pages(d, story, flow_story(d, story));
+    if (pages.empty() || pages.size() >= d.pages().size()) return 0;
+    const auto chain = thread_frames(d, story);
+    const auto keep_last = chain[chain.size() - 1 - pages.size()];
+    auto ids = core::doc::page_removal_ids(d, pages);
+    ids.push_back(keep_last);
+    const bool did = j.run("Text reflow", ids, [&] {
+        core::Frame f = *d.as<core::Frame>(keep_last);
+        f.next.clear();
+        d.put(keep_last, f);
+        core::doc::drop_pages(d, pages);
+    });
+    return did ? static_cast<int>(pages.size()) : 0;
 }
 
 namespace {

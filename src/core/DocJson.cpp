@@ -56,6 +56,7 @@ json to(const Record& r) {
             if (v.note_title != "Notes") j["note_title"] = v.note_title;
             if (!v.author.empty()) j["author"] = v.author;   // s239
             if (v.reflow) j["reflow"] = true;                // s255
+            if (v.reflow_trim) j["reflow_trim"] = true;      // s256
             if (!v.run_head.empty()) j["run_head"] = v.run_head;   // s240
             if (!v.run_sub.empty()) j["run_sub"] = v.run_sub;
             if (v.note_num != Settings::NoteNum::Plain) j["note_num"] = static_cast<int>(v.note_num);   // s126
@@ -321,6 +322,7 @@ std::optional<Record> from(const json& j) {
         v.note_title = val(j, "note_title", std::string("Notes"));
         v.author = val(j, "author", std::string{});   // s239
         v.reflow = val(j, "reflow", false);           // s255
+        v.reflow_trim = val(j, "reflow_trim", false); // s256
         v.run_head = val(j, "run_head", std::string{});   // s240
         v.run_sub = val(j, "run_sub", std::string{});
         v.note_num = static_cast<Settings::NoteNum>(std::clamp(val(j, "note_num", 0), 0, 3));   // s126
@@ -482,7 +484,9 @@ std::optional<Record> from(const json& j) {
                                                   {"right_indent", &para.over.right_indent}, {"first_indent", &para.over.first_indent},
                                                   {"space_before", &para.over.space_before}, {"space_after", &para.over.space_after}})
                         if (o.contains(k) && o.at(k).is_number()) *slot = o.at(k).get<double>();
-                    if (o.contains("keep_next") && o.at("keep_next").is_boolean()) para.over.keep_next = o.at("keep_next").get<bool>();   // s094
+                    if (o.contains("keep_next") && o.at("keep_next").is_boolean()) para.over.keep_next = o.at("keep_next").get<bool>() ? 1 : 0;   // s094
+                    if (o.contains("keep_next") && o.at("keep_next").is_number_integer())   // s257: lines
+                        para.over.keep_next = std::clamp(o.at("keep_next").get<int>(), 0, 5);
                     if (o.contains("hyphenate") && o.at("hyphenate").is_boolean()) para.over.hyphenate = o.at("hyphenate").get<bool>();
                     if (o.contains("keep_lines") && o.at("keep_lines").is_number_integer()) para.over.keep_lines = o.at("keep_lines").get<int>();
                     if (o.contains("tabs") && o.at("tabs").is_array()) {   // s157
@@ -558,7 +562,9 @@ std::optional<Record> from(const json& j) {
         v.hyph_limit = val(j, "hyph_limit", 2);        // s065
         v.hyph_shortest = val(j, "hyph_shortest", 5);
         v.hyph_last_word = val(j, "hyph_last_word", false);
-        v.keep_next = val(j, "keep_next", false);     // s039
+        if (j.contains("keep_next") && j["keep_next"].is_boolean()) v.keep_next = j["keep_next"].get<bool>() ? 1 : 0;   // s039
+        else if (j.contains("keep_next") && j["keep_next"].is_number_integer()) v.keep_next = std::clamp(j["keep_next"].get<int>(), 0, 5);   // s257
+        else v.keep_next = 0;
         v.keep_lines = val(j, "keep_lines", 0);
         v.start = de(j, "start", ParaStart::Anywhere);   // s043
         if (j.contains("tabs") && j["tabs"].is_array())

@@ -22,6 +22,15 @@ namespace composix::core {
 namespace fs = std::filesystem;
 
 namespace {
+// s257: Keep with next -- Off, or how many of the next paragraph's first lines.
+const std::vector<Choice>& keep_next_choices() {
+    static const std::vector<Choice> ch{{"0", "Off"}, {"1", "1 line"}, {"2", "2 lines"}, {"3", "3 lines"}, {"4", "4 lines"}, {"5", "5 lines"}};
+    return ch;
+}
+std::string keep_next_label(int n) {
+    for (const auto& c : keep_next_choices()) if (c.id == std::to_string(n)) return c.label;
+    return "Off";
+}
 
 int words(const std::string& s) {
     std::istringstream in(s);
@@ -219,8 +228,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             return Field{slot == 0 ? "Running head" : "Running subhead", cur ? cur->name : ch.front().label, slot == 0 ? "drun1" : "drun2", ch};
         };
         std::vector<Field> f{title, author, run_row(0), run_row(1),
-                             {"Text reflow", st.reflow ? "Adds pages" : "Off", "dreflow",   // s255
-                              {{"1", "Adds pages"}, {"0", "Off"}}},
+                             {"Text reflow", !st.reflow ? "Off" : st.reflow_trim ? "Adds and removes pages" : "Adds pages", "dreflow",   // s255
+                              {{"1", "Adds pages"}, {"2", "Adds and removes pages"}, {"0", "Off"}}},   // s256
                              {"Units", unit_label(U), "dunits",   // s073
                               {{"0", unit_label(Units::Inches)}, {"1", unit_label(Units::Millimetres)},
                                {"2", unit_label(Units::Picas)}, {"3", unit_label(Units::Points)}}},
@@ -554,7 +563,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                  {{"0", "Whole"}, {"1", "May break"}}});
                 }
                 // s039: keeps.
-                f.push_back({"Keep with next", s.keep_next ? "On" : "Off", "keep_next", {{"0", "Off"}, {"1", "On"}}});
+                // s257: as many of the next's first lines (InDesign's 0 - 5).
+                f.push_back({"Keep with next", keep_next_label(s.keep_next), "keep_next", keep_next_choices()});
                 static const std::vector<Choice> keeps{{"0", "Off"}, {"2", "2 at start and end"}, {"3", "3 at start and end"},
                                                        {"-1", "All together"}};
                 std::string kl = "Off";
@@ -1250,11 +1260,11 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
             return id;
         };
         struct Row2 { const char* label; const char* edit; const char* key; const std::vector<Choice>* ch; };
-        const Row2 rows2[] = {{"Keep with next", "pkeep_next", "keep_next", &onoff}, {"Keep lines", "pkeep_lines", "keep_lines", &keeps},
+        const Row2 rows2[] = {{"Keep with next", "pkeep_next", "keep_next", &keep_next_choices()}, {"Keep lines", "pkeep_lines", "keep_lines", &keeps},
                               {"Hyphenate", "phyphenate", "hyphenate", &onoff}};
         const auto value2 = [&](const Para& p, const std::string& key, const std::vector<Choice>& ch) {
             const Style e = doc::para_style(d, p);
-            return choice_text(ch, key == "keep_next" ? std::to_string(e.keep_next ? 1 : 0)
+            return choice_text(ch, key == "keep_next" ? std::to_string(e.keep_next)
                                  : key == "hyphenate" ? std::to_string(e.hyphenate ? 1 : 0) : std::to_string(e.keep_lines));
         };
         const auto has2 = [](const ParaLocal& o, const std::string& key) {

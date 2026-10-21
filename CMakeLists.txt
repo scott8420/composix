@@ -166,7 +166,8 @@ target_compile_options(composix_layout PUBLIC ${PANGOCAIRO_CFLAGS_OTHER})
 # the build's slowest by far). src/selftest/Selftest.hpp says how to add one.
 add_executable(composix_selftest src/selftest.cpp
     src/selftest/part1.cpp src/selftest/part2.cpp src/selftest/part3.cpp src/selftest/part4.cpp
-    src/selftest/part5.cpp src/selftest/part6.cpp src/selftest/part7.cpp src/selftest/part8.cpp)
+    src/selftest/part5.cpp src/selftest/part6.cpp src/selftest/part7.cpp src/selftest/part8.cpp
+    src/selftest/part9.cpp)
 target_link_libraries(composix_selftest PRIVATE composix_core composix_layout Threads::Threads)
 # s202: where the real swatch files (third_party/swatch-samples) are
 target_compile_definitions(composix_selftest PRIVATE COMPOSIX_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -261,7 +262,7 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s255")
+set(COMPOSIX_BUILD "s259")
 # s194: on the About window's file alone -- on the whole target, each bump
 # rebuilt every app file and missed ccache.
 set_source_files_properties(src/AboutWindow.cpp PROPERTIES

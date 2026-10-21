@@ -97,6 +97,10 @@ struct Builder {
         s.color = swatch_for(pr.color);
         if (pr.page_break == 1) s.start = core::ParaStart::NextPage;
         if (pr.page_break == 1 && s.space_before > 0) s.top_space = true;   // s242: a chapter heading sunk down its page, as in the file
+        // s257: keeps -- keep with next (a line), orphans / widows as Keep lines
+        // (the larger; 1 or none is Off, more than 3 is kept at 3).
+        if (pr.keep_next == 1) s.keep_next = 1;
+        if (const int kl = std::max(pr.orphans, pr.widows); kl >= 2) s.keep_lines = std::min(kl, 3);
         const auto id = d.fresh_id("style");
         para_style[named] = id;
         d.put(id, s);
@@ -215,6 +219,7 @@ struct Builder {
             if (own.before > -1e8) q.over.space_before = own.before;
             if (own.after > -1e8) q.over.space_after = own.after;
             if (own.page_break == 1) q.brk = core::ParaStart::NextPage;
+            if (own.keep_next >= 0) q.over.keep_next = own.keep_next;   // s257
         }
         q.runs = runs_of(p.text, p.spans, base);
         for (const auto& n : p.notes) {

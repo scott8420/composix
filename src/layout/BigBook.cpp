@@ -173,13 +173,13 @@ BigBookInfo load_big_book(core::Doc& d, const BigBookOpts& o) {
     {
         core::Style h{"Heading 1", core::StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, core::Align::Left, 12, 6, "swatch.3"};
         h.next = "style.10";
-        h.keep_next = true;
+        h.keep_next = 1;
         h.start = core::ParaStart::NextRightPage;
         h.rule_below = {1, "swatch.3", 1, 4, false};
         d.put("style.2", h);
         core::Style h2{"Heading 2", core::StyleKind::Paragraph, 2.5, "Serif", 13, 16, true, false, core::Align::Left, 14, 4};
         h2.next = "style.1";
-        h2.keep_next = true;
+        h2.keep_next = 1;
         d.put("style.12", h2);
     }
     d.put("style.3", core::Style{"Caption", core::StyleKind::Paragraph, 3, "Serif", 9, 11, false, true, core::Align::Left});

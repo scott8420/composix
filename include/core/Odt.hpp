@@ -27,6 +27,8 @@ struct Props {
     double      leading = -1;           // points (fo:line-height absolute); -1 unset
     double      leading_pct = -1;       // fo:line-height as a percentage (100 = single)
     int         page_break = -1;        // 1: starts a page (fo:break-before="page")
+    int         keep_next = -1;         // s257: 1 fo:keep-with-next="always", 0 "auto"
+    int         orphans = -1, widows = -1;   // s257: fo:orphans / fo:widows (lines)
     std::string master;                 // style:master-page-name (a new page with that master)
 };
 

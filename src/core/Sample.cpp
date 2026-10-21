@@ -85,7 +85,7 @@ void load_sample(Doc& d) {
     {   // s037: Enter after a chapter heading starts its first paragraph.
         Style h{"Heading 1", StyleKind::Paragraph, 2, "Serif", 24, 28, true, false, Align::Left, 12, 6, "swatch.3"};
         h.next = "style.10";
-        h.keep_next = true;   // s039: never alone at a column's foot
+        h.keep_next = 1;   // s039: never alone at a column's foot
         h.start = ParaStart::NextRightPage;   // s043: each chapter opens a right-hand page
         h.rule_below = {1, "swatch.3", 1, 4, false};   // s044: a Guild Rust line under the heading
         d.put("style.2", h);

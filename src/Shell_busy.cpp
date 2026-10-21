@@ -1,5 +1,6 @@
 #include "Shell.hpp"
 #include "Log.hpp"
+#include "layout/Export.hpp"
 
 #include <glibmm/main.h>
 #include <gtkmm/box.h>
@@ -8,6 +9,7 @@
 #include <gtkmm/window.h>
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -125,6 +127,57 @@ void Shell::busy_thread(const std::string& title, const std::string& what, std::
             return false;
         }, 80);
     });
+}
+
+// s259: Build / Rebuild with the progress dialog (Scott: long work shows how
+// far it has got). Settled on a records-only copy on a worker (s258); the
+// entries are written here, each list its own step, as building them one by
+// one did.
+void Shell::build_lists(const std::vector<std::string>& lists, std::function<void()> then) {  // helper
+    std::vector<std::string> todo;
+    for (const auto& l : lists)
+        if (m_doc.as<core::GenList>(l)) todo.push_back(l);
+    if (todo.empty()) {
+        if (then) then();
+        return;
+    }
+    const auto write = [this](const std::vector<layout::ListBuild>& built) {
+        bool any = false;
+        for (const auto& lb : built)
+            if (m_doc.as<core::GenList>(lb.list)) any = core::doc::build_list(m_journal, m_doc, lb.list, lb.entries) || any;
+        if (any) queue_refresh();
+        return any;
+    };
+    if (m_doc.pages().size() < kBusyPages) {   // short: here, as before
+        bool any = false;
+        for (const auto& l : todo) any = layout::build_list(m_journal, m_doc, l) || any;
+        if (any) queue_refresh();
+        if (then) then();
+        return;
+    }
+    struct Job {
+        core::Doc                      doc;
+        std::vector<layout::ListBuild> built;
+    };
+    auto job = std::make_shared<Job>();
+    {   // the copy the worker settles on -- records only (not the window's door or change hook)
+        core::Doc::Loading load(job->doc);
+        for (const auto& [id, r] : m_doc.records()) job->doc.put(id, r);
+    }
+    const auto* first = m_doc.as<core::GenList>(todo.front());
+    const std::string title = todo.size() == 1 ? "Building \u201c" + (first->name.empty() ? std::string("the list") : first->name) + "\u201d"
+                                               : "Building " + std::to_string(todo.size()) + " lists";
+    const auto t0 = std::chrono::steady_clock::now();
+    busy_thread(title, "Gathering the entries\u2026",
+                [job, todo](const Report& report) { job->built = layout::settle_lists(job->doc, todo, report); },
+                "Writing the entries\u2026",
+                [this, job, write, then, t0] {
+                    write(job->built);
+                    if (auto lg = log::get(log::Area::Shell))
+                        lg->info("lists: {} built on a worker ({:.0f} ms)", job->built.size(),
+                                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                    if (then) then();
+                });
 }
 
 }  // namespace composix

@@ -72,5 +72,6 @@ void part5();
 void part6();
 void part7();
 void part8();
+void part9();
 }  // namespace cxtest
 using namespace cxtest;

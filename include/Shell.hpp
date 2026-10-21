@@ -166,6 +166,11 @@ private:
     bool open_project(const std::string& dir);    // category: helper: load + reset the journal + views
     // s102: a progress dialog in front of long work (Shell_busy.cpp).
     using Report = std::function<void(double fraction, const std::string& line)>;
+    // s259: generated lists built (Build / Rebuild, Preflight's Rebuild, Export's
+    // "rebuild first") -- on a worker behind the progress dialog for a long
+    // document (kBusyPages), else here; each its own step, as before. `then`
+    // runs after, on the UI thread.
+    void build_lists(const std::vector<std::string>& lists, std::function<void()> then = {});   // category: helper
     void busy(const std::string& title, const std::string& what, std::function<void()> work);   // category: helper: UI-thread work, dialog drawn first
     void busy_thread(const std::string& title, const std::string& what, std::function<void(const Report&)> job,
                      const std::string& then_what, std::function<void()> done);   // category: helper: a worker job with a bar, then UI work

@@ -904,18 +904,22 @@ std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int 
     return made;
 }
 
-bool remove_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
-    const auto pages = only_pages(d, ids);
-    if (pages.empty() || pages.size() >= d.pages().size()) return false;   // a document keeps one page
-    // Everything the removal touches is in the step: the pages, their frames,
-    // and any section starting on one of them (it moves to the next survivor,
-    // or goes if its whole run goes).
+// Everything removing `pages` touches: the pages, their frames and guides
+// (s256), and any section (one starting on a page that goes moves to the
+// next survivor, or goes if its whole run goes).
+std::vector<Doc::Id> page_removal_ids(const Doc& d, const std::vector<Doc::Id>& pages) {
     std::vector<Doc::Id> touched = pages;
     for (const auto& p : pages)
         for (const auto& f : d.frames_on(p)) touched.push_back(f);
+    for (const auto& g : d.ids_of<Guide>())
+        if (std::find(pages.begin(), pages.end(), d.as<Guide>(g)->owner) != pages.end()) touched.push_back(g);
+    for (const auto& s : d.ids_of<Section>()) touched.push_back(s);
+    return touched;
+}
+
+void drop_pages(Doc& d, const std::vector<Doc::Id>& pages) {
     const auto secs = d.ids_of<Section>();
-    for (const auto& s : secs) touched.push_back(s);
-    return j.run("Delete " + plural(pages.size(), "page", "pages"), touched, [&] {
+    {
         const auto order = d.pages();
         const auto gone = [&](const Doc::Id& p) {
             return std::find(pages.begin(), pages.end(), p) != pages.end();
@@ -937,11 +941,19 @@ bool remove_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
             if (next.empty()) d.put(sid, std::nullopt);
             else { s.start_page = next; d.put(sid, s); }
         }
+        for (const auto& g : d.ids_of<Guide>())   // s256: a page's guides go with it
+            if (gone(d.as<Guide>(g)->owner)) d.put(g, std::nullopt);
         for (const auto& p : pages) {
             for (const auto& f : d.frames_on(p)) d.put(f, std::nullopt);
             d.put(p, std::nullopt);
         }
-    });
+    }
+}
+
+bool remove_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids) {
+    const auto pages = only_pages(d, ids);
+    if (pages.empty() || pages.size() >= d.pages().size()) return false;   // a document keeps one page
+    return j.run("Delete " + plural(pages.size(), "page", "pages"), page_removal_ids(d, pages), [&] { drop_pages(d, pages); });
 }
 
 bool move_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const Doc::Id& after) {
@@ -2079,6 +2091,17 @@ bool set_reflow(DocJournal& j, Doc& d, bool on) {   // s255
     return j.run(on ? "Text reflow on" : "Text reflow off", {"doc"}, [&] {
         Settings s = d.settings();
         s.reflow = on;
+        d.put("doc", s);
+    });
+}
+
+bool set_reflow_mode(DocJournal& j, Doc& d, int mode) {   // s256
+    const bool on = mode >= 1, trim = mode >= 2;
+    if (d.settings().reflow == on && d.settings().reflow_trim == trim) return false;
+    return j.run(!on ? "Text reflow off" : trim ? "Text reflow: adds and removes pages" : "Text reflow: adds pages", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.reflow = on;
+        s.reflow_trim = trim;
         d.put("doc", s);
     });
 }
@@ -3589,7 +3612,7 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
     else if (key == "list_num") st.list.numbering = static_cast<Numbering>(std::clamp(std::stoi(choice), 0, 4));
     else if (key == "list_hang") st.list.hang = std::stod(choice);
     else if (key == "pstart") st.start = static_cast<ParaStart>(std::clamp(std::stoi(choice), 0, 5));
-    else if (key == "keep_next") st.keep_next = std::stoi(choice) != 0;
+    else if (key == "keep_next") st.keep_next = std::clamp(std::stoi(choice), 0, 5);   // s257: lines
     else if (key == "keep_lines") st.keep_lines = std::stoi(choice);
     else if (key == "hyph_limit") st.hyph_limit = std::max(0, std::stoi(choice));
     else if (key == "hyph_shortest") st.hyph_shortest = std::clamp(std::stoi(choice), 4, 20);
@@ -5356,6 +5379,8 @@ const std::vector<Verb>& verbs() {
         {"flip_frames", [](DocJournal& j, Doc& d) { flip_frames(j, d, {"frame.4"}, true, 200, 300); }},
         {"set_turn", [](DocJournal& j, Doc& d) { set_turn(j, d, {"frame.1", "frame.4"}, 12.5, 8, 0, "Rotation"); }},
         {"set_author", [](DocJournal& j, Doc& d) { set_author(j, d, "Scott"); }},   // s239
+        {"set_reflow", [](DocJournal& j, Doc& d) { set_reflow(j, d, !d.settings().reflow); }},   // s255
+        {"set_reflow_mode", [](DocJournal& j, Doc& d) { set_reflow_mode(j, d, 2); }},   // s256
         {"set_running", [](DocJournal& j, Doc& d) { set_running(j, d, 0, d.ids_of<Style>().front()); }},   // s240
         {"scale_frames", [](DocJournal& j, Doc& d) { scale_frames(j, d, {"frame.4", "frame.5"}, 1.5, 0.75, 100, 100); }},   // s232
         {"set_scale", [](DocJournal& j, Doc& d) { set_scale(j, d, {"frame.1"}, 1.25, 1.25, 8); }},

@@ -331,10 +331,10 @@ void part3() {
         const auto body = *d.as<core::Style>("style.1");
         check("set: keep with next, keep lines, hyphenate -- one step",
               core::doc::set_para_local(j, d, "story.1", {3, 0}, {3, 0}, "Keeps", [&](core::ParaLocal& o) {
-                  o.keep_next = !body.keep_next; o.keep_lines = -1; o.hyphenate = !body.hyphenate; }));
+                  o.keep_next = body.keep_next ? 0 : 1; o.keep_lines = -1; o.hyphenate = !body.hyphenate; }));
         const auto& p3 = d.as<core::Story>("story.1")->paras.at(3);
         const auto e = core::doc::para_style(d, p3);
-        check("para_style: its own keeps and hyphenation", e.keep_next == !body.keep_next && e.keep_lines == -1 && e.hyphenate == !body.hyphenate);
+        check("para_style: its own keeps and hyphenation", e.keep_next == (body.keep_next ? 0 : 1) && e.keep_lines == -1 && e.hyphenate == !body.hyphenate);
         const auto f = core::text_fields(d, "story.1", {3, 0}, {3, 0});
         std::string kl, kl_own, hy_own = "?";
         for (const auto& x : f) {

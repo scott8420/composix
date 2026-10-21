@@ -99,6 +99,7 @@ int main() {
     part6();
     part7();
     part8();
+    part9();
     std::cout << "-----------------------------------------------\n";
     std::cout << passes() << " pass / " << failures() << " fail\n";
     return failures() == 0 ? 0 : 1;

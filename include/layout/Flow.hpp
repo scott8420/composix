@@ -146,6 +146,13 @@ std::vector<core::DocJournal::Settled> fit_frames(const core::Doc& d);
 int reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story);
 // Whether `story`'s last frame is one reflow adds pages after.
 bool reflows(const core::Doc& d, const std::string& story);
+// s256: the pages reflow can take away -- from the thread's end back, each
+// frame that holds no lines in `f` (the story's flow), a page's margin frame
+// (text, unturned), the only frame on its page; never the thread's first.
+std::vector<std::string> empty_reflow_pages(const core::Doc& d, const std::string& story, const StoryFlow& f);
+// s256: those pages removed (the frame before threads on to nothing), one
+// step "Text reflow"; the pages taken away (0: none).
+int trim_reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story);
 // s023: flow `text` (a version of the story's words -- markers filled in)
 // through that story's thread.
 StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::Story& text);

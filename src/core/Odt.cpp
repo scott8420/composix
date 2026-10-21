@@ -4,6 +4,7 @@
 #include "core/Xml.hpp"
 #include "core/Zip.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 
@@ -91,6 +92,9 @@ Props Book::resolved(const std::string& name) const {
             if (*o <= -1e8) *o = i;
         if (out.leading < 0 && out.leading_pct < 0) { out.leading = p.leading; out.leading_pct = p.leading_pct; }
         if (out.page_break < 0) out.page_break = p.page_break;
+        if (out.keep_next < 0) out.keep_next = p.keep_next;   // s257
+        if (out.orphans < 0) out.orphans = p.orphans;
+        if (out.widows < 0) out.widows = p.widows;
         if (out.master.empty()) out.master = p.master;
     };
     std::string fam;
@@ -161,6 +165,9 @@ void read_props(const Node& st, Props& p, const std::map<std::string, std::strin
             else if (*lh != "normal") p.leading = length(*lh, -1);
         }
         if (pp->attr_or("fo:break-before") == "page") p.page_break = 1;
+        if (const auto* k = pp->attr("fo:keep-with-next")) p.keep_next = *k == "always" ? 1 : 0;   // s257
+        if (const auto* o = pp->attr("fo:orphans")) p.orphans = std::max(0, std::atoi(o->c_str()));
+        if (const auto* w = pp->attr("fo:widows")) p.widows = std::max(0, std::atoi(w->c_str()));
     }
     if (const auto* tp = st.child("style:text-properties")) {
         if (const auto* fn = tp->attr("style:font-name")) {

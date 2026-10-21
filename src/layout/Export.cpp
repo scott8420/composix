@@ -1048,15 +1048,22 @@ std::vector<core::doc::ListEntry> list_entries(const core::Doc& d, FlowCache& fl
     return out;
 }
 
-bool build_list(core::DocJournal& j, core::Doc& d, const std::string& list) {   // s087
-    if (!d.as<core::GenList>(list)) return false;
+namespace {
+// s087: the entries that hold once written -- written on a copy of `d`, looked
+// at again, until the folios stop moving (at most a few rounds).
+std::vector<core::doc::ListEntry> settled_entries(const core::Doc& d, const std::string& list, const std::function<void(int round)>& tick) {
     std::vector<core::doc::ListEntry> entries;
     {
         FlowCache f0;
         entries = list_entries(d, f0, list);
     }
     for (int round = 0; round < 4; ++round) {   // settle: write on a copy, look again
-        core::Doc scratch = d;
+        if (tick) tick(round + 1);
+        core::Doc scratch;
+        {
+            core::Doc::Loading load(scratch);   // s258: records only (no door, no change hook of d's)
+            for (const auto& [id, r] : d.records()) scratch.put(id, r);
+        }
         core::DocJournal sj{scratch};
         scratch.set_door([&sj] { return sj.open(); });
         core::doc::build_list(sj, scratch, list, entries);
@@ -1065,7 +1072,34 @@ bool build_list(core::DocJournal& j, core::Doc& d, const std::string& list) {   
         if (again == entries) break;
         entries = std::move(again);
     }
-    return core::doc::build_list(j, d, list, entries);
+    return entries;
+}
+}  // namespace
+
+bool build_list(core::DocJournal& j, core::Doc& d, const std::string& list) {   // s087
+    if (!d.as<core::GenList>(list)) return false;
+    return core::doc::build_list(j, d, list, settled_entries(d, list, {}));
+}
+
+std::vector<ListBuild> settle_lists(core::Doc& scratch, const std::vector<std::string>& lists, const ListProgress& progress) {   // s258
+    std::vector<ListBuild> out;
+    core::DocJournal sj{scratch};
+    scratch.set_door([&sj] { return sj.open(); });
+    const double n = static_cast<double>(std::max<std::size_t>(1, lists.size()));
+    for (std::size_t i = 0; i < lists.size(); ++i) {
+        const auto* gl = scratch.as<core::GenList>(lists[i]);
+        if (!gl) continue;
+        const std::string name = gl->name.empty() ? "the list" : "\u201c" + gl->name + "\u201d";
+        if (progress) progress(static_cast<double>(i) / n, "Gathering " + name + "\u2026");
+        auto entries = settled_entries(scratch, lists[i], [&](int round) {
+            if (progress) progress((static_cast<double>(i) + round / 5.0) / n, "Placing " + name + " (pass " + std::to_string(round) + ")\u2026");
+        });
+        core::doc::build_list(sj, scratch, lists[i], entries);   // the next list sees this one written
+        out.push_back({lists[i], std::move(entries)});
+    }
+    scratch.set_door({});
+    if (progress) progress(1.0, "Writing\u2026");
+    return out;
 }
 
 std::vector<StaleList> stale_lists(const core::Doc& d, FlowCache& flows) {   // s089

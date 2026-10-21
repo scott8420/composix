@@ -654,7 +654,7 @@ void part5() {
             const auto o = core::project(d, "");
             bool kl = false, kn = false;
             for (const auto& f : o.find("style.1")->fields) kl = kl || (f.edit == "keep_lines" && f.value == "All together");
-            for (const auto& f : o.find("style.2")->fields) kn = kn || (f.edit == "keep_next" && f.value == "On");
+            for (const auto& f : o.find("style.2")->fields) kn = kn || (f.edit == "keep_next" && f.value == "1 line");   // s257: lines
             check("inspector: Keep lines, Keep with next", kl && kn);
             std::string err;
             core::Doc e;

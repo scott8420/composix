@@ -515,26 +515,31 @@ void Shell::on_export_pdf() {  // handler
                 m_profile_missing.clear();
                 core::doc::set_export(m_journal, m_doc, e);
             }
-            if (rebuild->get_visible() && m_pdf_rebuild) {   // s089: its own undo step, before the file
-                bool any = false;
-                m_pf_flows.finish_now(m_doc);   // s106
-                for (const auto& s : layout::stale_lists(m_doc, m_pf_flows)) any = layout::build_list(m_journal, m_doc, s.list) || any;
-                if (any) queue_refresh();
-            }
-            update_preflight();   // s024: the standard's checks follow
-            if (m_proofing) apply_proof(true);   // s099: the proof follows the export's profile and intent
             m_export->set_visible(false);
-            auto dialog = Gtk::FileDialog::create();
-            dialog->set_title("Export PDF");
-            dialog->set_initial_name(m_doc.settings().title + ".pdf");
-            dialog->save(*this, [this, dialog](const Glib::RefPtr<Gio::AsyncResult>& result) {
-                try {
-                    auto f = dialog->save_finish(result);
-                    if (f && !f->get_path().empty()) export_pdf_to(f->get_path());
-                } catch (const Glib::Error& e) {
-                    if (auto lg = log::get(log::Area::Io)) lg->info("export: dismissed ({})", e.what());
-                }
-            });
+            // The rest once the contents are rebuilt (s259: that may be a worker's, behind the progress dialog).
+            const auto go = [this] {
+                update_preflight();   // s024: the standard's checks follow
+                if (m_proofing) apply_proof(true);   // s099: the proof follows the export's profile and intent
+                auto dialog = Gtk::FileDialog::create();
+                dialog->set_title("Export PDF");
+                dialog->set_initial_name(m_doc.settings().title + ".pdf");
+                dialog->save(*this, [this, dialog](const Glib::RefPtr<Gio::AsyncResult>& result) {
+                    try {
+                        auto f = dialog->save_finish(result);
+                        if (f && !f->get_path().empty()) export_pdf_to(f->get_path());
+                    } catch (const Glib::Error& e) {
+                        if (auto lg = log::get(log::Area::Io)) lg->info("export: dismissed ({})", e.what());
+                    }
+                });
+            };
+            if (rebuild->get_visible() && m_pdf_rebuild) {   // s089: its own undo step, before the file
+                m_pf_flows.finish_now(m_doc);   // s106
+                std::vector<std::string> stale;
+                for (const auto& s : layout::stale_lists(m_doc, m_pf_flows)) stale.push_back(s.list);
+                build_lists(stale, go);
+            } else {
+                go();
+            }
         });
     }
     // Refresh the sheet from the document each time it opens.
@@ -962,13 +967,19 @@ void Shell::update_screen_colours() {  // helper
 // first (cheap: the canvas laid it out already); reflow_pages sets it whole.
 void Shell::check_reflow() {  // helper
     if (!m_doc.settings().reflow || m_journal.can_redo() || m_journal.in_gesture()) return;
-    int added = 0;
+    int added = 0, removed = 0;
     for (const auto& sid : m_doc.ids_of<core::Story>()) {
-        if (!layout::reflows(m_doc, sid) || !m_pf_flows.get(m_doc, sid).overset) continue;
-        added += layout::reflow_pages(m_journal, m_doc, sid);
+        if (layout::reflows(m_doc, sid) && m_pf_flows.get(m_doc, sid).overset) {
+            added += layout::reflow_pages(m_journal, m_doc, sid);
+            continue;
+        }
+        // s256: and the pages the text no longer reaches -- the cached flow
+        // says whether any; trim_reflow_pages sets it whole before it takes them.
+        if (m_doc.settings().reflow_trim && !layout::empty_reflow_pages(m_doc, sid, m_pf_flows.get(m_doc, sid)).empty())
+            removed += layout::trim_reflow_pages(m_journal, m_doc, sid);
     }
-    if (added > 0) {
-        if (auto lg = log::get(log::Area::Shell)) lg->info("text reflow: {} page(s) added", added);
+    if (added > 0 || removed > 0) {
+        if (auto lg = log::get(log::Area::Shell)) lg->info("text reflow: {} page(s) added, {} removed", added, removed);
         queue_refresh();
     }
 }
@@ -1107,7 +1118,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "dtitle") {   // s066: the document's settings
             did = core::doc::set_title(m_journal, m_doc, choice);
         } else if (key == "dreflow") {   // s255
-            did = core::doc::set_reflow(m_journal, m_doc, choice == "1");
+            did = core::doc::set_reflow_mode(m_journal, m_doc, choice == "2" ? 2 : choice == "1" ? 1 : 0);   // s256
             if (did) Glib::signal_idle().connect_once([this] { check_reflow(); });
         } else if (key == "dauthor") {   // s239
             did = core::doc::set_author(m_journal, m_doc, choice);
@@ -1283,8 +1294,10 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "list_numbers") {   // s090
             for (const auto& id : m_inspected) did = core::doc::set_list_numbers(m_journal, m_doc, id, choice == "1") || did;
         } else if (key == "genlist") {   // s087: Build / Rebuild
-            if (choice == "build")
-                for (const auto& id : m_inspected) did = layout::build_list(m_journal, m_doc, id) || did;
+            if (choice == "build") {   // s259: the progress dialog on a long document
+                build_lists(m_inspected);
+                did = true;
+            }
         } else if (key == "based_on") {   // s037
             if (m_inspected.size() == 1) did = core::doc::set_style_base(m_journal, m_doc, m_inspected.front(), choice);
         } else if (key == "style_reset" && choice.rfind("para.", 0) == 0) {   // s093: a paragraph's own setting off
@@ -1301,7 +1314,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
             did = core::doc::set_para_local(m_journal, m_doc, cv.edit_story_id(), a, b,
                                             key == "pkeep_next" ? "Keep with next" : key == "pkeep_lines" ? "Keep lines" : "Hyphenate",
                                             [&](core::ParaLocal& o) {
-                                                if (key == "pkeep_next") o.keep_next = v != 0;
+                                                if (key == "pkeep_next") o.keep_next = std::clamp(v, 0, 5);   // s257: lines
                                                 else if (key == "phyphenate") o.hyphenate = v != 0;
                                                 else o.keep_lines = v;
                                             });

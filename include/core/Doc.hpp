@@ -159,6 +159,10 @@ struct Settings {
     // (its master, a frame in the margins, threaded on), as InDesign's
     // Smart Text Reflow.
     bool        reflow = false;
+    // s256: and takes away the pages it added that the text no longer
+    // reaches (InDesign's "Delete Empty Pages") -- a trailing page holding
+    // only the thread's empty margin frame.
+    bool        reflow_trim = false;
     // s154: the rulers' origin, and the zero point dragged from it (points,
     // from where the origin puts it; Spine: unused).
     RulerOrigin ruler_origin = RulerOrigin::Spread;
@@ -365,7 +369,8 @@ struct TabStop {
 struct ParaLocal {
     std::optional<Align>  align;
     std::optional<double> left_indent, right_indent, first_indent, space_before, space_after;
-    std::optional<bool>   keep_next, hyphenate;   // s094
+    std::optional<int>    keep_next;              // s094; s257: lines (0 off, 1 - 5)
+    std::optional<bool>   hyphenate;              // s094
     std::optional<int>    keep_lines;             // s094: 0 off, 2 / 3, -1 all together
     // s157 (Scott): the style holds the tab stops; a paragraph may have its
     // own (the tab ruler edits these), "Reset to style" drops them.
@@ -521,10 +526,11 @@ struct Style {
     bool        hyph_last_word = false;
     // s039: keeps, where a column breaks. `keep_next`: this paragraph's
     // last line stays in the same column as the next paragraph's first
-    // (headings). `keep_lines`: 0 none; N (2, 3): at least N lines at a
-    // paragraph's start and at its end (no orphans / widows); -1 the whole
-    // paragraph together.
-    bool        keep_next = false;
+    // (headings) -- s257: as many of the next's first lines (1 - 5; 0 off),
+    // InDesign's "Keep with Next: N lines". `keep_lines`: 0 none; N (2, 3):
+    // at least N lines at a paragraph's start and at its end (no orphans /
+    // widows); -1 the whole paragraph together.
+    int         keep_next = 0;
     int         keep_lines = 0;
     // s043: start in the next column / frame / page / right-hand page when
     // something is already set there (a chapter's opening heading).
@@ -864,6 +870,11 @@ std::vector<SizePreset> size_presets(const Doc& d, const Doc::Id& page);
 std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int count,
                                const Doc::Id& master);
 bool remove_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages);
+// s256: remove_pages' parts, for a step of one's own -- the ids it touches
+// (pages, their frames and guides, the sections) and the removal itself
+// (call inside the step; no check that a page is left).
+std::vector<Doc::Id> page_removal_ids(const Doc& d, const std::vector<Doc::Id>& pages);
+void drop_pages(Doc& d, const std::vector<Doc::Id>& pages);
 bool move_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const Doc::Id& after);
 bool set_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const Doc::Id& master);
 // s066: the document's own settings, one step each. The title (trimmed,
@@ -874,6 +885,8 @@ bool set_title(DocJournal& j, Doc& d, const std::string& title);
 // s239: the document's author (may be empty). One step.
 bool set_author(DocJournal& j, Doc& d, const std::string& author);
 bool set_reflow(DocJournal& j, Doc& d, bool on);   // s255
+// s256: 0 off, 1 adds pages, 2 adds and removes pages. One step.
+bool set_reflow_mode(DocJournal& j, Doc& d, int mode);
 // s240: the style a running head follows (slot 0 chapter, 1 subtitle; "" by name). One step.
 bool set_running(DocJournal& j, Doc& d, int slot, const std::string& style);
 bool set_trim(DocJournal& j, Doc& d, double w, double h);
