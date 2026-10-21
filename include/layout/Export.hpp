@@ -124,6 +124,16 @@ std::vector<PdfLink> index_links(const core::Doc& d, FlowCache& flows);
 // (frames turned left out): a web address out, "#id" to its anchor (s304;
 // gone or not set: no link).
 std::vector<PdfLink> hyperlink_links(const core::Doc& d, FlowCache& flows);
+// s309: what the screen marks in a text frame's words -- a misspelled word
+// (core::spell; nothing without a dictionary) and a hyperlink's words: a box
+// round each on each line, frame coordinates (as selection_rects).
+struct TextMark {
+    enum Kind { Misspelled, Link } kind = Misspelled;
+    core::Rect box;
+    int para = 0, from = 0, to = 0;   // in the story (its words as drawn: a resolved story's)
+    bool operator==(const TextMark&) const = default;
+};
+std::vector<TextMark> text_marks(const core::Doc& d, FlowCache& flows, const std::string& frame, bool spelling = true, bool links = true);
 
 // s134: the index as the marks make it -- one entry for each term (and
 // each sub-entry under it), sorted as a reader looks them up (case folded,

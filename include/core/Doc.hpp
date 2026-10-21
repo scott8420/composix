@@ -167,6 +167,8 @@ struct Settings {
     // from where the origin puts it; Spine: unused).
     RulerOrigin ruler_origin = RulerOrigin::Spread;
     double      zero_x = 0, zero_y = 0;
+    // s307: the language its words are checked in ("en_US"; "" = the app's).
+    std::string language;
     bool operator==(const Settings&) const = default;
 };
 
@@ -1533,6 +1535,15 @@ bool set_para_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
 // piece's Local (Clear overrides: f = reset). One step.
 bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
                const std::function<void(Local&)>& f, const std::string& merge_key = {});
+// s307: the document's language for spell check ("" the app's). One step.
+bool set_language(DocJournal& j, Doc& d, const std::string& lang);
+// s307: a misspelled word put right -- [from, to) of paragraph `para`, if it
+// still reads `was`, becomes `with`. One step ("Spelling").
+bool replace_word(DocJournal& j, Doc& d, const Doc::Id& story, int para, int from, int to, const std::string& was,
+                  const std::string& with);
+// s307: Change All -- every word `was` (whole words, as the checker reads
+// them; case as typed) in every story becomes `with`. One step; how many.
+int  change_all_words(DocJournal& j, Doc& d, const std::string& was, const std::string& with);
 // s303: hyperlinks. [a, b) made a link to `target` ("" takes the link off);
 // the target as normal_link gives it. One step ("Hyperlink").
 bool set_link(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& target);

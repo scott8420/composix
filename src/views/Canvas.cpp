@@ -1,5 +1,6 @@
 #include <sstream>
 #include "views/Canvas.hpp"
+#include "core/Spell.hpp"
 #include "views/BackButton.hpp"
 #include "views/Images.hpp"
 #include "views/PagePaint.hpp"
@@ -849,6 +850,49 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
                 cr->fill();
                 cr->restore();
             }
+    }
+    if (m_mark_spell || m_mark_links) {   // s309: misspelled words, links -- marked on screen
+        if (m_marks_rev != m_doc.revision() || m_marks_gen != core::spell::generation()) {
+            m_marks.clear();
+            m_marks_rev = m_doc.revision();
+            m_marks_gen = core::spell::generation();
+        }
+        const double W = m_vp.widget_w(), H = m_vp.widget_h();
+        for (const auto& p : m_placed) {
+            if (p.master) continue;
+            for (const auto& fid : m_doc.frames_on(p.id)) {
+                const auto* f = m_doc.as<core::Frame>(fid);
+                if (!f || f->kind != core::FrameKind::Text || f->story.empty() || f->rot != 0 || f->shear != 0 || f->flip ||
+                    f->sx != 1 || f->sy != 1 || f->on_path || !core::on_panel(m_doc, p, fid) || !core::doc::frame_shown(m_doc, *f))
+                    continue;
+                const Rect fr = m_vp.to_screen(Rect{p.r.x + f->x, p.r.y + f->y, f->w, f->h});
+                if (fr.x > W || fr.y > H || fr.x + fr.w < 0 || fr.y + fr.h < 0) continue;
+                auto it = m_marks.find(fid);
+                if (it == m_marks.end()) it = m_marks.emplace(fid, layout::text_marks(m_doc, flows(), fid, m_mark_spell, m_mark_links)).first;
+                for (const auto& m : it->second) {
+                    const Rect r = m_vp.to_screen(Rect{p.r.x + f->x + m.box.x, p.r.y + f->y + m.box.y, m.box.w, m.box.h});
+                    const double y = std::round(r.y + r.h) - 1.5, x0 = r.x, x1 = r.x + r.w;
+                    if (x1 - x0 < 2) continue;
+                    cr->save();
+                    if (m.kind == layout::TextMark::Misspelled) {   // a wave
+                        cr->set_source_rgba(0.85, 0.12, 0.12, 0.9);
+                        cr->set_line_width(1);
+                        cr->move_to(x0, y);
+                        bool up = true;
+                        for (double x = x0 + 2; x <= x1; x += 2, up = !up) cr->line_to(x, y + (up ? -1.5 : 0));
+                    } else {   // a dotted line
+                        cr->set_source_rgba(0.1, 0.35, 0.85, 0.85);
+                        cr->set_line_width(1);
+                        std::vector<double> dash{1.5, 1.5};
+                        cr->set_dash(dash, 0);
+                        cr->move_to(x0, y + 0.5);
+                        cr->line_to(x1, y + 0.5);
+                    }
+                    cr->stroke();
+                    cr->restore();
+                }
+            }
+        }
     }
     if (m_drag == Drag::Draw && (m_draw.w > 0 || m_draw.h > 0)) {   // the frame being drawn
         const Rect r = m_vp.to_screen(m_draw);

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 
 #ifdef COMPOSIX_HAVE_HUNSPELL
@@ -25,6 +26,9 @@ struct State {
     bool        latin1 = false;   // the dictionary's words in ISO 8859-1 (else UTF-8)
     std::string user_file;
     std::set<std::string> user, ignored;
+    std::uint64_t gen = 1;                                  // s307
+    std::map<std::string, std::vector<Word>> memo;          // s307: text -> its misses (para 0)
+    void moved() { ++gen; memo.clear(); }
     ~State() {
 #ifdef COMPOSIX_HAVE_HUNSPELL
         if (h) Hunspell_destroy(h);
@@ -136,6 +140,7 @@ bool load(const std::string& lang, std::string* err, const std::vector<std::stri
         if (s.h) Hunspell_destroy(s.h);
         s.h = h;
         s.lang = lang;
+        s.moved();
         std::string enc = Hunspell_get_dic_encoding(h) ? Hunspell_get_dic_encoding(h) : "UTF-8";
         std::transform(enc.begin(), enc.end(), enc.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
         s.latin1 = enc.find("8859-1") != std::string::npos || enc == "ISO8859-1" || enc == "LATIN1";
@@ -161,6 +166,9 @@ bool loaded() {
 std::string language() { return loaded() ? st().lang : std::string(); }
 
 std::vector<std::string> languages(const std::vector<std::string>& dirs) {
+    static std::vector<std::string> once;   // s309: asked on every projection -- the folders read once
+    static bool read = false;
+    if (dirs.empty() && read) return once;
     std::set<std::string> out;
     for (const auto& d : search_dirs(dirs)) {
         std::error_code ec;
@@ -172,12 +180,15 @@ std::vector<std::string> languages(const std::vector<std::string>& dirs) {
             if (fs::exists(aff, ec)) out.insert(p.stem().string());
         }
     }
-    return {out.begin(), out.end()};
+    std::vector<std::string> v(out.begin(), out.end());
+    if (dirs.empty()) { once = v; read = true; }
+    return v;
 }
 
 void set_user_file(const std::string& path) {
     auto& s = st();
     s.user_file = path;
+    s.moved();
     if (path.empty()) return;
     std::ifstream in(path);
     for (std::string w; std::getline(in, w);) {
@@ -193,6 +204,7 @@ void set_user_file(const std::string& path) {
 bool add_word(const std::string& word) {
     const auto w = plain(word);
     if (w.empty() || !st().user.insert(w).second) return false;
+    st().moved();
 #ifdef COMPOSIX_HAVE_HUNSPELL
     if (st().h) { std::string dw; if (to_dic(w, dw)) Hunspell_add(st().h, dw.c_str()); }
 #endif
@@ -202,6 +214,7 @@ bool add_word(const std::string& word) {
 bool remove_word(const std::string& word) {
     const auto w = plain(word);
     if (!st().user.erase(w)) return false;
+    st().moved();
 #ifdef COMPOSIX_HAVE_HUNSPELL
     if (st().h) { std::string dw; if (to_dic(w, dw)) Hunspell_remove(st().h, dw.c_str()); }
 #endif
@@ -209,8 +222,24 @@ bool remove_word(const std::string& word) {
     return true;
 }
 std::vector<std::string> user_words() { return {st().user.begin(), st().user.end()}; }
-void ignore(const std::string& word) { st().ignored.insert(plain(word)); }
-void clear_ignored() { st().ignored.clear(); }
+void ignore(const std::string& word) { st().ignored.insert(plain(word)); st().moved(); }
+void clear_ignored() { st().ignored.clear(); st().moved(); }
+std::uint64_t generation() { return st().gen; }
+
+std::vector<Word> para_misses(const std::string& text, int para) {   // s307
+    auto& s = st();
+    auto it = s.memo.find(text);
+    if (it == s.memo.end()) {
+        if (s.memo.size() > 20000) s.memo.clear();
+        std::vector<Word> out;
+        for (auto& w : words_of(text, 0))
+            if (!good(w.text)) out.push_back(std::move(w));
+        it = s.memo.emplace(text, std::move(out)).first;
+    }
+    auto out = it->second;
+    for (auto& w : out) w.para = para;
+    return out;
+}
 
 bool good(const std::string& word) {
     const auto w = plain(word);
@@ -286,8 +315,7 @@ std::vector<Word> words_of(const std::string& text, int para) {
 std::vector<Word> misses(const Story& s) {
     std::vector<Word> out;
     for (std::size_t p = 0; p < s.paras.size(); ++p)
-        for (auto& w : words_of(s.paras[p].text, static_cast<int>(p)))
-            if (!good(w.text)) out.push_back(std::move(w));
+        for (auto& w : para_misses(s.paras[p].text, static_cast<int>(p))) out.push_back(std::move(w));
     return out;
 }
 

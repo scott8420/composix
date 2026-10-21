@@ -1,4 +1,6 @@
 #include "Shell.hpp"
+
+#include <filesystem>
 #include "Log.hpp"
 #include "layout/Flow.hpp"
 
@@ -410,6 +412,34 @@ void Shell::on_hyperlink() {  // handler
         m_xref_pop->set_pointing_to(Gdk::Rectangle(static_cast<int>(r.x), static_cast<int>(r.y), 1, static_cast<int>(std::max(1.0, r.h))));
     m_xref_pop->popup();
     entry->grab_focus();
+}
+
+// s309: the dictionary the document's words are checked in -- its own
+// language, else the app's ("spell.lang", en_US), else the first installed.
+// The user's words kept beside the settings. Cheap when nothing changed.
+void Shell::ensure_spell() {  // helper
+    static bool user = false;
+    if (!user) {
+        user = true;
+        core::spell::set_user_file((std::filesystem::path(m_settings_file).parent_path() / "words.txt").string());
+    }
+    std::string want = m_doc.settings().language;
+    if (want.empty()) want = m_settings.count("spell.lang") ? m_settings["spell.lang"] : std::string("en_US");
+    if (core::spell::language() == want) return;
+    static std::string failed;   // asked once a language: not again each refresh
+    if (failed == want) return;
+    std::string err;
+    if (!core::spell::load(want, &err)) {
+        failed = want;
+        if (!core::spell::loaded()) {
+            const auto ls = core::spell::languages();
+            if (!ls.empty()) core::spell::load(ls.front());
+        }
+        if (auto lg = log::get(log::Area::Shell)) lg->warn("spelling: {} -- using {}", err, core::spell::language().empty() ? "none" : core::spell::language());
+    } else if (auto lg = log::get(log::Area::Shell)) {
+        lg->info("spelling: {} loaded", want);
+    }
+    m_canvas_view.canvas().marks_changed();
 }
 
 }  // namespace composix

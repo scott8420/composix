@@ -2,6 +2,7 @@
 #include "widgets/Widgets.hpp"
 #include "core/Outline.hpp"
 #include "core/Doc.hpp"      // s004: the document + its journal
+#include "core/Spell.hpp"    // s309
 #include "views/Canvas.hpp"
 #include "views/Inspector.hpp"
 #include "views/ItemView.hpp"
@@ -171,6 +172,10 @@ private:
     void paste_here(bool in_place);                 // category: handler: s297 -- Ctrl+V: another program's words as a frame, else our frames
     bool paste_target(double& cx, double& cy, const core::Placed*& tp);   // category: helper: s297 -- the page Paste lands on, the view's middle
     void duplicate_picked();
+    void ensure_spell();                            // category: helper: s309 -- the document's dictionary loaded
+    struct SpellAt { std::string story; core::spell::Word word; };
+    SpellAt m_spell_at;                             // s309: the misspelled word the text menu was opened on
+    bool layer_edit(const std::string& key, const std::string& choice, const std::vector<std::string>& ids);   // category: handler: s308
     void on_hyperlink();                            // category: handler: s304 -- Type > Hyperlink... (Ctrl+K)
     void on_step_repeat();                          // category: handler: s284 -- Edit > Step and Repeat
     void after_frames_changed(const std::vector<std::string>& pick);   // category: helper: s299 -- the canvas redrawn, `pick` picked                        // category: handler: s282 -- Edit > Duplicate

@@ -1,5 +1,6 @@
 #include "core/Doc.hpp"
 #include "core/Swatches.hpp"
+#include "core/Spell.hpp"
 
 #include <map>
 #include <algorithm>
@@ -2875,6 +2876,48 @@ bool set_reflow_mode(DocJournal& j, Doc& d, int mode) {   // s256
         s.reflow_trim = trim;
         d.put("doc", s);
     });
+}
+
+bool set_language(DocJournal& j, Doc& d, const std::string& lang) {   // s307
+    if (lang == d.settings().language) return false;
+    return j.run(lang.empty() ? std::string("Language: the app's") : "Language " + lang, {"doc"}, [&] {
+        Settings s = d.settings();
+        s.language = lang;
+        d.put("doc", s);
+    });
+}
+
+bool replace_word(DocJournal& j, Doc& d, const Doc::Id& story, int para, int from, int to, const std::string& was,
+                  const std::string& with) {   // s307
+    const auto* st = d.as<Story>(story);
+    if (!st || para < 0 || para >= static_cast<int>(st->paras.size()) || with.empty() || with == was) return false;
+    const auto& t = st->paras[static_cast<std::size_t>(para)].text;
+    if (from < 0 || to > static_cast<int>(t.size()) || to <= from || t.compare(static_cast<std::size_t>(from), static_cast<std::size_t>(to - from), was) != 0)
+        return false;
+    edit_text(j, d, story, {para, from}, {para, to}, with, "Spelling");
+    return true;
+}
+
+int change_all_words(DocJournal& j, Doc& d, const std::string& was, const std::string& with) {   // s307
+    if (was.empty() || with.empty() || was == with) return 0;
+    int n = 0;
+    std::vector<Doc::Id> ids;
+    for (const auto& sid : d.ids_of<Story>())
+        for (const auto& p : d.as<Story>(sid)->paras)
+            if (p.text.find(was) != std::string::npos) { ids.push_back(sid); break; }
+    if (ids.empty()) return 0;
+    j.run("Change All \u201c" + was + "\u201d", ids, [&] {
+        for (const auto& sid : ids)
+            for (int p = 0; p < static_cast<int>(d.as<Story>(sid)->paras.size()); ++p) {
+                const auto ws = spell::words_of(d.as<Story>(sid)->paras[static_cast<std::size_t>(p)].text, p);
+                for (auto it = ws.rbegin(); it != ws.rend(); ++it)   // from the end: the earlier places stay put
+                    if (it->text == was) {
+                        edit_text(j, d, sid, {p, it->from}, {p, it->to}, with, "Spelling");
+                        ++n;
+                    }
+            }
+    });
+    return n;
 }
 
 bool set_author(DocJournal& j, Doc& d, const std::string& author) {   // s239
@@ -6178,6 +6221,9 @@ const std::vector<Verb>& verbs() {
         {"group_frames", [](DocJournal& j, Doc& d) { group_frames(j, d, {"frame.2", "frame.4"}); }},   // s300
         {"lock_frames", [](DocJournal& j, Doc& d) { lock_frames(j, d, {"frame.2"}, true); }},          // s301
         {"set_link", [](DocJournal& j, Doc& d) { set_link(j, d, "story.1", {1, 4}, {1, 12}, "www.example.com"); }},   // s303
+        {"set_language", [](DocJournal& j, Doc& d) { set_language(j, d, "en_GB"); }},   // s307
+        {"replace_word", [](DocJournal& j, Doc& d) { replace_word(j, d, "story.1", 1, 4, 10, "harbor", "harbour"); }},
+        {"change_all_words", [](DocJournal& j, Doc& d) { change_all_words(j, d, "the", "thee"); }},
         {"add_layer", [](DocJournal& j, Doc& d) { add_layer(j, d, "Notes"); }},   // s305
         {"align_frames", [](DocJournal& j, Doc& d) {   // s299
             align_frames(j, d, layout_pages(d, d.pages()), {"frame.1"}, 0, AlignTo::Page);

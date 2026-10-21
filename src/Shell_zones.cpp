@@ -320,6 +320,7 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: the menubar's model (s27
                    {"Actual Size", "win.zoom-100"}, {"200%", "win.zoom-200"}, {"300%", "win.zoom-300"}});
     section(view, {{"Rulers", "win.toggle-rulers"}, {"Guides", "win.toggle-guides"}, {"Lock Guides", "win.toggle-guide-lock"},
                    {"Baseline Grid", "win.toggle-grid"}, {"Hidden Characters", "win.toggle-hidden"}, {"Snap to Guides & Edges", "win.toggle-snap"}});
+    section(view, {{"Misspelled Words", "win.toggle-spelling"}, {"Hyperlinks", "win.toggle-links"}});   // s309
     section(view, {{"Proof Colours", "win.toggle-proof"}, {"Simulate Paper", "win.toggle-paper"}});
     bar->append_submenu("_View", view);
 

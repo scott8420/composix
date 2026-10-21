@@ -21,7 +21,7 @@
 
 namespace composix::core {
 
-enum class Segment { Document, Pages, Masters, Stories, Styles, Assets, Colors, Generated, Notes };   // s115: Notes last (an index into names); shown after Stories
+enum class Segment { Document, Pages, Masters, Stories, Styles, Assets, Colors, Generated, Notes, Layers };   // s115: Notes (an index into names); shown after Stories; s308: Layers
 
 struct SegmentInfo {
     Segment     id;

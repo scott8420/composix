@@ -1,4 +1,5 @@
 #include "layout/Export.hpp"
+#include "core/Spell.hpp"
 #include "layout/Flow.hpp"
 #include "layout/Preflight.hpp"
 
@@ -406,6 +407,7 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
     const auto rec = [&](const std::string& rid) {
         if (const auto it = d.records().find(rid); it != d.records().end()) k.recs.emplace_back(rid, it->second);
     };
+    for (const auto& l : d.ids_of<core::Layer>()) rec(l);   // s308: shown / hidden, its order -- what's drawn
     auto owners = core::master_chain(d, id);
     owners.push_back(id);
     for (const auto& o : owners) {
@@ -863,6 +865,43 @@ std::vector<PdfLink> hyperlink_links(const core::Doc& d, FlowCache& flows) {   /
                     out.push_back(std::move(l));
                 }
             }
+        }
+    }
+    return out;
+}
+
+std::vector<TextMark> text_marks(const core::Doc& d, FlowCache& flows, const std::string& frame, bool spelling, bool links) {   // s309
+    std::vector<TextMark> out;
+    const auto* f = d.as<core::Frame>(frame);
+    if (!f || f->kind != core::FrameKind::Text || f->story.empty() || !d.as<core::Story>(f->story)) return out;
+    const auto& sid = f->story;
+    const auto& rs = flows.resolved(d, sid, {});
+    const core::Story* text = rs.any ? &rs.text : d.as<core::Story>(sid);
+    const StoryFlow& flow = rs.any ? rs.flow : flows.get(d, sid);
+    const FrameText* ft = nullptr;
+    for (const auto& x : flow.frames) if (x.frame == frame) { ft = &x; break; }
+    if (!ft || ft->lines.empty()) return out;
+    std::set<int> paras;
+    for (const auto& l : ft->lines) paras.insert(l.para);
+    const auto add = [&](TextMark::Kind k, int p, int a, int b) {
+        for (const auto& r : selection_rects(d, sid, flow, frame, {p, a}, {p, b}, rs.any ? &rs.text : nullptr))
+            if (r.w > 0) out.push_back({k, r, p, a, b});
+    };
+    for (int p : paras) {
+        if (p < 0 || p >= static_cast<int>(text->paras.size())) continue;
+        const auto& para = text->paras[static_cast<std::size_t>(p)];
+        if (spelling && core::spell::loaded())
+            for (const auto& w : core::spell::para_misses(para.text, p)) add(TextMark::Misspelled, p, w.from, w.to);
+        if (links) {
+            int a = -1, b = -1;
+            std::string at;
+            for (const auto& r : para.runs) {
+                if (r.local.link.empty()) continue;
+                if (a >= 0 && r.start == b && r.local.link == at) { b = r.end; continue; }
+                if (a >= 0) add(TextMark::Link, p, a, b);
+                a = r.start; b = r.end; at = r.local.link;
+            }
+            if (a >= 0) add(TextMark::Link, p, a, b);
         }
     }
     return out;

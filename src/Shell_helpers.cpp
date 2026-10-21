@@ -114,6 +114,7 @@ void Shell::refresh() {  // helper
     // Mid-drag the canvas paints the gesture itself; the rest of the views
     // catch up when it ends (signal_edited -> here again).
     if (m_journal.in_gesture()) { m_canvas_view.canvas().queue_draw(); return; }
+    ensure_spell();   // s309: the document's language may have changed (an open, an undo)
     if (m_np && m_np->get_visible()) notes_panel_sync();   // s121
     if (m_xp && m_xp->get_visible()) xrefs_panel_sync();   // s133
     if (m_sp && m_sp->get_visible()) sources_panel_sync();   // s144

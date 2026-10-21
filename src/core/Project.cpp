@@ -8,6 +8,7 @@
 // staleness from its last build against today's headings.
 #include "core/Doc.hpp"
 #include "core/Outline.hpp"
+#include "core/Spell.hpp"
 #include "core/Hyphen.hpp"   // s190
 
 #include <algorithm>
@@ -284,7 +285,11 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             const auto* cur = d.as<Style>(set);
             return Field{slot == 0 ? "Running head" : "Running subhead", cur ? cur->name : ch.front().label, slot == 0 ? "drun1" : "drun2", ch};
         };
-        std::vector<Field> f{title, author, run_row(0), run_row(1),
+        // s309: the language its words are checked in -- the dictionaries installed
+        std::vector<Choice> langs{{"", "The app's"}};
+        for (const auto& l : spell::languages()) langs.push_back({l, l});
+        const Field language{"Language", st.language.empty() ? "The app's" : st.language, "dlang", langs};
+        std::vector<Field> f{title, author, language, run_row(0), run_row(1),
                              {"Text reflow", !st.reflow ? "Off" : st.reflow_trim ? "Adds and removes pages" : "Adds pages", "dreflow",   // s255
                               {{"1", "Adds pages"}, {"2", "Adds and removes pages"}, {"0", "Off"}}},   // s256
                              {"Units", unit_label(U), "dunits",   // s073
@@ -833,6 +838,39 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         o.add({sid, G::Colors, s.name, badge, {K::Swatch, 1, 1, doc::screen_rgb(s)}, fields, group});
     }
 
+    // ── Layers (s308): top first, as they stack ─────────────────────────────
+    {
+        const auto ls = doc::layers(d);
+        const auto active = d.active_layer();
+        for (auto it = ls.rbegin(); it != ls.rend(); ++it) {
+            const auto& l = *d.as<Layer>(*it);
+            const int n = doc::frames_on_layer(d, *it);
+            std::string badge = *it == active ? "Active" : "";
+            if (!l.visible) badge = badge.empty() ? "Hidden" : badge + " \u00b7 Hidden";
+            else if (!l.print) badge = badge.empty() ? "Non-printing" : badge + " \u00b7 Non-printing";
+            Field name{"Name", l.name, "lname"};
+            name.text = true;
+            std::vector<Field> fields{name,
+                                      {"Visible", l.visible ? "Shown" : "Hidden", "lvis", {{"1", "Shown"}, {"0", "Hidden"}}},
+                                      {"Locked", l.locked ? "Locked" : "No", "llock", {{"0", "No"}, {"1", "Locked"}}},
+                                      {"Prints", l.print ? "Yes" : "No", "lprint", {{"1", "Yes"}, {"0", "No"}}},
+                                      {"Frames", n == 1 ? "1 frame" : std::to_string(n) + " frames"}};
+            Field act{"", "", "layer", {}};
+            if (*it != active) act.choices.push_back({"active", "Make Active"});
+            act.choices.push_back({"picked", "Move Picked Frames Here"});
+            if (it != ls.rbegin()) act.choices.push_back({"up", "Move Up"});
+            if (std::next(it) != ls.rend()) act.choices.push_back({"down", "Move Down"});
+            act.choices.push_back({"new", "New Layer"});
+            if (ls.size() > 1) {
+                act.choices.push_back({"delete_keep", "Delete, Keep Frames"});
+                act.choices.push_back({"delete", n ? "Delete with Its Frames" : "Delete"});
+            }
+            act.buttons = true;
+            fields.push_back(act);
+            o.add({*it, G::Layers, l.name, badge, {K::Section, 1, 1}, fields});
+        }
+    }
+
     // ── Footnotes (s115): each one, story by story, in order ────────────────
     for (const auto& sid : d.ids_of<Story>()) {
         const auto& st = *d.as<Story>(sid);
@@ -986,6 +1024,12 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
         const char* kind = f->kind == FrameKind::Text ? "Text" : f->kind == FrameKind::Image ? "Image" : "Shape";
         std::string on = d.as<Page>(f->owner) ? "Page " + d.folio(f->owner) : master_label(d, f->owner);
         std::vector<Field> fields{{"Kind", kind}, {"On", on}};
+        if (const auto ls = doc::layers(d); !ls.empty()) {   // s308: its layer, and the others to move it to
+            std::vector<Choice> lc;
+            for (auto it = ls.rbegin(); it != ls.rend(); ++it) lc.push_back({*it, d.as<Layer>(*it)->name});
+            const auto* l = doc::layer_of(d, *f);
+            fields.push_back({"Layer", l ? l->name : "", "flayer", lc});
+        }
         // s210: what it holds -- a shape made a text or picture frame, and back
         fields.push_back({"Content", f->on_path && f->kind == FrameKind::Text ? "Text on path"   // s217
                                      : f->kind == FrameKind::Text ? "Text" : f->kind == FrameKind::Image ? "Picture" : "None", "content",

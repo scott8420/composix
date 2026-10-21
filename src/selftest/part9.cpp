@@ -2218,5 +2218,97 @@ void part9() {
             fs::remove_all(dir, ec);
         }
     }
+    // -- s307: spelling put right ---------------------------------------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("language: set, saved", D::set_language(j, d, "en_GB") && d.settings().language == "en_GB" &&
+                                          [&] { core::Doc e; return core::from_json(e, core::to_json(d)) && e.settings().language == "en_GB"; }());
+        check("replace a word -- only while it still reads so", !D::replace_word(j, d, "story.1", 1, 4, 10, "harbr", "harbor") &&
+                                                                 D::replace_word(j, d, "story.1", 1, 4, 10, "harbor", "harbour") &&
+                                                                 d.as<core::Story>("story.1")->paras[1].text.rfind("The harbour smelled", 0) == 0);
+        j.undo();
+        check("replace: one step", d.as<core::Story>("story.1")->paras[1].text.rfind("The harbor smelled", 0) == 0);
+        int before = 0;
+        for (const auto& sid : d.ids_of<core::Story>())
+            for (const auto& p : d.as<core::Story>(sid)->paras)
+                for (const auto& w : core::spell::words_of(p.text)) before += w.text == "the" ? 1 : 0;
+        const int n = D::change_all_words(j, d, "the", "thee");
+        int after = 0, other = 0;
+        for (const auto& sid : d.ids_of<core::Story>())
+            for (const auto& p : d.as<core::Story>(sid)->paras)
+                for (const auto& w : core::spell::words_of(p.text)) { after += w.text == "thee" ? 1 : 0; other += w.text == "The" ? 1 : 0; }
+        check("Change All: every whole word, case as typed (The kept), one step", n == before && n > 2 && after == n && other > 0 &&
+                                                                                   d.as<core::Story>("story.1")->paras[1].text.find("thee") != std::string::npos,
+              std::to_string(n) + " of " + std::to_string(before));
+        j.undo();
+        int back = 0;
+        for (const auto& sid : d.ids_of<core::Story>())
+            for (const auto& p : d.as<core::Story>(sid)->paras)
+                for (const auto& w : core::spell::words_of(p.text)) back += w.text == "thee" ? 1 : 0;
+        check("Change All: undone in one", back == 0);
+        if (core::spell::loaded()) {
+            const auto g = core::spell::generation();
+            const auto m1 = core::spell::para_misses("A harbr and a harbr.", 3);
+            const auto m2 = core::spell::para_misses("A harbr and a harbr.", 5);
+            check("para misses: remembered by the words, its paragraph on each", m1.size() == 2 && m2.size() == 2 && m1[0].para == 3 && m2[0].para == 5 &&
+                                                                                 core::spell::generation() == g);
+            core::spell::ignore("harbr");
+            check("para misses: Ignore All moves the generation and forgets", core::spell::generation() != g &&
+                                                                               core::spell::para_misses("A harbr and a harbr.", 0).empty());
+            core::spell::clear_ignored();
+        }
+    }
+    // -- s308: the Layers card's items, a frame's Layer row ------------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("layers card: none until one is made", core::project(d, "").in(core::Segment::Layers).empty());
+        const auto top = D::add_layer(j, d, "Notes");
+        const auto ls = D::layers(d);
+        D::edit_layer(j, d, ls.front(), "Hide Layer", [](core::Layer& l) { l.visible = false; });
+        const auto o = core::project(d, "");
+        const auto items = o.in(core::Segment::Layers);
+        const auto fv = [](const core::Item& it, const std::string& label) {
+            for (const auto& f : it.fields) if (f.label == label) return f.value;
+            return std::string("?");
+        };
+        check("layers card: top first; the active one marked; hidden said", items.size() == 2 && items[0]->id == top && items[0]->badge == "Active" &&
+                                                                             items[1]->badge == "Hidden" && fv(*items[1], "Visible") == "Hidden" &&
+                                                                             fv(*items[0], "Prints") == "Yes",
+              items.empty() ? "none" : items[0]->badge + "/" + items.back()->badge);
+        const auto fi = core::frame_items(d, {"frame.1"}, "");
+        const auto row = std::find_if(fi.front().fields.begin(), fi.front().fields.end(), [](const core::Field& f) { return f.edit == "flayer"; });
+        check("a frame's Layer row -- its layer, the others to move it to (top first)", row != fi.front().fields.end() &&
+                                                                                       row->value == "Layer 1" && row->choices.size() == 2 &&
+                                                                                       row->choices.front().id == top);
+    }
+    // -- s309: the screen's marks -- misspelled words, links ------------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        D::replace_word(j, d, "story.1", 1, 11, 18, "smelled", "smeled");
+        D::set_link(j, d, "story.1", {1, 4}, {1, 10}, "www.example.com");
+        L::FlowCache flows;
+        const auto ms = L::text_marks(d, flows, "frame.1");
+        int miss = 0, link = 0;
+        for (const auto& m : ms) {
+            if (m.kind == L::TextMark::Link && m.para == 1 && m.from == 4 && m.to == 10 && m.box.w > 0) ++link;
+            if (m.kind == L::TextMark::Misspelled && m.para == 1 && m.from == 11 && m.to == 17) ++miss;
+        }
+        check("marks: the link's words boxed", link >= 1, std::to_string(ms.size()) + " marks");
+        check("marks: the misspelled word boxed (with a dictionary)", !core::spell::loaded() || miss >= 1);
+        check("marks: none asked for, none given", L::text_marks(d, flows, "frame.1", false, false).empty());
+        check("marks: not a text frame -- none", L::text_marks(d, flows, "frame.4", true, true).empty() || d.as<core::Frame>("frame.4")->kind == core::FrameKind::Text);
+    }
 }
 }  // namespace cxtest

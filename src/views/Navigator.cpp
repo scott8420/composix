@@ -242,6 +242,7 @@ void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const 
             row->set_name("nav.item." + it->id);
             row->add_css_class("cx-item-row");
             auto ib = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            if (s == core::Segment::Layers) layer_toggles(c, *it, *ib);   // s308: eye, padlock, printer
             auto il = Gtk::make_managed<Gtk::Label>(it->title);
             il->set_xalign(0.0f);
             il->set_hexpand(true);
@@ -1207,6 +1208,7 @@ void Navigator::refresh(const core::Outline* o) {
                 }
                 badge->set_text(it->badge);
                 badge->set_visible(!it->badge.empty());
+                if (c.segment == core::Segment::Layers) set_layer_toggles(c, *it);   // s308
                 if (it->thumb.flag) badge->add_css_class("cx-warn");
                 else                badge->remove_css_class("cx-warn");
             }
@@ -1214,6 +1216,51 @@ void Navigator::refresh(const core::Outline* o) {
     }
     show_picks();
     if (!m_filter.empty()) apply_filter();   // s298
+}
+
+// s308: a layer's three switches before its name -- shown / locked / prints.
+void Navigator::layer_toggles(Card& c, const core::Item& it, Gtk::Box& row) {
+    static const char* keys[3] = {"lvis", "llock", "lprint"};
+    static const char* tips[3] = {"Show / hide the layer", "Lock / unlock the layer (its frames not picked)",
+                                  "Print / don't print the layer (exports leave it out)"};
+    std::array<Gtk::ToggleButton*, 3> bs{};
+    for (int k = 0; k < 3; ++k) {
+        auto b = Gtk::make_managed<Gtk::ToggleButton>();
+        b->set_name("nav.layer." + it.id + "." + keys[k]);
+        b->set_has_frame(false);
+        b->set_focus_on_click(false);
+        b->add_css_class("cx-layer-toggle");
+        b->set_tooltip_text(tips[k]);
+        const std::string id = it.id, key = keys[k];
+        b->signal_toggled().connect([this, b, id, key] {
+            if (m_quiet) return;
+            m_layer_sig.emit(id, key, b->get_active() == (key != "llock") ? "1" : "0");
+        });
+        row.append(*b);
+        bs[static_cast<std::size_t>(k)] = b;
+    }
+    c.layer_btns[it.id] = bs;
+    set_layer_toggles(c, it);
+}
+
+void Navigator::set_layer_toggles(Card& c, const core::Item& it) {
+    const auto f = c.layer_btns.find(it.id);
+    if (f == c.layer_btns.end()) return;
+    const bool shown = field(it, "Visible") != "Hidden", locked = field(it, "Locked") == "Locked", prints = field(it, "Prints") != "No";
+    const bool quiet = m_quiet;
+    m_quiet = true;
+    // pressed in = the usual state (shown, unlocked, printing); out = the exception, its icon struck
+    auto& [eye, lock, print] = f->second;
+    eye->set_active(shown);
+    eye->set_icon_name(shown ? "view-reveal-symbolic" : "view-conceal-symbolic");
+    lock->set_active(!locked);
+    lock->set_icon_name(locked ? "changes-prevent-symbolic" : "changes-allow-symbolic");
+    print->set_active(prints);
+    print->set_icon_name("printer-symbolic");
+    if (prints) print->remove_css_class("cx-off"); else print->add_css_class("cx-off");
+    if (locked) lock->add_css_class("cx-off"); else lock->remove_css_class("cx-off");
+    if (!shown) eye->add_css_class("cx-off"); else eye->remove_css_class("cx-off");
+    m_quiet = quiet;
 }
 
 std::string Navigator::spreads_text() const {

@@ -116,6 +116,7 @@ json to(const Record& r) {
             if (!v.author.empty()) j["author"] = v.author;   // s239
             if (v.reflow) j["reflow"] = true;                // s255
             if (v.reflow_trim) j["reflow_trim"] = true;      // s256
+            if (!v.language.empty()) j["language"] = v.language;   // s307
             if (!v.run_head.empty()) j["run_head"] = v.run_head;   // s240
             if (!v.run_sub.empty()) j["run_sub"] = v.run_sub;
             if (v.note_num != Settings::NoteNum::Plain) j["note_num"] = static_cast<int>(v.note_num);   // s126
@@ -391,6 +392,7 @@ std::optional<Record> from(const json& j) {
         v.author = val(j, "author", std::string{});   // s239
         v.reflow = val(j, "reflow", false);           // s255
         v.reflow_trim = val(j, "reflow_trim", false); // s256
+        v.language = val<std::string>(j, "language", "");   // s307
         v.run_head = val(j, "run_head", std::string{});   // s240
         v.run_sub = val(j, "run_sub", std::string{});
         v.note_num = static_cast<Settings::NoteNum>(std::clamp(val(j, "note_num", 0), 0, 3));   // s126

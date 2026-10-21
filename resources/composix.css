@@ -426,3 +426,8 @@ button.cx-insp-group.cx-group-drop-after  { box-shadow: inset 0 -3px 0 0 @cx_ink
 
 /* s298: the navigator's filter */
 searchentry.cx-nav-filter { margin: 10px 10px 0; border-radius: 9px; }
+
+/* s308: the Layers card's switches -- an exception (hidden, locked, not printing) dimmed and marked */
+.cx-layer-toggle { min-width: 20px; min-height: 20px; padding: 0 2px; }
+.cx-layer-toggle:checked { background: none; }
+.cx-layer-toggle.cx-off { opacity: 0.45; color: @error_color; }

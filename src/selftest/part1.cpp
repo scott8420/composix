@@ -203,7 +203,7 @@ void part1() {
             keys.insert(s.key);
         }
         check("segments: every segment listed once", seen.size() == core::segments().size() &&
-                                                     seen.size() == 9 && keys.size() == 9);
+                                                     seen.size() == 10 && keys.size() == 10);   // s308: Layers
     }
     {
         std::cout << "\n-- document: places, folios, sections --\n";
@@ -359,8 +359,8 @@ void part1() {
         core::load_sample(d);
         const auto o = core::project(d, "");
         bool all_full = true;
-        for (const auto& s : core::segments()) all_full = all_full && !o.in(s.id).empty();
-        check("project: every segment has items", all_full);
+        for (const auto& s : core::segments()) all_full = all_full && (s.id == core::Segment::Layers || !o.in(s.id).empty());
+        check("project: every segment has items (Layers none until one is made, s308)", all_full);
         std::set<std::string> ids;
         for (const auto& it : o.items()) ids.insert(it.id);
         check("project: item ids unique, = record ids", ids.size() == o.size() && o.find("page.11"));

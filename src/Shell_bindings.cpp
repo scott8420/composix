@@ -166,6 +166,47 @@ void Shell::bind_actions() {  // bindings: actions + recents group
         }, on);
     }
     toggle("toggle-grid",   [this](bool on) { m_canvas_view.canvas().set_show_grid(on); }, false);   // s036
+    {   // s309: misspelled words and links marked in the words -- kept between runs
+        const bool sp = core::setting_int(m_settings, "view.spelling", 1, 0, 1) == 1, ln = core::setting_int(m_settings, "view.links", 1, 0, 1) == 1;
+        m_canvas_view.canvas().set_marks(sp, ln);
+        toggle("toggle-spelling", [this](bool v) {
+            m_settings["view.spelling"] = v ? "1" : "0";
+            core::save_settings(m_settings_file, m_settings);
+            m_canvas_view.canvas().set_marks(v, core::setting_int(m_settings, "view.links", 1, 0, 1) == 1);
+        }, sp);
+        toggle("toggle-links", [this](bool v) {
+            m_settings["view.links"] = v ? "1" : "0";
+            core::save_settings(m_settings_file, m_settings);
+            m_canvas_view.canvas().set_marks(core::setting_int(m_settings, "view.spelling", 1, 0, 1) == 1, v);
+        }, ln);
+    }
+    add_action_with_parameter("spell-fix", Glib::Variant<Glib::ustring>::variant_type(), [this](const Glib::VariantBase& p) {   // s309
+        const std::string with = Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(p).get();
+        const auto& w = m_spell_at.word;
+        if (m_spell_at.story.empty()) return;
+        auto& cv = m_canvas_view.canvas();
+        if (core::doc::replace_word(m_journal, m_doc, m_spell_at.story, w.para, w.from, w.to, w.text, with)) {
+            cv.model_changed();
+            if (const auto* st = m_doc.as<core::Story>(m_spell_at.story))
+                cv.place_caret(core::clamp_pos(*st, {w.para, w.from + static_cast<int>(with.size())}));
+        }
+        if (auto lg = log::get(log::Area::Shell)) lg->info("spelling: '{}' -> '{}'", w.text, with);
+        m_spell_at = {};
+    });
+    add_action("spell-none", [] {});
+    add_action("spell-add", [this] {
+        if (m_spell_at.story.empty()) return;
+        core::spell::add_word(m_spell_at.word.text);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("spelling: '{}' added to the user's words", m_spell_at.word.text);
+        m_canvas_view.canvas().marks_changed();
+        m_spell_at = {};
+    });
+    add_action("spell-ignore", [this] {
+        if (m_spell_at.story.empty()) return;
+        core::spell::ignore(m_spell_at.word.text);
+        m_canvas_view.canvas().marks_changed();
+        m_spell_at = {};
+    });
     {   // s059: hidden characters -- kept between runs.
         const bool on = core::setting_int(m_settings, "view.hidden", 0, 0, 1) == 1;
         m_canvas_view.canvas().set_show_hidden(on);
@@ -418,6 +459,9 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_nav.signal_move_pages().connect(sigc::mem_fun(*this, &Shell::on_nav_move_pages));      // s278
     m_nav.signal_context().connect(sigc::mem_fun(*this, &Shell::on_nav_context));            // s279
     m_nav.signal_master_insert().connect(sigc::mem_fun(*this, &Shell::on_nav_master_insert));
+    m_nav.signal_layer_toggle().connect([this](const std::string& id, const std::string& key, const std::string& v) {   // s308
+        layer_edit(key, v, {id});
+    });
     m_nav.signal_open_changed().connect([this] {
         m_settings["nav.cards"] = m_nav.open_keys();
         core::save_settings(m_settings_file, m_settings);

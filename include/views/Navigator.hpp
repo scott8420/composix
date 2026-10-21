@@ -21,6 +21,7 @@
 
 #include <sigc++/signal.h>
 
+#include <array>
 #include <functional>
 #include <map>
 #include <optional>
@@ -88,6 +89,9 @@ public:
     void open_all(bool open);
     void reset_order();
     sigc::signal<void(int)>&         signal_thumb_height() { return m_thumb_sig; }
+    // s308: a Layers row's eye / padlock / printer pressed -- (layer, "lvis" /
+    // "llock" / "lprint", "1" / "0"), as the inspector's rows send them.
+    sigc::signal<void(const std::string&, const std::string&, const std::string&)>& signal_layer_toggle() { return m_layer_sig; }
     sigc::signal<void()>&            signal_open_changed() { return m_open_sig; }
 
     // s031: how the pages group into spreads. Empty groups: one page each.
@@ -125,6 +129,7 @@ private:
         Gtk::Box*                     chips = nullptr;   // s287: Colors -- the chips' column (its first row is `flow`)
         std::map<std::string, Gtk::Label*> samples;      // s292: Stories -- each one's first words
         std::vector<std::pair<Gtk::Widget*, WrapBox*>> chip_heads;   // s298: Colors -- a group's heading, its row
+        std::map<std::string, std::array<Gtk::ToggleButton*, 3>> layer_btns;   // s308: Layers -- eye, padlock, printer
     };
 
     Card*       card(core::Segment s);
@@ -178,6 +183,9 @@ private:
     sigc::signal<void(const std::string&, const std::string&, bool)> m_insert_sig;
     sigc::signal<void()>            m_order_sig;
     sigc::signal<void(const Pick&, double, double)> m_ctx_sig;
+    sigc::signal<void(const std::string&, const std::string&, const std::string&)> m_layer_sig;   // s308
+    void        layer_toggles(Card& c, const core::Item& it, Gtk::Box& row);                          // s308
+    void        set_layer_toggles(Card& c, const core::Item& it);
     std::function<std::vector<std::vector<std::string>>()> m_grouping;
 };
 

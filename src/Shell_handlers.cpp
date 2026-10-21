@@ -960,6 +960,31 @@ void Shell::on_canvas_context(const views::Canvas::ContextHit& hit) {  // handle
     m_ctx = h;
     auto menu = Gio::Menu::create();
     if (h.text) {   // s274 (Scott): typing -- the fields by name, the type style, at the caret
+        {   // s309: a misspelled word under the pointer -- what it might be, add it, ignore it
+            m_spell_at = {};
+            auto& cv = m_canvas_view.canvas();
+            const auto* st = m_doc.as<core::Story>(cv.edit_story_id());
+            const auto at = cv.edit_range().second;
+            if (st && core::spell::loaded() && at.para < static_cast<int>(st->paras.size()))
+                for (const auto& w : core::spell::words_of(st->paras[static_cast<std::size_t>(at.para)].text, at.para))
+                    if (at.byte >= w.from && at.byte <= w.to && !core::spell::good(w.text)) {
+                        m_spell_at = {cv.edit_story_id(), w};
+                        auto sp = Gio::Menu::create();
+                        const auto sg = core::spell::suggest(w.text, 6);
+                        for (const auto& g : sg) {
+                            auto item = Gio::MenuItem::create(g, "");
+                            item->set_action_and_target("win.spell-fix", Glib::Variant<Glib::ustring>::create(g));
+                            sp->append_item(item);
+                        }
+                        if (sg.empty()) sp->append("(No suggestions)", "win.spell-none");
+                        menu->append_section(sp);
+                        auto more = Gio::Menu::create();
+                        more->append("Add \u201c" + w.text + "\u201d to the Dictionary", "win.spell-add");
+                        more->append("Ignore All", "win.spell-ignore");
+                        menu->append_section(more);
+                        break;
+                    }
+        }
         auto ins = Gio::Menu::create();
         ins->append_submenu("Insert Field", field_menu());
         ins->append_submenu("Type Style", type_style_menu());
@@ -968,6 +993,7 @@ void Shell::on_canvas_context(const views::Canvas::ContextHit& hit) {  // handle
         more->append("Footnote", "win.insert-footnote");
         more->append("Index Entry\u2026", "win.index-mark");
         more->append("Cross-Reference\u2026", "win.insert-xref");
+        more->append("Hyperlink\u2026", "win.hyperlink");   // s309
         menu->append_section(more);
         auto ed = Gio::Menu::create();
         ed->append("Story Editor", "win.story-editor");
@@ -1409,11 +1435,83 @@ void Shell::check_reflow() {  // helper
     }
 }
 
+// s308: the Layers card's and the inspector's layer edits -- `ids` the layers
+// (or, for "flayer", the frames). False: not a layer edit.
+bool Shell::layer_edit(const std::string& key, const std::string& choice, const std::vector<std::string>& ids) {  // handler
+    namespace D = core::doc;
+    const auto show_layer = [this](const std::string& id) {
+        Glib::signal_idle().connect_once([this, id] {
+            m_tiles.show_section(m_outline, core::Segment::Layers, {id});
+            on_tiles_selection({id});
+        });
+    };
+    bool did = false;
+    if (key == "layers_new" || (key == "layer" && choice == "new")) {
+        const auto made = D::add_layer(m_journal, m_doc);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("layers: new {} (active)", made);
+        show_layer(made);
+        return true;
+    }
+    if (key == "flayer") {   // the picked frames to a layer
+        const int n = D::move_to_layer(m_journal, m_doc, ids, choice);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("layers: {} frame(s) to {}", n, choice);
+        return true;
+    }
+    if (key != "lname" && key != "lvis" && key != "llock" && key != "lprint" && key != "layer") return false;
+    std::vector<std::string> ls;
+    for (const auto& id : ids) if (m_doc.as<core::Layer>(id)) ls.push_back(id);
+    if (ls.empty()) return true;
+    if (key == "lname") {
+        std::string t = choice;
+        while (!t.empty() && t.back() == ' ') t.pop_back();
+        if (!t.empty()) did = D::edit_layer(m_journal, m_doc, ls.front(), "Rename Layer", [&](core::Layer& l) { l.name = t; });
+    } else if (key == "lvis" || key == "llock" || key == "lprint") {
+        const bool on = choice == "1";
+        const char* label = key == "lvis" ? (on ? "Show Layer" : "Hide Layer") : key == "llock" ? (on ? "Lock Layer" : "Unlock Layer")
+                                                                                              : (on ? "Layer Prints" : "Layer Doesn't Print");
+        for (const auto& id : ls)
+            did = D::edit_layer(m_journal, m_doc, id, label, [&](core::Layer& l) {
+                      (key == "lvis" ? l.visible : key == "llock" ? l.locked : l.print) = on;
+                  }) || did;
+        if (did && key != "lprint") {   // hidden or locked: its frames drop out of the canvas's picks
+            auto& cv = m_canvas_view.canvas();
+            std::vector<std::string> keep;
+            for (const auto& f : cv.selection())
+                if (const auto* fr = m_doc.as<core::Frame>(f); fr && !D::frame_held(m_doc, *fr)) keep.push_back(f);
+            cv.set_selection(keep);
+        }
+    } else {   // "layer": its actions
+        const auto& id = ls.front();
+        const auto all = D::layers(m_doc);
+        const int at = static_cast<int>(std::find(all.begin(), all.end(), id) - all.begin());
+        if (choice == "active") { m_doc.set_active_layer(id); queue_refresh(); }
+        else if (choice == "up") did = D::move_layer(m_journal, m_doc, id, at + 1);
+        else if (choice == "down") did = D::move_layer(m_journal, m_doc, id, at - 1);
+        else if (choice == "picked") did = D::move_to_layer(m_journal, m_doc, m_canvas_view.canvas().selection(), id) > 0;
+        else if (choice == "delete" || choice == "delete_keep") {
+            did = D::delete_layer(m_journal, m_doc, id, choice == "delete_keep");
+            if (did) { m_canvas_view.canvas().model_changed(); show_layer(m_doc.active_layer()); }
+        }
+        if (did && (choice == "up" || choice == "down")) show_layer(id);
+    }
+    if (auto lg = log::get(log::Area::Shell)) lg->info("layers: {} = {} on {}: {}", key, choice, ls.front(), did ? "step" : "no change");
+    return true;
+}
+
 // s097: Links & Assets, nothing picked -- the files in assets/ nothing uses
 // (not the document, not what undo could bring back), and a way to clear
 // them: the desktop's Trash, so a mistake can be fetched back.
 std::vector<core::Field> Shell::section_fields(core::Segment s) const {  // helper
     std::vector<core::Field> out;
+    if (s == core::Segment::Layers) {   // s308: none yet -- every frame on the one layer; make one
+        const auto ls = core::doc::layers(m_doc);
+        out.push_back({"Layers", ls.empty() ? "One (every frame on it)" : std::to_string(ls.size())});
+        if (!ls.empty()) out.push_back({"Active", m_doc.as<core::Layer>(m_doc.active_layer())->name});
+        core::Field act{"", "", "layers_new", {{"new", "New Layer"}}};
+        act.buttons = true;
+        out.push_back(act);
+        return out;
+    }
     if (s == core::Segment::Notes) {   // s121: the settings, in their panel
         core::Field act{"", "", "notes_panel", {{"open", "Footnotes & Endnotes\u2026"}}};
         act.buttons = true;
@@ -1492,6 +1590,7 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         return;
     }
     if (key == "notes_panel") { open_notes_panel(); return; }   // s121
+    if (layer_edit(key, choice, m_inspected)) return;   // s308
     if (key == "align_to") {   // s302: an app setting, not the document's
         m_settings["align.to"] = choice;
         core::save_settings(m_settings_file, m_settings);
@@ -1558,6 +1657,9 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "dreflow") {   // s255
             did = core::doc::set_reflow_mode(m_journal, m_doc, choice == "2" ? 2 : choice == "1" ? 1 : 0);   // s256
             if (did) Glib::signal_idle().connect_once([this] { check_reflow(); });
+        } else if (key == "dlang") {   // s309: its words checked in another language
+            did = core::doc::set_language(m_journal, m_doc, choice);
+            if (did) ensure_spell();
         } else if (key == "dauthor") {   // s239
             did = core::doc::set_author(m_journal, m_doc, choice);
         } else if (key == "drun1" || key == "drun2") {   // s240

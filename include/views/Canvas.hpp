@@ -15,6 +15,7 @@
 // Outline's summaries -- and it writes ONLY through core::doc verbs.
 // Ideas from Curvz (viewport, handles, gesture shape), code rewritten: ARC s005.
 #include "core/Doc.hpp"
+#include "layout/Export.hpp"   // s309: TextMark
 #include "layout/Flow.hpp"
 #include "layout/ThumbStore.hpp"
 #include <plate/plate.hpp>
@@ -102,6 +103,9 @@ public:
     void set_show_grid(bool on) { m_show_grid = on; queue_draw(); }   // s036: baseline grid
     bool show_grid() const { return m_show_grid; }
     void set_show_hidden(bool on) { m_show_hidden = on; queue_draw(); }   // s059: hidden characters
+    // s309: misspelled words (a red wave) and links (a blue dotted line) marked in the words -- screen only.
+    void set_marks(bool spelling, bool links) { m_mark_spell = spelling; m_mark_links = links; m_marks.clear(); queue_draw(); }
+    void marks_changed() { m_marks.clear(); queue_draw(); }   // the dictionary / the user's words moved
     // s099: proof colours -- the pages drawn as this press profile will
     // print them (null: off).
     void set_proof(std::shared_ptr<const plate::Proof> p) { m_proof = std::move(p); ++m_proof_gen; queue_draw(); }
@@ -319,6 +323,9 @@ private:
     bool              m_snap = true, m_show_guides = true, m_show_grid = false;
     bool              m_guides_locked = false;   // s153
     bool              m_show_hidden = false;   // s059
+    bool              m_mark_spell = true, m_mark_links = true;   // s309
+    std::map<std::string, std::vector<layout::TextMark>> m_marks;   // s309: a frame's, until the document moves
+    std::uint64_t     m_marks_rev = 0, m_marks_gen = 0;
     std::shared_ptr<const plate::Proof> m_proof;   // s099
     std::uint64_t     m_proof_gen = 0;             // s104: a new proof, new page images
     bool              m_follow_keep_zoom = false;   // s061: a follow shows another spread without fitting

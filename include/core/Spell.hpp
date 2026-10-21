@@ -9,6 +9,7 @@
 // Words with a digit are left alone, as are web / mail addresses.
 #include "core/Doc.hpp"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,11 @@ struct Word {
 };
 // The words of a paragraph's text, in order (the ones a checker looks at).
 std::vector<Word> words_of(const std::string& text, int para = 0);
+// s307: a paragraph's misspelled words -- remembered by its text (the same
+// words asked again cost nothing) until the dictionary, the user's words or
+// the ignored ones change (generation() moves). `para` set on each.
+std::vector<Word> para_misses(const std::string& text, int para);
+std::uint64_t generation();
 // The misspelled words of a story, in order.
 std::vector<Word> misses(const Story& s);
 // The first misspelled word at or after `from` (a TextPos), wrapping to the
