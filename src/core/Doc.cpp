@@ -1512,6 +1512,74 @@ std::vector<Doc::Id> paste_frames(DocJournal& j, Doc& d, const FrameClip& clip, 
     return out;
 }
 
+Doc::Id paste_text_frame(DocJournal& j, Doc& d, const Doc::Id& page, const Rect& r, const std::string& text) {
+    if ((!d.as<Page>(page) && !d.as<Master>(page)) || r.w < 1) return {};
+    std::string t = text;
+    t.erase(std::remove(t.begin(), t.end(), '\r'), t.end());
+    while (!t.empty() && (t.back() == '\n' || t.back() == ' ')) t.pop_back();
+    if (t.empty()) return {};
+    Doc::Id made;
+    j.run("Paste text", {}, [&] {
+        std::vector<Doc::Id> ids;
+        Doc::Id style;
+        for (const auto& s : d.ids_of<Style>())
+            if (d.as<Style>(s)->kind == StyleKind::Paragraph) { style = s; break; }
+        Story st{"Pasted text", {}};
+        std::size_t a = 0;
+        for (;;) {
+            const auto e = t.find('\n', a);
+            std::string line = t.substr(a, e == std::string::npos ? std::string::npos : e - a);
+            // the private marks this app's text uses never come from outside
+            std::string clean;
+            for (std::size_t i = 0; i < line.size();) {
+                if (static_cast<unsigned char>(line[i]) == 0xEE && i + 2 < line.size() && static_cast<unsigned char>(line[i + 1]) == 0x80) { i += 3; continue; }
+                clean += line[i++];
+            }
+            st.paras.push_back({style, clean});
+            if (e == std::string::npos) break;
+            a = e + 1;
+        }
+        const Doc::Id sid = d.fresh_id("story");
+        d.put(sid, st);
+        ids.push_back(sid);
+        Frame f;
+        f.owner = page;
+        f.kind = FrameKind::Text;
+        f.x = r.x; f.y = r.y; f.w = r.w; f.h = std::max(12.0, r.h);
+        f.story = sid;
+        f.autosize = true;   // its height follows the words
+        double z = 0;
+        for (const auto& o : d.frames_on(page)) z = std::max(z, d.as<Frame>(o)->z);
+        f.z = z + 1;
+        made = d.fresh_id("frame");
+        d.put(made, f);
+        ids.push_back(made);
+        return ids;
+    });
+    return made;
+}
+
+std::string frames_text(const Doc& d, const std::vector<Doc::Id>& frames) {
+    std::string out;
+    std::set<Doc::Id> done;
+    for (const auto& id : frames) {
+        const auto* f = d.as<Frame>(id);
+        if (!f || f->kind != FrameKind::Text || f->story.empty() || !done.insert(f->story).second) continue;
+        const auto* st = d.as<Story>(f->story);
+        if (!st) continue;
+        if (!out.empty()) out += "\n\n";
+        for (std::size_t k = 0; k < st->paras.size(); ++k) {
+            if (k) out += '\n';
+            const auto& t = st->paras[k].text;
+            for (std::size_t i = 0; i < t.size();) {
+                if (static_cast<unsigned char>(t[i]) == 0xEE && i + 2 < t.size() && static_cast<unsigned char>(t[i + 1]) == 0x80) { i += 3; continue; }
+                out += t[i++];
+            }
+        }
+    }
+    return out;
+}
+
 std::vector<Doc::Id> step_repeat(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, int count, double dx, double dy) {
     const auto clip = clip_frames(d, frames);
     if (clip.empty() || count < 1) return {};
@@ -5682,6 +5750,7 @@ const std::vector<Verb>& verbs() {
         {"delete_frames", [](DocJournal& j, Doc& d) { delete_frames(j, d, {"frame.2", "frame.4"}); }},  // mid-thread
         {"duplicate_frames", [](DocJournal& j, Doc& d) { duplicate_frames(j, d, {"frame.2", "frame.4"}, 18, 18); }},   // s281
         {"step_repeat", [](DocJournal& j, Doc& d) { step_repeat(j, d, {"frame.2"}, 3, 12, 0); }},   // s284
+        {"paste_text_frame", [](DocJournal& j, Doc& d) { paste_text_frame(j, d, "page.8", {54, 54, 200, 40}, "Words\nfrom elsewhere"); }},   // s297
         {"paste_frames", [](DocJournal& j, Doc& d) { paste_frames(j, d, clip_frames(d, {"frame.2"}), "page.8", 12, 12); }},   // s282
         {"override_master_item", [](DocJournal& j, Doc& d) { override_master_item(j, d, "page.7", "frame.13"); }},   // s025
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},

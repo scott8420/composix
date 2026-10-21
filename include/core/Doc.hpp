@@ -1217,6 +1217,15 @@ std::vector<Doc::Id> paste_clip_into(Doc& d, const FrameClip& clip, double dx, d
                                      const std::map<Doc::Id, Doc::Id>& owners, const Doc::Id& onto, std::vector<Doc::Id>& made);
 // Paste: the clip onto page / master `onto`, moved (dx, dy). One step; the frames made.
 std::vector<Doc::Id> paste_frames(DocJournal& j, Doc& d, const FrameClip& clip, const Doc::Id& onto, double dx, double dy);
+// s297: words from another program pasted onto a page -- a text frame at
+// `r` (its height then follows the text: auto-size), the words its story's
+// paragraphs (a line break a new paragraph), in the first paragraph style.
+// One step; the frame ("" when nothing to paste or no page).
+Doc::Id paste_text_frame(DocJournal& j, Doc& d, const Doc::Id& page, const Rect& r, const std::string& text);
+// s297: the words of frames as a plain-text clipboard holds them -- each
+// story once (in the frames' order), its paragraphs a line each, a blank line
+// between stories; its marks (page numbers, notes ...) left out.
+std::string frames_text(const Doc& d, const std::vector<Doc::Id>& frames);
 // s284: Step and Repeat -- `count` copies of the frames, the k-th (k dx, k dy)
 // from them (points), each as duplicate_frames makes one. One step; every
 // frame made, copy by copy.

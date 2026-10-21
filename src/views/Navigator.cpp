@@ -12,6 +12,7 @@
 #include <gtkmm/listbox.h>
 #include <gtkmm/listboxrow.h>
 #include <gtkmm/overlay.h>
+#include <gtkmm/searchentry.h>
 #include <gtkmm/togglebutton.h>
 #include <gtkmm/widgetpaintable.h>
 #include <gdkmm/contentprovider.h>
@@ -19,6 +20,7 @@
 #include <glibmm/main.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <sstream>
 
@@ -75,6 +77,22 @@ Navigator::Navigator()
     m_scroll.set_policy(Gtk::PolicyType::NEVER, Gtk::PolicyType::AUTOMATIC);
     m_scroll.set_vexpand(true);
     m_scroll.set_child(m_cards);
+    // s298: a filter over every card -- what's typed narrows each to the items whose names have it
+    m_filter_entry = Gtk::make_managed<Gtk::SearchEntry>();
+    m_filter_entry->set_name("nav.filter");
+    m_filter_entry->set_placeholder_text("Filter pages, styles, colours\u2026");
+    m_filter_entry->add_css_class("cx-nav-filter");
+    m_filter_entry->signal_search_changed().connect([this] {
+        std::string t = m_filter_entry->get_text();
+        for (auto& ch : t) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        while (!t.empty() && t.back() == ' ') t.pop_back();
+        while (!t.empty() && t.front() == ' ') t.erase(t.begin());
+        if (t == m_filter) return;
+        m_filter = t;
+        apply_filter();
+    });
+    m_filter_entry->signal_stop_search().connect([this] { m_filter_entry->set_text(""); });
+    append(*m_filter_entry);
     append(m_scroll);
 }
 
@@ -121,6 +139,7 @@ void Navigator::set_outline(const core::Outline* o) {
     m_picked = keep;
     m_quiet = false;
     show_picks();
+    if (!m_filter.empty()) apply_filter();   // s298
 }
 
 void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const core::Item*>& items) {
@@ -953,6 +972,7 @@ void Navigator::build_chips(Card& c, const std::vector<const core::Item*>& items
     c.chips = nullptr;
     c.flow = nullptr;
     c.cells.clear();
+    c.chip_heads.clear();
     auto col = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
     col->add_css_class("cx-chips");
     c.flow = Gtk::make_managed<WrapBox>(5, 5);
@@ -971,6 +991,7 @@ void Navigator::build_chips(Card& c, const std::vector<const core::Item*>& items
             row = rows.empty() ? c.flow : Gtk::make_managed<WrapBox>(5, 5);
             rows.push_back({group, row});
             col->append(*row);
+            if (!group.empty()) c.chip_heads.push_back({col->get_last_child()->get_prev_sibling(), row});   // s298
         }
         Cell cell;
         cell.id = it->id;
@@ -1029,6 +1050,63 @@ void Navigator::build_chips(Card& c, const std::vector<const core::Item*>& items
     for (std::size_t k = 1; k < rows.size(); ++k) m_chip_rows[c.segment].push_back(rows[k].second);
     c.chips = col;
     c.body->append(*col);
+}
+
+// s298: the filter -- an item shows when its name (a page: its folio and
+// master too; a swatch: its group) has what's typed; a spread when either
+// page does. A card with nothing showing goes; one with something opens
+// (while filtering -- what the user left open or shut is kept).
+void Navigator::apply_filter() {
+    const auto lower = [](std::string s) {
+        for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return s;
+    };
+    const auto matches = [&](const std::string& id) {
+        if (m_filter.empty()) return true;
+        const auto* it = m_outline ? m_outline->find(id) : nullptr;
+        if (!it) return false;
+        std::string hay = it->title + " " + it->badge + " " + it->group;
+        if (it->segment == core::Segment::Pages) hay += " " + field(*it, "Folio") + " " + field(*it, "Master");
+        if (it->segment == core::Segment::Stories) hay += " " + it->thumb.sample;
+        return lower(hay).find(m_filter) != std::string::npos;
+    };
+    for (auto& c : m_cardv) {
+        int shown = 0;
+        for (const auto& [id, row] : c.rows) {
+            const bool on = matches(id);
+            row->set_visible(on);
+            shown += on;
+        }
+        // pictures / chips / tiles: the slot holding the cell (a spread: either page)
+        std::map<Gtk::Widget*, bool> slot_on;
+        for (auto& [id, cell] : c.cells) {
+            Gtk::Widget* w = cell.col;
+            while (w && w->get_parent() && w->get_parent() != c.flow &&
+                   std::find_if(m_chip_rows[c.segment].begin(), m_chip_rows[c.segment].end(), [&](WrapBox* r) { return r == w->get_parent(); }) ==
+                       m_chip_rows[c.segment].end())
+                w = w->get_parent();
+            const bool on = matches(id);
+            slot_on[w] = slot_on[w] || on;
+            shown += on;
+        }
+        for (auto& [w, on] : slot_on) w->set_visible(on);
+        for (auto& [head, row] : c.chip_heads) {   // s298: a group's heading goes with its last chip
+            bool any = false;
+            for (auto* k : row->children()) any = any || k->get_visible();
+            head->set_visible(any);
+            row->set_visible(any);
+        }
+        const bool filtering = !m_filter.empty();
+        c.box->set_visible(!filtering || shown > 0);
+        if (filtering) {
+            c.body->set_visible(shown > 0);
+            c.arrow->set_icon_name(shown > 0 ? "pan-down-symbolic" : "pan-end-symbolic");   // shown open while filtering
+            c.count->set_text(std::to_string(shown) + " of " + std::to_string(c.ids.size()));
+        } else {
+            c.count->set_text(std::to_string(c.ids.size()));
+            show_open(c);
+        }
+    }
 }
 
 void Navigator::wire_context(Gtk::Widget& w, std::function<Pick()> what) {
@@ -1135,6 +1213,7 @@ void Navigator::refresh(const core::Outline* o) {
         }
     }
     show_picks();
+    if (!m_filter.empty()) apply_filter();   // s298
 }
 
 std::string Navigator::spreads_text() const {

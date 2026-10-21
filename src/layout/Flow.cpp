@@ -76,6 +76,7 @@ core::Style style_of(const core::Doc& d, const std::string& id) {
 
 // s093: ... with the paragraph's own settings over it.
 core::Style style_of(const core::Doc& d, const core::Para& p) { return core::doc::para_style(d, p); }
+int split_end(const core::Doc& d, const core::Story& st, int p);   // s293 (below); s295: the in-column split too
 
 double leading_of(const core::Style& s) { return s.leading > 0 ? s.leading : std::max(1.0, s.size * 1.2); }
 
@@ -1125,14 +1126,15 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                 int sband = 1000;   // in-column bands: apart from fill_bands' own numbers
                 for (const auto& l : ft.lines) if (l.band >= 1000) sband = std::max(sband, l.band + 1);
                 const int p0 = c.p;
+                const int pe = split_end(d, st, p0);   // s295: one paragraph, or the run split alike
                 ++g_split_depth;
                 const auto holds = [&](double h) {
                     Cursor t = c;
                     FrameText tmp = ft;
                     NoteCount tc = nc ? *nc : NoteCount{};
                     FootShare tf = fs ? *fs : FootShare{};
-                    fill_cols(d, st, sub, wraps, t, h, tmp, nc ? &tc : nullptr, false, fs ? &tf : nullptr, y + above, p0 + 1, sband);
-                    return t.p > p0;
+                    fill_cols(d, st, sub, wraps, t, h, tmp, nc ? &tc : nullptr, false, fs ? &tf : nullptr, y + above, pe, sband);
+                    return t.p >= pe;
                 };
                 const double room = lim();
                 const bool fits = holds(room);
@@ -1147,7 +1149,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                     h = hi;
                 }
                 const std::size_t from = ft.lines.size();
-                fill_cols(d, st, sub, wraps, c, h, ft, nc, false, fs, y + above, p0 + 1, sband);
+                fill_cols(d, st, sub, wraps, c, h, ft, nc, false, fs, y + above, pe, sband);
                 --g_split_depth;
                 double bottom = y;
                 for (std::size_t i = from; i < ft.lines.size(); ++i) {
@@ -1156,7 +1158,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                     bottom = std::max(bottom, ft.lines[i].y + ft.lines[i].h);
                 }
                 in_col += static_cast<int>(ft.lines.size() - from);
-                if (c.p == p0) break;   // it didn't all fit (a fresh column too small): its rest in the next, split there too
+                if (c.p < pe) break;   // it didn't all fit (a fresh column too small): its rest in the next, split there too
                 y = bottom + style.space_after;
                 continue;
             }
@@ -2579,7 +2581,8 @@ void show_line_on_path(cairo_t* cr, PangoLayoutLine* line, double x0, const core
                 cairo_matrix_init(&mx, m.xx, m.yx, m.xy, m.yy, dx + px, dy + py);
                 cairo_transform(cr, &mx);
             }
-            cairo_move_to(cr, -w / 2 + g.geometry.x_offset / static_cast<double>(PANGO_SCALE), shift);   // s218: below the path by the alignment
+            // s218: below the path by the alignment; s296: a raised run (baseline shift, a superscript) off it by its rise
+            cairo_move_to(cr, -w / 2 + g.geometry.x_offset / static_cast<double>(PANGO_SCALE), shift - run->y_offset / static_cast<double>(PANGO_SCALE));
             pango_cairo_show_glyph_string(cr, font, one);
             cairo_restore(cr);
             pango_glyph_string_free(one);

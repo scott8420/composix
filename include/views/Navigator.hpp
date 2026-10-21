@@ -28,7 +28,7 @@
 #include <string>
 #include <vector>
 
-namespace Gtk { class DrawingArea; class ListBox; class ListBoxRow; class ToggleButton; }
+namespace Gtk { class DrawingArea; class ListBox; class ListBoxRow; class SearchEntry; class ToggleButton; }
 
 namespace composix::views {
 
@@ -124,6 +124,7 @@ private:
         std::map<std::string, Gtk::ToggleButton*> sizes; // pages: S / M / L
         Gtk::Box*                     chips = nullptr;   // s287: Colors -- the chips' column (its first row is `flow`)
         std::map<std::string, Gtk::Label*> samples;      // s292: Stories -- each one's first words
+        std::vector<std::pair<Gtk::Widget*, WrapBox*>> chip_heads;   // s298: Colors -- a group's heading, its row
     };
 
     Card*       card(core::Segment s);
@@ -154,6 +155,9 @@ private:
 
     widgets::ScrolledWindow m_scroll;
     widgets::Box            m_cards;
+    Gtk::SearchEntry*       m_filter_entry = nullptr;   // s298
+    std::string             m_filter;                   // s298: lower-cased; "" = all
+    void        apply_filter();                         // s298: each card's items shown that match; cards with none hidden
 
     const core::Outline*         m_outline = nullptr;
     std::vector<Card>            m_cardv;

@@ -168,6 +168,8 @@ private:
     std::vector<std::string> picked_frames() const; // category: helper: s282 -- the canvas's picked frames
     void copy_frames(bool cut);                     // category: handler: s282 -- Ctrl+C / Ctrl+X on frames
     void paste_frames_here(bool in_place);          // category: handler: s282 -- Ctrl+V / Paste in Place
+    void paste_here(bool in_place);                 // category: handler: s297 -- Ctrl+V: another program's words as a frame, else our frames
+    bool paste_target(double& cx, double& cy, const core::Placed*& tp);   // category: helper: s297 -- the page Paste lands on, the view's middle
     void duplicate_picked();
     void on_step_repeat();                          // category: handler: s284 -- Edit > Step and Repeat                        // category: handler: s282 -- Edit > Duplicate
     void on_go_to_page();                           // category: handler: s277 -- Ctrl+J: the head's Go to Page field
@@ -279,6 +281,7 @@ private:
     widgets::MenuButton   m_menu_button;
     Gtk::PopoverMenuBar*  m_menubar = nullptr;   // s279
     core::doc::FrameClip       m_frame_clip;             // s282: frames copied / cut
+    std::string           m_frame_clip_text;        // s297: the words they put on the system clipboard
     int                   m_paste_n = 0;            // s282: pastes since the copy (each a step further on)
     std::unique_ptr<Gtk::PopoverMenu> m_nav_menu;   // s279: the navigator's right-click
     views::Pick           m_nav_ctx;                // ... and what it was on

@@ -863,8 +863,8 @@ void Shell::bind_context_actions() {  // bindings
     // s282 (X1): frames copied, cut, pasted, duplicated
     add_action("copy-frames", [this] { copy_frames(false); });
     add_action("cut-frames", [this] { copy_frames(true); });
-    add_action("paste-frames", [this] { paste_frames_here(false); });
-    add_action("paste-in-place", [this] { paste_frames_here(true); });
+    add_action("paste-frames", [this] { paste_here(false); });   // s297: another program's words, else our frames
+    add_action("paste-in-place", [this] { paste_here(true); });
     add_action("duplicate-frames", [this] { duplicate_picked(); });
     // s279: the navigator's right-click
     add_action("nav-open", [this] { if (!m_nav_ctx.items.empty()) m_nav.select_items(m_nav_ctx.items); });
@@ -978,7 +978,7 @@ void Shell::on_canvas_context(const views::Canvas::ContextHit& hit) {  // handle
         for (const auto& f : m_doc.frames_on(h.page)) own = own || !m_doc.as<core::Frame>(f)->overrides.empty();
         if (own) page->append("Remove All Overrides", "win.remove-page-overrides");
         if (page->get_n_items() > 0) menu->append_section(page);
-        if (!m_frame_clip.empty()) {   // s282
+        {   // s282; s297: always -- another program's words paste too
             auto paste = Gio::Menu::create();
             paste->append("Paste", "win.paste-frames");
             paste->append("Paste in Place", "win.paste-in-place");
@@ -1124,6 +1124,9 @@ void Shell::copy_frames(bool cut) {  // handler
     if (ids.empty()) return;
     m_frame_clip = core::doc::clip_frames(m_doc, ids);
     m_paste_n = 0;
+    // s297: their words for other programs too (frames themselves stay ours)
+    m_frame_clip_text = core::doc::frames_text(m_doc, ids);
+    get_clipboard()->set_text(m_frame_clip_text);
     if (auto lg = log::get(log::Area::Shell)) lg->info("{} {} frame(s)", cut ? "cut" : "copied", ids.size());
     if (cut) {
         core::doc::delete_frames(m_journal, m_doc, ids);
@@ -1169,6 +1172,52 @@ void Shell::paste_frames_here(bool in_place) {  // handler
     cv.model_changed();
     cv.set_selection(made);
     on_canvas_selection();
+}
+
+bool Shell::paste_target(double& cx, double& cy, const core::Placed*& tp) {  // helper
+    if (m_main.get_visible_child_name() != "canvas") return false;
+    auto& cv = m_canvas_view.canvas();
+    const auto& pl = cv.placed();
+    if (pl.empty()) return false;
+    tp = nullptr;
+    for (const auto& id : picked_frames())
+        for (const auto& p : pl) if (p.id == m_doc.as<core::Frame>(id)->owner) { tp = &p; break; }
+    cv.viewport().to_doc(cv.viewport().widget_w() / 2, cv.viewport().widget_h() / 2, cx, cy);
+    if (!tp) tp = core::panel_at(pl, cx, cy);
+    if (!tp) {
+        double best = 1e300;
+        for (const auto& p : pl) {
+            const double ddx = cx - (p.r.x + p.r.w / 2), ddy = cy - (p.r.y + p.r.h / 2), dd = ddx * ddx + ddy * ddy;
+            if (dd < best) { best = dd; tp = &p; }
+        }
+    }
+    return tp != nullptr;
+}
+
+// s297: Ctrl+V -- words another program put on the clipboard become a text
+// frame in the middle of the view (as InDesign); our own copied frames
+// (their words are what we put there) paste as frames.
+void Shell::paste_here(bool in_place) {  // handler
+    if (m_main.get_visible_child_name() != "canvas") return;
+    get_clipboard()->read_text_async([this, in_place](const Glib::RefPtr<Gio::AsyncResult>& r) {
+        std::string t;
+        try { t = get_clipboard()->read_text_finish(r); } catch (const Glib::Error&) {}
+        const bool ours = !m_frame_clip.empty() && (t.empty() || t == m_frame_clip_text);
+        if (ours || t.empty()) { paste_frames_here(in_place); return; }
+        double cx = 0, cy = 0;
+        const core::Placed* tp = nullptr;
+        if (!paste_target(cx, cy, tp)) return;
+        const core::Rect m = core::margin_rect(m_doc, tp->id);
+        const double w = std::min(m.w > 1 ? m.w : 288.0, 288.0);
+        const core::Rect at{std::clamp(cx - tp->r.x - w / 2, 0.0, std::max(0.0, tp->r.w - w)), std::max(0.0, cy - tp->r.y - 18), w, 36};
+        const auto made = core::doc::paste_text_frame(m_journal, m_doc, tp->id, at, t);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("pasted text from the clipboard ({} bytes) as {}", t.size(), made.empty() ? "nothing" : made);
+        if (made.empty()) return;
+        auto& cv = m_canvas_view.canvas();
+        cv.model_changed();
+        cv.set_selection({made});
+        on_canvas_selection();
+    });
 }
 
 void Shell::duplicate_picked() {  // handler

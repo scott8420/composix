@@ -1,5 +1,8 @@
 // composix_selftest, part 9 (s256: part8 had grown to 3800 lines).
 #include "Selftest.hpp"
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <plate/pango.hpp>
 
 namespace cxtest {
@@ -1832,6 +1835,111 @@ void part9() {
         if (gl && d.as<core::Story>(gl->story))
             for (const auto& p : d.as<core::Story>(gl->story)->paras) in2 += p.style == gl->entry_styles[1];
         check("import: the two level-2 entries built in it", in2 == 2, std::to_string(in2));
+    }
+
+    // -- s295: "split together" in a frame of two columns too ---------------
+    {
+        std::cout << "--- s295 split together in a two-column frame ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="9pt"/></style:style>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in">
+  <style:columns fo:column-count="2" fo:column-gap="0.25in"/></style:page-layout-properties></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+</office:master-styles></office:document-styles>)";
+        std::string inner;
+        for (int i = 0; i < 4; ++i) inner += R"(<text:p text:style-name="Standard">Gulls over the quay, the ferry slow on the tide.</text:p>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:automatic-styles>
+ <style:style style:name="Sect1" style:family="section"><style:section-properties><style:columns fo:column-count="2" fo:column-gap="0.1in"/></style:section-properties></style:style>
+</office:automatic-styles><office:body><office:text>)"
+            R"(<text:p text:style-name="Standard">Before.</text:p><text:section text:style-name="Sect1" text:name="S1">)" + inner +
+            R"(</text:section><text:p text:style-name="Standard">After.</text:p></office:text></office:body></office:document-content>)";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        const auto fl = L::flow_story(d, "story.1");
+        std::set<int> bands;
+        std::set<double> xs;
+        bool two_col_frame = false;
+        for (const auto& ft : fl.frames)
+            for (const auto& l : ft.lines)
+                if (l.para >= 1 && l.para <= 4) {
+                    bands.insert(l.band);
+                    xs.insert(std::round(l.x));
+                    two_col_frame = two_col_frame || core::column_count(*d.as<core::Frame>(ft.frame)) == 2;
+                }
+        check("in a two-column frame: the section's four paragraphs one band over two sub-columns",
+              ok && two_col_frame && bands.size() == 1 && *bands.begin() >= 1000 && xs.size() == 2, err);
+    }
+
+    // -- s296: a baseline shift on a path -- the raised words off the path --
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.as<core::Frame>("frame.1")->owner;
+        const auto ln = D::add_path(j, d, page, {D::corner_point(100, 300), D::corner_point(400, 300)}, true);
+        D::set_frame_content(j, d, {ln}, core::FrameKind::Text);
+        D::edit_frames(j, d, {ln}, "On path", [](core::Frame& f) { f.on_path = true; });
+        {
+            core::Doc::Loading ld(d);
+            core::Story st = *d.as<core::Story>(d.as<core::Frame>(ln)->story);
+            st.paras[0].text = "low HIGH low";
+            core::Run r;
+            r.start = 4;
+            r.end = 8;
+            r.local.shift = 6;   // up 6 pt
+            st.paras[0].runs = {r};
+            d.put(d.as<core::Frame>(ln)->story, st);
+        }
+        namespace fs = std::filesystem;
+        const auto base = fs::temp_directory_path() / "composix_selftest_rise";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        const auto out = (base / "p.pdf").string();
+        L::PdfOptions opt;
+        opt.compress = false;
+        L::PdfReport rep;
+        std::string err;
+        const bool ok = L::export_print_pdf(d, out, opt, {}, &rep, &err);
+        std::string pdf;
+        { std::ifstream in(out, std::ios::binary); std::stringstream ss; ss << in.rdbuf(); pdf = ss.str(); }
+        // each glyph: "a b c d x y Tm [" -- y the baseline off the path
+        int at0 = 0, raised = 0;
+        for (auto i = pdf.find(" Tm ["); i != std::string::npos; i = pdf.find(" Tm [", i + 1)) {
+            const auto ls = pdf.rfind(' ', i - 1);
+            const double y = std::atof(pdf.substr(ls + 1, i - ls - 1).c_str());
+            if (std::abs(y) < 0.01) ++at0;
+            else if (std::abs(y + 6) < 0.6 || std::abs(y - 6) < 0.6) ++raised;
+        }
+        check("on a path: the shifted word's glyphs 6 pt off the path, the rest on it", ok && raised == 4 && at0 >= 6,
+              std::to_string(raised) + " raised, " + std::to_string(at0) + " on");
+        fs::remove_all(base, ec);
+    }
+
+    // -- s297: words in and out through the system clipboard ---------------
+    {
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.pages().back();
+        const auto f = core::doc::paste_text_frame(j, d, page, {36, 72, 200, 36}, "First line\r\nSecond line\n\n");
+        const auto* fr = d.as<core::Frame>(f);
+        const auto* st = fr ? d.as<core::Story>(fr->story) : nullptr;
+        check("paste text: a frame, its words a paragraph a line, auto-sized", fr && st && st->paras.size() == 2 && st->paras[0].text == "First line" &&
+                                                                              st->paras[1].text == "Second line" && fr->autosize && fr->owner == page);
+        check("paste text: nothing to paste, nothing made", core::doc::paste_text_frame(j, d, page, {36, 72, 200, 36}, " \n ").empty());
+        check("frames' words: each story once, a line a paragraph", core::doc::frames_text(d, {f, f}) == "First line\nSecond line");
+        j.undo();
+        check("paste text: one step", !d.as<core::Frame>(f));
     }
 }
 }  // namespace cxtest

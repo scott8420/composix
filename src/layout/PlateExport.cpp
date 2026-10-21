@@ -154,7 +154,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
     // s216: text on a path -- each glyph turned to the path at its middle (one line).
     const bool on_path = f.on_path && f.kind == core::FrameKind::Text;
     const core::doc::PathTrack tr = on_path ? core::doc::path_track(f) : core::doc::PathTrack{};
-    double first_base = -1, shift = 0;
+    double first_base = -1, shift = 0, line_base = 0;   // s296: line_base -- where the line's runs sit unraised
     const auto show = [&](const plate::pango::Run& run) {
         if (!on_path) { plate::pango::show(c.doc, pg, run); return; }
         double pen = run.x;
@@ -167,7 +167,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
             tr.at(s, px, py, ang);
             plate::pango::Run one = run;
             one.x = -g.advance / 2;
-            one.baseline = shift;   // s218: below the path by the alignment
+            one.baseline = shift + (run.baseline - line_base);   // s218: below the path by the alignment; s296: a raised run by its rise
             one.glyphs = {g};
             pg.save();
             const auto m = core::doc::path_axes(f, ang, px, py);   // s223: the effect
@@ -196,6 +196,7 @@ void draw_text(Ctx& c, plate::Page& pg, const core::Frame& f, const std::string&
                 if (t.strike) { pg.rect({t.x0, t.strike_y, t.x1 - t.x0, t.strike_t}); pg.fill(); }
             }
         };
+        line_base = f.y + v.baseline;   // s296
         for (const auto& run : plate::pango::runs(v.line, f.x + v.x, f.y + v.baseline)) {
             // The run's colour: its character style's, else the paragraph's.
             std::string sw = ps ? ps->color : std::string{};
