@@ -219,6 +219,9 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: the menubar's model (s27
     m_edit_menu->append("Undo", "win.undo");
     m_edit_menu->append("Redo", "win.redo");
     edit->append_section(m_edit_menu);
+    section(edit, {{"Cut", "win.cut-frames"}, {"Copy", "win.copy-frames"}, {"Paste", "win.paste-frames"},
+                   {"Paste in Place", "win.paste-in-place"}, {"Duplicate", "win.duplicate-frames"},
+                   {"Step and Repeat\u2026", "win.step-repeat"}});   // s282; s284
     section(edit, {{"Find / Change\u2026", "win.find"}});
     section(edit, {{"Delete Frames", "win.delete-frames"}});
     bar->append_submenu("_Edit", edit);
@@ -285,7 +288,8 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: the menubar's model (s27
     auto layout = Gio::Menu::create();
     section(layout, {{"Go to Page\u2026", "win.go-to-page"}, {"Previous Spread", "win.prev-spread"}, {"Next Spread", "win.next-spread"}});
     section(layout, {{"Back", "win.go-up"}, {"Forward", "win.go-forward"}});
-    section(layout, {{"Add Page After", "win.layout-add-page"}, {"Delete Pages", "win.layout-delete-pages"}});
+    section(layout, {{"Add Page After", "win.layout-add-page"}, {"Duplicate Spread", "win.layout-duplicate"},
+                     {"Delete Pages", "win.layout-delete-pages"}});
     section(layout, {{"Override All Master Items", "win.layout-override-all"}, {"Remove All Overrides", "win.layout-remove-overrides"}});
     bar->append_submenu("_Layout", layout);
 

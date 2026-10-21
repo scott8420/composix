@@ -15,6 +15,7 @@
 #include <gtkmm/togglebutton.h>
 #include <gtkmm/widgetpaintable.h>
 #include <gdkmm/contentprovider.h>
+#include <gdkmm/drop.h>
 #include <glibmm/main.h>
 
 #include <algorithm>
@@ -317,9 +318,9 @@ void Navigator::build_pictures(Card& c, const std::vector<const core::Item*>& it
                 p.items = m_picked;
                 return p;
             });
-            {   // drag: the spread
+            {   // drag: the spread (s283: Ctrl -- a copy of it)
                 auto src = Gtk::DragSource::create();
-                src->set_actions(Gdk::DragAction::MOVE);
+                src->set_actions(Gdk::DragAction::MOVE | Gdk::DragAction::COPY);
                 std::string payload = "composix-pages:";
                 for (std::size_t k = 0; k < ids.size(); ++k) payload += (k ? "," : "") + ids[k];
                 src->signal_prepare().connect([payload](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
@@ -414,9 +415,9 @@ Gtk::Box* Navigator::make_cell(Card& c, const core::Item& it, bool left, bool ri
             srcp->set_icon(Gtk::WidgetPaintable::create(*over), 12, 10);
         });
         cell.col->add_controller(src);
-    } else {   // s278: a page drags -- the pick if it's among it, else itself
+    } else {   // s278: a page drags -- the pick if it's among it, else itself (s283: Ctrl -- copies)
         auto src = Gtk::DragSource::create();
-        src->set_actions(Gdk::DragAction::MOVE);
+        src->set_actions(Gdk::DragAction::MOVE | Gdk::DragAction::COPY);
         src->signal_prepare().connect([this, id](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
             const auto ids = drag_ids(id);
             std::string payload = "composix-pages:";
@@ -690,7 +691,7 @@ void Navigator::wire_page_drop(Card& c) {
         const char* t = g_value_get_string(v.gobj());
         return t ? t : "";
     };
-    drop->signal_motion().connect([this, text_of](double x, double y) {
+    drop->signal_motion().connect([this, text_of, dp](double x, double y) {
         auto* cc = card(core::Segment::Pages);
         if (!cc || !cc->flow) return Gdk::DragAction{};
         const std::string t = text_of();
@@ -698,10 +699,18 @@ void Navigator::wire_page_drop(Card& c) {
         if (!master && t.rfind("composix-pages:", 0) != 0) { mark_drop(*cc, {}); return Gdk::DragAction{}; }
         auto h = hit_page(*cc, x, y, master);
         mark_drop(*cc, h);
-        return master ? Gdk::DragAction::COPY : Gdk::DragAction::MOVE;
+        const bool ctrl = (dp->get_current_event_state() & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
+        return master || ctrl ? Gdk::DragAction::COPY : Gdk::DragAction::MOVE;
     }, false);
     drop->signal_leave().connect([this] { if (auto* cc = card(core::Segment::Pages)) mark_drop(*cc, {}); });
-    drop->signal_drop().connect([this](const Glib::ValueBase& value, double x, double y) {
+    drop->signal_drop().connect([this, dp](const Glib::ValueBase& value, double x, double y) {
+        // s283: Ctrl held -- the drag offers a copy only (GDK's choice from the keys), or the state says so.
+        bool copy = (dp->get_current_event_state() & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
+        if (auto drp = dp->get_current_drop()) {
+            const auto acts = drp->get_actions();
+            if ((acts & Gdk::DragAction::COPY) == Gdk::DragAction::COPY && (acts & Gdk::DragAction::MOVE) != Gdk::DragAction::MOVE) copy = true;
+            if (auto lg = log::get(log::Area::View)) lg->info("nav drop: actions {} -> {}", static_cast<int>(acts), copy ? "copy" : "move");
+        }
         auto* cc = card(core::Segment::Pages);
         if (!cc || !cc->flow) return false;
         mark_drop(*cc, {});
@@ -729,10 +738,10 @@ void Navigator::wire_page_drop(Card& c) {
         std::string one;
         while (std::getline(ss, one, ',')) if (!one.empty()) ids.push_back(one);
         const auto h = hit_page(*cc, x, y, false);
-        if (h.page.empty() || ids.empty() || std::find(ids.begin(), ids.end(), h.page) != ids.end()) return false;
+        if (h.page.empty() || ids.empty() || (!copy && std::find(ids.begin(), ids.end(), h.page) != ids.end())) return false;
         const std::string page = h.page;
         const bool before = h.zone < 0;
-        Glib::signal_idle().connect_once([this, ids, page, before] { m_move_sig.emit(ids, page, before); });
+        Glib::signal_idle().connect_once([this, ids, page, before, copy] { m_move_sig.emit(ids, page, before, copy); });
         return true;
     }, false);
     c.body->add_controller(drop);

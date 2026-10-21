@@ -1037,6 +1037,49 @@ std::vector<Doc::Id> insert_pages(DocJournal& j, Doc& d, const Doc::Id& before, 
     return made;
 }
 
+std::vector<Doc::Id> duplicate_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& ids, const Doc::Id& after, bool at_front) {
+    const auto order = d.pages();
+    std::vector<Doc::Id> pages;   // in the book's order
+    for (const auto& p : order)
+        if (std::find(ids.begin(), ids.end(), p) != ids.end()) pages.push_back(p);
+    if (pages.empty()) return {};
+    const Doc::Id at = after.empty() ? pages.back() : after;
+    if (!d.as<Page>(at)) return {};
+    std::vector<Doc::Id> made_pages;
+    j.run(pages.size() == 1 ? std::string("Duplicate page") : "Duplicate " + std::to_string(pages.size()) + " pages", {}, [&] {
+        std::vector<Doc::Id> made;
+        // Places between `at` and the page after it.
+        const auto it = std::find(order.begin(), order.end(), at);
+        double lo = d.as<Page>(at)->pos;
+        double hi = it + 1 == order.end() ? lo + static_cast<double>(pages.size()) + 1.0 : d.as<Page>(*(it + 1))->pos;
+        if (at_front) { hi = d.as<Page>(order.front())->pos; lo = hi - static_cast<double>(pages.size()) - 1.0; }
+        std::map<Doc::Id, Doc::Id> owners;
+        for (std::size_t k = 0; k < pages.size(); ++k) {
+            Page pg = *d.as<Page>(pages[k]);
+            pg.pos = lo + (hi - lo) * static_cast<double>(k + 1) / static_cast<double>(pages.size() + 1);
+            const Doc::Id id = d.fresh_id("page");
+            d.put(id, pg);
+            made.push_back(id);
+            made_pages.push_back(id);
+            owners[pages[k]] = id;
+        }
+        for (const auto& p : pages)   // the guides
+            for (const auto& g : guides_on(d, p)) {
+                Guide c = *d.as<Guide>(g);
+                c.owner = owners[p];
+                const Doc::Id gid = d.fresh_id("guide");
+                d.put(gid, c);
+                made.push_back(gid);
+            }
+        std::vector<Doc::Id> frames;
+        for (const auto& p : pages)
+            for (const auto& f : d.frames_on(p)) frames.push_back(f);
+        paste_clip_into(d, clip_frames(d, frames), 0, 0, owners, {}, made);
+        return made;
+    });
+    return made_pages;
+}
+
 // Everything removing `pages` touches: the pages, their frames and guides
 // (s256), and any section (one starting on a page that goes moves to the
 // next survivor, or goes if its whole run goes).
@@ -1312,6 +1355,191 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
         return ids;
     });
     return made;
+}
+
+// ── s281: duplicates (X1) ───────────────────────────────────────────────────
+namespace {
+// Frames of `story` in thread order (the head: no frame's next is it).
+std::vector<Doc::Id> thread_of(const Doc& d, const Doc::Id& story) {
+    std::vector<Doc::Id> all;
+    std::set<Doc::Id> pointed;
+    for (const auto& id : d.ids_of<Frame>()) {
+        const auto* f = d.as<Frame>(id);
+        if (f->kind != FrameKind::Text || f->story != story) continue;
+        all.push_back(id);
+        if (!f->next.empty()) pointed.insert(f->next);
+    }
+    std::vector<Doc::Id> out;
+    for (const auto& id : all) {
+        if (pointed.count(id)) continue;
+        std::set<Doc::Id> seen;
+        for (Doc::Id at = id; !at.empty() && !seen.count(at); at = d.as<Frame>(at) ? d.as<Frame>(at)->next : Doc::Id{}) {
+            seen.insert(at);
+            out.push_back(at);
+        }
+    }
+    for (const auto& id : all)   // a loop or a stray: at the end, as found
+        if (std::find(out.begin(), out.end(), id) == out.end()) out.push_back(id);
+    return out;
+}
+}  // namespace
+
+FrameClip clip_frames(const Doc& d, const std::vector<Doc::Id>& frames) {
+    FrameClip c;
+    for (const auto& id : frames) {
+        const auto* f = d.as<Frame>(id);
+        if (!f || c.frames.count(id)) continue;
+        c.order.push_back(id);
+        c.frames[id] = *f;
+        if (f->kind == FrameKind::Text && !f->story.empty() && !c.stories.count(f->story))
+            if (const auto* st = d.as<Story>(f->story)) c.stories[f->story] = *st;
+    }
+    if (c.order.empty()) return c;
+    c.owner = c.frames[c.order.front()].owner;
+    for (const auto& [sid, st] : c.stories) {
+        (void)st;
+        for (const auto& f : thread_of(d, sid)) if (c.frames.count(f)) c.threads[sid].push_back(f);
+    }
+    bool first = true;
+    for (const auto& id : c.order) {
+        const auto& f = c.frames[id];
+        if (f.owner != c.owner) continue;
+        const Rect r{f.x, f.y, f.w, f.h};
+        if (first) { c.bounds = r; first = false; continue; }
+        const double x1 = std::max(c.bounds.x + c.bounds.w, r.x + r.w), y1 = std::max(c.bounds.y + c.bounds.h, r.y + r.h);
+        c.bounds.x = std::min(c.bounds.x, r.x);
+        c.bounds.y = std::min(c.bounds.y, r.y);
+        c.bounds.w = x1 - c.bounds.x;
+        c.bounds.h = y1 - c.bounds.y;
+    }
+    return c;
+}
+
+std::vector<Doc::Id> paste_clip_into(Doc& d, const FrameClip& clip, double dx, double dy,
+                                     const std::map<Doc::Id, Doc::Id>& owners, const Doc::Id& onto, std::vector<Doc::Id>& made) {
+    if (clip.order.empty()) return {};
+    // The anchors there are (new ones mustn't take an id in use).
+    std::set<std::string> anchors;
+    for (const auto& sid : d.ids_of<Story>())
+        for (const auto& p : d.as<Story>(sid)->paras)
+            for (const auto& a : p.anchors) anchors.insert(a);
+    int next_anchor = 1;
+    const auto new_anchor = [&] {
+        std::string id;
+        do { id = "anchor." + std::to_string(next_anchor++); } while (anchors.count(id));
+        anchors.insert(id);
+        return id;
+    };
+    // Each story once: its copy, its anchors renamed, references inside it following.
+    std::map<Doc::Id, Doc::Id> story_copy;
+    for (const auto& [sid, st] : clip.stories) {
+        Story c = st;
+        c.name = st.name + " copy";
+        std::map<std::string, std::string> renamed;
+        for (auto& p : c.paras)
+            for (auto& a : p.anchors) if (!a.empty()) { const auto n = new_anchor(); renamed[a] = n; a = n; }
+        for (auto& p : c.paras)
+            for (auto& r : p.refs) {
+                if (auto it = renamed.find(r.target); it != renamed.end()) r.target = it->second;
+                for (auto& m : r.more) if (auto it = renamed.find(m); it != renamed.end()) m = it->second;
+            }
+        const Doc::Id cid = d.fresh_id("story");
+        d.put(cid, c);
+        story_copy[sid] = cid;
+    }
+    // The frames: on top of their (new) owner's, in their own stacking order.
+    std::vector<Doc::Id> by_z = clip.order;
+    std::stable_sort(by_z.begin(), by_z.end(), [&](const Doc::Id& a, const Doc::Id& b) { return clip.frames.at(a).z < clip.frames.at(b).z; });
+    std::map<Doc::Id, double> top;
+    std::map<Doc::Id, Doc::Id> frame_copy;
+    for (const auto& id : by_z) {
+        Frame c = clip.frames.at(id);
+        if (!onto.empty()) c.owner = onto;
+        else if (auto it = owners.find(c.owner); it != owners.end()) c.owner = it->second;
+        if (!d.as<Page>(c.owner) && !d.as<Master>(c.owner)) continue;   // its page is gone
+        if (!top.count(c.owner)) {
+            double z = 0;
+            for (const auto& o : d.frames_on(c.owner)) z = std::max(z, d.as<Frame>(o)->z);
+            top[c.owner] = z;
+        }
+        c.z = (top[c.owner] += 1);
+        c.x += dx;
+        c.y += dy;
+        c.overrides.clear();
+        c.next.clear();
+        if (c.kind == FrameKind::Text)
+            if (auto it = story_copy.find(c.story); it != story_copy.end()) c.story = it->second;
+        const Doc::Id nid = d.fresh_id("frame");
+        d.put(nid, c);
+        frame_copy[id] = nid;
+    }
+    // Threads: the copies of each story's frames, in the story's order.
+    for (const auto& [old_story, new_story] : story_copy) {
+        Doc::Id prev;
+        if (auto t = clip.threads.find(old_story); t != clip.threads.end())
+            for (const auto& f : t->second) {
+                const auto it = frame_copy.find(f);
+                if (it == frame_copy.end()) continue;
+                if (!prev.empty()) {
+                    Frame pf = *d.as<Frame>(prev);
+                    pf.next = it->second;
+                    d.put(prev, pf);
+                }
+                prev = it->second;
+            }
+        made.push_back(new_story);
+    }
+    std::vector<Doc::Id> out;
+    for (const auto& id : clip.order) if (auto it = frame_copy.find(id); it != frame_copy.end()) out.push_back(it->second);
+    made.insert(made.begin(), out.begin(), out.end());
+    return out;
+}
+
+std::vector<Doc::Id> copy_frames_into(Doc& d, const std::vector<Doc::Id>& frames, double dx, double dy,
+                                      const std::map<Doc::Id, Doc::Id>& owners, std::vector<Doc::Id>& made) {
+    return paste_clip_into(d, clip_frames(d, frames), dx, dy, owners, {}, made);
+}
+
+std::vector<Doc::Id> paste_frames(DocJournal& j, Doc& d, const FrameClip& clip, const Doc::Id& onto, double dx, double dy) {
+    if (clip.order.empty() || (!d.as<Page>(onto) && !d.as<Master>(onto))) return {};
+    std::vector<Doc::Id> out;
+    const std::size_t n = clip.order.size();
+    j.run(n == 1 ? std::string("Paste frame") : "Paste " + std::to_string(n) + " frames", {}, [&] {
+        std::vector<Doc::Id> made;
+        out = paste_clip_into(d, clip, dx, dy, {}, onto, made);
+        return made;
+    });
+    return out;
+}
+
+std::vector<Doc::Id> step_repeat(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, int count, double dx, double dy) {
+    const auto clip = clip_frames(d, frames);
+    if (clip.empty() || count < 1) return {};
+    count = std::min(count, 500);
+    std::vector<Doc::Id> out;
+    j.run("Step and repeat " + std::to_string(count) + "\u00d7", {}, [&] {
+        std::vector<Doc::Id> made;
+        for (int k = 1; k <= count; ++k) {
+            const auto one = paste_clip_into(d, clip, k * dx, k * dy, {}, {}, made);
+            out.insert(out.end(), one.begin(), one.end());
+        }
+        return made;
+    });
+    return out;
+}
+
+std::vector<Doc::Id> duplicate_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, double dx, double dy,
+                                      const std::map<Doc::Id, Doc::Id>& owners) {
+    std::size_t n = 0;
+    for (const auto& id : frames) n += d.as<Frame>(id) ? 1 : 0;
+    if (n == 0) return {};
+    std::vector<Doc::Id> out;
+    j.run(n == 1 ? std::string("Duplicate frame") : "Duplicate " + std::to_string(n) + " frames", {}, [&] {
+        std::vector<Doc::Id> made;
+        out = copy_frames_into(d, frames, dx, dy, owners, made);
+        return made;
+    });
+    return out;
 }
 
 // ── s197: shapes ────────────────────────────────────────────────────────────
@@ -5336,6 +5564,7 @@ const std::vector<Verb>& verbs() {
     static const std::vector<Verb> table = {
         {"add_pages", [](DocJournal& j, Doc& d) { add_pages(j, d, d.pages()[2], 2, "master.2"); }},
         {"insert_pages", [](DocJournal& j, Doc& d) { insert_pages(j, d, d.pages()[0], 2, "master.2"); }},   // s277
+        {"duplicate_pages", [](DocJournal& j, Doc& d) { duplicate_pages(j, d, {d.pages()[1], d.pages()[2]}); }},   // s283
         {"remove_pages", [](DocJournal& j, Doc& d) {
              const auto p = d.pages();
              remove_pages(j, d, {p[0], p[4]});   // p[0] starts a section: it moves
@@ -5450,6 +5679,9 @@ const std::vector<Verb>& verbs() {
         {"add_path", [](DocJournal& j, Doc& d) {
              add_path(j, d, "page.8", {{54, 300, 54, 300, 80, 250, true}, {200, 330, 170, 360, 200, 330, false}, corner_point(120, 400)}, false); }},
         {"delete_frames", [](DocJournal& j, Doc& d) { delete_frames(j, d, {"frame.2", "frame.4"}); }},  // mid-thread
+        {"duplicate_frames", [](DocJournal& j, Doc& d) { duplicate_frames(j, d, {"frame.2", "frame.4"}, 18, 18); }},   // s281
+        {"step_repeat", [](DocJournal& j, Doc& d) { step_repeat(j, d, {"frame.2"}, 3, 12, 0); }},   // s284
+        {"paste_frames", [](DocJournal& j, Doc& d) { paste_frames(j, d, clip_frames(d, {"frame.2"}), "page.8", 12, 12); }},   // s282
         {"override_master_item", [](DocJournal& j, Doc& d) { override_master_item(j, d, "page.7", "frame.13"); }},   // s025
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
         {"override_all", [](DocJournal& j, Doc& d) { override_all(j, d, {"page.7", "page.8"}); }},   // s072

@@ -1430,5 +1430,142 @@ void part9() {
               labels(core::order_groups(fs, {"Paragraph", "Frame", "Text"})) == "Name|Align|X|Y|Font|Size||");
         check("groups: names not shown are ignored", labels(core::order_groups(fs, {"Nope", "Text"})) == "Name|Font|Size|Align|X|Y||");
     }
+
+    // -- s281 (X1): duplicating frames -- stories copied, threads kept -----
+    {
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // The longest thread in the sample.
+        std::map<std::string, std::vector<std::string>> by_story;
+        for (const auto& id : d.ids_of<core::Frame>())
+            if (const auto* f = d.as<core::Frame>(id); f->kind == core::FrameKind::Text && !f->story.empty()) by_story[f->story].push_back(id);
+        std::string story;
+        for (const auto& [s0, fs] : by_story) if (fs.size() > (story.empty() ? 1 : by_story[story].size())) story = s0;
+        check("dup: the sample has a thread", !story.empty() && by_story[story].size() >= 2);
+        // Its frames in thread order.
+        std::vector<std::string> chain;
+        {
+            std::set<std::string> pointed;
+            for (const auto& f : by_story[story]) if (!d.as<core::Frame>(f)->next.empty()) pointed.insert(d.as<core::Frame>(f)->next);
+            for (const auto& f : by_story[story]) if (!pointed.count(f)) for (std::string at = f; !at.empty(); at = d.as<core::Frame>(at)->next) chain.push_back(at);
+        }
+        const auto frames_before = d.ids_of<core::Frame>().size();
+        const auto stories_before = d.ids_of<core::Story>().size();
+        const std::vector<std::string> two{chain[chain.size() - 1], chain[chain.size() - 2]};   // given out of order
+        const auto made = core::doc::duplicate_frames(j, d, two, 18, 9);
+        check("dup: two frames made, one story", made.size() == 2 && d.ids_of<core::Frame>().size() == frames_before + 2 &&
+                                                 d.ids_of<core::Story>().size() == stories_before + 1);
+        const auto* a = made.size() == 2 ? d.as<core::Frame>(made[1]) : nullptr;   // the copy of the earlier frame
+        const auto* b = made.size() == 2 ? d.as<core::Frame>(made[0]) : nullptr;
+        check("dup: threaded in the story's order", a && b && a->next == made[0] && b->next.empty());
+        check("dup: a story of their own, the words the same", a && b && a->story == b->story && a->story != story &&
+                                                               d.as<core::Story>(a->story)->paras.size() == d.as<core::Story>(story)->paras.size() &&
+                                                               d.as<core::Story>(a->story)->paras.front().text == d.as<core::Story>(story)->paras.front().text);
+        const auto* o = d.as<core::Frame>(chain[chain.size() - 2]);
+        check("dup: moved by (18, 9), on its own page, on top", a && o && a->x == o->x + 18 && a->y == o->y + 9 && a->owner == o->owner && a->z > o->z);
+        check("dup: the original untouched", o && o->story == story && o->next == chain.back());
+        std::set<std::string> orig_anchors;
+        for (const auto& p : d.as<core::Story>(story)->paras) for (const auto& x : p.anchors) orig_anchors.insert(x);
+        bool shared = false;
+        if (a) for (const auto& p : d.as<core::Story>(a->story)->paras) for (const auto& x : p.anchors) shared = shared || orig_anchors.count(x);
+        check("dup: no anchor shared with the original", !shared);
+        j.undo();
+        check("dup: one step -- undone, all gone", d.ids_of<core::Frame>().size() == frames_before && d.ids_of<core::Story>().size() == stories_before);
+        // Onto another page (a duplicated page's frames).
+        const auto pages = d.pages();
+        const auto* f0 = d.as<core::Frame>(chain.front());
+        std::string other;
+        for (const auto& p : pages) if (p != f0->owner) { other = p; break; }
+        const auto moved = core::doc::duplicate_frames(j, d, {chain.front()}, 0, 0, {{f0->owner, other}});
+        check("dup: onto the page the map names", moved.size() == 1 && d.as<core::Frame>(moved[0])->owner == other);
+        check("dup: a lone frame of a thread -- the whole story, nowhere to run on", moved.size() == 1 && d.as<core::Frame>(moved[0])->next.empty());
+    }
+
+    // -- s282 (X1): cut, then paste -- the clip holds the frames by value ---
+    {
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        std::string tf;
+        for (const auto& id : d.ids_of<core::Frame>())
+            if (const auto* f = d.as<core::Frame>(id); f->kind == core::FrameKind::Text && f->next.empty() && d.as<core::Page>(f->owner)) { tf = id; break; }
+        const auto* f0 = d.as<core::Frame>(tf);
+        const std::string words = f0 ? d.as<core::Story>(f0->story)->paras.front().text : std::string{};
+        const auto clip = core::doc::clip_frames(d, {tf});
+        check("clip: the frame and its story, its bounds", clip.order.size() == 1 && clip.stories.size() == 1 && f0 &&
+                                                          clip.bounds.x == f0->x && clip.bounds.w == f0->w);
+        core::doc::delete_frames(j, d, {tf});
+        check("clip: cut -- the frame gone", !d.as<core::Frame>(tf));
+        const auto pages = d.pages();
+        const auto made = core::doc::paste_frames(j, d, clip, pages.back(), 0, 0);
+        check("paste: onto the page given, the words with it", made.size() == 1 && d.as<core::Frame>(made[0])->owner == pages.back() &&
+                                                               d.as<core::Story>(d.as<core::Frame>(made[0])->story)->paras.front().text == words);
+        check("paste: onto nothing, nothing", core::doc::paste_frames(j, d, clip, "page.nope", 0, 0).empty());
+        j.undo();
+        const auto now = d.ids_of<core::Frame>();
+        check("paste: one step", !made.empty() && std::find(now.begin(), now.end(), made[0]) == now.end());
+    }
+
+    // -- s283 (X1): duplicating pages -- a spread and what's on it ----------
+    {
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = d.pages();
+        // The pages with the most frames, side by side.
+        std::size_t best = 0;
+        for (std::size_t i = 0; i + 1 < before.size(); ++i)
+            if (d.frames_on(before[i]).size() + d.frames_on(before[i + 1]).size() >
+                d.frames_on(before[best]).size() + d.frames_on(before[best + 1]).size()) best = i;
+        const std::vector<std::string> two{before[best], before[best + 1]};
+        const auto made = core::doc::duplicate_pages(j, d, two);
+        const auto after = d.pages();
+        check("dup pages: two made, right after the two", made.size() == 2 && after.size() == before.size() + 2 &&
+                                                          after[best + 2] == made[0] && after[best + 3] == made[1]);
+        bool same = made.size() == 2;
+        for (std::size_t k = 0; k < 2 && same; ++k)
+            same = d.frames_on(made[k]).size() == d.frames_on(two[k]).size() &&
+                   d.as<core::Page>(made[k])->master == d.as<core::Page>(two[k])->master &&
+                   core::guides_on(d, made[k]).size() == core::guides_on(d, two[k]).size();
+        check("dup pages: each its master, its guides, as many frames", same);
+        bool own = true;
+        for (const auto& p : made)
+            for (const auto& f : d.frames_on(p))
+                if (const auto* fr = d.as<core::Frame>(f); fr->kind == core::FrameKind::Text)
+                    for (const auto& o : two) for (const auto& of : d.frames_on(o)) own = own && d.as<core::Frame>(of)->story != fr->story;
+        check("dup pages: the copies' text is their own (no story shared)", own);
+        j.undo();
+        check("dup pages: one step", d.pages() == before);
+    }
+
+    {   // s283: a copy before the first page
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = d.pages();
+        const auto made = core::doc::duplicate_pages(j, d, {before[3]}, {}, true);
+        check("dup pages: at the front", made.size() == 1 && d.pages().front() == made[0] && d.pages()[1] == before[0]);
+    }
+
+    {   // s284: Step and Repeat
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        std::string sh;
+        for (const auto& id : d.ids_of<core::Frame>()) if (d.as<core::Frame>(id)->kind != core::FrameKind::Text) { sh = id; break; }
+        const auto n0 = d.ids_of<core::Frame>().size();
+        const auto made = core::doc::step_repeat(j, d, {sh}, 4, 10, 5);
+        const auto* f = d.as<core::Frame>(sh);
+        check("step & repeat: four copies, stepped", made.size() == 4 && f && d.as<core::Frame>(made[3])->x == f->x + 40 &&
+                                                     d.as<core::Frame>(made[3])->y == f->y + 20 && d.as<core::Frame>(made[0])->x == f->x + 10);
+        j.undo();
+        check("step & repeat: one step", d.ids_of<core::Frame>().size() == n0);
+    }
 }
 }  // namespace cxtest

@@ -313,6 +313,17 @@ void Shell::bind_actions() {  // bindings: actions + recents group
             if ((keyval == GDK_KEY_z || keyval == GDK_KEY_Z) && mods == CTRL)               act = "win.undo";
             else if ((keyval == GDK_KEY_z || keyval == GDK_KEY_Z) && mods == (CTRL | SHIFT)) act = "win.redo";
             else if ((keyval == GDK_KEY_y || keyval == GDK_KEY_Y) && mods == CTRL)          act = "win.redo";
+            // s282: frames copied / cut / pasted -- the canvas's, while it's not typing (it keeps
+            // Ctrl+C / X / V for its text then, and entries for theirs).
+            if (!act && !focus_is_text() && m_main.get_visible_child_name() == "canvas" && !m_canvas_view.canvas().editing()) {
+                const bool c = keyval == GDK_KEY_c || keyval == GDK_KEY_C, x = keyval == GDK_KEY_x || keyval == GDK_KEY_X,
+                           v = keyval == GDK_KEY_v || keyval == GDK_KEY_V;
+                const auto ALT = Gdk::ModifierType::ALT_MASK;
+                if (mods == CTRL && c) act = "win.copy-frames";
+                else if (mods == CTRL && x) act = "win.cut-frames";
+                else if (mods == CTRL && v) act = "win.paste-frames";
+                else if (mods == (CTRL | ALT | SHIFT) && v) act = "win.paste-in-place";   // as InDesign
+            }
             // s027: Page Up / Page Down -- the previous / next spread on the canvas.
             if (!act && mods == Gdk::ModifierType{} && (keyval == GDK_KEY_Page_Up || keyval == GDK_KEY_Page_Down) &&
                 !focus_is_text() && m_main.get_visible_child_name() == "canvas" && !m_canvas_view.canvas().editing()) {

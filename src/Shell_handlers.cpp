@@ -202,7 +202,18 @@ void Shell::on_tiles_move(const std::vector<std::string>& ids, const std::string
 // s278: pages dragged in the navigator's Pages card -- moved, one step; the
 // sides reshuffle as they fall (a page dropped inside a spread pushes the rest
 // on), and the canvas shows them where they landed.
-void Shell::on_nav_move_pages(const std::vector<std::string>& ids, const std::string& target, bool before) {  // handler
+void Shell::on_nav_move_pages(const std::vector<std::string>& ids, const std::string& target, bool before, bool copy) {  // handler
+    if (copy) {   // s283: Ctrl held -- copies of them land there
+        const auto pages = m_doc.pages();
+        const auto it = std::find(pages.begin(), pages.end(), target);
+        if (it == pages.end()) return;
+        const bool front = before && it == pages.begin();
+        const std::string after = before ? (front ? std::string{} : *(it - 1)) : target;
+        const auto made = core::doc::duplicate_pages(m_journal, m_doc, ids, after, front);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("nav: copied {} page(s) {} {}", made.size(), before ? "before" : "after", target);
+        if (!made.empty()) Glib::signal_idle().connect_once([this, made] { m_nav.select_items(made); });
+        return;
+    }
     if (std::find(ids.begin(), ids.end(), target) != ids.end()) return;
     std::vector<std::string> rest;
     for (const auto& p : m_doc.pages())
@@ -849,6 +860,12 @@ void Shell::bind_context_actions() {  // bindings
         if (!made.empty()) Glib::signal_idle().connect_once([this, made] { m_nav.select_items(made); });
     });
     add_action("layout-delete-pages", [this] { page_action("delete", layout_pages()); });
+    // s282 (X1): frames copied, cut, pasted, duplicated
+    add_action("copy-frames", [this] { copy_frames(false); });
+    add_action("cut-frames", [this] { copy_frames(true); });
+    add_action("paste-frames", [this] { paste_frames_here(false); });
+    add_action("paste-in-place", [this] { paste_frames_here(true); });
+    add_action("duplicate-frames", [this] { duplicate_picked(); });
     // s279: the navigator's right-click
     add_action("nav-open", [this] { if (!m_nav_ctx.items.empty()) m_nav.select_items(m_nav_ctx.items); });
     add_action("nav-add-page", [this] {
@@ -858,6 +875,14 @@ void Shell::bind_context_actions() {  // bindings
         if (!made.empty()) Glib::signal_idle().connect_once([this, made] { m_nav.select_items(made); });
     });
     add_action("nav-delete-pages", [this] { page_action("delete", m_nav_ctx_pages); });
+    add_action("nav-duplicate-pages", [this] {   // s283
+        const auto made = core::doc::duplicate_pages(m_journal, m_doc, m_nav_ctx_pages);
+        if (!made.empty()) Glib::signal_idle().connect_once([this, made] { m_nav.select_items(made); });
+    });
+    add_action("layout-duplicate", [this] {   // s283: the picked pages, else the spread shown
+        const auto made = core::doc::duplicate_pages(m_journal, m_doc, layout_pages());
+        if (!made.empty()) Glib::signal_idle().connect_once([this, made] { m_nav.select_items(made); });
+    });
     add_action("nav-section", [this] { page_action("section", m_nav_ctx_pages); });
     add_action("nav-override-all", [this] { core::doc::override_all(m_journal, m_doc, m_nav_ctx_pages); });
     add_action("nav-remove-overrides", [this] { core::doc::remove_all_overrides(m_journal, m_doc, m_nav_ctx_pages); });
@@ -936,6 +961,12 @@ void Shell::on_canvas_context(const views::Canvas::ContextHit& hit) {  // handle
         arrange->append_submenu("Text Wrap", wrap);
         if (text) arrange->append(ignoring ? "Let Wrap Push the Text" : "Ignore Others' Wrap", "win.frame-ignore-wrap");
         menu->append_section(arrange);
+        auto clip = Gio::Menu::create();   // s282
+        clip->append("Cut", "win.cut-frames");
+        clip->append("Copy", "win.copy-frames");
+        clip->append("Duplicate", "win.duplicate-frames");
+        clip->append("Step and Repeat\u2026", "win.step-repeat");
+        menu->append_section(clip);
         auto del = Gio::Menu::create();
         del->append(sel.size() == 1 ? "Delete Frame" : "Delete Frames", "win.delete-frames");
         menu->append_section(del);
@@ -947,6 +978,12 @@ void Shell::on_canvas_context(const views::Canvas::ContextHit& hit) {  // handle
         for (const auto& f : m_doc.frames_on(h.page)) own = own || !m_doc.as<core::Frame>(f)->overrides.empty();
         if (own) page->append("Remove All Overrides", "win.remove-page-overrides");
         if (page->get_n_items() > 0) menu->append_section(page);
+        if (!m_frame_clip.empty()) {   // s282
+            auto paste = Gio::Menu::create();
+            paste->append("Paste", "win.paste-frames");
+            paste->append("Paste in Place", "win.paste-in-place");
+            menu->append_section(paste);
+        }
         auto more = Gio::Menu::create();
         more->append("Add Page After", "win.page-add-after");
         more->append("Fit the Pages", "win.zoom-fit");
@@ -1040,6 +1077,7 @@ void Shell::on_nav_context(const views::Pick& p, double x, double y) {  // handl
         const std::size_t n = m_nav_ctx_pages.size();
         auto top = Gio::Menu::create();
         top->append(n == 1 ? "Add Page After" : "Add Page After Them", "win.nav-add-page");
+        top->append(n == 1 ? "Duplicate Page" : n == 2 ? "Duplicate Spread" : "Duplicate " + std::to_string(n) + " Pages", "win.nav-duplicate-pages");   // s283
         top->append_submenu("Apply Master", masters_menu());
         top->append("Start Section Here", "win.nav-section");
         menu->append_section(top);
@@ -1071,6 +1109,77 @@ void Shell::on_nav_context(const views::Pick& p, double x, double y) {  // handl
             m_nav_menu->present();
         }
     });
+}
+
+std::vector<std::string> Shell::picked_frames() const {  // helper
+    std::vector<std::string> out;
+    if (m_main.get_visible_child_name() != "canvas") return out;
+    for (const auto& id : const_cast<Shell*>(this)->m_canvas_view.canvas().selection())
+        if (m_doc.as<core::Frame>(id)) out.push_back(id);
+    return out;
+}
+
+void Shell::copy_frames(bool cut) {  // handler
+    const auto ids = picked_frames();
+    if (ids.empty()) return;
+    m_frame_clip = core::doc::clip_frames(m_doc, ids);
+    m_paste_n = 0;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("{} {} frame(s)", cut ? "cut" : "copied", ids.size());
+    if (cut) {
+        core::doc::delete_frames(m_journal, m_doc, ids);
+        m_canvas_view.canvas().set_selection({});
+        m_canvas_view.canvas().model_changed();
+        on_canvas_selection();
+    }
+}
+
+// s282: Paste -- the copied frames centred in the view, on the page there (or
+// the picked frame's page); Paste in Place -- where they were, on that page.
+void Shell::paste_frames_here(bool in_place) {  // handler
+    if (m_frame_clip.empty() || m_main.get_visible_child_name() != "canvas") return;
+    auto& cv = m_canvas_view.canvas();
+    const auto& pl = cv.placed();
+    if (pl.empty()) return;
+    const core::Placed* tp = nullptr;
+    for (const auto& id : picked_frames())
+        for (const auto& p : pl) if (p.id == m_doc.as<core::Frame>(id)->owner) { tp = &p; break; }
+    double cx = 0, cy = 0;
+    cv.viewport().to_doc(cv.viewport().widget_w() / 2, cv.viewport().widget_h() / 2, cx, cy);
+    if (!tp) tp = core::panel_at(pl, cx, cy);
+    if (!tp) {   // over the pasteboard: the nearest page
+        double best = 1e300;
+        for (const auto& p : pl) {
+            const double ddx = cx - (p.r.x + p.r.w / 2), ddy = cy - (p.r.y + p.r.h / 2), dd = ddx * ddx + ddy * ddy;
+            if (dd < best) { best = dd; tp = &p; }
+        }
+    }
+    if (!tp) return;
+    double dx = 0, dy = 0;
+    const auto& b = m_frame_clip.bounds;
+    if (!in_place) {
+        dx = (cx - tp->r.x) - (b.x + b.w / 2);
+        dy = (cy - tp->r.y) - (b.y + b.h / 2);
+        // The same place twice: each paste a step further on, so they don't stack unseen.
+        if (std::abs(dx) < 1 && std::abs(dy) < 1 && tp->id == m_frame_clip.owner) { dx = dy = 12.0 * (m_paste_n + 1); }
+    }
+    ++m_paste_n;
+    const auto made = core::doc::paste_frames(m_journal, m_doc, m_frame_clip, tp->id, dx, dy);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("pasted {} frame(s) on {}{}", made.size(), tp->id, in_place ? " in place" : "");
+    if (made.empty()) return;
+    cv.model_changed();
+    cv.set_selection(made);
+    on_canvas_selection();
+}
+
+void Shell::duplicate_picked() {  // handler
+    const auto ids = picked_frames();
+    if (ids.empty()) return;
+    const auto made = core::doc::duplicate_frames(m_journal, m_doc, ids, 12, 12);
+    if (made.empty()) return;
+    auto& cv = m_canvas_view.canvas();
+    cv.model_changed();
+    cv.set_selection(made);
+    on_canvas_selection();
 }
 
 std::vector<std::string> Shell::layout_pages() {  // helper

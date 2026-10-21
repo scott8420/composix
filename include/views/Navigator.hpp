@@ -71,8 +71,8 @@ public:
     sigc::signal<void(const Pick&)>& signal_pick() { return m_pick; }
     // s062: a master dropped on pages: (master, pages).
     sigc::signal<void(const std::string&, const std::vector<std::string>&)>& signal_master_drop() { return m_master_drop; }
-    // s278: pages dragged in the Pages card -- (pages, onto page, before it?).
-    sigc::signal<void(const std::vector<std::string>&, const std::string&, bool)>& signal_move_pages() { return m_move_sig; }
+    // s278: pages dragged in the Pages card -- (pages, onto page, before it?, s283: copied -- Ctrl held?).
+    sigc::signal<void(const std::vector<std::string>&, const std::string&, bool, bool)>& signal_move_pages() { return m_move_sig; }
     // s278: a master dropped in the gap before / after a page -- (master, page, before?).
     sigc::signal<void(const std::string&, const std::string&, bool)>& signal_master_insert() { return m_insert_sig; }
     // s278: the cards' order, dragged by their headers ("masters,pages,...").
@@ -163,7 +163,7 @@ private:
     sigc::signal<void(const std::string&, const std::vector<std::string>&)> m_master_drop;
     sigc::signal<void(int)>         m_thumb_sig;
     sigc::signal<void()>            m_open_sig;
-    sigc::signal<void(const std::vector<std::string>&, const std::string&, bool)> m_move_sig;
+    sigc::signal<void(const std::vector<std::string>&, const std::string&, bool, bool)> m_move_sig;
     sigc::signal<void(const std::string&, const std::string&, bool)> m_insert_sig;
     sigc::signal<void()>            m_order_sig;
     sigc::signal<void(const Pick&, double, double)> m_ctx_sig;

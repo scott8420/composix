@@ -121,6 +121,12 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         // Shift turns [ ] into { } on the way in, so the braces are bound too.
         {"Frames", "win.bring-front",   {"<Ctrl><Shift>bracketright", "<Ctrl><Shift>braceright"}, "Ctrl+Shift+]", "Bring the picked frames to the front"},
         {"Frames", "win.bring-forward", {"<Ctrl>bracketright"}, "", "Bring the picked frames forward one"},
+        {"Frames", "win.duplicate-frames", {"<Ctrl><Shift><Alt>d"}, "", "Duplicate the picked frames (a step down and right; text: a copy of the story)"},   // s282
+        {"Frames", "win.step-repeat",    {"<Ctrl><Shift><Alt>u"}, "", "Step and Repeat -- copies of the picked frames, each a step on"},   // s284 (Ctrl+Alt+U is the index mark here)
+        {"Frames", "win.copy-frames",    {}, "Ctrl+C", "Copy the picked frames (not while typing: then the words)"},
+        {"Frames", "win.cut-frames",     {}, "Ctrl+X", "Cut the picked frames"},
+        {"Frames", "win.paste-frames",   {}, "Ctrl+V", "Paste frames -- in the middle of the view, on the page there"},
+        {"Frames", "win.paste-in-place", {}, "Ctrl+Alt+Shift+V", "Paste frames where they were, on the page shown"},
         {"Frames", "win.send-backward", {"<Ctrl>bracketleft"}, "", "Send the picked frames backward one"},
         {"Frames", "win.send-back",     {"<Ctrl><Shift>bracketleft", "<Ctrl><Shift>braceleft"}, "Ctrl+Shift+[", "Send the picked frames to the back"},
         // s212: compound paths (InDesign's keys)

@@ -935,6 +935,12 @@ std::vector<Doc::Id> insert_pages(DocJournal& j, Doc& d, const Doc::Id& before, 
 std::vector<Doc::Id> page_removal_ids(const Doc& d, const std::vector<Doc::Id>& pages);
 void drop_pages(Doc& d, const std::vector<Doc::Id>& pages);
 bool move_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const Doc::Id& after);
+// s283 (X1): copies of pages -- each its size, master, own margins, guides
+// and frames (duplicate_frames' way: a story with frames among them copied
+// once, threads inside the copy kept) -- placed after `after` ("": after the
+// last of them), in their order. One step; the pages made.
+std::vector<Doc::Id> duplicate_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const Doc::Id& after = {},
+                                     bool at_front = false);   // at_front: before the first page (after is ignored)
 bool set_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const Doc::Id& master);
 // s066: the document's own settings, one step each. The title (trimmed,
 // not empty); the trim -- every page and master at the old trim height
@@ -1186,6 +1192,45 @@ bool set_shows_on(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, int
 // story whose LAST frame goes goes with it, and so does an image whose last
 // placement goes (s009, as InDesign). One step.
 bool delete_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
+// s282 (X1): frames as the clipboard holds them -- their records and their
+// stories (whole), by value, so a cut's frames can be pasted after they've
+// gone. `threads`: each story's frames among them, in the story's order;
+// `bounds`: round the frames on the first one's owner (its coordinates).
+struct FrameClip {
+    std::vector<Doc::Id>                      order;
+    std::map<Doc::Id, Frame>                  frames;
+    std::map<Doc::Id, Story>                  stories;
+    std::map<Doc::Id, std::vector<Doc::Id>>   threads;
+    Doc::Id                                   owner;
+    Rect                                      bounds;
+    bool empty() const { return order.empty(); }
+};
+FrameClip clip_frames(const Doc& d, const std::vector<Doc::Id>& frames);
+// Inside a step: the clip's copies (dx, dy) from where they were -- all onto
+// `onto` when given, else each on owners[its owner] or its own. As
+// duplicate_frames does it (stories copied, threads kept, anchors new).
+std::vector<Doc::Id> paste_clip_into(Doc& d, const FrameClip& clip, double dx, double dy,
+                                     const std::map<Doc::Id, Doc::Id>& owners, const Doc::Id& onto, std::vector<Doc::Id>& made);
+// Paste: the clip onto page / master `onto`, moved (dx, dy). One step; the frames made.
+std::vector<Doc::Id> paste_frames(DocJournal& j, Doc& d, const FrameClip& clip, const Doc::Id& onto, double dx, double dy);
+// s284: Step and Repeat -- `count` copies of the frames, the k-th (k dx, k dy)
+// from them (points), each as duplicate_frames makes one. One step; every
+// frame made, copy by copy.
+std::vector<Doc::Id> step_repeat(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, int count, double dx, double dy);
+// s281 (X1): copies of frames. Each copy sits (dx, dy) from its frame, on
+// `owners[its owner]` when the map names one (a page duplicated), else on its
+// own page / master; on top of what's there, in their own stacking order.
+// Text: each story with frames among them is copied once, whole (its anchors
+// new, references to them following), and those frames' copies are threaded
+// through the copy in the story's order -- a thread inside what was copied
+// stays a thread. Not an override (the copy is its own). A step of its own
+// (or part of the one it runs in). Returns the frames made, in the order given.
+std::vector<Doc::Id> duplicate_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, double dx, double dy,
+                                      const std::map<Doc::Id, Doc::Id>& owners = {});
+// The copying itself, inside a step the caller runs: the frames made, then
+// the stories made, into `made` (both ids, for the step to know).
+std::vector<Doc::Id> copy_frames_into(Doc& d, const std::vector<Doc::Id>& frames, double dx, double dy,
+                                      const std::map<Doc::Id, Doc::Id>& owners, std::vector<Doc::Id>& made);
 // s032: the export settings, kept with the document (one step; none when
 // unchanged).
 bool set_export(DocJournal& j, Doc& d, const ExportPrefs& e);

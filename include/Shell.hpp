@@ -161,10 +161,15 @@ private:
     void queue_refresh();
     std::vector<std::string> next_spread();         // category: helper: s269 -- the spread after the canvas's (Forward)
     bool step_spread(int by);                       // category: helper: s277 -- Page Up / Down, the head's < > (false: not on pages)
-    void on_nav_move_pages(const std::vector<std::string>& ids, const std::string& target, bool before);   // category: handler: s278 -- pages dragged in the navigator
+    void on_nav_move_pages(const std::vector<std::string>& ids, const std::string& target, bool before, bool copy);   // category: handler: s278 -- pages dragged in the navigator (s283: Ctrl -- copied)
     void on_nav_master_insert(const std::string& master, const std::string& page, bool before);              // category: handler: s278 -- a master dropped in a gap
     std::vector<std::string> layout_pages();        // category: helper: s279 -- Layout's pages: the picked pages, else the spread shown
     void on_nav_context(const views::Pick& p, double x, double y);   // category: handler: s279 -- the navigator's right-click menus
+    std::vector<std::string> picked_frames() const; // category: helper: s282 -- the canvas's picked frames
+    void copy_frames(bool cut);                     // category: handler: s282 -- Ctrl+C / Ctrl+X on frames
+    void paste_frames_here(bool in_place);          // category: handler: s282 -- Ctrl+V / Paste in Place
+    void duplicate_picked();
+    void on_step_repeat();                          // category: handler: s284 -- Edit > Step and Repeat                        // category: handler: s282 -- Edit > Duplicate
     void on_go_to_page();                           // category: handler: s277 -- Ctrl+J: the head's Go to Page field
     void on_goto_typed(const std::string& t);       // category: handler: s277 -- a folio / +N / master typed there
     void check_reflow();                          // category: helper: s255 -- overset stories in page frames get pages                         // category: helper: one re-projection per idle, after the writes
@@ -273,6 +278,8 @@ private:
     widgets::ToggleButton m_insp_toggle;
     widgets::MenuButton   m_menu_button;
     Gtk::PopoverMenuBar*  m_menubar = nullptr;   // s279
+    core::doc::FrameClip       m_frame_clip;             // s282: frames copied / cut
+    int                   m_paste_n = 0;            // s282: pastes since the copy (each a step further on)
     std::unique_ptr<Gtk::PopoverMenu> m_nav_menu;   // s279: the navigator's right-click
     views::Pick           m_nav_ctx;                // ... and what it was on
     std::vector<std::string> m_nav_ctx_pages;       // the pages its page verbs take
@@ -370,6 +377,7 @@ private:
     // s013: the Export PDF sheet, and its choices for the session.
     std::unique_ptr<Gtk::Window>     m_export;
     std::unique_ptr<Gtk::Window>     m_offset;   // s215: Offset Path
+    std::unique_ptr<Gtk::Window>     m_step;     // s284: Step and Repeat
     std::function<void()>            m_export_sync;   // s086: the sheet's live state and summary card
     // s058: the swatch editor -- the swatch being made / changed, its sheet's widgets.
     // s064: the start screen's recent-project cards and their folders.
