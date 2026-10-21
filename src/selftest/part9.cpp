@@ -1742,5 +1742,96 @@ void part9() {
                 }
         check("import: each citation a Cite reference to its source's anchor", aimed && cites == 3, std::to_string(cites) + " " + err);
     }
+
+    // -- s293: an ODT section in two columns -- its paragraphs split together --
+    {
+        std::cout << "--- s293 an ODT section's columns ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:style>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+</office:master-styles></office:document-styles>)";
+        std::string inner;
+        for (int i = 0; i < 6; ++i) inner += R"(<text:p text:style-name="Standard">Gulls wheeled over the quay while the ferry came in slow against the tide, and nobody looked up.</text:p>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:automatic-styles>
+ <style:style style:name="Sect1" style:family="section"><style:section-properties><style:columns fo:column-count="2" fo:column-gap="0.2in"/></style:section-properties></style:style>
+</office:automatic-styles><office:body><office:text>)"
+            R"(<text:p text:style-name="Standard">Before the section.</text:p>)"
+            R"(<text:section text:style-name="Sect1" text:name="Section1">)" + inner + R"(</text:section>)"
+            R"(<text:p text:style-name="Standard">After the section.</text:p>)"
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        check("read: the section's six paragraphs in two columns, 0.2 in apart; the others not",
+              book && book->body.size() == 8 && book->body[1].section_cols == 2 && std::abs(book->body[1].section_gap - 14.4) < 0.01 &&
+                  book->body[0].section_cols == 0 && book->body[7].section_cols == 0, err);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        const auto& st = *d.as<core::Story>("story.1");
+        const auto* ss = ok ? d.as<core::Style>(st.paras[1].style) : nullptr;
+        check("import: a split style, two columns, together", ss && ss->split == 2 && ss->split_run && std::abs(ss->split_gutter - 14.4) < 0.01 &&
+                                                             st.paras[6].style == st.paras[1].style && st.paras[0].style != st.paras[1].style, err);
+        const auto fl = L::flow_story(d, "story.1");
+        std::set<int> cols, bands;
+        int first_right = -1;
+        for (const auto& ft : fl.frames)
+            for (const auto& l : ft.lines)
+                if (l.para >= 1 && l.para <= 6) {
+                    cols.insert(l.col);
+                    bands.insert(l.band);
+                    if (l.col == 1 && first_right < 0) first_right = l.para;
+                }
+        check("flow: the six balanced as ONE band over both columns (the right column takes a later paragraph)",
+              cols.size() == 2 && bands.size() == 1 && first_right >= 3, std::to_string(first_right));
+    }
+
+    // -- s294: an ODT contents' deeper levels keep their own entry styles ----
+    {
+        std::cout << "--- s294 an ODT contents' level 2 ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Contents_20_1" style:display-name="Contents 1" style:family="paragraph"/>
+ <style:style style:name="Contents_20_2" style:display-name="Contents 2" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.2in"/></style:style>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"/>
+ <style:style style:name="Heading_20_2" style:display-name="Heading 2" style:family="paragraph" style:default-outline-level="2"/>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+</office:master-styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:body><office:text>)"
+            R"(<text:table-of-content text:name="T1"><text:table-of-content-source text:outline-level="2">)"
+            R"(<text:table-of-content-entry-template text:outline-level="1" text:style-name="Contents_20_1"><text:index-entry-text/></text:table-of-content-entry-template>)"
+            R"(<text:table-of-content-entry-template text:outline-level="2" text:style-name="Contents_20_2"><text:index-entry-text/><text:index-entry-tab-stop style:type="right" style:leader-char="."/><text:index-entry-page-number/></text:table-of-content-entry-template>)"
+            R"(</text:table-of-content-source><text:index-body><text:p>x</text:p></text:index-body></text:table-of-content>)"
+            R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Part One</text:h>)"
+            R"(<text:h text:style-name="Heading_20_2" text:outline-level="2">The Quay</text:h><text:p text:style-name="Standard">Words.</text:p>)"
+            R"(<text:h text:style-name="Heading_20_2" text:outline-level="2">The Ferry</text:h><text:p text:style-name="Standard">Words.</text:p>)"
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        check("read: both levels' templates; level 2's right tab, its dots",
+              book && book->tocs.size() == 1 && book->tocs[0].level_entries.size() == 2 && book->tocs[0].level_entries[1].style == "Contents_20_2" &&
+                  book->tocs[0].level_entries[1].right_tab && book->tocs[0].level_entries[1].leader == ".", err);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        const core::GenList* gl = nullptr;
+        for (const auto& id : ok ? d.ids_of<core::GenList>() : std::vector<std::string>{}) gl = d.as<core::GenList>(id);
+        const auto* s2 = gl && gl->entry_styles.size() == 2 ? d.as<core::Style>(gl->entry_styles[1]) : nullptr;
+        check("import: level 2's entries in Contents 2, its right tab with dots", s2 && s2->name == "Contents 2" && s2->tabs.size() == 1 &&
+                                                                               s2->tabs[0].align == core::TabAlign::Right && s2->tabs[0].leader == ".", err);
+        int in2 = 0;
+        if (gl && d.as<core::Story>(gl->story))
+            for (const auto& p : d.as<core::Story>(gl->story)->paras) in2 += p.style == gl->entry_styles[1];
+        check("import: the two level-2 entries built in it", in2 == 2, std::to_string(in2));
+    }
 }
 }  // namespace cxtest

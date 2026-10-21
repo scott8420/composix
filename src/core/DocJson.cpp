@@ -295,6 +295,7 @@ json to(const Record& r) {
             if (!v.lang.empty()) j["lang"] = v.lang;   // s190
             if (v.top_space) j["top_space"] = true;   // s242
             if (v.split >= 2 && v.split_gutter != 12) j["split_gutter"] = v.split_gutter;
+            if (v.split >= 2 && v.split_run) j["split_run"] = true;   // s293
             if (!v.tabs.empty()) {
                 json tabs = json::array();
                 for (const auto& t : v.tabs) tabs.push_back({{"pos", t.pos}, {"align", en(t.align)}, {"leader", t.leader}});
@@ -613,6 +614,7 @@ std::optional<Record> from(const json& j) {
         v.lang = val(j, "lang", std::string{});   // s190
         v.top_space = val(j, "top_space", false);   // s242
         v.split_gutter = val(j, "split_gutter", 12.0);
+        v.split_run = val(j, "split_run", false);   // s293
         v.align = de(j, "align", Align::Left);
         v.space_before = val(j, "space_before", 0.0);
         v.space_after = val(j, "space_after", 0.0);

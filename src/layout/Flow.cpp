@@ -1334,6 +1334,21 @@ int splits(const core::Doc& d, const core::Story& st, const core::Frame& fr, int
     const int k = style_of(d, st.paras[static_cast<std::size_t>(p)]).split;
     return k >= 2 ? k : 0;
 }
+// s293: the paragraphs a split band at p takes -- p alone, or (split_run) p
+// and those after it split alike: the first one past them.
+int split_end(const core::Doc& d, const core::Story& st, int p) {
+    const int n = static_cast<int>(st.paras.size());
+    if (p < 0 || p >= n) return p + 1;
+    const auto& a = style_of(d, st.paras[static_cast<std::size_t>(p)]);
+    if (!a.split_run || a.split < 2) return p + 1;
+    int e = p + 1;
+    while (e < n) {
+        const auto& b = style_of(d, st.paras[static_cast<std::size_t>(e)]);
+        if (b.split != a.split || !b.split_run || std::abs(b.split_gutter - a.split_gutter) > 0.01 || b.span) break;
+        ++e;
+    }
+    return e;
+}
 // A paragraph that starts a band of its own: spanning (2+ columns) or split (one).
 bool own_band(const core::Doc& d, const core::Story& st, const core::Frame& fr, int p) {
     return core::column_count(fr) >= 2 ? spans(d, st, p) : splits(d, st, fr, p) > 0;
@@ -1374,15 +1389,16 @@ bool fill_bands(const core::Doc& d, const core::Story& st, const core::Frame& fr
             sub.widths.clear();
             sub.balance = false;
             const int p0 = c.p;
+            const int pe = split_end(d, st, p0);   // s293: one paragraph, or the run split alike
             const auto holds = [&](double h) {
                 Cursor t = c;
                 FrameText tmp = ft;
                 NoteCount tc = nc ? *nc : NoteCount{};
                 FootShare tf = fs ? *fs : FootShare{};
                 ++g_split_depth;   // s191: its sub-columns don't split it again
-                fill_cols(d, st, sub, wraps, t, h, tmp, nc ? &tc : nullptr, false, fs ? &tf : nullptr, top + before, p0 + 1, band);
+                fill_cols(d, st, sub, wraps, t, h, tmp, nc ? &tc : nullptr, false, fs ? &tf : nullptr, top + before, pe, band);
                 --g_split_depth;
-                return t.p > p0;
+                return t.p >= pe;
             };
             const std::size_t from = ft.lines.size();
             double h = hmax;
@@ -1395,7 +1411,7 @@ bool fill_bands(const core::Doc& d, const core::Story& st, const core::Frame& fr
                 h = hi;
             }
             ++g_split_depth;
-            fill_cols(d, st, sub, wraps, c, h, ft, nc, false, fs, top + before, p0 + 1, band);
+            fill_cols(d, st, sub, wraps, c, h, ft, nc, false, fs, top + before, pe, band);
             --g_split_depth;
             for (std::size_t i = from; i < ft.lines.size(); ++i) {
                 ft.lines[i].cw = core::column_width(sub, ft.lines[i].col);
@@ -1403,7 +1419,7 @@ bool fill_bands(const core::Doc& d, const core::Story& st, const core::Frame& fr
             }
             ++band;
             if (c.p >= paras) return true;
-            if (c.p == p0) return false;   // it didn't all fit: the frame is full (on in the next)
+            if (c.p < pe) return false;   // it didn't all fit: the frame is full (on in the next) -- s293: the run's rest too
             top = bottom_of(from) + style.space_after;
             continue;
         }

@@ -29,6 +29,8 @@ std::vector<odt::Para> split_lines(const odt::Para& p) {
         q.list = p.list;   // s243: its list goes with each piece (the number on the first)
         q.list_level = p.list_level;
         q.start = out.empty() ? p.start : 0;
+        q.section_cols = p.section_cols;   // s293
+        q.section_gap = p.section_gap;
         q.text = p.text.substr(a, b - a);
         for (const auto& s : p.spans) {
             const int s0 = std::max(s.start, static_cast<int>(a)), s1 = std::min(s.end, static_cast<int>(b));
@@ -58,6 +60,27 @@ struct Builder {
     double pos = 10;
     std::string body_id;                              // the default paragraph style's
     std::map<std::string, std::string> cite_anchor;   // s291: a source's identifier -> its anchor
+    std::map<std::string, std::string> split_style;   // s293: "style|cols|gap" -> its split variant
+    // s293: a paragraph in a section of columns -- its style split into them,
+    // the section's paragraphs together (split_run): one balanced band.
+    std::string split_for(const std::string& base, int cols, double gap) {
+        const std::string key = base + "|" + std::to_string(cols) + "|" + std::to_string(gap);
+        if (const auto it = split_style.find(key); it != split_style.end()) return it->second;
+        const auto* bs = d.as<core::Style>(base);
+        if (!bs) return base;
+        core::Style s = *bs;
+        s.name = bs->name + " (" + std::to_string(std::min(cols, 4)) + " columns)";
+        s.pos = pos++;
+        s.split = std::min(cols, 4);
+        s.split_gutter = gap;
+        s.split_run = true;
+        s.span = false;
+        const auto id = d.fresh_id("style");
+        d.put(id, s);
+        split_style[key] = id;
+        ++info.section_styles;
+        return id;
+    }
 
     std::string swatch_for(const std::string& hex) {
         if (hex.size() != 7 || hex == "#000000") return {};
@@ -314,6 +337,7 @@ struct Builder {
             q.style = list_for(q.style, p.list, p.list_level);
             q.restart = std::max(0, p.start);
         }
+        if (p.section_cols >= 2) q.style = split_for(q.style, p.section_cols, p.section_gap);   // s293
         q.text = p.text;
         if (const auto* qs = d.as<core::Style>(q.style)) cur_size = qs->size > 0 ? qs->size : 12;   // s262
         core::Local base;
@@ -1011,7 +1035,12 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
                 if (slot.empty()) slot = st.paras[static_cast<std::size_t>(first_of[i])].style;
             }
             std::vector<std::string> from;
-            for (const auto& s : by_level) if (!s.empty() && std::find(from.begin(), from.end(), s) == from.end()) from.push_back(s);
+            std::vector<int> from_level;   // s294: each gathered style's outline level
+            for (std::size_t lv = 0; lv < by_level.size(); ++lv)
+                if (const auto& s = by_level[lv]; !s.empty() && std::find(from.begin(), from.end(), s) == from.end()) {
+                    from.push_back(s);
+                    from_level.push_back(static_cast<int>(lv) + 1);
+                }
             if (from.empty()) continue;
             const std::string title_style = bl.para_for(toc.title_style);
             const std::string entry_style = toc.entry_style.empty() ? title_style : bl.para_for(toc.entry_style);
@@ -1036,6 +1065,20 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             for (const auto& id : d.ids_of<core::GenList>()) pos = std::max(pos, d.as<core::GenList>(id)->pos);
             core::GenList gl{name, core::ListKind::Contents, pos + 1, from, page, -1, sid};
             gl.entry_styles = {entry_style};
+            // s294: each deeper level its own entry style (and right tab, leader) when the file gives one
+            for (std::size_t k = 1; k < from_level.size(); ++k) {
+                const int lv = from_level[k];
+                const auto* L = lv - 1 < static_cast<int>(toc.level_entries.size()) ? &toc.level_entries[static_cast<std::size_t>(lv - 1)] : nullptr;
+                if (!L || L->style.empty()) { gl.entry_styles.push_back(entry_style); continue; }
+                const std::string es_id = bl.para_for(L->style);
+                if (L->right_tab && r.w > 1) {
+                    auto es = *d.as<core::Style>(es_id);
+                    const double at = std::max(12.0, r.w - std::max(0.0, es.left_indent) - std::max(0.0, es.right_indent));
+                    es.tabs = {core::TabStop{at, core::TabAlign::Right, L->leader}};
+                    d.put(es_id, es);
+                }
+                gl.entry_styles.push_back(es_id);
+            }
             const auto lid = d.fresh_id("list");
             d.put(lid, gl);
             build_list(j, d, lid);

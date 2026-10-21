@@ -597,6 +597,10 @@ struct Style {
     // columns (0 / 1: not split), `split_gutter` points between them.
     int         split = 0;
     double      split_gutter = 12;
+    // s293: the split's paragraphs taken TOGETHER -- consecutive paragraphs
+    // split alike (k, gutter, run) balanced as one band, as a word
+    // processor's section in columns; off: each paragraph its own band.
+    bool        split_run = false;
     // s190 (G4): the language its words hyphenate by (core::hyphen_languages:
     // "en-US", "de", "fr"...; "" = US English). s226: a CHARACTER style's
     // too -- its words in that language; "" = the paragraph's, "none" = No

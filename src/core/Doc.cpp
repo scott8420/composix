@@ -3753,8 +3753,8 @@ const std::vector<StyleField>& style_fields() {
         COMPOSIX_SF("align_grid", "Baseline grid", align_grid),
         // s183: span / split columns ride together (one choice sets them).
         StyleField{"span", "Span columns",
-                   [](Style& t, const Style& f) { t.span = f.span; t.split = f.split; t.split_gutter = f.split_gutter; },
-                   [](const Style& a, const Style& b) { return a.span == b.span && a.split == b.split && a.split_gutter == b.split_gutter; }},
+                   [](Style& t, const Style& f) { t.span = f.span; t.split = f.split; t.split_gutter = f.split_gutter; t.split_run = f.split_run; },
+                   [](const Style& a, const Style& b) { return a.span == b.span && a.split == b.split && a.split_gutter == b.split_gutter && a.split_run == b.split_run; }},
         COMPOSIX_SF("hyphenate", "Hyphenate", hyphenate),
         COMPOSIX_SF("lang", "Language", lang),   // s190
         COMPOSIX_SF("hyph_limit", "Hyphens in a row", hyph_limit),         // s065
@@ -3969,7 +3969,7 @@ std::string style_edit_label(const std::string& key) {   // s164
         {"pstart", "Start"}, {"keep_next", "Keep with next"}, {"keep_lines", "Keep lines"},
         {"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"}, {"hyph_last_word", "Hyphenate last word"},
         {"hyphenate", "Hyphenate"}, {"align_grid", "Align to grid"}, {"span", "Span columns"}, {"lang", "Language"}, {"clang", "Language"},
-        {"split_gutter", "Split gutter"},
+        {"split_gutter", "Split gutter"}, {"split_run", "Split together"},
         {"track", "Tracking"}, {"bshift", "Baseline shift"}, {"cpos", "Position"}, {"ccase", "Case"}, {"uline", "Underline"},
         {"strike", "Strikethrough"}};   // s263
     if (const auto it = labels.find(key); it != labels.end()) return it->second;
@@ -4054,6 +4054,7 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
         st.split = choice.size() == 2 && choice[0] == 's' ? std::clamp(choice[1] - '0', 2, 4) : 0;
     }
     else if (key == "split_gutter") st.split_gutter = std::clamp(std::stod(choice), 0.0, 500.0);   // s183
+    else if (key == "split_run") st.split_run = choice == "1";   // s293
     else if (key.rfind("rule_a_", 0) == 0 || key.rfind("rule_b_", 0) == 0) {   // s044: paragraph rules
         const bool above = key[5] == 'a';
         const char what = key.back();
@@ -4102,7 +4103,7 @@ std::string style_key_of_edit(const std::string& e) {   // s092
         {"nobreak", "no_break"}, {"color", "color"}, {"color_tint", "color_tint"}, {"align", "align"},
         {"before", "space_before"}, {"after", "space_after"}, {"top_space", "top_space"}, {"lindent", "left_indent"}, {"rindent", "right_indent"},
         {"findent", "first_indent"}, {"indent_after", "skip_after_heading"}, {"tabs", "tabs"}, {"drop_lines", "drop_lines"},
-        {"drop_chars", "drop_chars"}, {"span", "span"}, {"split_gutter", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"lang", "lang"}, {"clang", "lang"}, {"hyph_limit", "hyph_limit"},
+        {"drop_chars", "drop_chars"}, {"span", "span"}, {"split_gutter", "span"}, {"split_run", "span"}, {"align_grid", "align_grid"}, {"hyphenate", "hyphenate"}, {"lang", "lang"}, {"clang", "lang"}, {"hyph_limit", "hyph_limit"},
         {"hyph_shortest", "hyph_shortest"}, {"hyph_last_word", "hyph_last_word"}, {"keep_next", "keep_next"},
         {"keep_lines", "keep_lines"}, {"pstart", "start"},
         {"track", "tracking"}, {"bshift", "shift"}, {"cpos", "position"}, {"ccase", "caps"}, {"uline", "underline"}, {"strike", "strike"}};   // s260

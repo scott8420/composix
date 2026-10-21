@@ -40,6 +40,24 @@ std::string prefix_of(const std::string& master) {
     return dash == std::string::npos ? master : master.substr(0, dash);
 }
 
+// s292: a story's first words as the card shows them -- its marks as words
+// ("#" a page number), the rest of the private-use marks left out.
+std::string readable(const std::string& t) {
+    std::string out;
+    for (std::size_t i = 0; i < t.size();) {
+        const auto c = static_cast<unsigned char>(t[i]);
+        if (c == 0xEE && i + 2 < t.size() && static_cast<unsigned char>(t[i + 1]) == 0x80) {
+            const auto k = static_cast<unsigned char>(t[i + 2]);
+            if (k == 0x80 || k == 0x82 || k == 0x83) out += "#";   // a page number (this page's, a jump line's)
+            else if (k == 0x81) out += "\u00a7";                  // the section's name
+            i += 3;
+            continue;
+        }
+        out += t[i++];
+    }
+    return out;
+}
+
 bool inside_button(Gtk::Widget* w, Gtk::Widget* stop) {
     for (; w && w != stop; w = w->get_parent())
         if (dynamic_cast<Gtk::Button*>(w)) return true;
@@ -193,6 +211,8 @@ void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const 
         build_pictures(c, items);
     } else if (s == core::Segment::Colors) {   // s287: the swatches as chips, a heading over each group
         build_chips(c, items);
+    } else if (s == core::Segment::Assets) {   // s292: the pictures as small tiles
+        build_assets(c, items);
     } else {
         c.list = Gtk::make_managed<Gtk::ListBox>();
         c.list->set_selection_mode(Gtk::SelectionMode::MULTIPLE);
@@ -208,7 +228,21 @@ void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const 
             il->set_hexpand(true);
             il->set_ellipsize(Pango::EllipsizeMode::END);
             if (s == core::Segment::Styles) specimen(*il, *it);   // s287: the name set in the style
-            ib->append(*il);
+            if (s != core::Segment::Stories) ib->append(*il);
+            if (s == core::Segment::Stories) {   // s292: its first words under its name
+                auto col2 = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
+                col2->set_hexpand(true);
+                col2->append(*il);   // (placed once: a managed label taken out of a box is gone)
+                auto sm = Gtk::make_managed<Gtk::Label>(readable(it->thumb.sample));
+                sm->set_xalign(0.0f);
+                sm->set_ellipsize(Pango::EllipsizeMode::END);
+                sm->set_width_chars(1);
+                sm->add_css_class("cx-story-sample");
+                sm->set_visible(!readable(it->thumb.sample).empty());
+                col2->append(*sm);
+                ib->append(*col2);
+                c.samples[it->id] = sm;
+            }
             auto b = Gtk::make_managed<Gtk::Label>(it->badge);   // always there, hidden when empty
             b->add_css_class("cx-badge");
             if (it->thumb.flag) b->add_css_class("cx-warn");
@@ -859,6 +893,59 @@ void Navigator::specimen(Gtk::Label& l, const core::Item& it) {
     l.add_css_class("cx-specimen");
 }
 
+// s292: Links & Assets -- each picture a small tile (the picture itself, as the
+// tile view draws it), its name under, a Missing / Modified word in warning ink.
+void Navigator::build_assets(Card& c, const std::vector<const core::Item*>& items) {
+    if (c.flow) { c.flow->remove_all(); c.body->remove(*c.flow); }
+    c.cells.clear();
+    c.flow = Gtk::make_managed<WrapBox>(6, 8);
+    c.flow->add_css_class("cx-asset-tiles");
+    for (const auto* it : items) {
+        Cell cell;
+        cell.id = it->id;
+        cell.thumb = it->thumb;
+        cell.col = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 2);
+        cell.col->set_name("nav.item." + it->id);
+        cell.col->add_css_class("cx-asset-tile");
+        cell.da = Gtk::make_managed<Gtk::DrawingArea>();
+        cell.da->set_content_width(76);
+        cell.da->set_content_height(56);
+        Gtk::DrawingArea* da = cell.da;
+        const std::string id = it->id;
+        const core::Segment seg = c.segment;
+        da->set_draw_func([this, da, id, seg](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+            auto* cc = card(seg);
+            if (!cc) return;
+            if (auto f = cc->cells.find(id); f != cc->cells.end()) paint_thumb(cr, *da, w, h, f->second.thumb, false);
+        });
+        cell.col->append(*da);
+        cell.under = Gtk::make_managed<Gtk::Label>(it->title);
+        cell.under->add_css_class("cx-master-name");
+        cell.under->set_ellipsize(Pango::EllipsizeMode::MIDDLE);
+        cell.under->set_size_request(76, -1);
+        cell.under->set_max_width_chars(1);
+        cell.col->append(*cell.under);
+        cell.badge = Gtk::make_managed<Gtk::Label>(it->badge);
+        cell.badge->add_css_class("cx-asset-badge");
+        cell.badge->set_visible(!it->badge.empty());
+        cell.col->append(*cell.badge);
+        cell.col->set_tooltip_text(it->title + (it->badge.empty() ? "" : "  \u00b7  " + it->badge));
+        auto click = Gtk::GestureClick::create();
+        click->set_button(GDK_BUTTON_PRIMARY);
+        auto* clk = click.get();
+        click->signal_pressed().connect([this, seg, id, clk](int, double, double) {
+            const auto st = clk->get_current_event_state();
+            const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
+            const bool shift = (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
+            if (auto* cc = card(seg)) click_item(*cc, id, ctrl, shift);
+        });
+        cell.col->add_controller(click);
+        c.flow->append(*cell.col);
+        c.cells[it->id] = cell;
+    }
+    c.body->append(*c.flow);
+}
+
 void Navigator::build_chips(Card& c, const std::vector<const core::Item*>& items) {
     if (c.flow) c.flow->remove_all();
     for (auto* r : m_chip_rows[c.segment]) r->remove_all();
@@ -1008,6 +1095,10 @@ void Navigator::refresh(const core::Outline* o) {
             build_chips(c, items);
             continue;
         }
+        if (c.segment == core::Segment::Assets) {   // s292: the tiles drawn again (a picture relinked, a badge)
+            build_assets(c, items);
+            continue;
+        }
         if (c.segment == core::Segment::Pages) {
             // Sides may have moved (a page added before, a section): the spreads again.
             const auto groups = m_grouping ? m_grouping() : std::vector<std::vector<std::string>>{};
@@ -1032,6 +1123,10 @@ void Navigator::refresh(const core::Outline* o) {
                 auto& [title, badge] = l->second;
                 if (title->get_text().raw() != it->title) title->set_text(it->title);
                 if (c.segment == core::Segment::Styles) specimen(*title, *it);   // s287: its face may have changed
+                if (auto sm = c.samples.find(it->id); sm != c.samples.end()) {   // s292
+                    sm->second->set_text(readable(it->thumb.sample));
+                    sm->second->set_visible(!readable(it->thumb.sample).empty());
+                }
                 badge->set_text(it->badge);
                 badge->set_visible(!it->badge.empty());
                 if (it->thumb.flag) badge->add_css_class("cx-warn");

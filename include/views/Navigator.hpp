@@ -123,6 +123,7 @@ private:
         std::vector<std::vector<std::string>> spreads;   // pages: as shown
         std::map<std::string, Gtk::ToggleButton*> sizes; // pages: S / M / L
         Gtk::Box*                     chips = nullptr;   // s287: Colors -- the chips' column (its first row is `flow`)
+        std::map<std::string, Gtk::Label*> samples;      // s292: Stories -- each one's first words
     };
 
     Card*       card(core::Segment s);
@@ -140,6 +141,7 @@ private:
     void        on_list_changed(Card& c);
     void        scroll_to(Gtk::Widget& w);
     void        build_chips(Card& c, const std::vector<const core::Item*>& items);   // s287
+    void        build_assets(Card& c, const std::vector<const core::Item*>& items);  // s292
     static void specimen(Gtk::Label& l, const core::Item& it);                         // s287
     // s278: drag and drop
     struct Hit { std::string page; int zone = 0; };   // zone: -1 before, 0 onto, +1 after

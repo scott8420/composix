@@ -240,6 +240,12 @@ void read_styles(const Node* group, Book& b, bool automatic, const std::string& 
             s.outline = std::atoi(k.attr_or("style:default-outline-level", "0").c_str());
             s.automatic = automatic;
             read_props(k, s.props, b.fonts);
+            if (s.family == "section")   // s293: a section's columns
+                if (const auto* sp = k.child("style:section-properties"))
+                    if (const auto* cs = sp->child("style:columns")) {
+                        const int n = std::clamp(std::atoi(cs->attr_or("fo:column-count", "1").c_str()), 1, 12);
+                        if (n >= 2) b.section_columns[s.name] = {n, std::max(0.0, length(cs->attr_or("fo:column-gap"), 12))};
+                    }
             if (!s.name.empty() && (s.family == "paragraph" || s.family == "text")) b.styles[s.name] = std::move(s);
         } else if (k.name == "style:default-style") {
             read_props(k, b.defaults[k.attr_or("style:family")], b.fonts);
@@ -458,7 +464,8 @@ struct Gather {
     }
 };
 
-struct ListAt { std::string style; int level = 0; bool header = false; int start = 0; };
+struct ListAt { std::string style; int level = 0; bool header = false; int start = 0;
+                int sec_cols = 0; double sec_gap = 0; };   // s293: inside a section of columns
 
 void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}) {
     for (const auto& k : n.kids) {
@@ -467,6 +474,8 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}
         if (nm == "text:p" || nm == "text:h") {
             Para p;
             p.style = k.attr_or("text:style-name");
+            p.section_cols = list.sec_cols;   // s293
+            p.section_gap = list.sec_gap;
             if (nm == "text:h") p.outline = std::max(1, std::atoi(k.attr_or("text:outline-level", "1").c_str()));
             if (list.level > 0 && !list.header && nm == "text:p") {   // s243: an item's paragraph -- numbered / bulleted
                 p.list = list.style;
@@ -497,7 +506,14 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}
             in.header = nm == "text:list-header";
             in.start = std::atoi(k.attr_or("text:start-value", "0").c_str());
             read_block(k, b, out, in);
-        } else if (nm == "text:section" || nm == "text:index-body") {
+        } else if (nm == "text:section") {   // s293: a section's columns go with its paragraphs
+            ListAt in = list;
+            if (const auto it = b.section_columns.find(k.attr_or("text:style-name")); it != b.section_columns.end()) {
+                in.sec_cols = it->second.first;
+                in.sec_gap = it->second.second;
+            }
+            read_block(k, b, out, in);
+        } else if (nm == "text:index-body") {
             read_block(k, b, out, list);
         } else if (nm == "table:table") {
             ++b.tables;
@@ -509,6 +525,19 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}
                 if (const auto* tt = src->child("text:index-title-template")) {
                     t.title_style = tt->attr_or("text:style-name");
                     for (const auto& x : tt->kids) if (x.is_text()) t.title += x.text;
+                }
+                for (const auto* e : src->children("text:table-of-content-entry-template")) {   // s294: every level's
+                    const int lv = std::atoi(e->attr_or("text:outline-level", "0").c_str());
+                    if (lv >= 1 && lv <= 10) {
+                        if (static_cast<int>(t.level_entries.size()) < lv) t.level_entries.resize(static_cast<std::size_t>(lv));
+                        auto& L = t.level_entries[static_cast<std::size_t>(lv - 1)];
+                        L.style = e->attr_or("text:style-name");
+                        if (const auto* ts = e->child("text:index-entry-tab-stop"); ts && ts->attr_or("style:type") == "right") {
+                            L.right_tab = true;
+                            L.leader = ts->attr_or("style:leader-char");
+                            if (L.leader == " ") L.leader.clear();
+                        }
+                    }
                 }
                 for (const auto* e : src->children("text:table-of-content-entry-template"))
                     if (e->attr_or("text:outline-level") == "1") {

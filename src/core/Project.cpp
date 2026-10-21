@@ -185,7 +185,7 @@ std::string style_group(const Field& f) {
         {"ot_frac", "OpenType"}, {"ot_ordn", "OpenType"}, {"ot_swsh", "OpenType"}, {"ot_sset", "OpenType"},   // s267
         {"align", "Paragraph"}, {"before", "Paragraph"}, {"after", "Paragraph"}, {"top_space", "Paragraph"}, {"lindent", "Paragraph"}, {"rindent", "Paragraph"},
         {"findent", "Paragraph"}, {"indent_after", "Paragraph"}, {"tabs", "Paragraph"}, {"drop_lines", "Paragraph"},
-        {"drop_chars", "Paragraph"}, {"span", "Paragraph"}, {"split_gutter", "Paragraph"},
+        {"drop_chars", "Paragraph"}, {"span", "Paragraph"}, {"split_gutter", "Paragraph"}, {"split_run", "Paragraph"},
         {"align_grid", "Flow"}, {"hyphenate", "Flow"}, {"lang", "Flow"}, {"hyph_limit", "Flow"}, {"hyph_shortest", "Flow"}, {"hyph_last_word", "Flow"},
         {"keep_next", "Flow"}, {"keep_lines", "Flow"}, {"pstart", "Flow"},
         {"list_type", "List"}, {"list_bullet", "List"}, {"list_num", "List"}, {"list_cont", "List"}, {"list_level", "List"},
@@ -619,6 +619,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                     std::vector<Choice> g_ch;
                     for (double v : {6.0, 9.0, 12.0, 18.0, 24.0}) g_ch.push_back({pts(v), pt(v)});
                     f.push_back({"Split gutter", pt(s.split_gutter), "split_gutter", g_ch});
+                    f.push_back({"Split together", s.split_run ? "With the paragraphs after" : "Each paragraph", "split_run",   // s293
+                                 {{"0", "Each paragraph"}, {"1", "With the paragraphs after"}}});
                 }
                 // s036: lines on the page's baseline grid.
                 f.push_back({"Baseline grid", s.align_grid ? "Align to grid" : "Off", "align_grid",

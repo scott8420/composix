@@ -104,6 +104,8 @@ struct Para {
     std::vector<Picture> pictures;      // s244: those anchored in it (Book::images takes them)
     std::vector<IndexMark> index;       // s286: one for each kMarkIndex in text, in order
     std::vector<std::string> cites;     // s291: one for each kMarkRef in text -- the source's identifier
+    int               section_cols = 0;  // s293: in a section of 2+ columns: how many, and the gap
+    double            section_gap = 0;
 };
 
 struct PageLayout {
@@ -139,6 +141,10 @@ struct Toc {
     int         entries = 0;            // as LibreOffice last wrote it
     bool        right_tab = false;      // s272: level 1's page number at the right edge (its entry template's tab)
     std::string leader;                 //        what fills up to it ("." dots; "" none)
+    // s294: every level's own entry template -- its style, its right tab and leader
+    // (index 0 is level 1; a level the file doesn't give: "" / none).
+    struct Level { std::string style; bool right_tab = false; std::string leader; };
+    std::vector<Level> level_entries;
 };
 
 struct Book {
@@ -163,6 +169,8 @@ struct Book {
     std::map<std::string, Source>     sources;
     std::vector<std::string>          source_order;
     std::vector<Index>                bibliographies;
+    // s293: a section style's columns (style:section-properties) -- count, gap.
+    std::map<std::string, std::pair<int, double>> section_columns;
     int tables = 0, pictures = 0, contents = 0;   // what wasn't kept (s271: contents -- an index / bibliography)
     // A style's property, its chain followed (named parents; the family's default last).
     Props resolved(const std::string& style) const;
