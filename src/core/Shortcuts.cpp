@@ -122,6 +122,10 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Frames", "win.bring-front",   {"<Ctrl><Shift>bracketright", "<Ctrl><Shift>braceright"}, "Ctrl+Shift+]", "Bring the picked frames to the front"},
         {"Frames", "win.bring-forward", {"<Ctrl>bracketright"}, "", "Bring the picked frames forward one"},
         {"Frames", "win.duplicate-frames", {"<Ctrl><Shift><Alt>d"}, "", "Duplicate the picked frames (a step down and right; text: a copy of the story)"},   // s282
+        {"Frames", "win.group",          {"<Ctrl>g"}, "", "Group the picked frames -- picked and moved as one (Ctrl+click: one inside)"},   // s300
+        {"Frames", "win.ungroup",        {"<Ctrl><Shift>g"}, "", "Ungroup"},
+        {"Frames", "win.lock",           {"<Ctrl>l"}, "", "Lock the picked frames -- not picked or moved until unlocked"},   // s301
+        {"Frames", "win.unlock-spread",  {"<Ctrl><Alt>l"}, "", "Unlock every frame on the spread shown"},
         {"Frames", "win.step-repeat",    {"<Ctrl><Shift><Alt>u"}, "", "Step and Repeat -- copies of the picked frames, each a step on"},   // s284 (Ctrl+Alt+U is the index mark here)
         {"Frames", "win.copy-frames",    {}, "Ctrl+C", "Copy the picked frames (not while typing: then the words)"},
         {"Frames", "win.cut-frames",     {}, "Ctrl+X", "Cut the picked frames"},

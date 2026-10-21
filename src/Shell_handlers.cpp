@@ -866,6 +866,48 @@ void Shell::bind_context_actions() {  // bindings
     add_action("paste-frames", [this] { paste_here(false); });   // s297: another program's words, else our frames
     add_action("paste-in-place", [this] { paste_here(true); });
     add_action("duplicate-frames", [this] { duplicate_picked(); });
+    // s299: align / distribute the picked frames (Object menu, the inspector's Align row)
+    add_action_with_parameter("align", Glib::Variant<Glib::ustring>::variant_type(), [this](const Glib::VariantBase& p) {
+        const std::string v = Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(p).get();   // "e:to" -- e 0..5, to s/m/p
+        if (v.size() < 3) return;
+        const int e = v[0] - '0';
+        auto to = v[2] == 'p' ? core::doc::AlignTo::Page : v[2] == 'm' ? core::doc::AlignTo::Margins : core::doc::AlignTo::Selection;
+        const auto ids = picked_frames();
+        // one frame (or one group) "to each other": to the margins instead (s302)
+        if (to == core::doc::AlignTo::Selection) {
+            std::set<std::string> units;
+            for (const auto& id : ids) if (const auto* f = m_doc.as<core::Frame>(id)) units.insert(f->group.empty() ? id : f->group);
+            if (units.size() < 2) to = core::doc::AlignTo::Margins;
+        }
+        if (core::doc::align_frames(m_journal, m_doc, m_canvas_view.canvas().placed(), ids, e, to)) after_frames_changed(ids);
+    });
+    add_action_with_parameter("distribute", Glib::Variant<Glib::ustring>::variant_type(), [this](const Glib::VariantBase& p) {
+        const int how = std::atoi(Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(p).get().c_str());
+        const auto ids = picked_frames();
+        if (core::doc::distribute_frames(m_journal, m_doc, m_canvas_view.canvas().placed(), ids, how)) after_frames_changed(ids);
+    });
+    // s300: group / ungroup
+    add_action("group", [this] {
+        const auto ids = picked_frames();
+        if (core::doc::group_frames(m_journal, m_doc, ids)) after_frames_changed(ids);
+    });
+    add_action("ungroup", [this] {
+        const auto ids = picked_frames();
+        if (core::doc::ungroup_frames(m_journal, m_doc, ids)) after_frames_changed(ids);
+    });
+    // s301: lock / unlock
+    add_action("lock", [this] {
+        const auto ids = picked_frames();
+        if (core::doc::lock_frames(m_journal, m_doc, ids, true)) after_frames_changed({});
+    });
+    add_action("unlock-spread", [this] {
+        std::vector<std::string> owners;
+        for (const auto& p : m_canvas_view.canvas().placed()) owners.push_back(p.id);
+        if (m_main.get_visible_child_name() != "canvas") return;
+        const int n = core::doc::unlock_all(m_journal, m_doc, owners);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("unlocked {} frame(s) on the spread", n);
+        if (n > 0) after_frames_changed({});
+    });
     // s279: the navigator's right-click
     add_action("nav-open", [this] { if (!m_nav_ctx.items.empty()) m_nav.select_items(m_nav_ctx.items); });
     add_action("nav-add-page", [this] {
@@ -961,6 +1003,15 @@ void Shell::on_canvas_context(const views::Canvas::ContextHit& hit) {  // handle
         arrange->append_submenu("Text Wrap", wrap);
         if (text) arrange->append(ignoring ? "Let Wrap Push the Text" : "Ignore Others' Wrap", "win.frame-ignore-wrap");
         menu->append_section(arrange);
+        {   // s300 / s301: group, lock
+            auto gl = Gio::Menu::create();
+            bool grouped = false;
+            for (const auto& id : sel) if (const auto* f = m_doc.as<core::Frame>(id)) grouped = grouped || !f->group.empty();
+            if (sel.size() >= 2) gl->append("Group", "win.group");
+            if (grouped) gl->append("Ungroup", "win.ungroup");
+            gl->append("Lock", "win.lock");
+            menu->append_section(gl);
+        }
         auto clip = Gio::Menu::create();   // s282
         clip->append("Cut", "win.cut-frames");
         clip->append("Copy", "win.copy-frames");
@@ -983,6 +1034,11 @@ void Shell::on_canvas_context(const views::Canvas::ContextHit& hit) {  // handle
             paste->append("Paste", "win.paste-frames");
             paste->append("Paste in Place", "win.paste-in-place");
             menu->append_section(paste);
+        }
+        {   // s301
+            auto un = Gio::Menu::create();
+            un->append("Unlock All on Spread", "win.unlock-spread");
+            menu->append_section(un);
         }
         auto more = Gio::Menu::create();
         more->append("Add Page After", "win.page-add-after");
@@ -1220,6 +1276,15 @@ void Shell::paste_here(bool in_place) {  // handler
     });
 }
 
+void Shell::after_frames_changed(const std::vector<std::string>& pick) {  // helper
+    auto& cv = m_canvas_view.canvas();
+    cv.model_changed();
+    std::vector<std::string> keep;
+    for (const auto& id : pick) if (const auto* f = m_doc.as<core::Frame>(id); f && !f->locked) keep.push_back(id);
+    cv.set_selection(keep);
+    on_canvas_selection();
+}
+
 void Shell::duplicate_picked() {  // handler
     const auto ids = picked_frames();
     if (ids.empty()) return;
@@ -1427,6 +1492,19 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         return;
     }
     if (key == "notes_panel") { open_notes_panel(); return; }   // s121
+    if (key == "align_to") {   // s302: an app setting, not the document's
+        m_settings["align.to"] = choice;
+        core::save_settings(m_settings_file, m_settings);
+        on_canvas_selection();
+        return;
+    }
+    if (key == "align") {
+        const std::string to = m_settings.count("align.to") ? m_settings["align.to"] : std::string("s");
+        activate_action("win.align", Glib::Variant<Glib::ustring>::create(choice + ":" + to));
+        return;
+    }
+    if (key == "distribute") { activate_action("win.distribute", Glib::Variant<Glib::ustring>::create(choice)); return; }
+    if (key == "arrange_act") { activate_action("win." + choice); return; }
     if (key == "assets_linked" && choice == "embed") {   // s247: Embed All
         asset_action("embed", core::linked_assets(m_doc, m_project_dir));
         Glib::signal_idle().connect_once([this] { on_tiles_selection(m_inspected); });
@@ -2013,6 +2091,37 @@ void Shell::on_canvas_selection() {  // handler
         for (auto& it : items)
             for (auto& fl : it.fields)
                 if (fl.edit == "turn_ref") fl.value = core::turn_ref_choices()[static_cast<std::size_t>(ref)].label;
+    }
+    {   // s302: Align / Distribute and group / lock, under one heading -- the same rows on every frame (shared)
+        const std::string to = m_settings.count("align.to") ? m_settings["align.to"] : std::string("s");
+        static const std::vector<core::Choice> tos{{"s", "Each other"}, {"m", "Margins"}, {"p", "Page"}};
+        std::string to_label = "Each other";
+        for (const auto& c : tos) if (c.id == to) to_label = c.label;
+        bool grouped = false;
+        for (const auto& id : sel) if (const auto* f = m_doc.as<core::Frame>(id)) grouped = grouped || !f->group.empty();
+        for (auto& it : items) {
+            core::Field at{"Align to", to_label, "align_to", tos};
+            at.group = "Align";
+            core::Field al{"", "", "align", {{"0", "\u21E4 Left"}, {"1", "\u2194 Centre"}, {"2", "Right \u21E5"},
+                                              {"3", "\u2912 Top"}, {"4", "\u2195 Middle"}, {"5", "Bottom \u2913"}}};
+            al.buttons = true;
+            al.group = "Align";
+            it.fields.push_back(at);
+            it.fields.push_back(al);
+            if (sel.size() >= 3) {
+                core::Field ds{"", "", "distribute", {{"0", "Centres across"}, {"1", "Centres down"}, {"2", "Space across"}, {"3", "Space down"}}};
+                ds.buttons = true;
+                ds.group = "Align";
+                it.fields.push_back(ds);
+            }
+            core::Field gl{"", "", "arrange_act", {}};
+            if (sel.size() >= 2) gl.choices.push_back({"group", "Group"});
+            if (grouped) gl.choices.push_back({"ungroup", "Ungroup"});
+            gl.choices.push_back({"lock", "Lock"});
+            gl.buttons = true;
+            gl.group = "Align";
+            it.fields.push_back(gl);
+        }
     }
     std::vector<const core::Item*> ptrs;
     for (const auto& it : items) ptrs.push_back(&it);

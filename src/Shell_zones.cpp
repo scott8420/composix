@@ -271,6 +271,26 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: the menubar's model (s27
         m_arrange_menu->append_section(outline);
         // The menubar's Object: the same items, laid out flat.
         object->append_section(m_arrange_menu);
+        {   // s299: align and distribute
+            auto al = Gio::Menu::create();
+            static const char* edges[] = {"Left Edges", "Horizontal Centres", "Right Edges", "Top Edges", "Vertical Centres", "Bottom Edges"};
+            for (int e = 0; e < 6; ++e) al->append(edges[e], "win.align::" + std::to_string(e) + ":s");
+            auto dist = Gio::Menu::create();
+            dist->append("Horizontal Centres", "win.distribute::0");
+            dist->append("Vertical Centres", "win.distribute::1");
+            dist->append("Horizontal Space", "win.distribute::2");
+            dist->append("Vertical Space", "win.distribute::3");
+            auto am = Gio::Menu::create();
+            am->append_submenu("Align", al);
+            am->append_submenu("Distribute", dist);
+            object->append_section(am);
+            auto gl = Gio::Menu::create();   // s300 / s301
+            gl->append("Group", "win.group");
+            gl->append("Ungroup", "win.ungroup");
+            gl->append("Lock", "win.lock");
+            gl->append("Unlock All on Spread", "win.unlock-spread");
+            object->append_section(gl);
+        }
         auto wrap = Gio::Menu::create();
         wrap->append("None", "win.frame-wrap::0");
         wrap->append("Wrap Around", "win.frame-wrap::1");

@@ -1941,5 +1941,55 @@ void part9() {
         j.undo();
         check("paste text: one step", !d.as<core::Frame>(f));
     }
+
+    // -- s299 - s301: align, distribute, group, lock ------------------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.pages().back();
+        const auto a = D::add_frame(j, d, page, core::FrameKind::Shape, {40, 40, 30, 20});
+        const auto b = D::add_frame(j, d, page, core::FrameKind::Shape, {100, 90, 50, 40});
+        const auto c = D::add_frame(j, d, page, core::FrameKind::Shape, {250, 200, 20, 20});
+        const auto pl = core::layout_pages(d, {page});
+        const auto F = [&](const std::string& id) { return *d.as<core::Frame>(id); };
+        check("align: left edges to the selection's", D::align_frames(j, d, pl, {a, b, c}, 0, D::AlignTo::Selection) &&
+                                                       F(a).x == 40 && F(b).x == 40 && F(c).x == 40);
+        check("align: bottoms", D::align_frames(j, d, pl, {a, b, c}, 5, D::AlignTo::Selection) &&
+                                 F(a).y + F(a).h == 220 && F(b).y + F(b).h == 220 && F(c).y == 200);
+        j.undo();
+        j.undo();
+        check("align: one step each (undone)", F(a).x == 40 && F(b).x == 100 && F(c).x == 250 && F(b).y == 90);
+        check("distribute: centres across -- the middle one midway", D::distribute_frames(j, d, pl, {a, b, c}, 0) &&
+                                                                    std::abs((F(b).x + F(b).w / 2) - (55 + 260) / 2.0) < 1e-6 && F(a).x == 40 && F(c).x == 250);
+        j.undo();
+        check("distribute: even gaps across", D::distribute_frames(j, d, pl, {a, b, c}, 2) &&
+                                              std::abs((F(b).x - (F(a).x + F(a).w)) - (F(c).x - (F(b).x + F(b).w))) < 1e-6);
+        j.undo();
+        check("distribute: two -- nothing", !D::distribute_frames(j, d, pl, {a, b}, 0));
+        const auto m = core::margin_rect(d, page);
+        check("align: to the margins' right", D::align_frames(j, d, pl, {a}, 2, D::AlignTo::Margins) && std::abs(F(a).x + F(a).w - (m.x + m.w)) < 1e-6);
+        j.undo();
+        check("group: two frames, one id", D::group_frames(j, d, {a, b}) && !F(a).group.empty() && F(a).group == F(b).group);
+        const auto with = core::with_groups(d, {a});
+        check("group: one picked brings the other", with.size() == 2 && std::find(with.begin(), with.end(), b) != with.end());
+        check("group: aligned as one unit (its bounds), the single frame to it",
+              D::align_frames(j, d, pl, {a, b, c}, 0, D::AlignTo::Selection) && F(a).x == 40 && F(b).x == 100 && F(c).x == 40);
+        j.undo();
+        check("ungroup", D::ungroup_frames(j, d, {a}) && F(a).group.empty() && F(b).group.empty());
+        const auto picked_c = [&] { return core::hit_frame(d, pl, pl.front().r.x + 260, pl.front().r.y + 210, 0) == c; };
+        const auto boxed_c = [&] { const auto in = core::frames_in(d, pl, {pl.front().r.x + 240, pl.front().r.y + 190, 50, 50});
+                                   return std::find(in.begin(), in.end(), c) != in.end(); };
+        check("lock: picked before it", picked_c() && boxed_c());
+        check("lock: not picked on the canvas", D::lock_frames(j, d, {c}, true) && F(c).locked && !picked_c());
+        check("lock: not in a marquee", !boxed_c());
+        check("unlock all on the page", D::unlock_all(j, d, {page}) == 1 && !F(c).locked);
+        core::Doc e;
+        D::group_frames(j, d, {a, b});
+        D::lock_frames(j, d, {c}, true);
+        check("group / lock: saved", core::from_json(e, core::to_json(d)) && e.as<core::Frame>(a)->group == F(a).group && e.as<core::Frame>(c)->locked);
+    }
 }
 }  // namespace cxtest

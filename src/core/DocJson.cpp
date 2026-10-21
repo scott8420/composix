@@ -188,6 +188,8 @@ json to(const Record& r) {
                 j["path"] = pts;
             }
             if (v.ignore_wrap) j["ignore_wrap"] = true;                // s069
+            if (!v.group.empty()) j["group"] = v.group;               // s300
+            if (v.locked) j["locked"] = true;                         // s301
             if (v.role) j["role"] = v.role;                            // s275
             if (!(v.inset == Sides{})) j["inset"] = {v.inset.top, v.inset.right, v.inset.bottom, v.inset.left};   // s040
             if (!(v.col_rule == ColumnRule{}))   // s055
@@ -482,6 +484,8 @@ std::optional<Record> from(const json& j) {
         v.autosize_from = std::clamp(val(j, "autosize_from", 0), 0, 2);
         v.autosize_min = std::max(0.0, val(j, "autosize_min", 0.0));
         v.ignore_wrap = val(j, "ignore_wrap", false);   // s069
+        v.group = val(j, "group", std::string{});      // s300
+        v.locked = val(j, "locked", false);            // s301
         v.role = std::clamp(val(j, "role", 0), 0, 2);   // s275
         v.across = val(j, "across", false);   // s155
         v.shape = de(j, "shape", ShapeKind::Rect);   // s197

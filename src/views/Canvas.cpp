@@ -825,6 +825,31 @@ std::string Canvas::out_port_hit(double sx, double sy) const {
 void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
     draw_threads(cr);
     cr->set_line_width(1);
+    {   // s302: a locked frame -- a small padlock at its top left (why it won't pick)
+        for (const auto& p : m_placed)
+            for (const auto& fid : m_doc.frames_on(p.id)) {
+                const auto* f = m_doc.as<core::Frame>(fid);
+                if (!f || !f->locked || !core::on_panel(m_doc, p, fid)) continue;
+                double sx, sy;
+                m_vp.to_screen(p.r.x + f->x, p.r.y + f->y, sx, sy);
+                const double x = std::round(sx) + 3.5, y = std::round(sy) + 3.5;
+                cr->save();
+                cr->set_source_rgba(1, 1, 1, 0.85);
+                cr->rectangle(x - 2, y - 2, 13, 15);
+                cr->fill();
+                cr->set_source_rgba(0.25, 0.25, 0.3, 0.9);
+                cr->set_line_width(1.4);
+                cr->begin_new_sub_path();
+                cr->arc(x + 4.5, y + 4.5, 2.8, M_PI, 2 * M_PI);   // the shackle
+                cr->line_to(x + 7.3, y + 6.5);
+                cr->move_to(x + 1.7, y + 6.5);
+                cr->line_to(x + 1.7, y + 4.5);
+                cr->stroke();
+                cr->rectangle(x, y + 6.5, 9, 6);   // the body
+                cr->fill();
+                cr->restore();
+            }
+    }
     if (m_drag == Drag::Draw && (m_draw.w > 0 || m_draw.h > 0)) {   // the frame being drawn
         const Rect r = m_vp.to_screen(m_draw);
         std::vector<double> dash{5, 3};
@@ -1794,15 +1819,21 @@ void Canvas::on_drag_begin(double x, double y) {
     const auto hit = core::hit_frame(m_doc, m_placed, dx, dy, 3 / m_vp.scale());
     const bool adding = m_mods_shift;
     if (!hit.empty()) {
+        // s300: a grouped frame brings its group (Ctrl+click: just the one, inside it)
+        const auto unit = m_mods_ctrl ? std::vector<std::string>{hit} : core::with_groups(m_doc, {hit});
         if (adding) {   // Shift-click: toggle, no move
             auto s = m_sel;
-            const auto it = std::find(s.begin(), s.end(), hit);
-            if (it == s.end()) s.push_back(hit); else s.erase(it);
+            const bool in = std::find(s.begin(), s.end(), hit) != s.end();
+            for (const auto& u : unit) {
+                const auto it = std::find(s.begin(), s.end(), u);
+                if (in && it != s.end()) s.erase(it);
+                else if (!in && it == s.end()) s.push_back(u);
+            }
             pick(s);
             m_drag = Drag::None;
             return;
         }
-        if (std::find(m_sel.begin(), m_sel.end(), hit) == m_sel.end()) pick({hit});
+        if (std::find(m_sel.begin(), m_sel.end(), hit) == m_sel.end()) pick(unit);
         m_drag = Drag::Move;
         m_own0.clear();
         for (const auto& id : m_sel) m_own0[id] = core::frame_rect(*m_doc.as<core::Frame>(id));
@@ -1997,7 +2028,7 @@ void Canvas::on_drag_update(double ox, double oy) {
             return;
         }
         auto s2 = m_sel0;
-        for (const auto& id : core::frames_in(m_doc, m_placed, Rect::from_corners(x0, y0, x1, y1)))
+        for (const auto& id : core::with_groups(m_doc, core::frames_in(m_doc, m_placed, Rect::from_corners(x0, y0, x1, y1))))   // s300: whole groups
             if (std::find(s2.begin(), s2.end(), id) == s2.end()) s2.push_back(id);
         pick(s2);
         queue_draw();

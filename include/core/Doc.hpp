@@ -331,6 +331,9 @@ struct Frame {
     // (1 = as set): text, stroke and picture with it. Innermost in the turn:
     // owner = C + R . Shear . Flip . Scale . (p - C).
     double      sx = 1, sy = 1;
+    // (last, so the aggregate initialisers that fill the front keep working)
+    std::string group;                   // s300: frames grouped share an id ("group.N"; "" none) -- picked and moved as one
+    bool        locked = false;          // s301: not picked on the canvas, so not moved or changed by hand
     bool operator==(const Frame&) const = default;
 };
 
@@ -1217,6 +1220,22 @@ std::vector<Doc::Id> paste_clip_into(Doc& d, const FrameClip& clip, double dx, d
                                      const std::map<Doc::Id, Doc::Id>& owners, const Doc::Id& onto, std::vector<Doc::Id>& made);
 // Paste: the clip onto page / master `onto`, moved (dx, dy). One step; the frames made.
 std::vector<Doc::Id> paste_frames(DocJournal& j, Doc& d, const FrameClip& clip, const Doc::Id& onto, double dx, double dy);
+// s299: Align -- each unit (a group's frames together, else a frame) moved so
+// its `edge` (0 left, 1 centre across, 2 right, 3 top, 4 middle, 5 bottom)
+// meets the target's: the selection's bounds (2+ units), the margins or the
+// page of the first frame's page (layout coordinates via `pl`). One step.
+enum class AlignTo { Selection, Margins, Page };
+bool align_frames(DocJournal& j, Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& frames, int edge, AlignTo to);
+// s299: Distribute (3+ units) -- 0 centres evenly across, 1 down; 2 even gaps
+// across, 3 down -- the outermost two stay put. One step.
+bool distribute_frames(DocJournal& j, Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& frames, int how);
+// s300: Group (2+ frames: one new group; a grouped frame among them leaves its
+// old group) / Ungroup (every group among them). One step each.
+bool group_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
+bool ungroup_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
+// s301: Lock / Unlock frames; Unlock every frame on `owners`. One step each.
+bool lock_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, bool lock);
+int  unlock_all(DocJournal& j, Doc& d, const std::vector<Doc::Id>& owners);
 // s297: words from another program pasted onto a page -- a text frame at
 // `r` (its height then follows the text: auto-size), the words its story's
 // paragraphs (a line break a new paragraph), in the first paragraph style.
@@ -1994,6 +2013,8 @@ Doc::Id hit_master_item(const Doc& d, const std::vector<Placed>& pl, double x, d
 std::vector<MasterItemOn> master_items_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r);
 // Every own frame touched by `r` (touching selects -- Curvz's marquee rule).
 std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, const Rect& r);
+// s300: `ids` with every frame grouped with any of them (in the document's order, the given first).
+std::vector<Doc::Id> with_groups(const Doc& d, const std::vector<Doc::Id>& ids);
 // Guides on a page or master (its own; master_chain gives the inherited).
 std::vector<Doc::Id> guides_on(const Doc& d, const Doc::Id& owner);
 // The guide of a placed page / master (its OWN, not a master's) within `tol`

@@ -1512,6 +1512,187 @@ std::vector<Doc::Id> paste_frames(DocJournal& j, Doc& d, const FrameClip& clip, 
     return out;
 }
 
+// ── s299 - s301: align, distribute, group, lock ──────────────────────────────
+namespace {
+struct Unit { std::vector<Doc::Id> ids; Rect r; };   // a group's frames together, or one frame -- layout coordinates
+std::vector<Unit> units_of(const Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& frames) {
+    std::vector<Unit> out;
+    std::map<std::string, std::size_t> by_group;
+    for (const auto& id : frames) {
+        const auto* f = d.as<Frame>(id);
+        if (!f || f->locked) continue;
+        const Rect r = frame_in_layout(d, pl, id);
+        if (r.w <= 0 && r.h <= 0) continue;
+        if (!f->group.empty()) {
+            if (auto it = by_group.find(f->group); it != by_group.end()) {
+                auto& u = out[it->second];
+                u.ids.push_back(id);
+                u.r = u.r.unite(r);
+                continue;
+            }
+            by_group[f->group] = out.size();
+        }
+        out.push_back({{id}, r});
+    }
+    return out;
+}
+double edge_of(const Rect& r, int e) {
+    switch (e) {
+    case 0: return r.x;
+    case 1: return r.cx();
+    case 2: return r.r();
+    case 3: return r.y;
+    case 4: return r.cy();
+    default: return r.b();
+    }
+}
+std::string fresh_group(const Doc& d) {
+    int n = 0;
+    for (const auto& id : d.ids_of<Frame>()) {
+        const auto& g = d.as<Frame>(id)->group;
+        if (g.rfind("group.", 0) == 0) n = std::max(n, std::atoi(g.c_str() + 6));
+    }
+    return "group." + std::to_string(n + 1);
+}
+// Every frame of each unit moved by its own (dx, dy) -- one step.
+bool move_units(DocJournal& j, Doc& d, const std::vector<Unit>& us, const std::vector<std::pair<double, double>>& by, const std::string& label) {
+    std::vector<Doc::Id> ids;
+    bool any = false;
+    for (std::size_t k = 0; k < us.size(); ++k) {
+        if (std::abs(by[k].first) < 1e-6 && std::abs(by[k].second) < 1e-6) continue;
+        any = true;
+        ids.insert(ids.end(), us[k].ids.begin(), us[k].ids.end());
+    }
+    if (!any) return false;
+    return j.run(label, ids, [&] {
+        for (std::size_t k = 0; k < us.size(); ++k)
+            for (const auto& id : us[k].ids) {
+                Frame f = *d.as<Frame>(id);
+                f.x += by[k].first;
+                f.y += by[k].second;
+                d.put(id, f);
+            }
+    });
+}
+}  // namespace
+
+bool align_frames(DocJournal& j, Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& frames, int edge, AlignTo to) {
+    const auto us = units_of(d, pl, frames);
+    if (us.empty() || edge < 0 || edge > 5) return false;
+    Rect target;
+    if (to == AlignTo::Selection) {
+        if (us.size() < 2) return false;
+        target = us.front().r;
+        for (const auto& u : us) target = target.unite(u.r);
+    } else {
+        const auto* f = d.as<Frame>(us.front().ids.front());
+        const Placed* p = nullptr;
+        for (const auto& q : pl) if (q.id == f->owner) { p = &q; break; }
+        if (!p) return false;
+        if (to == AlignTo::Page) target = p->r;
+        else {
+            const Rect m = margin_rect(d, f->owner, p->side == Side::Any ? Side::Right : p->side);
+            target = {p->r.x + m.x, p->r.y + m.y, m.w, m.h};
+        }
+    }
+    const bool across = edge <= 2;
+    std::vector<std::pair<double, double>> by;
+    for (const auto& u : us) {
+        const double delta = edge_of(target, edge) - edge_of(u.r, edge);
+        by.push_back(across ? std::pair{delta, 0.0} : std::pair{0.0, delta});
+    }
+    static const char* names[] = {"Align left", "Align centres", "Align right", "Align tops", "Align middles", "Align bottoms"};
+    return move_units(j, d, us, by, names[edge]);
+}
+
+bool distribute_frames(DocJournal& j, Doc& d, const std::vector<Placed>& pl, const std::vector<Doc::Id>& frames, int how) {
+    auto us = units_of(d, pl, frames);
+    if (us.size() < 3 || how < 0 || how > 3) return false;
+    const bool across = how == 0 || how == 2;
+    std::vector<std::size_t> order(us.size());
+    for (std::size_t k = 0; k < order.size(); ++k) order[k] = k;
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        return across ? us[a].r.cx() < us[b].r.cx() : us[a].r.cy() < us[b].r.cy();
+    });
+    std::vector<std::pair<double, double>> by(us.size(), {0.0, 0.0});
+    const auto& first = us[order.front()].r;
+    const auto& last = us[order.back()].r;
+    const std::size_t n = order.size();
+    if (how <= 1) {   // centres evenly
+        const double a = across ? first.cx() : first.cy(), b = across ? last.cx() : last.cy();
+        for (std::size_t k = 1; k + 1 < n; ++k) {
+            const auto& r = us[order[k]].r;
+            const double want = a + (b - a) * static_cast<double>(k) / static_cast<double>(n - 1);
+            const double delta = want - (across ? r.cx() : r.cy());
+            by[order[k]] = across ? std::pair{delta, 0.0} : std::pair{0.0, delta};
+        }
+    } else {   // even gaps between them
+        double total = 0;
+        for (const auto i : order) total += across ? us[i].r.w : us[i].r.h;
+        const double span = across ? last.r() - first.x : last.b() - first.y;
+        const double gap = (span - total) / static_cast<double>(n - 1);
+        double at = (across ? first.r() : first.b()) + gap;
+        for (std::size_t k = 1; k + 1 < n; ++k) {
+            const auto& r = us[order[k]].r;
+            const double delta = at - (across ? r.x : r.y);
+            by[order[k]] = across ? std::pair{delta, 0.0} : std::pair{0.0, delta};
+            at += (across ? r.w : r.h) + gap;
+        }
+    }
+    static const char* names[] = {"Distribute centres across", "Distribute centres down", "Distribute spacing across", "Distribute spacing down"};
+    return move_units(j, d, us, by, names[how]);
+}
+
+bool group_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames) {
+    std::vector<Doc::Id> ids;
+    for (const auto& id : frames) if (d.as<Frame>(id) && std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+    if (ids.size() < 2) return false;
+    const auto g = fresh_group(d);
+    return j.run("Group", ids, [&] {
+        for (const auto& id : ids) {
+            Frame f = *d.as<Frame>(id);
+            f.group = g;
+            d.put(id, f);
+        }
+    });
+}
+
+bool ungroup_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames) {
+    std::set<std::string> gs;
+    for (const auto& id : frames) if (const auto* f = d.as<Frame>(id); f && !f->group.empty()) gs.insert(f->group);
+    if (gs.empty()) return false;
+    std::vector<Doc::Id> ids;
+    for (const auto& id : d.ids_of<Frame>()) if (gs.count(d.as<Frame>(id)->group)) ids.push_back(id);
+    return j.run("Ungroup", ids, [&] {
+        for (const auto& id : ids) {
+            Frame f = *d.as<Frame>(id);
+            f.group.clear();
+            d.put(id, f);
+        }
+    });
+}
+
+bool lock_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, bool lock) {
+    std::vector<Doc::Id> ids;
+    for (const auto& id : frames) if (const auto* f = d.as<Frame>(id); f && f->locked != lock) ids.push_back(id);
+    if (ids.empty()) return false;
+    return j.run(lock ? "Lock" : "Unlock", ids, [&] {
+        for (const auto& id : ids) {
+            Frame f = *d.as<Frame>(id);
+            f.locked = lock;
+            d.put(id, f);
+        }
+    });
+}
+
+int unlock_all(DocJournal& j, Doc& d, const std::vector<Doc::Id>& owners) {
+    std::vector<Doc::Id> ids;
+    for (const auto& o : owners)
+        for (const auto& f : d.frames_on(o)) if (d.as<Frame>(f)->locked) ids.push_back(f);
+    if (ids.empty() || !lock_frames(j, d, ids, false)) return 0;
+    return static_cast<int>(ids.size());
+}
+
 Doc::Id paste_text_frame(DocJournal& j, Doc& d, const Doc::Id& page, const Rect& r, const std::string& text) {
     if ((!d.as<Page>(page) && !d.as<Master>(page)) || r.w < 1) return {};
     std::string t = text;
@@ -5751,6 +5932,11 @@ const std::vector<Verb>& verbs() {
         {"duplicate_frames", [](DocJournal& j, Doc& d) { duplicate_frames(j, d, {"frame.2", "frame.4"}, 18, 18); }},   // s281
         {"step_repeat", [](DocJournal& j, Doc& d) { step_repeat(j, d, {"frame.2"}, 3, 12, 0); }},   // s284
         {"paste_text_frame", [](DocJournal& j, Doc& d) { paste_text_frame(j, d, "page.8", {54, 54, 200, 40}, "Words\nfrom elsewhere"); }},   // s297
+        {"group_frames", [](DocJournal& j, Doc& d) { group_frames(j, d, {"frame.2", "frame.4"}); }},   // s300
+        {"lock_frames", [](DocJournal& j, Doc& d) { lock_frames(j, d, {"frame.2"}, true); }},          // s301
+        {"align_frames", [](DocJournal& j, Doc& d) {   // s299
+            align_frames(j, d, layout_pages(d, d.pages()), {"frame.1"}, 0, AlignTo::Page);
+        }},
         {"paste_frames", [](DocJournal& j, Doc& d) { paste_frames(j, d, clip_frames(d, {"frame.2"}), "page.8", 12, 12); }},   // s282
         {"override_master_item", [](DocJournal& j, Doc& d) { override_master_item(j, d, "page.7", "frame.13"); }},   // s025
         {"remove_overrides", [](DocJournal& j, Doc& d) { remove_overrides(j, d, {"frame.15"}); }},
@@ -6657,6 +6843,7 @@ Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double 
         for (auto it = own.rbegin(); it != own.rend(); ++it) {   // topmost first
             if (!on_panel(d, p, *it)) continue;
             const auto& fr = *d.as<Frame>(*it);
+            if (fr.locked) continue;   // s301: a locked frame isn't picked
             double bx = x - p.r.x, by = y - p.r.y;   // s228: in its box, before the turn
             to_box(fr, bx, by);
             if (doc::has_outline(fr)) {   // s203: a line or a path by its outline, not its box
@@ -6728,9 +6915,22 @@ std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, cons
         for (const auto& f : d.frames_on(p.id)) {
             if (!on_panel(d, p, f) || std::find(out.begin(), out.end(), f) != out.end()) continue;
             const auto& fr = *d.as<Frame>(f);
+            if (fr.locked) continue;   // s301
             const Rect b = frame_bounds(fr);   // s228: where it reaches, turned
             if (Rect{p.r.x + b.x, p.r.y + b.y, b.w, b.h}.intersects(r)) out.push_back(f);   // s150: per panel
         }
+    return out;
+}
+
+std::vector<Doc::Id> with_groups(const Doc& d, const std::vector<Doc::Id>& ids) {   // s300
+    std::vector<Doc::Id> out = ids;
+    std::set<std::string> groups;
+    for (const auto& id : ids)
+        if (const auto* f = d.as<Frame>(id); f && !f->group.empty()) groups.insert(f->group);
+    if (groups.empty()) return out;
+    for (const auto& id : d.ids_of<Frame>())
+        if (const auto* f = d.as<Frame>(id); groups.count(f->group) && !f->locked && std::find(out.begin(), out.end(), id) == out.end())
+            out.push_back(id);
     return out;
 }
 
