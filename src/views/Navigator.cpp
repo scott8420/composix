@@ -60,6 +60,11 @@ Navigator::Navigator()
     append(m_scroll);
 }
 
+Navigator::~Navigator() {
+    for (auto& c : m_cardv) if (c.flow) c.flow->remove_all();
+    for (auto& [seg, rs] : m_chip_rows) for (auto* r : rs) r->remove_all();
+}
+
 Navigator::Card* Navigator::card(core::Segment s) {
     for (auto& c : m_cardv)
         if (c.segment == s) return &c;
@@ -79,6 +84,9 @@ Navigator::Card* Navigator::card_of(const std::string& id) {
 // ── building ─────────────────────────────────────────────────────────────────
 void Navigator::set_outline(const core::Outline* o) {
     m_quiet = true;
+    for (auto& c : m_cardv) if (c.flow) c.flow->remove_all();   // s285: a WrapBox lets its children go before it goes
+    for (auto& [seg, rs] : m_chip_rows) for (auto* r : rs) r->remove_all();   // s287
+    m_chip_rows.clear();
     while (auto* c = m_cards.get_first_child()) m_cards.remove(*c);
     m_cardv.clear();
     m_outline = o;
@@ -183,6 +191,8 @@ void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const 
     for (const auto* it : items) c.ids.push_back(it->id);
     if (s == core::Segment::Pages || s == core::Segment::Masters) {
         build_pictures(c, items);
+    } else if (s == core::Segment::Colors) {   // s287: the swatches as chips, a heading over each group
+        build_chips(c, items);
     } else {
         c.list = Gtk::make_managed<Gtk::ListBox>();
         c.list->set_selection_mode(Gtk::SelectionMode::MULTIPLE);
@@ -197,6 +207,7 @@ void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const 
             il->set_xalign(0.0f);
             il->set_hexpand(true);
             il->set_ellipsize(Pango::EllipsizeMode::END);
+            if (s == core::Segment::Styles) specimen(*il, *it);   // s287: the name set in the style
             ib->append(*il);
             auto b = Gtk::make_managed<Gtk::Label>(it->badge);   // always there, hidden when empty
             b->add_css_class("cx-badge");
@@ -221,7 +232,7 @@ void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const 
 
 // Pages: the spreads, a FlowBox child each. Masters: each master's mock-up.
 void Navigator::build_pictures(Card& c, const std::vector<const core::Item*>& items) {
-    if (c.flow) c.body->remove(*c.flow);
+    if (c.flow) { c.flow->remove_all(); c.body->remove(*c.flow); }   // s285: its children let go first
     c.cells.clear();
     c.spreads.clear();
     c.flow = Gtk::make_managed<WrapBox>(2, 4);
@@ -478,7 +489,8 @@ void Navigator::set_thumb_height(int px) {
     for (auto& c : m_cardv) {
         for (auto& [k, b] : c.sizes)
             b->set_active((k == "S" && px == kSmall) || (k == "M" && px == kMedium) || (k == "L" && px == kLarge));
-        if (c.flow && m_outline) build_pictures(c, m_outline->in(c.segment));
+        if (c.flow && m_outline && (c.segment == core::Segment::Pages || c.segment == core::Segment::Masters))
+            build_pictures(c, m_outline->in(c.segment));
     }
     m_quiet = false;
     show_picks();
@@ -829,6 +841,109 @@ void Navigator::wire_card_drag(Card& c) {
     c.box->add_controller(drop);
 }
 
+// s287: a style's name set in its own face -- family, weight, slant, its size
+// (kept between 9 and 16 pt, so the card stays a list).
+void Navigator::specimen(Gtk::Label& l, const core::Item& it) {
+    if (it.thumb.kind != core::ThumbKind::Style) return;
+    Pango::FontDescription fd;
+    if (!it.thumb.family.empty()) fd.set_family(it.thumb.family);
+    if (it.thumb.bold) fd.set_weight(Pango::Weight::BOLD);
+    if (it.thumb.italic) fd.set_style(Pango::Style::ITALIC);
+    double pt = 0;
+    for (const auto& f : it.fields) if (f.label == "Size") pt = std::atof(f.value.c_str());
+    if (pt > 0) fd.set_size(static_cast<int>(std::clamp(pt, 9.0, 16.0) * PANGO_SCALE));
+    auto attrs = Pango::AttrList();
+    auto a = Pango::Attribute::create_attr_font_desc(fd);
+    attrs.insert(a);
+    l.set_attributes(attrs);
+    l.add_css_class("cx-specimen");
+}
+
+void Navigator::build_chips(Card& c, const std::vector<const core::Item*>& items) {
+    if (c.flow) c.flow->remove_all();
+    for (auto* r : m_chip_rows[c.segment]) r->remove_all();
+    if (c.chips) c.body->remove(*c.chips);
+    c.chips = nullptr;
+    c.flow = nullptr;
+    c.cells.clear();
+    auto col = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+    col->add_css_class("cx-chips");
+    c.flow = Gtk::make_managed<WrapBox>(5, 5);
+    std::string group = "\x01";
+    std::vector<std::pair<std::string, WrapBox*>> rows;
+    WrapBox* row = nullptr;
+    for (const auto* it : items) {
+        if (!row || it->group != group) {   // a group's heading, then its chips
+            group = it->group;
+            if (!group.empty()) {
+                auto h = Gtk::make_managed<Gtk::Label>(group);
+                h->set_xalign(0.0f);
+                h->add_css_class("cx-chip-group");
+                col->append(*h);
+            }
+            row = rows.empty() ? c.flow : Gtk::make_managed<WrapBox>(5, 5);
+            rows.push_back({group, row});
+            col->append(*row);
+        }
+        Cell cell;
+        cell.id = it->id;
+        cell.thumb = it->thumb;
+        cell.col = Gtk::make_managed<Gtk::Box>();
+        cell.col->set_name("nav.item." + it->id);
+        cell.col->add_css_class("cx-chip");
+        cell.da = Gtk::make_managed<Gtk::DrawingArea>();
+        cell.da->set_content_width(22);
+        cell.da->set_content_height(22);
+        const std::uint32_t rgb = it->thumb.rgb;
+        const bool flag = it->thumb.flag || field(*it, "Type") == "Spot";   // a spot ink: its corner turned
+        cell.da->set_draw_func([rgb, flag](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+            const double r = 5;
+            cr->begin_new_sub_path();
+            cr->arc(w - r, r, r, -M_PI / 2, 0);
+            cr->arc(w - r, h - r, r, 0, M_PI / 2);
+            cr->arc(r, h - r, r, M_PI / 2, M_PI);
+            cr->arc(r, r, r, M_PI, 3 * M_PI / 2);
+            cr->close_path();
+            cr->set_source_rgb(((rgb >> 16) & 0xff) / 255.0, ((rgb >> 8) & 0xff) / 255.0, (rgb & 0xff) / 255.0);
+            cr->fill_preserve();
+            cr->set_source_rgba(0, 0, 0, 0.18);
+            cr->set_line_width(1);
+            cr->stroke();
+            if (flag) {   // a spot colour: a corner turned down
+                cr->move_to(w - 8, h);
+                cr->line_to(w, h - 8);
+                cr->line_to(w, h);
+                cr->close_path();
+                cr->set_source_rgba(1, 1, 1, 0.85);
+                cr->fill();
+            }
+        });
+        cell.col->append(*cell.da);
+        cell.under = Gtk::make_managed<Gtk::Label>();
+        cell.badge = Gtk::make_managed<Gtk::Label>();
+        cell.col->set_tooltip_text(it->title + (it->badge.empty() ? "" : "  \u00b7  " + it->badge));
+        const std::string id = it->id;
+        const core::Segment seg = c.segment;
+        auto click = Gtk::GestureClick::create();
+        click->set_button(GDK_BUTTON_PRIMARY);
+        auto* clk = click.get();
+        click->signal_pressed().connect([this, seg, id, clk](int, double, double) {
+            const auto st = clk->get_current_event_state();
+            const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
+            const bool shift = (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
+            if (auto* cc = card(seg)) click_item(*cc, id, ctrl, shift);
+        });
+        cell.col->add_controller(click);
+        row->append(*cell.col);
+        c.cells[it->id] = cell;
+    }
+    // The extra rows live in `col`; the card keeps the first as its flow (let go with the rest).
+    m_chip_rows[c.segment].clear();
+    for (std::size_t k = 1; k < rows.size(); ++k) m_chip_rows[c.segment].push_back(rows[k].second);
+    c.chips = col;
+    c.body->append(*col);
+}
+
 void Navigator::wire_context(Gtk::Widget& w, std::function<Pick()> what) {
     auto rc = Gtk::GestureClick::create();
     rc->set_button(GDK_BUTTON_SECONDARY);
@@ -889,6 +1004,10 @@ void Navigator::refresh(const core::Outline* o) {
     for (auto& c : m_cardv) {
         const auto items = o->in(c.segment);
         c.count->set_text(std::to_string(items.size()));
+        if (c.segment == core::Segment::Colors) {   // s287: chips drawn again (a colour, a group, may have changed)
+            build_chips(c, items);
+            continue;
+        }
         if (c.segment == core::Segment::Pages) {
             // Sides may have moved (a page added before, a section): the spreads again.
             const auto groups = m_grouping ? m_grouping() : std::vector<std::vector<std::string>>{};
@@ -912,6 +1031,7 @@ void Navigator::refresh(const core::Outline* o) {
             if (auto l = c.labels.find(it->id); l != c.labels.end()) {
                 auto& [title, badge] = l->second;
                 if (title->get_text().raw() != it->title) title->set_text(it->title);
+                if (c.segment == core::Segment::Styles) specimen(*title, *it);   // s287: its face may have changed
                 badge->set_text(it->badge);
                 badge->set_visible(!it->badge.empty());
                 if (it->thumb.flag) badge->add_css_class("cx-warn");

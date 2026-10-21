@@ -302,10 +302,21 @@ void read_styles(const Node* group, Book& b, bool automatic, const std::string& 
 
 // The words of a paragraph-like element into `p`: spans, spaces collapsed
 // as ODF says (runs of white space are one space; text:s is n spaces).
+// s286: an index mark as Composix keeps it -- under key1 when there is one.
+IndexMark index_mark(const std::string& entry, const std::string& k1, const std::string& k2) {
+    IndexMark m;
+    if (k1.empty()) { m.term = entry; return m; }
+    m.term = k1;
+    m.sub = k2.empty() ? entry : entry.empty() ? k2 : k2 + ", " + entry;
+    return m;
+}
+
 struct Gather {
     Book& b;
     Para& p;
     bool  last_space = true;   // the paragraph's start counts as after a space
+    struct OpenMark { std::size_t at = 0, from = 0; std::string entry, k1, k2; };
+    std::map<std::string, OpenMark> open_marks;   // s286: index marks started, by id
     void text(const std::string& t) {
         for (char c : t) {
             const bool sp = c == ' ' || c == '\n' || c == '\t' || c == '\r';
@@ -360,6 +371,33 @@ struct Gather {
                 }
                 raw(kMarkNote);
                 p.notes.push_back(std::move(note));
+            } else if (nm == "text:alphabetical-index-mark" || nm == "text:alphabetical-index-mark-start") {   // s286
+                std::string entry = k.attr_or("text:string-value");
+                const std::string k1 = k.attr_or("text:key1"), k2 = k.attr_or("text:key2");
+                raw(kMarkIndex);
+                p.index.push_back({});
+                if (nm == "text:alphabetical-index-mark-start")   // its words: up to the end mark of the same id
+                    open_marks[k.attr_or("text:id")] = {p.index.size() - 1, p.text.size(), entry, k1, k2};
+                else
+                    p.index.back() = index_mark(entry, k1, k2);
+            } else if (nm == "text:alphabetical-index-mark-end") {
+                const auto it = open_marks.find(k.attr_or("text:id"));
+                if (it != open_marks.end()) {
+                    auto& om = it->second;
+                    std::string words = om.entry;
+                    if (words.empty()) {   // the text between, without the marks
+                        const std::string between = p.text.substr(std::min(om.from, p.text.size()));
+                        for (std::size_t i = 0; i < between.size();) {
+                            const auto c = static_cast<unsigned char>(between[i]);
+                            if (c == 0xEE && i + 2 < between.size()) { i += 3; continue; }   // a mark (U+E000..)
+                            words += between[i++];
+                        }
+                        while (!words.empty() && words.back() == ' ') words.pop_back();
+                        while (!words.empty() && words.front() == ' ') words.erase(words.begin());
+                    }
+                    if (om.at < p.index.size()) p.index[om.at] = index_mark(words, om.k1, om.k2);
+                    open_marks.erase(it);
+                }
             } else if (nm == "text:page-number") {
                 raw(kMarkPage);
             } else if (nm == "text:author-name" || nm == "text:initial-creator" || nm == "text:creator") {   // s239
@@ -461,6 +499,27 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}
                 t.entries = static_cast<int>(body->children("text:p").size());
             }
             b.tocs.push_back(std::move(t));
+        } else if (nm == "text:alphabetical-index" && &out == &b.body) {   // s286: kept -- an index made on import
+            Book::Index ix;
+            ix.at = static_cast<int>(out.size());
+            if (const auto* src = k.child("text:alphabetical-index-source"))
+                if (const auto* tt = src->child("text:index-title-template")) {
+                    ix.title_style = tt->attr_or("text:style-name");
+                    for (const auto& x : tt->kids) if (x.is_text()) ix.title += x.text;
+                }
+            if (const auto* body = k.child("text:index-body"))
+                if (const auto* it = body->child("text:index-title"))
+                    if (const auto* p = it->child("text:p")) {
+                        std::string words;
+                        std::function<void(const Node&)> collect = [&](const Node& x) {
+                            if (x.is_text()) { words += x.text; return; }
+                            for (const auto& y : x.kids) collect(y);
+                        };
+                        collect(*p);
+                        if (!words.empty()) ix.title = words;
+                        ix.title_style = p->attr_or("text:style-name", ix.title_style);
+                    }
+            b.indexes.push_back(std::move(ix));
         } else if (nm == "text:table-of-content" || nm == "text:alphabetical-index" || nm == "text:bibliography") {
             ++b.contents;
         } else if (nm == "draw:frame" || nm == "draw:custom-shape" || nm == "draw:g") {

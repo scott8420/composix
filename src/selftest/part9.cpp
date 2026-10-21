@@ -1567,5 +1567,46 @@ void part9() {
         j.undo();
         check("step & repeat: one step", d.ids_of<core::Frame>().size() == n0);
     }
+
+    // -- s286: an ODT's alphabetical index and its marks -------------------
+    {
+        std::cout << "--- s286 an ODT's alphabetical index ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Index_20_Heading" style:display-name="Index Heading" style:family="paragraph"/>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+</office:master-styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:body><office:text>)"
+            R"(<text:p text:style-name="Standard">The <text:alphabetical-index-mark text:string-value="harbor"/>harbor at dawn.</text:p>)"
+            R"(<text:p text:style-name="Standard">A <text:alphabetical-index-mark-start text:id="m1"/>night ferry<text:alphabetical-index-mark-end text:id="m1"/> came.</text:p>)"
+            R"(<text:p text:style-name="Standard">Gulls<text:alphabetical-index-mark text:string-value="herring gull" text:key1="birds"/> cried.</text:p>)"
+            R"(<text:alphabetical-index text:name="Index1"><text:alphabetical-index-source><text:index-title-template text:style-name="Index_20_Heading">Index</text:index-title-template></text:alphabetical-index-source>)"
+            R"(<text:index-body><text:index-title><text:p text:style-name="Index_20_Heading">Index</text:p></text:index-title><text:p>harbor, 1</text:p></text:index-body></text:alphabetical-index>)"
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        check("read: one index after the three paragraphs, its title; not counted as left out",
+              book && book->indexes.size() == 1 && book->indexes[0].at == 3 && book->indexes[0].title == "Index" && book->contents == 0, err);
+        check("read: a point mark, a marked stretch, a mark under key1",
+              book && book->body.size() >= 3 && book->body[0].index.size() == 1 && book->body[0].index[0].term == "harbor" &&
+                  book->body[1].index.size() == 1 && book->body[1].index[0].term == "night ferry" &&
+                  book->body[2].index.size() == 1 && book->body[2].index[0].term == "birds" && book->body[2].index[0].sub == "herring gull");
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        check("import: an index, built from the three marks", ok && info.indexes == 1 && info.index_marks == 3, err);
+        int marks = 0;
+        if (ok) for (const auto& p : d.as<core::Story>("story.1")->paras) marks += static_cast<int>(p.index.size());
+        check("import: the marks in the story", marks == 3);
+        bool built = false;
+        for (const auto& id : d.ids_of<core::GenList>())
+            if (const auto* l = d.as<core::GenList>(id); l->kind == core::ListKind::Index && l->built_entries > 0 && d.as<core::Story>(l->story)) built = true;
+        check("import: the index list built on its page", built);
+    }
 }
 }  // namespace cxtest

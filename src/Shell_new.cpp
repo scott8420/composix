@@ -296,6 +296,8 @@ void Shell::import_odt_file(const std::string& path, int pictures, bool sections
                                                    : std::string("; its header / footer on the master");   // s270
             if (i.contents_lists) detail += i.contents_lists == 1 ? "; its table of contents a contents list, built"
                                                                   : "; its " + std::to_string(i.contents_lists) + " tables of contents as contents lists, built";   // s272
+            if (i.indexes) detail += "; its index built from " + std::to_string(i.index_marks) + (i.index_marks == 1 ? " mark" : " marks");   // s286
+            else if (i.index_marks) detail += "; " + std::to_string(i.index_marks) + (i.index_marks == 1 ? " index mark" : " index marks") + " kept";
             if (i.front_matter) detail += "; front matter and body as sections";
             detail += ".";
             if (i.placed) {

@@ -19,7 +19,7 @@ namespace odt = core::odt;
 std::vector<odt::Para> split_lines(const odt::Para& p) {
     std::vector<odt::Para> out;
     std::size_t a = 0;
-    std::size_t note = 0;
+    std::size_t note = 0, index = 0;
     for (;;) {
         const auto e = p.text.find('\n', a);
         const std::size_t b = e == std::string::npos ? p.text.size() : e;
@@ -36,6 +36,8 @@ std::vector<odt::Para> split_lines(const odt::Para& p) {
         }
         for (std::size_t i = q.text.find(core::kMarkNote); i != std::string::npos; i = q.text.find(core::kMarkNote, i + 3))
             if (note < p.notes.size()) q.notes.push_back(p.notes[note++]);
+        for (std::size_t i = q.text.find(core::kMarkIndex); i != std::string::npos; i = q.text.find(core::kMarkIndex, i + 3))   // s286
+            if (index < p.index.size()) q.index.push_back(p.index[index++]);
         out.push_back(std::move(q));
         if (e == std::string::npos) break;
         a = e + 1;
@@ -326,6 +328,13 @@ struct Builder {
             if (own.keep_next >= 0) q.over.keep_next = own.keep_next;   // s257
         }
         q.runs = runs_of(p.text, p.spans, base);
+        for (const auto& m : p.index) {   // s286: an index's marks
+            core::IndexMark im;
+            im.term = m.term.empty() ? std::string("?") : m.term;
+            im.sub = m.sub;
+            q.index.push_back(std::move(im));
+            ++info.index_marks;
+        }
         for (const auto& n : p.notes) {
             core::Note cn;
             cn.text = n.text;
@@ -406,19 +415,23 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     // front matter's right-hand page); the text after it starts afresh. The
     // list itself goes on that page once the pages are set.
     std::vector<int> toc_para(b.tocs.size(), -1);
+    std::vector<int> index_para(b.indexes.size(), -1);   // s286: an index holds its place as a contents list does
     bool after_toc = false;
     const auto put_tocs = [&](int at) {
-        for (std::size_t t = 0; t < b.tocs.size(); ++t) {
-            if (b.tocs[t].at != at) continue;
+        const auto hold = [&](const std::string& title_style, int& slot) {
             core::Para q;
-            q.style = bl.para_for(b.tocs[t].title_style);
-            q.brk = bl.start_for_master(b.resolved(b.tocs[t].title_style).master);
+            q.style = bl.para_for(title_style);
+            q.brk = bl.start_for_master(b.resolved(title_style).master);
             if (q.brk == core::ParaStart::Anywhere) q.brk = core::ParaStart::NextPage;
-            toc_para[t] = static_cast<int>(st.paras.size());
+            slot = static_cast<int>(st.paras.size());
             st.paras.push_back(q);
             heading1.push_back(false);
             after_toc = true;
-        }
+        };
+        for (std::size_t t = 0; t < b.tocs.size(); ++t)
+            if (b.tocs[t].at == at) hold(b.tocs[t].title_style, toc_para[t]);
+        for (std::size_t t = 0; t < b.indexes.size(); ++t)
+            if (b.indexes[t].at == at) hold(b.indexes[t].title_style, index_para[t]);
     };
     for (const auto& p : b.body) {
         put_tocs(static_cast<int>(first_of.size()));
@@ -478,8 +491,13 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     for (const auto& p : b.body) use(b.resolved(p.style).master);
     for (std::size_t i = 0; i < used.size(); ++i) use(mp_of(used[i])->next);
     std::vector<std::string> para_style_page;   // each story paragraph: the page style it names ("" none)
-    const auto toc_pages = [&](int at) {   // s272: a contents placeholder -- its title's page style
+    const auto toc_pages = [&](int at) {   // s272: a contents placeholder -- its title's page style (s286: an index's too)
         for (const auto& t : b.tocs)
+            if (t.at == at) {
+                const std::string want = b.resolved(t.title_style).master;
+                para_style_page.push_back(mp_of(want) ? want : std::string{});
+            }
+        for (const auto& t : b.indexes)
             if (t.at == at) {
                 const std::string want = b.resolved(t.title_style).master;
                 para_style_page.push_back(mp_of(want) ? want : std::string{});
@@ -922,6 +940,34 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             d.put(lid, gl);
             build_list(j, d, lid);
             ++info.contents_lists;
+        }
+    }
+    // s286: each alphabetical index an index of this book's marks, on the page its place holds.
+    if (!b.indexes.empty()) {
+        report(0.98, "The index\u2026");
+        core::DocJournal j{d};
+        const StoryFlow f = flow_story(d, "story.1");
+        for (std::size_t t = 0; t < b.indexes.size(); ++t) {
+            if (index_para[t] < 0) continue;
+            std::string page;
+            for (const auto& ft : f.frames) {
+                for (const auto& l : ft.lines)
+                    if (l.para == index_para[t]) { page = d.as<core::Frame>(ft.frame)->owner; break; }
+                if (!page.empty()) break;
+            }
+            if (page.empty()) continue;
+            double pos = 0;
+            for (const auto& id : d.ids_of<core::GenList>()) pos = std::max(pos, d.as<core::GenList>(id)->pos);
+            core::GenList gl;
+            gl.name = b.indexes[t].title.empty() ? std::string("Index") : b.indexes[t].title;
+            gl.kind = core::ListKind::Index;
+            gl.pos = pos + 1;
+            gl.placed_on = page;
+            gl.built_entries = -1;
+            const auto lid = d.fresh_id("list");
+            d.put(lid, gl);
+            build_list(j, d, lid);
+            ++info.indexes;
         }
     }
     info.masters = std::max<int>(1, static_cast<int>(used.size()) + (blank_master.empty() ? 0 : 1));

@@ -407,3 +407,11 @@ row.cx-drop-on { background: alpha(@cx_ink, 0.18); }
 /* s280: an inspector group dragged to a new place */
 button.cx-insp-group.cx-group-drop-before { box-shadow: inset 0 3px 0 0 @cx_ink; }
 button.cx-insp-group.cx-group-drop-after  { box-shadow: inset 0 -3px 0 0 @cx_ink; }
+
+/* s287: Colors as chips, a heading over each group; Styles' names in their own face */
+.cx-chips { padding: 2px 4px 4px; }
+.cx-chip-group { font-size: 0.72em; font-weight: 700; color: @cx_dim; letter-spacing: 0.04em; margin-top: 4px; }
+.cx-chip { border-radius: 7px; padding: 2px; }
+.cx-chip:hover { background: @cx_faint; }
+.cx-chip.cx-picked { box-shadow: 0 0 0 2px @cx_ink; }
+.cx-specimen { padding: 1px 0; }

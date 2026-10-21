@@ -8,7 +8,13 @@ WrapBox::WrapBox(int hspacing, int vspacing) : m_hs(hspacing), m_vs(vspacing) {
     set_overflow(Gtk::Overflow::HIDDEN);
 }
 
-WrapBox::~WrapBox() { remove_all(); }
+// s285: GTK may finalize the widget before this runs (a managed widget dropped
+// with its parent) -- callers let the children go first (remove_all); here,
+// only what is left, and no resize asked of a widget on its way out.
+WrapBox::~WrapBox() {
+    for (auto* k : m_kids) k->unparent();
+    m_kids.clear();
+}
 
 void WrapBox::append(Gtk::Widget& child) {
     child.set_parent(*this);

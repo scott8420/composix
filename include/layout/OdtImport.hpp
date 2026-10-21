@@ -32,6 +32,8 @@ struct OdtInfo {
     bool front_matter = false;                     // s237: words before the first chapter -> their own section
     int masters = 1;                               // s270: a master per page style the book uses
     int contents_lists = 0;                        // s272: its tables of contents, as contents lists (built)
+    int indexes = 0;                               // s286: its alphabetical indexes, as indexes (built)
+    int index_marks = 0;                           // s286: the index marks in its text
     int tables = 0, pictures = 0, contents = 0;   // in the file, not brought in
     std::vector<std::string> notes_said;           // what didn't come over as it was, in words
 };

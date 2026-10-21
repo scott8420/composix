@@ -43,6 +43,7 @@ struct Pick {
 class Navigator : public widgets::Box {
 public:
     Navigator();
+    ~Navigator() override;   // s285: the cards' WrapBoxes let their children go
 
     void set_outline(const core::Outline* o);   // rebuilds every card
     // s004: the document changed -- update in place when the items are the
@@ -121,6 +122,7 @@ private:
         std::map<std::string, Cell>   cells;
         std::vector<std::vector<std::string>> spreads;   // pages: as shown
         std::map<std::string, Gtk::ToggleButton*> sizes; // pages: S / M / L
+        Gtk::Box*                     chips = nullptr;   // s287: Colors -- the chips' column (its first row is `flow`)
     };
 
     Card*       card(core::Segment s);
@@ -137,6 +139,8 @@ private:
     void        click_item(Card& c, const std::string& id, bool ctrl, bool shift);
     void        on_list_changed(Card& c);
     void        scroll_to(Gtk::Widget& w);
+    void        build_chips(Card& c, const std::vector<const core::Item*>& items);   // s287
+    static void specimen(Gtk::Label& l, const core::Item& it);                         // s287
     // s278: drag and drop
     struct Hit { std::string page; int zone = 0; };   // zone: -1 before, 0 onto, +1 after
     Hit         hit_page(Card& c, double x, double y, bool master);
@@ -158,6 +162,7 @@ private:
     std::string                  m_anchor;   // Shift+click runs from here
     int                          m_thumb_h = kMedium;
     bool                         m_quiet = false;
+    std::map<core::Segment, std::vector<WrapBox*>> m_chip_rows;   // s287: Colors' rows after its first
 
     sigc::signal<void(const Pick&)> m_pick;
     sigc::signal<void(const std::string&, const std::vector<std::string>&)> m_master_drop;

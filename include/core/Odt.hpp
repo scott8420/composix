@@ -88,6 +88,10 @@ struct Picture {
     bool        whole_page = false;     // horizontal-rel / vertical-rel the page itself (else its text area)
 };
 
+// s286: an alphabetical index's mark in the text (core's kMarkIndex): its
+// entry, under key1 when the file gives one (key2 joins the sub-entry).
+struct IndexMark { std::string term, sub; };
+
 struct Para {
     std::string       style;            // the paragraph's style (often an automatic one)
     std::string       text;             // UTF-8; a note's place marked with core's kMarkNote, a page number kMarkPage
@@ -98,6 +102,7 @@ struct Para {
     int               list_level = 0;   // 1.. (nested lists deeper)
     int               start = 0;        // text:start-value on its item (0: counts on)
     std::vector<Picture> pictures;      // s244: those anchored in it (Book::images takes them)
+    std::vector<IndexMark> index;       // s286: one for each kMarkIndex in text, in order
 };
 
 struct PageLayout {
@@ -138,6 +143,10 @@ struct Book {
     std::vector<Para>                 body;
     std::string                       title, author;
     std::vector<Toc>                  tocs;        // s271: the body's tables of contents
+    // s286: the body's alphabetical indexes -- where each stands (before body
+    // paragraph `at`) and its title (words, paragraph style).
+    struct Index { int at = 0; std::string title, title_style; };
+    std::vector<Index>                indexes;
     int tables = 0, pictures = 0, contents = 0;   // what wasn't kept (s271: contents -- an index / bibliography)
     // A style's property, its chain followed (named parents; the family's default last).
     Props resolved(const std::string& style) const;
