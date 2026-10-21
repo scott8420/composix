@@ -298,6 +298,8 @@ void Shell::import_odt_file(const std::string& path, int pictures, bool sections
                                                                   : "; its " + std::to_string(i.contents_lists) + " tables of contents as contents lists, built";   // s272
             if (i.indexes) detail += "; its index built from " + std::to_string(i.index_marks) + (i.index_marks == 1 ? " mark" : " marks");   // s286
             else if (i.index_marks) detail += "; " + std::to_string(i.index_marks) + (i.index_marks == 1 ? " index mark" : " index marks") + " kept";
+            if (i.sources) detail += "; " + std::to_string(i.sources) + (i.sources == 1 ? " source" : " sources") + " cited " +
+                                     std::to_string(i.citations) + (i.citations == 1 ? " time" : " times") + (i.bibliographies ? ", a bibliography" : "");   // s291
             if (i.front_matter) detail += "; front matter and body as sections";
             detail += ".";
             if (i.placed) {

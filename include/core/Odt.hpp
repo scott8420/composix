@@ -103,6 +103,7 @@ struct Para {
     int               start = 0;        // text:start-value on its item (0: counts on)
     std::vector<Picture> pictures;      // s244: those anchored in it (Book::images takes them)
     std::vector<IndexMark> index;       // s286: one for each kMarkIndex in text, in order
+    std::vector<std::string> cites;     // s291: one for each kMarkRef in text -- the source's identifier
 };
 
 struct PageLayout {
@@ -110,6 +111,15 @@ struct PageLayout {
     double top = -1, right = -1, bottom = -1, left = -1;
     bool   mirrored = false;            // s236: style:page-usage="mirrored" -- facing pages
     int    side = 0;                    // s268: style:page-usage "right" 1, "left" 2 -- a page style only for that side
+    // s288: its header / footer when switched on (style:header-style's
+    // header-footer-properties): the least height, and the space between it
+    // and the body. The page's margin runs to the header's top; the body
+    // starts below header + spacing (as LibreOffice lays it).
+    bool   head = false, foot = false;
+    double head_min = 0, head_gap = 0, foot_min = 0, foot_gap = 0;
+    // s289: the body's columns (style:columns).
+    int    columns = 1;
+    double column_gap = 0;
 };
 
 struct MasterPage {
@@ -147,6 +157,12 @@ struct Book {
     // paragraph `at`) and its title (words, paragraph style).
     struct Index { int at = 0; std::string title, title_style; };
     std::vector<Index>                indexes;
+    // s291: the sources its bibliography marks name (text:bibliography-mark),
+    // by identifier, in the order first cited; and where a bibliography stands.
+    struct Source { std::string type, author, title, year, publisher, journal, volume, pages, url; };
+    std::map<std::string, Source>     sources;
+    std::vector<std::string>          source_order;
+    std::vector<Index>                bibliographies;
     int tables = 0, pictures = 0, contents = 0;   // what wasn't kept (s271: contents -- an index / bibliography)
     // A style's property, its chain followed (named parents; the family's default last).
     Props resolved(const std::string& style) const;

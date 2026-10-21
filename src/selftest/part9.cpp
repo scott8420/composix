@@ -1608,5 +1608,139 @@ void part9() {
             if (const auto* l = d.as<core::GenList>(id); l->kind == core::ListKind::Index && l->built_entries > 0 && d.as<core::Story>(l->story)) built = true;
         check("import: the index list built on its page", built);
     }
+
+    // -- s288 / s289: an ODT page style's header / footer room, its columns --
+    {
+        std::cout << "--- s288 / s289 an ODT's header height, columns ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:style>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.5in" fo:margin-bottom="0.5in" fo:margin-left="0.75in" fo:margin-right="0.75in">
+  <style:columns fo:column-count="2" fo:column-gap="0.25in"/></style:page-layout-properties>
+  <style:header-style><style:header-footer-properties fo:min-height="0.5in" fo:margin-bottom="0.25in"/></style:header-style>
+  <style:footer-style><style:header-footer-properties fo:min-height="0.25in" fo:margin-top="0.125in"/></style:footer-style>
+ </style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1">
+  <style:header><text:p text:style-name="Standard">THE BOOK</text:p></style:header>
+  <style:footer><text:p text:style-name="Standard"><text:page-number/></text:p></style:footer>
+ </style:master-page>
+</office:master-styles></office:document-styles>)";
+        std::string lots;
+        for (int i = 0; i < 30; ++i) lots += R"(<text:p text:style-name="Standard">The ship came in, and nobody on the quay expected her that morning, nor the next.</text:p>)";
+        const std::string content = "<office:document-content" + ns + "><office:body><office:text>" + lots + "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        const auto* lay = book && book->layouts.count("pm1") ? &book->layouts.at("pm1") : nullptr;
+        check("read: the header's / footer's least heights and spacing, two columns",
+              lay && lay->head && lay->foot && std::abs(lay->head_min - 36) < 0.01 && std::abs(lay->head_gap - 18) < 0.01 &&
+                  std::abs(lay->foot_min - 18) < 0.01 && std::abs(lay->foot_gap - 9) < 0.01 && lay->columns == 2 && std::abs(lay->column_gap - 18) < 0.01, err);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        const auto* m = ok ? d.as<core::Master>("master.1") : nullptr;
+        check("import: the body starts below margin + header + spacing; ends above footer + spacing",
+              m && std::abs(m->margins.top - (36 + 36 + 18)) < 0.01 && std::abs(m->margins.bottom - (36 + 18 + 9)) < 0.01, err);
+        check("import: the master's two columns, the gap", m && m->columns == 2 && std::abs(m->gutter - 18) < 0.01);
+        const core::Frame* head = nullptr;
+        const core::Frame* foot = nullptr;
+        for (const auto& f : ok ? d.frames_on("master.1") : std::vector<std::string>{}) {
+            const auto* fr = d.as<core::Frame>(f);
+            if (fr->role == 1) head = fr;
+            if (fr->role == 2) foot = fr;
+        }
+        check("import: the header at the page's margin, its least height; the footer above the bottom margin",
+              head && foot && m && std::abs(head->y - 36) < 0.01 && std::abs(head->h - 36) < 0.01 &&
+                  std::abs(foot->y + foot->h - (m->h - 36)) < 0.01, err);
+        bool cols = ok;
+        for (const auto& p : ok ? d.pages() : std::vector<std::string>{})
+            for (const auto& f : d.frames_on(p))
+                if (const auto* fr = d.as<core::Frame>(f); fr->story == "story.1") cols = cols && fr->columns == 2;
+        check("import: the body's frames in two columns", cols);
+    }
+
+    // -- s290: a contents list longer than its page runs on ----------------
+    {
+        std::cout << "--- s290 a long contents list runs on ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:style>
+ <style:style style:name="Contents_20_1" style:display-name="Contents 1" style:family="paragraph"/>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"/>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+</office:master-styles></office:document-styles>)";
+        std::string chapters;
+        for (int i = 1; i <= 90; ++i)
+            chapters += "<text:h text:style-name=\"Heading_20_1\" text:outline-level=\"1\">Chapter " + std::to_string(i) +
+                        "</text:h><text:p text:style-name=\"Standard\">A few words.</text:p>";
+        const std::string content = "<office:document-content" + ns + R"(><office:body><office:text>)"
+            R"(<text:table-of-content text:name="T1"><text:table-of-content-source text:outline-level="1">)"
+            R"(<text:table-of-content-entry-template text:outline-level="1" text:style-name="Contents_20_1"><text:index-entry-text/></text:table-of-content-entry-template></text:table-of-content-source>)"
+            R"(<text:index-body><text:p>x</text:p></text:index-body></text:table-of-content>)" + chapters +
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        std::string story;
+        for (const auto& id : ok ? d.ids_of<core::GenList>() : std::vector<std::string>{}) story = d.as<core::GenList>(id)->story;
+        int frames = 0;
+        for (const auto& f : d.ids_of<core::Frame>()) frames += d.as<core::Frame>(f)->story == story && !story.empty();
+        check("import: the 90-entry contents ran on -- pages added, its frames threaded, nothing overset",
+              ok && info.list_pages > 0 && frames > 1 && !L::flow_story(d, story).overset, std::to_string(info.list_pages) + " page(s)");
+        check("import: the book's text not overset after", ok && !L::flow_story(d, "story.1").overset);
+    }
+
+    // -- s291: an ODT's bibliography -- sources, citations, the list --------
+    {
+        std::cout << "--- s291 an ODT's bibliography ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"/>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+</office:master-styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:body><office:text>)"
+            R"(<text:p text:style-name="Standard">As Smith showed <text:bibliography-mark text:identifier="Smith01" text:bibliography-type="book" text:author="Smith, J." text:title="Harbors" text:year="2001" text:publisher="Dock Press">[Smith01]</text:bibliography-mark>, and Jones <text:bibliography-mark text:identifier="Jones99" text:bibliography-type="article" text:author="Jones, A." text:title="Tides" text:journal="Sea Review" text:year="1999">[Jones99]</text:bibliography-mark>.</text:p>)"
+            R"(<text:p text:style-name="Standard">Again <text:bibliography-mark text:identifier="Smith01" text:author="Smith, J.">[Smith01]</text:bibliography-mark>.</text:p>)"
+            R"(<text:bibliography text:name="Bibliography1"><text:bibliography-source><text:index-title-template>Bibliography</text:index-title-template></text:bibliography-source>)"
+            R"(<text:index-body><text:index-title><text:p>Bibliography</text:p></text:index-title><text:p>x</text:p></text:index-body></text:bibliography>)"
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        check("read: two sources, in the order first cited; three citations; one bibliography; nothing left out",
+              book && book->source_order == std::vector<std::string>{"Smith01", "Jones99"} && book->body.size() >= 2 &&
+                  book->body[0].cites.size() == 2 && book->body[1].cites.size() == 1 && book->bibliographies.size() == 1 && book->contents == 0, err);
+        check("read: a citation's shown words dropped (Composix numbers it)", book && book->body[0].text.find("[Smith01]") == std::string::npos);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        check("import: two sources, three citations, a bibliography", ok && info.sources == 2 && info.citations == 3 && info.bibliographies == 1, err);
+        const core::GenList* bl = nullptr;
+        for (const auto& id : ok ? d.ids_of<core::GenList>() : std::vector<std::string>{})
+            if (d.as<core::GenList>(id)->kind == core::ListKind::Bibliography) bl = d.as<core::GenList>(id);
+        check("import: the bibliography built on its page, the two sources in it", bl && bl->built_entries == 2 && d.as<core::Page>(bl->placed_on),
+              bl ? std::to_string(bl->built_entries) + " / '" + bl->placed_on + "'" : std::string("none"));
+        bool aimed = ok;
+        int cites = 0;
+        if (ok)
+            for (const auto& p : d.as<core::Story>("story.1")->paras)
+                for (const auto& r : p.refs) {
+                    ++cites;
+                    aimed = aimed && r.show == core::RefShow::Cite && !core::doc::find_anchor(d, r.target).story.empty();
+                    err += r.target + ";";
+                }
+        check("import: each citation a Cite reference to its source's anchor", aimed && cites == 3, std::to_string(cites) + " " + err);
+    }
 }
 }  // namespace cxtest

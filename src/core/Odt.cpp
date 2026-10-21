@@ -292,7 +292,23 @@ void read_styles(const Node* group, Book& b, bool automatic, const std::string& 
                 L.bottom = length(pl->attr_or("fo:margin-bottom"), -1);
                 L.left = length(pl->attr_or("fo:margin-left"), -1);
                 L.right = length(pl->attr_or("fo:margin-right"), -1);
+                if (const auto* cs = pl->child("style:columns")) {   // s289
+                    L.columns = std::clamp(std::atoi(cs->attr_or("fo:column-count", "1").c_str()), 1, 12);
+                    L.column_gap = std::max(0.0, length(cs->attr_or("fo:column-gap"), 0));
+                }
             }
+            if (const auto* hs = k.child("style:header-style"))   // s288
+                if (const auto* hp = hs->child("style:header-footer-properties")) {
+                    L.head = true;
+                    L.head_min = std::max(0.0, length(hp->attr_or("fo:min-height", hp->attr_or("svg:height")), 0));
+                    L.head_gap = std::max(0.0, length(hp->attr_or("fo:margin-bottom"), 0));
+                }
+            if (const auto* fs = k.child("style:footer-style"))
+                if (const auto* fp = fs->child("style:header-footer-properties")) {
+                    L.foot = true;
+                    L.foot_min = std::max(0.0, length(fp->attr_or("fo:min-height", fp->attr_or("svg:height")), 0));
+                    L.foot_gap = std::max(0.0, length(fp->attr_or("fo:margin-top"), 0));
+                }
             L.mirrored = k.attr_or("style:page-usage") == "mirrored";
             L.side = k.attr_or("style:page-usage") == "right" ? 1 : k.attr_or("style:page-usage") == "left" ? 2 : 0;   // s268
             b.layouts[k.attr_or("style:name")] = L;
@@ -380,6 +396,26 @@ struct Gather {
                     open_marks[k.attr_or("text:id")] = {p.index.size() - 1, p.text.size(), entry, k1, k2};
                 else
                     p.index.back() = index_mark(entry, k1, k2);
+            } else if (nm == "text:bibliography-mark") {   // s291: a citation -- its source by identifier; the shown words dropped (Composix numbers it)
+                const std::string id = k.attr_or("text:identifier");
+                if (!id.empty()) {
+                    if (!b.sources.count(id)) {
+                        Book::Source src;
+                        src.type = k.attr_or("text:bibliography-type");
+                        src.author = k.attr_or("text:author");
+                        src.title = k.attr_or("text:title");
+                        src.year = k.attr_or("text:year");
+                        src.publisher = k.attr_or("text:publisher");
+                        src.journal = k.attr_or("text:journal");
+                        src.volume = k.attr_or("text:volume");
+                        src.pages = k.attr_or("text:pages");
+                        src.url = k.attr_or("text:url");
+                        b.sources[id] = src;
+                        b.source_order.push_back(id);
+                    }
+                    raw(kMarkRef);
+                    p.cites.push_back(id);
+                }
             } else if (nm == "text:alphabetical-index-mark-end") {
                 const auto it = open_marks.find(k.attr_or("text:id"));
                 if (it != open_marks.end()) {
@@ -520,6 +556,27 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}
                         ix.title_style = p->attr_or("text:style-name", ix.title_style);
                     }
             b.indexes.push_back(std::move(ix));
+        } else if (nm == "text:bibliography" && &out == &b.body) {   // s291: kept -- a bibliography made on import
+            Book::Index bx;
+            bx.at = static_cast<int>(out.size());
+            if (const auto* src = k.child("text:bibliography-source"))
+                if (const auto* tt = src->child("text:index-title-template")) {
+                    bx.title_style = tt->attr_or("text:style-name");
+                    for (const auto& x : tt->kids) if (x.is_text()) bx.title += x.text;
+                }
+            if (const auto* body = k.child("text:index-body"))
+                if (const auto* it = body->child("text:index-title"))
+                    if (const auto* p = it->child("text:p")) {
+                        std::string words;
+                        std::function<void(const Node&)> collect = [&](const Node& x) {
+                            if (x.is_text()) { words += x.text; return; }
+                            for (const auto& y : x.kids) collect(y);
+                        };
+                        collect(*p);
+                        if (!words.empty()) bx.title = words;
+                        bx.title_style = p->attr_or("text:style-name", bx.title_style);
+                    }
+            b.bibliographies.push_back(std::move(bx));
         } else if (nm == "text:table-of-content" || nm == "text:alphabetical-index" || nm == "text:bibliography") {
             ++b.contents;
         } else if (nm == "draw:frame" || nm == "draw:custom-shape" || nm == "draw:g") {

@@ -19,7 +19,7 @@ namespace odt = core::odt;
 std::vector<odt::Para> split_lines(const odt::Para& p) {
     std::vector<odt::Para> out;
     std::size_t a = 0;
-    std::size_t note = 0, index = 0;
+    std::size_t note = 0, index = 0, cite = 0;
     for (;;) {
         const auto e = p.text.find('\n', a);
         const std::size_t b = e == std::string::npos ? p.text.size() : e;
@@ -38,6 +38,8 @@ std::vector<odt::Para> split_lines(const odt::Para& p) {
             if (note < p.notes.size()) q.notes.push_back(p.notes[note++]);
         for (std::size_t i = q.text.find(core::kMarkIndex); i != std::string::npos; i = q.text.find(core::kMarkIndex, i + 3))   // s286
             if (index < p.index.size()) q.index.push_back(p.index[index++]);
+        for (std::size_t i = q.text.find(core::kMarkRef); i != std::string::npos; i = q.text.find(core::kMarkRef, i + 3))   // s291
+            if (cite < p.cites.size()) q.cites.push_back(p.cites[cite++]);
         out.push_back(std::move(q));
         if (e == std::string::npos) break;
         a = e + 1;
@@ -55,6 +57,7 @@ struct Builder {
     std::map<std::string, std::string> list_style;   // s243: "base|list|level" -> a list paragraph style
     double pos = 10;
     std::string body_id;                              // the default paragraph style's
+    std::map<std::string, std::string> cite_anchor;   // s291: a source's identifier -> its anchor
 
     std::string swatch_for(const std::string& hex) {
         if (hex.size() != 7 || hex == "#000000") return {};
@@ -328,6 +331,14 @@ struct Builder {
             if (own.keep_next >= 0) q.over.keep_next = own.keep_next;   // s257
         }
         q.runs = runs_of(p.text, p.spans, base);
+        for (const auto& c : p.cites) {   // s291: a citation -- a reference to its source's anchor, shown as its number
+            core::XRef r;
+            const auto it = cite_anchor.find(c);
+            r.target = it == cite_anchor.end() ? std::string{} : it->second;
+            r.show = core::RefShow::Cite;
+            q.refs.push_back(std::move(r));
+            ++info.citations;
+        }
         for (const auto& m : p.index) {   // s286: an index's marks
             core::IndexMark im;
             im.term = m.term.empty() ? std::string("?") : m.term;
@@ -416,6 +427,54 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     // list itself goes on that page once the pages are set.
     std::vector<int> toc_para(b.tocs.size(), -1);
     std::vector<int> index_para(b.indexes.size(), -1);   // s286: an index holds its place as a contents list does
+    std::vector<int> bib_para(b.bibliographies.size(), -1);   // s291: and a bibliography
+    // s291: the sources first -- each a paragraph in a Source style, in a story of
+    // their own (not placed), an anchor at its start, so the body's citations point at them.
+    std::string source_style, source_story;
+    if (!b.source_order.empty()) {
+        core::Style ss = *d.as<core::Style>(bl.para_for(""));
+        ss.name = "Source";
+        ss.pos = bl.pos++;
+        ss.left_indent = 18;
+        ss.first_indent = -18;
+        ss.space_after = std::max(ss.space_after, 4.0);
+        ss.start = core::ParaStart::Anywhere;
+        source_style = d.fresh_id("style");
+        d.put(source_style, ss);
+        core::Story srcs{"Sources", {}};
+        int n = 0;
+        for (const auto& id : b.source_order) {
+            const auto& src = b.sources.at(id);
+            std::string words;
+            const auto add = [&](const std::string& w, const char* after) {
+                if (w.empty()) return;
+                words += w;
+                if (words.back() != '.' || std::string(after) != ".") words += after;
+                words += ' ';
+            };
+            add(src.author, ".");
+            add(src.title, ".");
+            add(src.journal, src.volume.empty() ? "." : "");
+            if (!src.volume.empty()) add(src.volume, ".");
+            if (!src.publisher.empty() && !src.year.empty()) { words += src.publisher + ", " + src.year + ". "; }
+            else { add(src.publisher, "."); add(src.year, "."); }
+            if (!src.pages.empty()) add("pp. " + src.pages, ".");
+            add(src.url, "");
+            while (!words.empty() && words.back() == ' ') words.pop_back();
+            if (words.empty()) words = id;
+            core::Para q;
+            q.style = source_style;
+            const std::string anchor = "anchor." + std::to_string(++n);
+            q.text = std::string(core::kMarkAnchor) + words;
+            q.anchors = {anchor};
+            srcs.paras.push_back(std::move(q));
+            bl.cite_anchor[id] = anchor;
+        }
+        // (not fresh_id: "story.1" is the book's text, put later under that name)
+        for (int k = 2; source_story.empty() || d.as<core::Story>(source_story); ++k) source_story = "story." + std::to_string(k);
+        d.put(source_story, srcs);
+        info.sources = n;
+    }
     bool after_toc = false;
     const auto put_tocs = [&](int at) {
         const auto hold = [&](const std::string& title_style, int& slot) {
@@ -432,6 +491,8 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             if (b.tocs[t].at == at) hold(b.tocs[t].title_style, toc_para[t]);
         for (std::size_t t = 0; t < b.indexes.size(); ++t)
             if (b.indexes[t].at == at) hold(b.indexes[t].title_style, index_para[t]);
+        for (std::size_t t = 0; t < b.bibliographies.size(); ++t)   // s291
+            if (b.bibliographies[t].at == at) hold(b.bibliographies[t].title_style, bib_para[t]);
     };
     for (const auto& p : b.body) {
         put_tocs(static_cast<int>(first_of.size()));
@@ -502,6 +563,11 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
                 const std::string want = b.resolved(t.title_style).master;
                 para_style_page.push_back(mp_of(want) ? want : std::string{});
             }
+        for (const auto& t : b.bibliographies)   // s291
+            if (t.at == at) {
+                const std::string want = b.resolved(t.title_style).master;
+                para_style_page.push_back(mp_of(want) ? want : std::string{});
+            }
     };
     int body_i = 0;
     for (const auto& p : b.body) {
@@ -515,6 +581,21 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
         }
     }
     toc_pages(static_cast<int>(b.body.size()));
+    // s288: a header's / footer's height -- its words' lines (each paragraph
+    // its style's leading), or the file's least height when that's more.
+    const auto head_height = [&](const std::vector<odt::Para>& right, const std::vector<odt::Para>& left, double least) {
+        double h = 0;
+        for (const auto* side : {&right, &left}) {
+            double one = 0;
+            for (const auto& p : *side)
+                for (const auto& piece : split_lines(p)) {
+                    const auto* ps = d.as<core::Style>(bl.para_for(piece.style));
+                    one += ps ? ps->leading : 14;
+                }
+            h = std::max(h, one);
+        }
+        return std::max(least, h > 0 ? h + 2 : 0.0);
+    };
     std::map<std::string, std::string> master_id;   // page style -> master
     std::string blank_master;   // s270: an inserted blank page's (LibreOffice prints them blank)
     {
@@ -531,6 +612,11 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
                 const auto mg = [](double v, double fb) { return v >= 0 ? v : fb; };
                 m.margins = {mg(lay.top, base.margins.top), mg(lay.bottom, base.margins.bottom), mg(lay.left, base.margins.inside),
                              mg(lay.right, base.margins.outside)};
+                // s288: a header / footer switched on takes its height and spacing from the body's room
+                if (lay.head) m.margins.top += head_height(mp->header, mp->header_left, lay.head_min) + lay.head_gap;
+                if (lay.foot) m.margins.bottom += head_height(mp->footer, mp->footer_left, lay.foot_min) + lay.foot_gap;
+                m.columns = lay.columns;   // s289
+                if (lay.columns > 1) m.gutter = lay.column_gap > 0 ? lay.column_gap : 12;
             }
             const std::string id = i == 0 ? std::string("master.1") : d.fresh_id("master");
             d.put(id, m);
@@ -649,11 +735,17 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             }
             const core::Rect r = core::margin_rect(d, pid);
             core::Frame fr = *d.as<core::Frame>(frames[i]);
-            if (r.w > 1 && (std::abs(fr.x - r.x) > 0.01 || std::abs(fr.y - r.y) > 0.01 || std::abs(fr.w - r.w) > 0.01 || std::abs(fr.h - r.h) > 0.01)) {
+            const auto* pm = d.as<core::Master>(d.as<core::Page>(pid)->master);   // s289: its page style's columns
+            const int cols = pm ? std::max(1, pm->columns) : 1;
+            const double gut = pm ? pm->gutter : 12;
+            if (r.w > 1 && (std::abs(fr.x - r.x) > 0.01 || std::abs(fr.y - r.y) > 0.01 || std::abs(fr.w - r.w) > 0.01 || std::abs(fr.h - r.h) > 0.01 ||
+                            fr.columns != cols || (cols > 1 && std::abs(fr.gutter - gut) > 0.01))) {
                 fr.x = r.x;
                 fr.y = r.y;
                 fr.w = r.w;
                 fr.h = r.h;
+                fr.columns = cols;
+                fr.gutter = gut;
                 d.put(frames[i], fr);
                 changed = true;
             }
@@ -814,9 +906,17 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
                 return std::pair{id, std::max(12.0, h + 2)};
             };
             const bool two = n.facing && (std::abs(ms.margins.inside - ms.margins.outside) > 0.01 || !left.empty());
-            const auto frame = [&](const std::string& story, double h, core::Side side, const std::vector<odt::Para>& ps) {
+            // s288: the page style's own header / footer: from the page's margin, its height (else: centred in the margin)
+            const odt::PageLayout* lay = nullptr;
+            if (const auto it = b.layouts.find(mp->layout); it != b.layouts.end() && (top ? it->second.head : it->second.foot)) lay = &it->second;
+            const auto frame = [&](const std::string& story, double h, core::Side side, const std::vector<odt::Para>& ps) {   // (h: s288 may grow it to the file's height)
                 const core::Rect r = core::margin_rect(d, mid, side == core::Side::Any ? core::Side::Right : side);
-                const double y = top ? std::max(0.0, (ms.margins.top - h) / 2) : ms.h - ms.margins.bottom + std::max(0.0, (ms.margins.bottom - h) / 2);
+                double y = top ? std::max(0.0, (ms.margins.top - h) / 2) : ms.h - ms.margins.bottom + std::max(0.0, (ms.margins.bottom - h) / 2);
+                if (lay) {
+                    const double room = top ? head_height(mp->header, mp->header_left, lay->head_min) : head_height(mp->footer, mp->footer_left, lay->foot_min);
+                    h = std::max(h, room);
+                    y = top ? std::max(0.0, lay->top) : ms.h - std::max(0.0, lay->bottom) - h;
+                }
                 core::Frame f{mid, core::FrameKind::Text, r.x, y, r.w, h, 0, 1, story, "", ""};
                 f.side = side;
                 f.role = top ? 1 : 2;   // s275
@@ -968,6 +1068,64 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             d.put(lid, gl);
             build_list(j, d, lid);
             ++info.indexes;
+        }
+    }
+    // s291: the sources' bibliography -- on the page its place holds (or kept, not placed,
+    // so the citations still count: [1], [2] ...), built from the Source paragraphs.
+    if (!source_style.empty()) {
+        core::DocJournal j{d};
+        const StoryFlow f = flow_story(d, "story.1");
+        const auto make = [&](const std::string& name, const std::string& page) {
+            double pos = 0;
+            for (const auto& id : d.ids_of<core::GenList>()) pos = std::max(pos, d.as<core::GenList>(id)->pos);
+            core::GenList gl;
+            gl.name = name;
+            gl.kind = core::ListKind::Bibliography;
+            gl.pos = pos + 1;
+            gl.from_styles = {source_style};
+            gl.placed_on = page;
+            gl.built_entries = -1;
+            gl.cite_order = true;   // LibreOffice numbers them as cited
+            const auto lid = d.fresh_id("list");
+            d.put(lid, gl);
+            if (!page.empty()) build_list(j, d, lid);
+            ++info.bibliographies;
+        };
+        bool any = false;
+        for (std::size_t t = 0; t < b.bibliographies.size(); ++t) {
+            if (bib_para[t] < 0) continue;
+            std::string page;
+            for (const auto& ft : f.frames) {
+                for (const auto& l : ft.lines)
+                    if (l.para == bib_para[t]) { page = d.as<core::Frame>(ft.frame)->owner; break; }
+                if (!page.empty()) break;
+            }
+            if (page.empty()) continue;
+            make(b.bibliographies[t].title.empty() ? std::string("Bibliography") : b.bibliographies[t].title, page);
+            any = true;
+        }
+        if (!any) make("Bibliography", "");
+    }
+    // s290: a contents list or index longer than its page runs on -- pages added
+    // after its page (its master), its frame threaded on, as text reflow does;
+    // then the book's text set again (a chapter that now falls on the wrong
+    // side takes its blank page).
+    {
+        core::DocJournal j{d};
+        int more = 0;
+        for (const auto& lid : d.ids_of<core::GenList>()) {
+            const auto* l = d.as<core::GenList>(lid);
+            if (!l || !d.as<core::Story>(l->story)) continue;
+            if (layout::reflows(d, l->story) && flow_story(d, l->story).overset) {
+                const int n1 = layout::reflow_pages(j, d, l->story);
+                more += n1;
+                info.list_pages += n1;
+            }
+        }
+        if (more > 0) {
+            fit(0.99, 0.995);
+            for (int round = 0; round < 3 && assign_masters(); ++round) fit(0.995, 0.997);
+            info.pages = static_cast<int>(d.pages().size());
         }
     }
     info.masters = std::max<int>(1, static_cast<int>(used.size()) + (blank_master.empty() ? 0 : 1));
