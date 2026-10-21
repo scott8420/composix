@@ -2074,6 +2074,15 @@ bool set_running(DocJournal& j, Doc& d, int slot, const std::string& style) {   
     });
 }
 
+bool set_reflow(DocJournal& j, Doc& d, bool on) {   // s255
+    if (d.settings().reflow == on) return false;
+    return j.run(on ? "Text reflow on" : "Text reflow off", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.reflow = on;
+        d.put("doc", s);
+    });
+}
+
 bool set_author(DocJournal& j, Doc& d, const std::string& author) {   // s239
     std::string t = author;
     while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) t.pop_back();
@@ -3520,7 +3529,7 @@ std::string style_edit_label(const std::string& key) {   // s164
         {"align", "Align"}, {"before", "Space before"}, {"after", "Space after"}, {"top_space", "Space at the top"}, {"lindent", "Left indent"},
         {"rindent", "Right indent"}, {"findent", "First indent"}, {"indent_after", "Indent when"}, {"tabs", "Tabs"},
         {"drop_lines", "Drop cap"}, {"drop_chars", "Drop letters"}, {"color", "Color"}, {"color_tint", "Tint"},
-        {"nobreak", "No break"}, {"next_style", "Next style"}, {"list_cont", "Numbering"}, {"list_level", "Level"},
+        {"nobreak", "No break"}, {"next_style", "Next style"}, {"list_cont", "Numbering"}, {"list_level", "Level"}, {"list_parent", "Number as"}, {"list_mstyle", "Marker style"},
         {"list_type", "List"}, {"list_bullet", "Bullet"}, {"list_num", "Numbers"}, {"list_hang", "Hang"},
         {"pstart", "Start"}, {"keep_next", "Keep with next"}, {"keep_lines", "Keep lines"},
         {"hyph_limit", "Hyphens in a row"}, {"hyph_shortest", "Shortest word"}, {"hyph_last_word", "Hyphenate last word"},
@@ -3568,7 +3577,9 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
     else if (key == "drop_chars") st.drop_chars = std::stoi(choice);
     else if (key == "next_style") st.next = choice;
     else if (key == "list_cont") st.list.continues = choice == "1";
-    else if (key == "list_level") st.list.level = std::clamp(std::stoi(choice), 1, 2);
+    else if (key == "list_level") st.list.level = std::clamp(std::stoi(choice), 1, 9);
+    else if (key == "list_parent") st.list.with_parent = choice == "1";   // s251
+    else if (key == "list_mstyle") st.list.marker_style = choice;
     else if (key == "list_type") {
         st.list.type = static_cast<ListType>(std::clamp(std::stoi(choice), 0, 2));
         // Room for the marker: the text in from the column by the hang.
@@ -3577,7 +3588,7 @@ void style_edit(const Doc& d, Style& st, const std::string& key, const std::stri
     else if (key == "list_bullet") st.list.bullet = choice;
     else if (key == "list_num") st.list.numbering = static_cast<Numbering>(std::clamp(std::stoi(choice), 0, 4));
     else if (key == "list_hang") st.list.hang = std::stod(choice);
-    else if (key == "pstart") st.start = static_cast<ParaStart>(std::clamp(std::stoi(choice), 0, 4));
+    else if (key == "pstart") st.start = static_cast<ParaStart>(std::clamp(std::stoi(choice), 0, 5));
     else if (key == "keep_next") st.keep_next = std::stoi(choice) != 0;
     else if (key == "keep_lines") st.keep_lines = std::stoi(choice);
     else if (key == "hyph_limit") st.hyph_limit = std::max(0, std::stoi(choice));
@@ -3687,7 +3698,7 @@ TextPos insert_break(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, Pa
     const auto* st = d.as<Story>(story);
     if (!st || st->paras.empty()) return at;
     at = clamp_pos(*st, at);
-    static const char* labels[] = {"Remove break", "Column break", "Frame break", "Page break", "Right-hand page break"};
+    static const char* labels[] = {"Remove break", "Column break", "Frame break", "Page break", "Right-hand page break", "Left-hand page break"};
     TextPos caret = at;
     j.run(labels[static_cast<int>(kind)], {story}, [&] {
         if (at.byte > 0 && kind != ParaStart::Anywhere) {
@@ -3722,9 +3733,31 @@ std::string list_marker(const Doc& d, const Story& s, int para) {
     switch (st->list.type) {
     case ListType::None:   return {};
     case ListType::Bullet: return st->list.bullet;
-    case ListType::Number: return format_folio(list_number(d, s, para), st->list.numbering) + st->list.after;
+    case ListType::Number: {
+        std::string pre;   // s251: the levels above's numbers, outermost first
+        if (st->list.with_parent)
+            for (int p = list_parent(d, s, para), guard = 0; p >= 0 && guard < 9; ++guard) {
+                const auto* ps = d.as<Style>(s.paras[static_cast<std::size_t>(p)].style);
+                pre = format_folio(list_number(d, s, p), ps->list.numbering) + "." + pre;
+                if (!ps->list.with_parent) break;
+                p = list_parent(d, s, p);
+            }
+        return pre + format_folio(list_number(d, s, para), st->list.numbering) + st->list.after;
+    }
     }
     return {};
+}
+
+int list_parent(const Doc& d, const Story& s, int para) {   // s251
+    if (para <= 0 || para >= static_cast<int>(s.paras.size())) return -1;
+    const auto* me = d.as<Style>(s.paras[static_cast<std::size_t>(para)].style);
+    if (!me || me->list.type == ListType::None) return -1;
+    for (int p = para - 1; p >= 0; --p) {
+        const auto* q = d.as<Style>(s.paras[static_cast<std::size_t>(p)].style);
+        if (!q || q->list.type == ListType::None) continue;
+        if (q->list.level < me->list.level) return q->list.type == ListType::Number ? p : -1;
+    }
+    return -1;
 }
 
 Doc::Id next_style_of(const Doc& d, const Doc::Id& style) {
@@ -4414,6 +4447,10 @@ int style_uses(const Doc& d, const Doc::Id& style) {
         }
     for (const auto& lid : d.ids_of<GenList>())
         for (const auto& fs : d.as<GenList>(lid)->from_styles) n += fs == style;
+    for (const auto& id : d.ids_of<Style>()) {   // s253: a list's marker set in it
+        const auto* s = d.as<Style>(id);
+        n += id != style && s->list.type != ListType::None && s->list.marker_style == style;
+    }
     return n;
 }
 
@@ -5571,7 +5608,7 @@ int note_number(const Doc& d, const Story& s, int p, int k) {   // s124
     int from = 0;   // the chapter's first paragraph: the last at or before p that starts a page
     for (int i = std::min(p, static_cast<int>(s.paras.size()) - 1); i > 0; --i) {
         const auto sa = doc::start_of(d, s.paras[static_cast<std::size_t>(i)]);
-        if (sa == ParaStart::NextPage || sa == ParaStart::NextRightPage) { from = i; break; }
+        if (page_start(sa)) { from = i; break; }
     }
     int n = 0;
     for (int i = from; i < p && i < static_cast<int>(s.paras.size()); ++i) n += static_cast<int>(s.paras[static_cast<std::size_t>(i)].notes.size());

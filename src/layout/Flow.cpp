@@ -123,6 +123,20 @@ void apply_runs(PangoLayout* l, const core::Doc& d, const core::Para& p, int fro
     pango_attr_list_unref(attrs);
 }
 
+LayoutPtr make_layout(const core::Style& st, const char* text, int len, double width, bool justify_last,
+                      double indent);
+// s251: a list's marker -- the paragraph's face, then its marker style over it.
+LayoutPtr marker_layout(const core::Doc& d, const core::Style& st, const std::string& mk) {
+    auto ml = make_layout(st, mk.c_str(), static_cast<int>(mk.size()), 1e6, false, 0);
+    if (const auto* cs = d.as<core::Style>(st.list.marker_style); cs && cs->kind == core::StyleKind::Character) {
+        core::Para p;
+        p.text = mk;
+        p.runs.push_back({0, static_cast<int>(mk.size()), st.list.marker_style});
+        apply_runs(ml.get(), d, p, 0);
+    }
+    return ml;
+}
+
 // s109: the number's layout -- the paragraph's face, smaller.
 LayoutPtr ref_layout(const PangoFontDescription* base, const std::string& digits) {
     LayoutPtr l(pango_layout_new(measure_context()));
@@ -880,7 +894,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
             const auto chapter_of = [&](int p) {
                 for (int i = p; i > 0; --i) {
                     const auto sa = core::doc::start_of(d, st.paras[static_cast<std::size_t>(i)]);
-                    if (sa == core::ParaStart::NextPage || sa == core::ParaStart::NextRightPage) return i;
+                    if (core::page_start(sa)) return i;
                 }
                 return 0;
             };
@@ -953,7 +967,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
             // notes first, set here.
             if (chapters && c.start == 0 && !c.ending) {
                 const auto sa0 = core::doc::start_of(d, para);
-                if ((sa0 == core::ParaStart::NextPage || sa0 == core::ParaStart::NextRightPage) && build_end(c.p)) {
+                if (core::page_start(sa0) && build_end(c.p)) {
                     if (y > top) y += 2 * note_gap(d, st, c.p - 1);
                     if (!set_endnotes()) break;   // on in the next column
                 }
@@ -1608,20 +1622,126 @@ std::vector<core::DocJournal::Settled> fit_frames(const core::Doc& d) {
         if (!f->autosize || f->kind != core::FrameKind::Text || !f->next.empty() || core::column_count(*f) != 1) continue;
         const auto* st = d.as<core::Story>(f->story);
         if (!st) continue;
-        const std::map<std::string, double> room{{id, 1e6}};
-        const auto flow = flow_impl(d, f->story, *st, &room);
-        double bottom = -1;
-        for (const auto& ft : flow.frames)
-            if (ft.frame == id)
-                for (const auto& l : ft.lines) bottom = std::max(bottom, l.y + l.h);
-        if (bottom < 0) continue;   // no text here: leave it as it is
-        const double h = std::max(1.0, bottom + std::max(0.0, f->inset.bottom));
-        if (std::abs(h - f->h) < 0.01) continue;
         core::Frame g = *f;
-        g.h = h;
+        // s254: the width first -- each paragraph on one line (set left, in a frame wide
+        // enough), the widest taken; its first paragraph's alignment holds that edge.
+        if (f->autosize_dims >= 1 && !st->paras.empty()) {
+            core::Doc wide = d;
+            wide.set_door({});
+            core::Frame wf = *f;
+            wf.w = 1e5;
+            wf.rot = 0;
+            wide.put(id, wf);
+            core::Story left = *st;
+            for (auto& p : left.paras) p.over.align = core::Align::Left;
+            wide.put(f->story, left);
+            const std::map<std::string, double> room{{id, 1e6}};
+            const auto flow = flow_impl(wide, f->story, left, &room);
+            double right = -1;
+            visit_lines(wide, f->story, flow, id, [&](const LineVisit& v) {
+                if (v.from == -1) return;   // (a leader fills to its stop: not the words' width)
+                PangoRectangle r;
+                pango_layout_line_get_extents(v.line, nullptr, &r);
+                right = std::max(right, v.x + r.width / static_cast<double>(PANGO_SCALE));
+            }, &left);
+            if (right > 0) {
+                const double w = std::max(1.0, std::ceil((right + std::max(0.0, f->inset.right)) * 100) / 100 + 0.5);
+                const auto al = core::doc::para_style(d, st->paras.front()).align;
+                const double dx = f->w - w;
+                g.x += al == core::Align::Right ? dx : al == core::Align::Center ? dx / 2 : 0;
+                g.w = w;
+            }
+        }
+        if (f->autosize_dims != 1) {   // the height (s048), from the edge it keeps (s254)
+            std::optional<core::Doc> tall;
+            const core::Doc* src = &d;
+            if (std::abs(g.w - f->w) > 1e-9) {   // (set at its new width)
+                tall.emplace(d);
+                tall->set_door({});
+                tall->put(id, g);
+                src = &*tall;
+            }
+            const std::map<std::string, double> room{{id, 1e6}};
+            const auto flow = flow_impl(*src, f->story, *st, &room);
+            double bottom = -1;
+            for (const auto& ft : flow.frames)
+                if (ft.frame == id)
+                    for (const auto& l : ft.lines) bottom = std::max(bottom, l.y + l.h);
+            if (bottom >= 0) {   // (no text here: its height as it is)
+                const double h = std::max({1.0, f->autosize_min, bottom + std::max(0.0, f->inset.bottom)});
+                const double dy = f->h - h;
+                g.y += f->autosize_from == 2 ? dy : f->autosize_from == 1 ? dy / 2 : 0;
+                g.h = h;
+            }
+        }
+        if (std::abs(g.h - f->h) < 0.01 && std::abs(g.w - f->w) < 0.01) continue;
         out.push_back({id, g});
     }
     return out;
+}
+
+bool reflows(const core::Doc& d, const std::string& story) {   // s255
+    const auto chain = thread_frames(d, story);
+    if (chain.empty()) return false;
+    const auto* f = d.as<core::Frame>(chain.back());
+    if (!f || f->kind != core::FrameKind::Text || !f->next.empty() || f->rot != 0 || !d.as<core::Page>(f->owner)) return false;
+    const core::Rect m = core::margin_rect(d, f->owner);
+    return std::abs(f->x - m.x) < 1 && std::abs(f->y - m.y) < 1 && std::abs(f->w - m.w) < 1 && std::abs(f->h - m.h) < 1;
+}
+
+int reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story) {   // s255
+    if (!reflows(d, story)) return 0;
+    if (!flow_story(d, story).overset) return 0;
+    const auto first_last = thread_frames(d, story).back();
+    int added = 0;
+    j.run("Text reflow", {first_last}, [&] {
+        std::vector<core::Doc::Id> made;
+        std::string last = first_last;
+        const auto* st = d.as<core::Story>(story);
+        std::size_t bytes = 0;
+        for (const auto& p : st->paras) bytes += p.text.size() + 1;
+        for (int round = 0; round < 60 && added < 2000; ++round) {
+            const StoryFlow f = flow_story(d, story);
+            if (!f.overset) break;
+            // how much a frame takes, from what's set: the rest's share of pages
+            std::size_t placed = 0;
+            int frames_used = 0;
+            for (const auto& ft : f.frames) {
+                if (ft.lines.empty()) continue;
+                ++frames_used;
+                for (const auto& l : ft.lines) placed += static_cast<std::size_t>(std::max(0, l.end - l.start));
+            }
+            const double per = frames_used > 0 ? std::max(1.0, static_cast<double>(placed) / frames_used) : 2000.0;
+            const int more = std::clamp(static_cast<int>(std::ceil(static_cast<double>(bytes > placed ? bytes - placed : 1) / per)), 1, 50);
+            for (int i = 0; i < more; ++i) {
+                const auto* lf = d.as<core::Frame>(last);
+                const auto* lp = d.as<core::Page>(lf->owner);
+                core::Page pg = *lp;
+                pg.pos = d.pos_after<core::Page>(lf->owner);
+                const auto pid = d.fresh_id("page");
+                d.put(pid, pg);
+                core::Frame nf = *lf;
+                nf.owner = pid;
+                nf.next.clear();
+                const core::Rect m = core::margin_rect(d, pid);
+                nf.x = m.x;
+                nf.y = m.y;
+                nf.w = m.w;
+                nf.h = m.h;
+                const auto fid = d.fresh_id("frame");
+                d.put(fid, nf);
+                core::Frame link = *lf;
+                link.next = fid;
+                d.put(last, link);
+                made.push_back(pid);
+                made.push_back(fid);
+                last = fid;
+                ++added;
+            }
+        }
+        return made;
+    });
+    return added;
 }
 
 namespace {
@@ -1667,7 +1787,7 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
             if (d.settings().note_restart == core::NoteRestart::Chapter) {
                 const auto starts = [&](const core::Para& pa) {
                     const auto sa = core::doc::start_of(d, pa);
-                    return sa == core::ParaStart::NextPage || sa == core::ParaStart::NextRightPage;
+                    return core::page_start(sa);
                 };
                 bool brk = false;
                 for (std::size_t i = k0; i < np.size() - suf; ++i) brk = brk || starts(np[i]);
@@ -1777,8 +1897,9 @@ StoryFlow flow_impl(const core::Doc& d, const std::string& story, const core::St
         // frames on the page it would follow on, and left-hand pages.
         if (c.start == 0 && c.p < static_cast<int>(st->paras.size()) && !last_page.empty()) {
             const auto start = core::doc::start_of(d, st->paras[static_cast<std::size_t>(c.p)]);   // s055: a break too
-            if ((start == core::ParaStart::NextPage || start == core::ParaStart::NextRightPage) &&
-                (fr.owner == last_page || (start == core::ParaStart::NextRightPage && d.side_of(fr.owner) == core::Side::Left))) {
+            if (core::page_start(start) &&
+                (fr.owner == last_page || (start == core::ParaStart::NextRightPage && d.side_of(fr.owner) == core::Side::Left) ||
+                 (start == core::ParaStart::NextLeftPage && d.side_of(fr.owner) == core::Side::Right))) {   // s252
                 // s117: a note running on still takes this frame's foot (no text).
                 if (!c.carry.empty()) {
                     ++out.filled;
@@ -2138,6 +2259,7 @@ const char* break_name(int brk) {   // s098
         case 2: return "Frame break";
         case 3: return "Page break";
         case 4: return "Right-page break";
+        case 5: return "Left-page break";   // s252
         default: return "Break";
     }
 }
@@ -2326,7 +2448,7 @@ void draw_frame_text(cairo_t* cr, const core::Doc& d, const std::string& story, 
                 pango_cairo_show_layout_line(cr, l);
             });
         if (!pl.marker.empty()) {   // s045: the bullet / number, in the paragraph's colour
-            auto ml = make_layout(*pl.style, pl.marker.c_str(), static_cast<int>(pl.marker.size()), 1e6, false);
+            auto ml = marker_layout(d, *pl.style, pl.marker);
             cairo_move_to(cr, ox + pl.marker_x, oy + pl.base);
             pango_cairo_show_layout_line(cr, pango_layout_get_line_readonly(ml.get(), 0));
         }
@@ -2414,7 +2536,7 @@ void visit_lines(const core::Doc& d, const std::string& story, const StoryFlow& 
                 f(LineVisit{l, x, pl.base, pl.line->para, -1});
             });
         if (!pl.marker.empty()) {   // s045: a list's marker (from = -2)
-            auto ml = make_layout(*pl.style, pl.marker.c_str(), static_cast<int>(pl.marker.size()), 1e6, false);
+            auto ml = marker_layout(d, *pl.style, pl.marker);
             f(LineVisit{pango_layout_get_line_readonly(ml.get(), 0), pl.marker_x, pl.base, pl.line->para, -2});
         }
         if (st)   // s109: a footnote's number at its mark (from = -3)

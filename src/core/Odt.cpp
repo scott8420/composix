@@ -219,6 +219,8 @@ void read_styles(const Node* group, Book& b, bool automatic, const std::string& 
                 v.format = lv.attr_or("style:num-format", "1");
                 v.prefix = lv.attr_or("style:num-prefix");
                 v.suffix = lv.attr_or("style:num-suffix", v.number ? "." : "");
+                v.display = std::clamp(std::atoi(lv.attr_or("text:display-levels", "1").c_str()), 1, 10);   // s251
+                v.text_style = lv.attr_or("text:style-name");
                 if (const auto* pp = lv.child("style:list-level-properties")) {
                     if (const auto* la = pp->child("style:list-level-label-alignment")) {   // ODF 1.2's
                         v.indent = length(la->attr_or("fo:margin-left"), -1);

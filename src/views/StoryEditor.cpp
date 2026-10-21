@@ -470,7 +470,7 @@ void StoryEditor::draw_gutter(const Cairo::RefPtr<Cairo::Context>& cr, int w, in
         const auto& para = st->paras[static_cast<std::size_t>(p)];
         const auto* s = m_doc.as<core::Style>(para.style);
         // s055: a break typed before it -- named, with a dashed line over the paragraph.
-        static const char* brk[] = {"", "\u2913 Column \u00b7 ", "\u2913 Frame \u00b7 ", "\u2913 Page \u00b7 ", "\u2913 Right page \u00b7 "};
+        static const char* brk[] = {"", "\u2913 Column \u00b7 ", "\u2913 Frame \u00b7 ", "\u2913 Page \u00b7 ", "\u2913 Right page \u00b7 ", "\u2913 Left page \u00b7 "};
         const std::string tag = brk[static_cast<int>(para.brk)];
         if (!tag.empty()) {
             cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.45);

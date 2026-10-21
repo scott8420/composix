@@ -161,6 +161,11 @@ bool new_document(Doc& d, const NewDoc& n) {
 
     if (n.text_frames) {
         d.put("story.1", Story{"Main", {{"style.1", ""}}});
+        {   // s255: the text adds pages as it runs on
+            Settings s = d.settings();
+            s.reflow = true;
+            d.put("doc", s);
+        }
         // A frame in each page's margins (its own side's), columns as the
         // master's, threaded page to page.
         for (std::size_t i = 0; i < pages.size(); ++i) {

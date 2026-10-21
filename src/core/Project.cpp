@@ -73,7 +73,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"dnote_rule_w", 1, 0.1, 6}, {"dnote_space", 1, 0, 36},   // s118
         {"dtrim", 72, 36, 5000}, {"dbleed", 72, 0, 72},   // s066
         {"msize", 72, 36, 5000}, {"mbleed", 72, 0, 72},   // s148
-        {"mgrid", 1, 0, 144}, {"split_gutter", 1, 0, 500},   // s183   // s150 (Scott): a baseline grid of any measure, the presets beside
+        {"mgrid", 1, 0, 144}, {"split_gutter", 1, 0, 500}, {"autosize_min", 1, 0, 20000},   // s254   // s183   // s150 (Scott): a baseline grid of any measure, the presets beside
         {"pic_off", 72, -20000, 20000},   // s076
         {"plindent", 1, 0, 1000}, {"prindent", 1, 0, 1000}, {"pfindent", 1, -1000, 1000}, {"pbefore", 1, 0, 1000}, {"pafter", 1, 0, 1000},   // s093
         {"ptop", 72, 0, 5000}, {"pbottom", 72, 0, 5000}, {"pinside", 72, 0, 5000}, {"poutside", 72, 0, 5000}};   // s062
@@ -147,6 +147,7 @@ std::string style_group(const Field& f) {
         {"align_grid", "Flow"}, {"hyphenate", "Flow"}, {"lang", "Flow"}, {"hyph_limit", "Flow"}, {"hyph_shortest", "Flow"}, {"hyph_last_word", "Flow"},
         {"keep_next", "Flow"}, {"keep_lines", "Flow"}, {"pstart", "Flow"},
         {"list_type", "List"}, {"list_bullet", "List"}, {"list_num", "List"}, {"list_cont", "List"}, {"list_level", "List"},
+        {"list_parent", "List"}, {"list_mstyle", "List"},
         {"list_hang", "List"},
         {"based_on", "Style"}, {"style_base", "Style"}, {"next_style", "Style"}};   // (Duplicate / Delete: under all, always in view)
     if (const auto it = by_edit.find(f.edit); it != by_edit.end()) return it->second;
@@ -218,6 +219,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             return Field{slot == 0 ? "Running head" : "Running subhead", cur ? cur->name : ch.front().label, slot == 0 ? "drun1" : "drun2", ch};
         };
         std::vector<Field> f{title, author, run_row(0), run_row(1),
+                             {"Text reflow", st.reflow ? "Adds pages" : "Off", "dreflow",   // s255
+                              {{"1", "Adds pages"}, {"0", "Off"}}},
                              {"Units", unit_label(U), "dunits",   // s073
                               {{"0", unit_label(Units::Inches)}, {"1", unit_label(Units::Millimetres)},
                                {"2", unit_label(Units::Picas)}, {"3", unit_label(Units::Points)}}},
@@ -559,7 +562,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 f.push_back({"Keep lines", kl, "keep_lines", keeps});
                 // s043: where it starts.
                 static const std::vector<Choice> starts{{"0", "Anywhere"}, {"1", "Next column"}, {"2", "Next frame"},
-                                                        {"3", "Next page"}, {"4", "Next right-hand page"}};
+                                                        {"3", "Next page"}, {"4", "Next right-hand page"}, {"5", "Next left-hand page"}};
                 f.push_back({"Start", starts[static_cast<std::size_t>(s.start)].label, "pstart", starts});
                 // s045: bullets and numbering.
                 static const std::vector<Choice> lt{{"0", "None"}, {"1", "Bullets"}, {"2", "Numbers"}};
@@ -578,7 +581,23 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                     // s047: past other paragraphs; a second level.
                     f.push_back({"Numbering", s.list.continues ? "Carries on" : "Restarts after others", "list_cont",
                                  {{"0", "Restarts after others"}, {"1", "Carries on"}}});
-                    f.push_back({"Level", std::to_string(s.list.level), "list_level", {{"1", "1"}, {"2", "2"}}});
+                    std::vector<Choice> lv;   // s253: as deep as an imported list goes
+                    for (int k = 1; k <= 9; ++k) lv.push_back({std::to_string(k), std::to_string(k)});
+                    f.push_back({"Level", std::to_string(s.list.level), "list_level", lv});
+                    if (s.list.level > 1)   // s253: "1.2." -- the levels above first
+                        f.push_back({"Number as", s.list.with_parent ? "With the levels above (1.2.)" : "Its own (2.)", "list_parent",
+                                     {{"0", "Its own (2.)"}, {"1", "With the levels above (1.2.)"}}});
+                }
+                if (s.list.type != ListType::None) {   // s253: the bullet / number in a character style
+                    std::vector<Choice> mc{{"", "Same as the text"}};
+                    std::string shown = "Same as the text";
+                    for (const auto& cid : d.ids_of<Style>()) {
+                        const auto* c = d.as<Style>(cid);
+                        if (c->kind != StyleKind::Character) continue;
+                        mc.push_back({cid, c->name});
+                        if (cid == s.list.marker_style) shown = c->name;
+                    }
+                    f.push_back({"Marker style", shown, "list_mstyle", mc});
                 }
                 if (s.list.type != ListType::None) {
                     std::vector<Choice> hc;
@@ -1072,8 +1091,16 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                               {{"0", "Pushes the text"}, {"1", "Ignored"}}});
             {   // s048: the height follows the text (the last frame of a thread, one column).
                 const bool can = f->next.empty() && column_count(*f) == 1;
-                fields.push_back({"Auto-size", f->autosize ? (can ? "Height" : "Height (not here)") : "Off", "autosize",
-                                  {{"0", "Off"}, {"1", "Height"}}});
+                static const std::vector<Choice> as{{"0", "Off"}, {"1", "Height"}, {"2", "Width"}, {"3", "Height and width"}};   // s254
+                const std::string shown = f->autosize ? as[static_cast<std::size_t>(1 + std::clamp(f->autosize_dims, 0, 2))].label : "Off";
+                fields.push_back({"Auto-size", f->autosize && !can ? shown + " (not here)" : shown, "autosize", as});
+                if (f->autosize && f->autosize_dims != 1) {
+                    static const std::vector<Choice> from{{"0", "Top"}, {"1", "Centre"}, {"2", "Bottom"}};
+                    fields.push_back({"Keeps its", from[static_cast<std::size_t>(std::clamp(f->autosize_from, 0, 2))].label, "autosize_from", from});
+                    std::vector<Choice> mins{{"0", "None"}};
+                    for (double v : {36.0, 72.0, 144.0, 288.0}) mins.push_back({pts(v), pts(v) + " pt"});
+                    fields.push_back({"Min height", f->autosize_min > 0 ? pts(f->autosize_min) + " pt" : "None", "autosize_min", mins});
+                }
             }
             {   // s042: where the text sits, up and down.
                 static const std::vector<Choice> va{{"0", "Top"}, {"1", "Centre"}, {"2", "Bottom"}, {"3", "Justify"}};

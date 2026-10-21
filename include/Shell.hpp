@@ -157,7 +157,8 @@ private:
 
     // ── helpers ────────────────────────────────────────────────────────────
     std::vector<const core::Item*> resolve(const std::vector<std::string>& ids) const;  // category: helper
-    void queue_refresh();                         // category: helper: one re-projection per idle, after the writes
+    void queue_refresh();
+    void check_reflow();                          // category: helper: s255 -- overset stories in page frames get pages                         // category: helper: one re-projection per idle, after the writes
     core::Outline project_now() const;            // category: helper: the projection, with overset measured
     void refresh();                               // category: helper: re-project; every view repaints, keeping its place
     void show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper
@@ -285,6 +286,7 @@ private:
     views::Pick              m_pick;          // what the navigator picked
     std::vector<std::string> m_inspected;     // the ids the inspector shows (an edit's target)
     bool                     m_refresh_queued = false;
+    bool                     m_reflow_queued = false;   // s255
 
     // Recents state (core data; UI holds it + resolves the path -- the seam).
     std::vector<std::string>        m_recents;

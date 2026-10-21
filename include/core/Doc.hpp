@@ -71,7 +71,9 @@ enum class ImageFit  { Fill, Fit, Custom };   // s009: cover the frame (cropped)
 enum class Wrap      { None, Around, Jump, Shape };   // s173: Shape -- an image's own outline (its traced shape)
 enum class VAlign    { Top, Center, Bottom, Justify };   // s042: a text frame's text, up and down
 // s043: where a paragraph (in this style) may start.
-enum class ParaStart { Anywhere, NextColumn, NextFrame, NextPage, NextRightPage };
+enum class ParaStart { Anywhere, NextColumn, NextFrame, NextPage, NextRightPage, NextLeftPage };   // s252: left
+// s252: a start that takes a new page (any, right-hand, left-hand).
+inline bool page_start(ParaStart s) { return s == ParaStart::NextPage || s == ParaStart::NextRightPage || s == ParaStart::NextLeftPage; }
 
 // Four distances, one per side (s018: a frame's text-wrap offset).
 struct Sides {
@@ -153,6 +155,10 @@ struct Settings {
     // the chapter's name (kMarkChapter), its subtitle (kMarkSubhead); "" =
     // found by name ("Heading 1"; "Subtitle", else "Heading 2").
     std::string run_head, run_sub;
+    // s255: text reflow -- a story run past its last page frame adds pages
+    // (its master, a frame in the margins, threaded on), as InDesign's
+    // Smart Text Reflow.
+    bool        reflow = false;
     // s154: the rulers' origin, and the zero point dragged from it (points,
     // from where the origin puts it; Spine: unused).
     RulerOrigin ruler_origin = RulerOrigin::Spread;
@@ -257,6 +263,13 @@ struct Frame {
     VAlign      valign = VAlign::Top;    // s042: text -- where it sits in the frame's height
     bool        autosize = false;        // s048: text -- its height follows its text (top fixed; the
                                          // last frame of its thread, one column)
+    // s254: what follows the text -- 0 height, 1 width (each paragraph one
+    // line; its alignment holds the left / centre / right), 2 both; the edge
+    // that stays put as the height changes -- 0 top, 1 centre, 2 bottom;
+    // and a height it doesn't go under (0: none).
+    int         autosize_dims = 0;
+    int         autosize_from = 0;
+    double      autosize_min = 0;
     ColumnRule  col_rule;                // s055: text -- a rule between its columns
     bool        ignore_wrap = false;     // s069: text -- other frames' wrap doesn't push this text
     // s155 (Scott): a facing master's item ACROSS THE SPINE -- one item, its
@@ -464,7 +477,11 @@ struct ListSpec {
     // s047: numbers carry on past other paragraphs (else another style
     // restarts them); `level` 2 restarts after each level-1 list paragraph.
     bool        continues = false;
-    int         level = 1;
+    int         level = 1;               // 1..9 (s251: was 1..2)
+    // s251: "1.2." -- the levels above's numbers first (each its own form, a
+    // "." after), as InDesign's ^1.^2; and the marker set in a character style.
+    bool        with_parent = false;
+    std::string marker_style;
     bool operator==(const ListSpec&) const = default;
 };
 
@@ -856,6 +873,7 @@ bool set_master(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages, const 
 bool set_title(DocJournal& j, Doc& d, const std::string& title);
 // s239: the document's author (may be empty). One step.
 bool set_author(DocJournal& j, Doc& d, const std::string& author);
+bool set_reflow(DocJournal& j, Doc& d, bool on);   // s255
 // s240: the style a running head follows (slot 0 chapter, 1 subtitle; "" by name). One step.
 bool set_running(DocJournal& j, Doc& d, int slot, const std::string& style);
 bool set_trim(DocJournal& j, Doc& d, double w, double h);
@@ -1384,6 +1402,8 @@ std::string style_key_of_edit(const std::string& edit);
 // sub-items (a higher level). A paragraph's `restart` sets its number.
 int list_number(const Doc& d, const Story& s, int para);
 std::string list_marker(const Doc& d, const Story& s, int para);
+// s251: the nearest paragraph before `para` in a numbered list a level up (-1 none).
+int list_parent(const Doc& d, const Story& s, int para);
 // s047: the paragraphs [a.para .. b.para] restart their list at `n` (0:
 // count on). One step.
 bool set_list_restart(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, int n);

@@ -49,6 +49,8 @@ Glib::RefPtr<Gio::Menu> Shell::special_menu() {  // zone
     breaks->append("Column Break", "win.insert-column-break");
     breaks->append("Frame Break", "win.insert-frame-break");
     breaks->append("Page Break", "win.insert-page-break");
+    breaks->append("Right-Hand Page Break", "win.insert-right-page-break");   // s252
+    breaks->append("Left-Hand Page Break", "win.insert-left-page-break");
     m->append_section(breaks);
     return m;
 }

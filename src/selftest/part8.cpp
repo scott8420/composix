@@ -3586,5 +3586,233 @@ void part8() {
         bool bad = true;
         check("svgz: plain text isn't one; a broken stream says so", !core::zip::gzipped("<svg/>") && core::zip::gunzip(gz.substr(0, 20), &bad).empty() && !bad);
     }
+    // ── s251: compound numbers (1.2.), the marker's character style ─────────
+    {
+        std::cout << "--- s251 list numbers ---\n";
+        namespace L = composix::layout;
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string content = "<office:document-content" + ns + R"ODT(><office:automatic-styles>
+ <text:list-style style:name="L3">
+  <text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/>
+  <text:list-level-style-number text:level="2" text:style-name="Num" text:display-levels="2" style:num-format="1" style:num-suffix="."/>
+  <text:list-level-style-number text:level="3" text:display-levels="3" style:num-format="a" style:num-suffix=")"/>
+ </text:list-style>
+</office:automatic-styles><office:body><office:text>
+ <text:list text:style-name="L3">
+  <text:list-item><text:p text:style-name="Standard">One</text:p>
+   <text:list><text:list-item><text:p text:style-name="Standard">Sub a</text:p></text:list-item>
+    <text:list-item><text:p text:style-name="Standard">Sub b</text:p>
+     <text:list><text:list-item><text:p text:style-name="Standard">Deeper</text:p></text:list-item></text:list></text:list-item></text:list></text:list-item>
+  <text:list-item><text:p text:style-name="Standard">Two</text:p>
+   <text:list><text:list-item><text:p text:style-name="Standard">Sub c</text:p></text:list-item></text:list></text:list-item>
+ </text:list>
+</office:text></office:body></office:document-content>)ODT";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles><style:style style:name="Standard" style:family="paragraph"/>
+ <style:style style:name="Num" style:family="text"><style:text-properties fo:font-size="22pt" fo:font-weight="bold"/></style:style></office:styles></office:document-styles>)";
+        std::string err;
+        const auto b = core::odt::read(core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}}), &err);
+        check("list levels: display-levels and the label's style read", b && b->lists.count("L3") && b->lists.at("L3").levels.size() == 3 &&
+              b->lists.at("L3").levels[1].display == 2 && b->lists.at("L3").levels[1].text_style == "Num", err);
+        if (b) {
+            core::Doc d;
+            core::DocJournal j0{d};
+            d.set_door([&j0] { return j0.open(); });
+            check("list numbers: imported", L::import_odt(d, *b, nullptr, {}, &err), err);
+            const auto& st = *d.as<core::Story>("story.1");
+            std::vector<std::string> mk;
+            for (int p = 0; p < static_cast<int>(st.paras.size()); ++p) mk.push_back(core::doc::list_marker(d, st, p));
+            const std::vector<std::string> want{"1.", "1.1.", "1.2.", "1.2.a)", "2.", "2.1."};
+            std::string got;
+            for (const auto& m : mk) got += m + " ";
+            check("list numbers: 1. 1.1. 1.2. 1.2.a) 2. 2.1. -- the levels above first, each its own form", mk == want, got);
+            check("list parent: a level up, none at the top", core::doc::list_parent(d, st, 3) == 2 && core::doc::list_parent(d, st, 5) == 4 &&
+                  core::doc::list_parent(d, st, 0) == -1);
+            const auto* s2 = d.as<core::Style>(st.paras[1].style);
+            const auto* ms = s2 ? d.as<core::Style>(s2->list.marker_style) : nullptr;
+            check("marker style: a character style, 22 pt bold", ms && ms->kind == core::StyleKind::Character && ms->size == 22 && ms->bold &&
+                  s2->list.level == 2 && s2->list.with_parent && d.as<core::Style>(st.paras[3].style)->list.level == 3);
+            const auto flow = L::flow_story(d, "story.1");
+            std::map<int, double> tall;
+            for (const auto& ft : flow.frames)
+                L::visit_lines(d, "story.1", flow, ft.frame, [&](const L::LineVisit& v) {
+                    if (v.from != -2) return;
+                    PangoRectangle r;
+                    pango_layout_line_get_extents(v.line, nullptr, &r);
+                    tall[v.para] = r.height / static_cast<double>(PANGO_SCALE);
+                });
+            check("marker style: drawn in it -- level 2's marker taller than level 1's", tall.count(0) && tall.count(1) && tall[1] > tall[0] * 1.5,
+                  std::to_string(tall[0]) + " / " + std::to_string(tall[1]));
+            core::Doc rt;
+            std::string e2;
+            const auto pdir = (std::filesystem::temp_directory_path() / "cx-s251").string();
+            std::filesystem::remove_all(pdir);
+            const bool back = core::save_project(d, pdir, &e2) && core::load_project(rt, pdir, &e2) && rt.as<core::Style>(st.paras[1].style);
+            std::filesystem::remove_all(pdir);
+            check("list numbers: kept in the file", back && rt.as<core::Style>(st.paras[1].style)->list == s2->list, e2);
+            // s253: the style's List rows
+            const auto o = core::project(d, "");
+            const auto* item = o.find(st.paras[1].style);
+            std::map<std::string, core::Field> rows;
+            if (item) for (const auto& f : item->fields) if (!f.edit.empty()) rows[f.edit] = f;
+            check("style rows: Level to 9, Number as (with the levels above), Marker style its character style",
+                  rows.count("list_level") && rows["list_level"].choices.size() == 9 && rows.count("list_parent") &&
+                  rows["list_parent"].value.find("1.2.") != std::string::npos && rows.count("list_mstyle") &&
+                  rows["list_mstyle"].value == ms->name);
+            const auto* top = o.find(st.paras[0].style);
+            bool parent_row = false;
+            if (top) for (const auto& f : top->fields) parent_row = parent_row || f.edit == "list_parent";
+            check("style rows: level 1 has no Number as", top && !parent_row);
+            check("marker style: counted as used (not offered for deleting)", core::doc::style_uses(d, s2->list.marker_style) >= 1 &&
+                  !core::doc::delete_styles(j0, d, {s2->list.marker_style}));
+        }
+    }
+    // ── s252: start on the next left-hand page ──────────────────────────────
+    {
+        std::cout << "--- s252 left-hand page ---\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto where = [&](int para) {
+            for (const auto& f : L::flow_story(d, "story.1").frames)
+                for (const auto& l : f.lines)
+                    if (l.para == para && l.start == 0) return d.as<core::Frame>(f.frame)->owner;
+            return std::string{};
+        };
+        const auto p1 = where(0);
+        core::doc::edit_styles(j, d, {"style.2"}, "Start", [](core::Style& s) { s.start = core::ParaStart::NextLeftPage; });
+        const auto p4 = where(4);
+        check("next left-hand page: Chapter Two on a left page, after Chapter One's",
+              !p4.empty() && d.side_of(p4) == core::Side::Left && d.page_index(p4) > d.page_index(p1), p4);
+        check("page_start: page, right, left -- not column / frame", core::page_start(core::ParaStart::NextLeftPage) &&
+              core::page_start(core::ParaStart::NextRightPage) && !core::page_start(core::ParaStart::NextFrame));
+        j.undo();
+        // As a break typed before a paragraph: the same.
+        const auto at = core::doc::insert_break(j, d, "story.1", {4, 0}, core::ParaStart::NextLeftPage);
+        (void)at;
+        const auto b4 = where(4);
+        check("left-hand page break: the paragraph after it on a left page", !b4.empty() && d.side_of(b4) == core::Side::Left, b4);
+        check("left-hand page break: named", j.undo_label() == "Left-hand page break" &&
+              std::string(L::break_name(static_cast<int>(core::ParaStart::NextLeftPage))) == "Left-page break", j.undo_label());
+        core::Style st = *d.as<core::Style>("style.2");
+        core::doc::style_edit(d, st, "pstart", "5");
+        check("style edit: Start -- next left-hand page", st.start == core::ParaStart::NextLeftPage);
+    }
+    // ── s254: auto-size -- width, both, the edge kept, a minimum ─────────────
+    {
+        std::cout << "--- s254 auto-size ---\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        j.set_settle([&d] { return L::fit_frames(d); });
+        core::load_sample(d);
+        const auto F = [&](const char* id) { return *d.as<core::Frame>(id); };
+        const auto lines = [&] {
+            int n = 0;
+            for (const auto& f : L::flow_story(d, "story.2").frames) if (f.frame == "frame.6") n += static_cast<int>(f.lines.size());
+            return n;
+        };
+        const auto end = static_cast<int>(d.as<core::Story>("story.2")->paras[0].text.size());
+        core::doc::edit_text(j, d, "story.2", {0, 0}, {0, end}, "Short caption");
+        const auto f0 = F("frame.6");
+        core::doc::edit_frames(j, d, {"frame.6"}, "Auto-size", [](core::Frame& f) { f.autosize = true; f.autosize_dims = 1; });
+        const auto w1 = F("frame.6");
+        check("width: narrower to fit its words, on one line, its left edge kept, its height as it was",
+              w1.w < f0.w - 20 && w1.w > 20 && lines() == 1 && std::abs(w1.x - f0.x) < 1e-9 && std::abs(w1.h - f0.h) < 1e-9,
+              std::to_string(w1.w) + " from " + std::to_string(f0.w));
+        // Longer words: wider, still one line.
+        const auto e2 = static_cast<int>(d.as<core::Story>("story.2")->paras[0].text.size());
+        core::doc::edit_text(j, d, "story.2", {0, e2}, {0, e2}, " that now runs on a good deal further");
+        check("width: grows with the words, one line", F("frame.6").w > w1.w + 50 && lines() == 1, std::to_string(F("frame.6").w));
+        j.undo();
+        // Right-aligned: the right edge stays.
+        core::Story s2 = *d.as<core::Story>("story.2");
+        s2.paras[0].over.align = core::Align::Right;
+        j.run("Align", {"story.2"}, [&] { d.put("story.2", s2); });
+        const double right = w1.x + w1.w;
+        const auto e3 = static_cast<int>(d.as<core::Story>("story.2")->paras[0].text.size());
+        core::doc::edit_text(j, d, "story.2", {0, e3}, {0, e3}, " and more");
+        check("width, set right: its right edge kept", std::abs(F("frame.6").x + F("frame.6").w - right) < 0.01 && F("frame.6").w > w1.w,
+              std::to_string(F("frame.6").x + F("frame.6").w) + " vs " + std::to_string(right));
+        // Both: one line, so the height is a line's.
+        core::doc::edit_frames(j, d, {"frame.6"}, "Auto-size", [](core::Frame& f) { f.autosize_dims = 2; });
+        const auto b = F("frame.6");
+        check("height and width: the height a line's (and its insets)", b.h < f0.h && b.h > 8 && lines() == 1, std::to_string(b.h));
+        // The bottom kept as the height changes; then a minimum.
+        core::doc::edit_frames(j, d, {"frame.6"}, "Auto-size", [](core::Frame& f) { f.autosize_dims = 0; f.w = 120; f.autosize_from = 2; });
+        const auto h1 = F("frame.6");
+        const auto e4 = static_cast<int>(d.as<core::Story>("story.2")->paras[0].text.size());
+        std::string more;
+        for (int k = 0; k < 6; ++k) more += " The routes run east along the coast.";
+        core::doc::edit_text(j, d, "story.2", {0, e4}, {0, e4}, more);
+        const auto h2 = F("frame.6");
+        check("grows from its bottom: the bottom edge kept, the top rises", h2.h > h1.h + 20 && std::abs((h2.y + h2.h) - (h1.y + h1.h)) < 0.01,
+              std::to_string(h2.y + h2.h) + " vs " + std::to_string(h1.y + h1.h));
+        core::doc::edit_frames(j, d, {"frame.6"}, "Auto-size", [](core::Frame& f) { f.autosize_from = 0; f.autosize_min = 400; });
+        check("a minimum height: never under it", std::abs(F("frame.6").h - 400) < 0.01, std::to_string(F("frame.6").h));
+        const auto items = core::frame_items(d, {"frame.6"});
+        std::map<std::string, std::string> rows;
+        for (const auto& f : items.at(0).fields) rows[f.edit] = f.value;
+        check("inspector: Auto-size Height, Keeps its Top, Min height 400 pt", rows["autosize"] == "Height" && rows["autosize_from"] == "Top" &&
+              rows["autosize_min"].rfind("400", 0) == 0, rows["autosize"] + " / " + rows["autosize_from"] + " / " + rows["autosize_min"]);
+        std::string err;
+        core::Doc e;
+        check("auto-size: kept in the file", core::from_json(e, core::to_json(d), &err) && e.records() == d.records(), err);
+    }
+    // ── s255: text reflow -- pages added as the text runs on ─────────────────
+    {
+        std::cout << "--- s255 text reflow ---\n";
+        namespace L = composix::layout;
+        core::Doc d;
+        core::NewDoc n;
+        n.pages = 2;
+        n.text_frames = true;
+        n.facing = true;
+        check("new document, threaded frames: reflow on", core::new_document(d, n) && d.settings().reflow);
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        check("its last frame: a page's margin frame -- reflows", L::reflows(d, "story.1"));
+        std::string words;
+        for (int k = 0; k < 400; ++k) words += "The routes ran east along the coast, and the ships came in with the morning. ";
+        core::Story st = *d.as<core::Story>("story.1");
+        st.paras[0].text = words;
+        j.run("Type", {"story.1"}, [&] { d.put("story.1", st); });
+        check("overset in two pages", L::flow_story(d, "story.1").overset && d.pages().size() == 2);
+        const auto steps = j.size();
+        const int added = L::reflow_pages(j, d, "story.1");
+        const auto fl = L::flow_story(d, "story.1");
+        bool all_used = true;
+        for (const auto& ft : fl.frames) all_used = all_used && !ft.lines.empty();
+        check("reflow: pages added until it fits, every frame holding text, one step", added > 2 && !fl.overset && all_used &&
+              static_cast<int>(d.pages().size()) == 2 + added && j.size() == steps + 1 && j.undo_label() == "Text reflow",
+              std::to_string(added) + " added, " + std::to_string(d.pages().size()) + " pages");
+        const auto pages = d.pages();
+        const auto chain = L::thread_frames(d, "story.1");
+        bool margins = true;
+        for (const auto& fid : chain) {
+            const auto* f = d.as<core::Frame>(fid);
+            const auto m = core::margin_rect(d, f->owner);
+            margins = margins && std::abs(f->x - m.x) < 0.01 && std::abs(f->w - m.w) < 0.01 && d.as<core::Page>(f->owner)->master == "master.1";
+        }
+        check("reflow: a frame a page, in its own side's margins, its master; threaded in page order",
+              chain.size() == pages.size() && margins && d.as<core::Frame>(chain[2])->owner == pages[2]);
+        check("reflow: nothing more to do", L::reflow_pages(j, d, "story.1") == 0);
+        j.undo();
+        check("undo: the pages gone, overset again", d.pages().size() == 2 && L::flow_story(d, "story.1").overset);
+        core::doc::edit_frames(j, d, {L::thread_frames(d, "story.1").back()}, "Size", [](core::Frame& f) { f.h -= 30; });
+        check("a frame not the margins': no pages added", !L::reflows(d, "story.1") && L::reflow_pages(j, d, "story.1") == 0);
+        check("set_reflow: off, one step", core::doc::set_reflow(j, d, false) && !d.settings().reflow && j.undo_label() == "Text reflow off");
+        std::string err;
+        core::Doc e;
+        core::doc::set_reflow(j, d, true);
+        check("reflow: kept in the file", core::from_json(e, core::to_json(d), &err) && e.settings().reflow, err);
+        const auto o = core::project(d, "");
+        bool row = false;
+        for (const auto& it : o.items())
+            for (const auto& f : it.fields) row = row || (f.edit == "dreflow" && f.value == "Adds pages");
+        check("Document: Text reflow -- Adds pages", row);
+    }
 }
 }  // namespace cxtest

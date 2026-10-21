@@ -61,7 +61,9 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     for (const auto& [name, kind] : std::initializer_list<std::pair<const char*, core::ParaStart>>{
              {"insert-column-break", core::ParaStart::NextColumn},
              {"insert-frame-break", core::ParaStart::NextFrame},
-             {"insert-page-break", core::ParaStart::NextPage}}) {
+             {"insert-page-break", core::ParaStart::NextPage},
+             {"insert-right-page-break", core::ParaStart::NextRightPage},   // s252
+             {"insert-left-page-break", core::ParaStart::NextLeftPage}}) {
         const auto k = kind;
         add_action(name, [this, k] {
             if (!m_canvas_view.canvas().insert_break(k))
@@ -239,7 +241,15 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     m_journal.set_settle([this] { return layout::fit_frames(m_doc); });
     m_journal.set_selection_source([this] { return m_inspected; });
     // s057: unsaved = not where it was saved (undo back there and it's clean).
-    m_journal.set_on_change([this] { update_undo_ui(); set_dirty(m_journal.mark() != m_saved_mark); });
+    m_journal.set_on_change([this] {
+        update_undo_ui();
+        set_dirty(m_journal.mark() != m_saved_mark);
+        // s255: text reflow, after a step (not an undo / redo: what was undone stays undone)
+        if (m_doc.settings().reflow && !m_journal.can_redo() && !m_reflow_queued) {
+            m_reflow_queued = true;
+            Glib::signal_idle().connect_once([this] { m_reflow_queued = false; check_reflow(); });
+        }
+    });
 
     // ── pane toggles: stateful, so the header buttons show the state ────────
     add_action_bool("toggle-nav", [this] {

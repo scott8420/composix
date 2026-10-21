@@ -139,6 +139,13 @@ StoryFlow reflow_story(const core::Doc& d, const std::string& story, const core:
 // measured with room to spare and given the height its text needs (top
 // fixed; at least 1 pt). What changes, for DocJournal::set_settle.
 std::vector<core::DocJournal::Settled> fit_frames(const core::Doc& d);
+// s255: text reflow -- `story` overset, its last frame a page's margin frame
+// (on a document page, not threaded on): pages added after that page (its
+// master), each a margin frame threaded on, until the text fits. One step,
+// "Text reflow"; the pages added (0: nothing to do, or the frame isn't one).
+int reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story);
+// Whether `story`'s last frame is one reflow adds pages after.
+bool reflows(const core::Doc& d, const std::string& story);
 // s023: flow `text` (a version of the story's words -- markers filled in)
 // through that story's thread.
 StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::Story& text);

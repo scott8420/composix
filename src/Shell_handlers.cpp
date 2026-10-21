@@ -957,6 +957,22 @@ void Shell::update_screen_colours() {  // helper
     m_canvas_view.canvas().queue_draw();
 }
 
+// s255: text reflow -- each story whose last frame is a page's margin frame
+// and that runs over gets pages (one step each). Its flow from the cache
+// first (cheap: the canvas laid it out already); reflow_pages sets it whole.
+void Shell::check_reflow() {  // helper
+    if (!m_doc.settings().reflow || m_journal.can_redo() || m_journal.in_gesture()) return;
+    int added = 0;
+    for (const auto& sid : m_doc.ids_of<core::Story>()) {
+        if (!layout::reflows(m_doc, sid) || !m_pf_flows.get(m_doc, sid).overset) continue;
+        added += layout::reflow_pages(m_journal, m_doc, sid);
+    }
+    if (added > 0) {
+        if (auto lg = log::get(log::Area::Shell)) lg->info("text reflow: {} page(s) added", added);
+        queue_refresh();
+    }
+}
+
 // s097: Links & Assets, nothing picked -- the files in assets/ nothing uses
 // (not the document, not what undo could bring back), and a way to clear
 // them: the desktop's Trash, so a mistake can be fetched back.
@@ -1090,6 +1106,9 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                                            static_cast<core::Numbering>(std::stoi(choice)));
         } else if (key == "dtitle") {   // s066: the document's settings
             did = core::doc::set_title(m_journal, m_doc, choice);
+        } else if (key == "dreflow") {   // s255
+            did = core::doc::set_reflow(m_journal, m_doc, choice == "1");
+            if (did) Glib::signal_idle().connect_once([this] { check_reflow(); });
         } else if (key == "dauthor") {   // s239
             did = core::doc::set_author(m_journal, m_doc, choice);
         } else if (key == "drun1" || key == "drun2") {   // s240
@@ -1360,8 +1379,20 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "override") {   // s025: back to the master's
             did = core::doc::remove_overrides(m_journal, m_doc, m_inspected);
         } else if (key == "autosize") {   // s048 (the journal's settle fits the height in the same step)
+            const int k = std::clamp(std::atoi(choice.c_str()), 0, 3);   // s254: off, height, width, both
             did = core::doc::edit_frames(m_journal, m_doc, m_inspected, "Auto-size", [&](core::Frame& f) {
-                if (f.kind == core::FrameKind::Text) f.autosize = choice == "1";
+                if (f.kind != core::FrameKind::Text) return;
+                f.autosize = k > 0;
+                if (k > 0) f.autosize_dims = k - 1;
+            });
+        } else if (key == "autosize_from" || key == "autosize_min") {   // s254
+            double v = 0;
+            try { v = std::stod(choice); } catch (const std::exception&) { return; }
+            did = core::doc::edit_frames(m_journal, m_doc, m_inspected, key == "autosize_from" ? "Auto-size: keeps" : "Auto-size: minimum height",
+                                         [&](core::Frame& f) {
+                if (f.kind != core::FrameKind::Text) return;
+                if (key == "autosize_from") f.autosize_from = std::clamp(static_cast<int>(v), 0, 2);
+                else f.autosize_min = std::max(0.0, v);
             });
         } else if (key == "valign") {   // s042
             const auto v = static_cast<core::VAlign>(std::clamp(std::stoi(choice), 0, 3));

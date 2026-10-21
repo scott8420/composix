@@ -55,6 +55,7 @@ json to(const Record& r) {
             if (v.note_at != NoteAt::Foot) j["note_at"] = static_cast<int>(v.note_at);   // s120
             if (v.note_title != "Notes") j["note_title"] = v.note_title;
             if (!v.author.empty()) j["author"] = v.author;   // s239
+            if (v.reflow) j["reflow"] = true;                // s255
             if (!v.run_head.empty()) j["run_head"] = v.run_head;   // s240
             if (!v.run_sub.empty()) j["run_sub"] = v.run_sub;
             if (v.note_num != Settings::NoteNum::Plain) j["note_num"] = static_cast<int>(v.note_num);   // s126
@@ -98,6 +99,9 @@ json to(const Record& r) {
                  {"wrap_off", {v.wrap_off.top, v.wrap_off.right, v.wrap_off.bottom, v.wrap_off.left}}};
             if (v.valign != VAlign::Top) j["valign"] = en(v.valign);   // s042
             if (v.autosize) j["autosize"] = true;                      // s048
+            if (v.autosize_dims) j["autosize_dims"] = v.autosize_dims;   // s254
+            if (v.autosize_from) j["autosize_from"] = v.autosize_from;
+            if (v.autosize_min > 0) j["autosize_min"] = v.autosize_min;
             if (v.across) j["across"] = true;                          // s155
             if (v.shape != ShapeKind::Rect) j["shape"] = en(v.shape);   // s197
             if (v.open) j["open"] = true;
@@ -240,6 +244,8 @@ json to(const Record& r) {
             if (v.list.type != ListType::None)   // s045
                 j["list"] = {{"type", en(v.list.type)}, {"bullet", v.list.bullet}, {"numbering", en(v.list.numbering)},
                              {"after", v.list.after}, {"hang", v.list.hang}, {"continues", v.list.continues}, {"level", v.list.level}};
+            if (v.list.type != ListType::None && v.list.with_parent) j["list"]["with_parent"] = true;   // s251
+            if (v.list.type != ListType::None && !v.list.marker_style.empty()) j["list"]["marker_style"] = v.list.marker_style;
             for (const auto& [key, r] : {std::pair{"rule_above", &v.rule_above}, std::pair{"rule_below", &v.rule_below}})   // s044
                 if (r->weight > 0)
                     j[key] = {{"weight", r->weight}, {"color", r->color}, {"tint", r->tint}, {"offset", r->offset}, {"text", r->text_width}};
@@ -314,6 +320,7 @@ std::optional<Record> from(const json& j) {
         v.note_at = static_cast<NoteAt>(std::clamp(val(j, "note_at", 0), 0, 2));   // s120
         v.note_title = val(j, "note_title", std::string("Notes"));
         v.author = val(j, "author", std::string{});   // s239
+        v.reflow = val(j, "reflow", false);           // s255
         v.run_head = val(j, "run_head", std::string{});   // s240
         v.run_sub = val(j, "run_sub", std::string{});
         v.note_num = static_cast<Settings::NoteNum>(std::clamp(val(j, "note_num", 0), 0, 3));   // s126
@@ -409,6 +416,9 @@ std::optional<Record> from(const json& j) {
         v.wrap = de(j, "wrap", Wrap::None);
         v.valign = de(j, "valign", VAlign::Top);   // s042
         v.autosize = val(j, "autosize", false);    // s048
+        v.autosize_dims = std::clamp(val(j, "autosize_dims", 0), 0, 2);   // s254
+        v.autosize_from = std::clamp(val(j, "autosize_from", 0), 0, 2);
+        v.autosize_min = std::max(0.0, val(j, "autosize_min", 0.0));
         v.ignore_wrap = val(j, "ignore_wrap", false);   // s069
         v.across = val(j, "across", false);   // s155
         v.shape = de(j, "shape", ShapeKind::Rect);   // s197
@@ -562,7 +572,8 @@ std::optional<Record> from(const json& j) {
         if (j.contains("list") && j["list"].is_object()) {   // s045
             const auto& o = j["list"];
             v.list = {de(o, "type", ListType::None), val<std::string>(o, "bullet", "\u2022"), de(o, "numbering", Numbering::Arabic),
-                      val<std::string>(o, "after", "."), val(o, "hang", 18.0), val(o, "continues", false), val(o, "level", 1)};
+                      val<std::string>(o, "after", "."), val(o, "hang", 18.0), val(o, "continues", false), val(o, "level", 1),
+                      val(o, "with_parent", false), val<std::string>(o, "marker_style", "")};
         }
         v.based_on = val<std::string>(j, "based_on", "");   // s037
         v.next = val<std::string>(j, "next", "");

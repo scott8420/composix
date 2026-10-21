@@ -48,6 +48,8 @@ struct ListLevel {
     std::string prefix, suffix = ".";
     double      indent = -1;        // points: where its text sits (fo:margin-left / text:space-before + min-label-width)
     double      label = -1;         // the label's room (min-label-width / -text-indent)
+    int         display = 1;        // s251: text:display-levels -- 2: "1.2."
+    std::string text_style;         // s251: the label's character style (text:style-name)
 };
 struct ListStyle { std::string name; std::vector<ListLevel> levels; };   // levels[0] is level 1
 

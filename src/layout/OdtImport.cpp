@@ -180,7 +180,9 @@ struct Builder {
                          : f == "a" ? core::Numbering::AlphaLower : f == "A" ? core::Numbering::AlphaUpper : core::Numbering::Arabic;
         s.list.after = L.suffix;
         s.list.hang = L.label > 0 ? L.label : 18;
-        s.list.level = std::clamp(level, 1, 2);
+        s.list.level = std::clamp(level, 1, 9);   // s251: as deep as it goes
+        s.list.with_parent = L.number && L.display > 1 && level > 1;
+        if (!L.text_style.empty() && b.styles.count(L.text_style)) s.list.marker_style = char_for(L.text_style);
         s.left_indent = L.indent >= 0 ? L.indent : s.list.hang * level;
         if (s.left_indent < s.list.hang) s.left_indent = s.list.hang;
         s.first_indent = 0;
@@ -291,6 +293,11 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     if (st.paras.empty()) st.paras.push_back({bl.para_for(""), ""});
     info.paragraphs = static_cast<int>(st.paras.size());
     d.put("story.1", st);
+    {   // s255: as a word processor's -- the text adds pages as it runs on
+        auto s = d.settings();
+        s.reflow = true;
+        d.put("doc", s);
+    }
     if (!b.author.empty()) {   // s239: its author, for a header's author field
         auto s = d.settings();
         s.author = b.author;
