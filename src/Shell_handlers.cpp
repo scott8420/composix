@@ -1280,7 +1280,7 @@ void Shell::after_frames_changed(const std::vector<std::string>& pick) {  // hel
     auto& cv = m_canvas_view.canvas();
     cv.model_changed();
     std::vector<std::string> keep;
-    for (const auto& id : pick) if (const auto* f = m_doc.as<core::Frame>(id); f && !f->locked) keep.push_back(id);
+    for (const auto& id : pick) if (const auto* f = m_doc.as<core::Frame>(id); f && !core::doc::frame_held(m_doc, *f)) keep.push_back(id);
     cv.set_selection(keep);
     on_canvas_selection();
 }

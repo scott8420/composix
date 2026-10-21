@@ -341,4 +341,75 @@ void Shell::open_xref(int edit_para, int edit_k) {
     m_xref_pop->popup();
 }
 
+// s304: Type > Hyperlink... (Ctrl+K) -- the selected words made a link (a
+// web address, mailto:, or #anchor); at a caret inside a link, that link
+// edited or removed.
+void Shell::on_hyperlink() {  // handler
+    auto& cv = m_canvas_view.canvas();
+    if (!cv.editing()) {
+        alert("Select words first", "A hyperlink goes on words: double-click a text frame and select them, then Hyperlink.");
+        return;
+    }
+    const std::string story = cv.edit_story_id();
+    auto [a, b] = cv.edit_range();
+    if (b < a) std::swap(a, b);
+    std::string cur = core::doc::link_at(m_doc, story, a, b);
+    if (a == b) {   // a caret: the whole link it stands in
+        for (const auto& l : core::doc::links_in(m_doc, story))
+            if (l.para == a.para && a.byte >= l.from && a.byte <= l.to && l.target == cur) { a = {l.para, l.from}; b = {l.para, l.to}; break; }
+        if (a == b) {
+            alert("Select words first", "Select the words the link goes on, then Hyperlink.");
+            return;
+        }
+    }
+    if (m_xref_pop) {
+        m_xref_pop->popdown();
+        m_xref_pop->unparent();
+        m_xref_pop.reset();
+    }
+    m_xref_pop = std::make_unique<Gtk::Popover>();
+    m_xref_pop->set_name("link.popover");
+    m_xref_pop->set_parent(cv);
+    auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+    box->set_margin(8);
+    auto head = Gtk::make_managed<Gtk::Label>(cur.empty() ? "Hyperlink" : "Edit Hyperlink");
+    head->set_xalign(0);
+    head->add_css_class("heading");
+    box->append(*head);
+    auto entry = Gtk::make_managed<Gtk::Entry>();
+    entry->set_name("link.target");
+    entry->set_width_chars(36);
+    entry->set_placeholder_text("www.example.com, name@example.com, #anchor");
+    entry->set_text(cur);
+    box->append(*entry);
+    auto buttons = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    buttons->set_halign(Gtk::Align::END);
+    auto remove = Gtk::make_managed<Gtk::Button>("Remove");
+    remove->set_name("link.remove");
+    remove->set_sensitive(!cur.empty());
+    auto ok = Gtk::make_managed<Gtk::Button>(cur.empty() ? "Link" : "Change");
+    ok->set_name("link.ok");
+    ok->add_css_class("suggested-action");
+    buttons->append(*remove);
+    buttons->append(*ok);
+    box->append(*buttons);
+    m_xref_pop->set_child(*box);
+    const auto apply = [this, story, a, b](const std::string& to) {
+        const bool did = core::doc::set_link(m_journal, m_doc, story, a, b, to);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("hyperlink: {}:{}-{}:{} -> '{}' ({})", a.para, a.byte, b.para, b.byte, core::doc::normal_link(to), did);
+        if (m_xref_pop) m_xref_pop->popdown();
+        auto& c = m_canvas_view.canvas();
+        if (did) c.model_changed();
+        Glib::signal_idle().connect_once([this] { m_canvas_view.canvas().grab_focus(); });
+    };
+    ok->signal_clicked().connect([apply, entry] { apply(entry->get_text()); });
+    entry->signal_activate().connect([apply, entry] { apply(entry->get_text()); });
+    remove->signal_clicked().connect([apply] { apply(""); });
+    const auto r = cv.caret_screen();
+    if (r.w > 0)
+        m_xref_pop->set_pointing_to(Gdk::Rectangle(static_cast<int>(r.x), static_cast<int>(r.y), 1, static_cast<int>(std::max(1.0, r.h))));
+    m_xref_pop->popup();
+    entry->grab_focus();
+}
+
 }  // namespace composix

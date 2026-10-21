@@ -19,7 +19,7 @@ namespace odt = core::odt;
 std::vector<odt::Para> split_lines(const odt::Para& p) {
     std::vector<odt::Para> out;
     std::size_t a = 0;
-    std::size_t note = 0, index = 0, cite = 0;
+    std::size_t note = 0, index = 0, cite = 0, mark = 0;
     for (;;) {
         const auto e = p.text.find('\n', a);
         const std::size_t b = e == std::string::npos ? p.text.size() : e;
@@ -42,6 +42,12 @@ std::vector<odt::Para> split_lines(const odt::Para& p) {
             if (index < p.index.size()) q.index.push_back(p.index[index++]);
         for (std::size_t i = q.text.find(core::kMarkRef); i != std::string::npos; i = q.text.find(core::kMarkRef, i + 3))   // s291
             if (cite < p.cites.size()) q.cites.push_back(p.cites[cite++]);
+        for (std::size_t i = q.text.find(core::kMarkAnchor); i != std::string::npos; i = q.text.find(core::kMarkAnchor, i + 3))   // s304
+            if (mark < p.bookmarks.size()) q.bookmarks.push_back(p.bookmarks[mark++]);
+        for (const auto& l : p.links) {   // s304
+            const int s0 = std::max(l.start, static_cast<int>(a)), s1 = std::min(l.end, static_cast<int>(b));
+            if (s1 > s0) q.links.push_back({s0 - static_cast<int>(a), s1 - static_cast<int>(a), l.href});
+        }
         out.push_back(std::move(q));
         if (e == std::string::npos) break;
         a = e + 1;
@@ -330,6 +336,7 @@ struct Builder {
         ++info.lists;
         return list_style[key] = id;
     }
+    std::map<std::string, std::string> bookmark_anchor;   // s304: a bookmark's name -> its anchor's id
     core::Para para_of(const odt::Para& p) {
         core::Para q;
         q.style = para_for(p.style);
@@ -355,6 +362,41 @@ struct Builder {
             if (own.keep_next >= 0) q.over.keep_next = own.keep_next;   // s257
         }
         q.runs = runs_of(p.text, p.spans, base);
+        if (!p.links.empty()) {   // s304: runs over every byte first (plain stretches have none)
+            std::vector<core::Run> full;
+            int at = 0;
+            for (const auto& r : q.runs) {
+                if (r.start > at) full.push_back({at, r.start, "", {}});
+                full.push_back(r);
+                at = r.end;
+            }
+            if (at < static_cast<int>(q.text.size())) full.push_back({at, static_cast<int>(q.text.size()), "", {}});
+            q.runs = std::move(full);
+        }
+        for (const auto& l : p.links) {   // s304: its hyperlinks -- the runs cut at their ends, the target as written (resolved after)
+            std::vector<core::Run> rs;
+            for (const auto& r : q.runs) {
+                const int cut[4] = {r.start, std::clamp(l.start, r.start, r.end), std::clamp(l.end, r.start, r.end), r.end};
+                for (int k = 0; k < 3; ++k) {
+                    if (cut[k + 1] <= cut[k]) continue;
+                    core::Run piece = r;
+                    piece.start = cut[k];
+                    piece.end = cut[k + 1];
+                    if (k == 1) piece.local.link = l.href;
+                    rs.push_back(std::move(piece));
+                }
+            }
+            q.runs = std::move(rs);
+            ++info.links;
+        }
+        if (!p.links.empty())
+            q.runs.erase(std::remove_if(q.runs.begin(), q.runs.end(), [](const core::Run& r) { return r.style.empty() && r.local.empty(); }), q.runs.end());
+        for (const auto& name : p.bookmarks) {   // s304: a bookmark -- an anchor a link can go to
+            const auto id = "anchor.bm." + std::to_string(bookmark_anchor.size() + 1);
+            bookmark_anchor.emplace(name, id);
+            q.anchors.push_back(id);
+            ++info.bookmarks;
+        }
         for (const auto& c : p.cites) {   // s291: a citation -- a reference to its source's anchor, shown as its number
             core::XRef r;
             const auto it = cite_anchor.find(c);
@@ -1170,6 +1212,75 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
             for (int round = 0; round < 3 && assign_masters(); ++round) fit(0.995, 0.997);
             info.pages = static_cast<int>(d.pages().size());
         }
+    }
+    {   // s304: the links' targets -- "#bookmark" to its anchor, "#Heading|outline" to an anchor made at that heading
+        int made = 0;
+        const auto words_of = [](const std::string& t) {
+            std::string w;
+            for (std::size_t i = 0; i < t.size();) {
+                const auto c = static_cast<unsigned char>(t[i]);
+                if (c == 0xEE && i + 2 < t.size()) { i += 3; continue; }   // a mark (U+E000..)
+                w += t[i++];
+            }
+            return w;
+        };
+        const auto heading_anchor = [&](const std::string& name) -> std::string {
+            for (const auto& sid : d.ids_of<core::Story>()) {
+                auto st = *d.as<core::Story>(sid);
+                for (auto& q : st.paras) {
+                    if (words_of(q.text) != name) continue;
+                    const auto* ps = d.as<core::Style>(q.style);
+                    bool heading = ps && ps->name.rfind("Heading", 0) == 0;
+                    for (const auto& lid : d.ids_of<core::GenList>())   // or one a Contents list gathers
+                        for (const auto& s2 : d.as<core::GenList>(lid)->from_styles) heading = heading || s2 == q.style;
+                    if (!heading) continue;
+                    if (!q.anchors.empty() && q.text.rfind(core::kMarkAnchor, 0) == 0) return q.anchors.front();
+                    const std::string id = "anchor.hd." + std::to_string(++made);
+                    const int m = static_cast<int>(std::string(core::kMarkAnchor).size());
+                    q.text.insert(0, core::kMarkAnchor);
+                    for (auto& r : q.runs) { if (r.start > 0) r.start += m; r.end += m; }
+                    q.anchors.insert(q.anchors.begin(), id);
+                    d.put(sid, st);
+                    return id;
+                }
+            }
+            return {};
+        };
+        std::map<std::string, std::string> outline_anchor;
+        for (const auto& sid : d.ids_of<core::Story>()) {
+            for (std::size_t pi = 0; pi < d.as<core::Story>(sid)->paras.size(); ++pi) {
+                const auto runs = d.as<core::Story>(sid)->paras[pi].runs;
+                bool changed = false;
+                auto now = runs;
+                for (auto& r : now) {
+                    if (r.local.link.size() < 2 || r.local.link[0] != '#') continue;
+                    std::string name = r.local.link.substr(1);
+                    std::string to;
+                    if (const auto bar = name.rfind('|'); bar != std::string::npos) {
+                        const auto kind = name.substr(bar + 1);
+                        name = name.substr(0, bar);
+                        if (kind == "outline") {
+                            auto it = outline_anchor.find(name);
+                            if (it == outline_anchor.end()) it = outline_anchor.emplace(name, heading_anchor(name)).first;
+                            to = it->second;
+                        }
+                    } else if (const auto it = bl.bookmark_anchor.find(name); it != bl.bookmark_anchor.end()) {
+                        to = it->second;
+                    }
+                    if (to.empty()) { ++info.links_broken; continue; }
+                    r.local.link = "#" + to;
+                    changed = true;
+                }
+                if (changed) {
+                    auto st = *d.as<core::Story>(sid);
+                    st.paras[pi].runs = now;
+                    d.put(sid, st);
+                }
+            }
+        }
+        if (info.links_broken)
+            info.notes_said.push_back(std::to_string(info.links_broken) + (info.links_broken == 1 ? " link goes" : " links go") +
+                                      " to a place not found in the file");
     }
     info.masters = std::max<int>(1, static_cast<int>(used.size()) + (blank_master.empty() ? 0 : 1));
     info.tables = b.tables;

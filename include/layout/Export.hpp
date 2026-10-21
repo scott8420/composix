@@ -104,6 +104,7 @@ struct PdfLink {
     core::Rect  box;             // on it, points from its top-left
     std::string to;              // the heading's page
     double      to_y = 0;        // ... how far down
+    std::string uri;             // s303: set -- out of the document (to unused)
     bool operator==(const PdfLink&) const = default;
 };
 std::vector<PdfLink> contents_links(const core::Doc& d, FlowCache& flows);
@@ -119,6 +120,10 @@ std::vector<PdfLink> xref_links(const core::Doc& d, FlowCache& flows);
 // page) a link to its page, at the entry's mark there. Only paragraphs
 // that read as the marks make them now (a stale index: what still matches).
 std::vector<PdfLink> index_links(const core::Doc& d, FlowCache& flows);
+// s303: hyperlinks in text -- a box round each link's words on each line
+// (frames turned left out): a web address out, "#id" to its anchor (s304;
+// gone or not set: no link).
+std::vector<PdfLink> hyperlink_links(const core::Doc& d, FlowCache& flows);
 
 // s134: the index as the marks make it -- one entry for each term (and
 // each sub-entry under it), sorted as a reader looks them up (case folded,
@@ -181,6 +186,7 @@ struct ExportSummary {
     int pages = 0, sheets = 0, bookmarks = 0, links = 0;
     int note_links = 0;   // s123
     int xref_links = 0;   // s131
+    int hyperlinks = 0;   // s303
     int index_links = 0;  // s137
     std::string size;     // "16 pages \u2192 9 sheets \u00b7 6 \u00d7 9 in + 0.125 in bleed"
     std::string colour;   // "CMYK for FOGRA39 \u2014 RGB converted, perceptual"

@@ -171,6 +171,7 @@ private:
     void paste_here(bool in_place);                 // category: handler: s297 -- Ctrl+V: another program's words as a frame, else our frames
     bool paste_target(double& cx, double& cy, const core::Placed*& tp);   // category: helper: s297 -- the page Paste lands on, the view's middle
     void duplicate_picked();
+    void on_hyperlink();                            // category: handler: s304 -- Type > Hyperlink... (Ctrl+K)
     void on_step_repeat();                          // category: handler: s284 -- Edit > Step and Repeat
     void after_frames_changed(const std::vector<std::string>& pick);   // category: helper: s299 -- the canvas redrawn, `pick` picked                        // category: handler: s282 -- Edit > Duplicate
     void on_go_to_page();                           // category: handler: s277 -- Ctrl+J: the head's Go to Page field

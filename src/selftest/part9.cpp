@@ -1,5 +1,6 @@
 // composix_selftest, part 9 (s256: part8 had grown to 3800 lines).
 #include "Selftest.hpp"
+#include "core/Spell.hpp"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -1990,6 +1991,232 @@ void part9() {
         D::group_frames(j, d, {a, b});
         D::lock_frames(j, d, {c}, true);
         check("group / lock: saved", core::from_json(e, core::to_json(d)) && e.as<core::Frame>(a)->group == F(a).group && e.as<core::Frame>(c)->locked);
+    }
+    // -- s303 / s304: hyperlinks in text -------------------------------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("link: www. made a web address", D::normal_link("  www.example.com ") == "https://www.example.com");
+        check("link: an address made mailto:", D::normal_link("ann@example.com") == "mailto:ann@example.com");
+        check("link: a scheme kept; #id kept", D::normal_link("ftp://x.org/a") == "ftp://x.org/a" && D::normal_link("#anchor.1") == "#anchor.1");
+        check("link: set on the words (one step)", D::set_link(j, d, "story.1", {1, 4}, {1, 10}, "www.example.com"));
+        auto ls = D::hyperlinks(d);
+        check("link: listed -- its words, its target", ls.size() == 1 && ls[0].words == "harbor" && ls[0].target == "https://www.example.com" &&
+                                                         ls[0].para == 1 && ls[0].from == 4 && ls[0].to == 10, ls.empty() ? "none" : ls[0].words);
+        check("link: at a caret inside, over the words", D::link_at(d, "story.1", {1, 6}, {1, 6}) == "https://www.example.com" &&
+                                                            D::link_at(d, "story.1", {1, 4}, {1, 10}) == "https://www.example.com");
+        check("link: a selection past it -- mixed", D::link_at(d, "story.1", {1, 0}, {1, 10}).empty());
+        D::edit_text(j, d, "story.1", {1, 10}, {1, 10}, "s");   // at its end: stays out
+        D::edit_text(j, d, "story.1", {1, 6}, {1, 6}, "X");     // inside: joins it
+        ls = D::hyperlinks(d);
+        check("link: typed at its end stays out, typed inside joins", ls.size() == 1 && ls[0].words == "haXrbor", ls.empty() ? "none" : ls[0].words);
+        {
+            core::Doc e;
+            check("link: saved", core::from_json(e, core::to_json(d)) && D::hyperlinks(e) == D::hyperlinks(d));
+        }
+        // s304: to an anchor in the book
+        const auto anchor = D::insert_anchor(j, d, "story.1", {4, 0});
+        check("link: to an anchor", !anchor.empty() && D::set_link(j, d, "story.1", {3, 0}, {3, 7}, "#" + anchor));
+        ls = D::hyperlinks(d);
+        check("link: to an anchor -- not broken", ls.size() == 2 && !ls[1].broken && ls[1].target == "#" + anchor);
+        check("link: to a missing anchor -- broken", D::set_link(j, d, "story.2", {0, 0}, {0, 4}, "#anchor.none") && D::hyperlinks(d).back().broken);
+        j.undo();
+        {
+            L::FlowCache flows;
+            const auto pl = L::hyperlink_links(d, flows);
+            const auto out = std::count_if(pl.begin(), pl.end(), [](const L::PdfLink& l) { return l.uri == "https://www.example.com"; });
+            const auto in = std::find_if(pl.begin(), pl.end(), [](const L::PdfLink& l) { return l.uri.empty(); });
+            const auto at = D::find_anchor(d, anchor);
+            check("link: PDF boxes -- the web one, and the anchor's to its page", out >= 1 && in != pl.end() && !in->to.empty() &&
+                                                                                 in->box.w > 0 && in->box.h > 0 && at.story == "story.1",
+                  std::to_string(out) + " out");
+        }
+        namespace fs = std::filesystem;
+        const auto base = fs::temp_directory_path() / "composix_selftest_links";
+        std::error_code ec;
+        fs::create_directories(base, ec);
+        L::PdfOptions opt;
+        opt.compress = false;
+        std::string err;
+        const auto read = [](const std::string& f) { std::ifstream in(f, std::ios::binary); std::stringstream ss; ss << in.rdbuf(); return ss.str(); };
+        const auto print = (base / "print.pdf").string(), screen = (base / "screen.pdf").string();
+        L::PdfReport rep;
+        const bool ok1 = L::export_print_pdf(d, print, opt, {}, &rep, &err);
+        const bool ok2 = L::export_pdf(d, screen, opt, {}, nullptr, &err);
+        const auto p1 = read(print), p2 = read(screen);
+        check("link: in the print PDF, a /URI action", ok1 && p1.find("/URI (https://www.example.com)") != std::string::npos);
+        check("link: in the screen PDF too", ok2 && p2.find("https://www.example.com") != std::string::npos);
+        {
+            L::FlowCache flows;
+            const auto sum = L::export_summary(d, flows, opt, true, "");
+            check("link: the summary counts them", sum.hyperlinks >= 2 && sum.nav.find("hyperlink") != std::string::npos, sum.nav);
+        }
+        check("link: taken off (one step)", D::set_link(j, d, "story.1", {1, 0}, {1, 20}, "") && D::hyperlinks(d).size() == 1);
+        fs::remove_all(base, ec);
+    }
+    // -- s304: an ODT's hyperlinks and bookmarks -----------------------------
+    {
+        std::cout << "--- s304 an ODT's links ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f" xmlns:xlink="x")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:style>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:text-properties fo:font-size="16pt"/></style:style>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="6in" fo:page-height="9in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+</office:master-styles></office:document-styles>)";
+        const std::string content = "<office:document-content" + ns + R"(><office:body><office:text>)"
+            R"(<text:h text:style-name="Heading_20_1" text:outline-level="1">Harbors</text:h>)"
+            R"(<text:p text:style-name="Standard">See <text:a xlink:type="simple" xlink:href="https://example.org/x">the site</text:a>, )"
+            R"(<text:a xlink:href="#Harbors|outline">harbors</text:a>, <text:a xlink:href="#bm1">the mark</text:a> and <text:a xlink:href="#nowhere">lost</text:a>.</text:p>)"
+            R"(<text:p text:style-name="Standard">Here <text:bookmark text:name="bm1"/>is the mark.</text:p>)"
+            "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        check("read: four links, one bookmark", book && book->body.size() == 3 && book->body[1].links.size() == 4 &&
+                                                book->body[2].bookmarks.size() == 1 && book->body[1].links[0].href == "https://example.org/x", err);
+        core::Doc d;
+        L::OdtInfo info;
+        const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
+        const auto ls = core::doc::hyperlinks(d);
+        std::string got;
+        for (const auto& l : ls) got += l.words + "=" + l.target + (l.broken ? "!" : "") + "; ";
+        const auto find = [&](const std::string& w) { return std::find_if(ls.begin(), ls.end(), [&](const auto& l) { return l.words == w; }); };
+        check("import: counted -- 4 links, 1 bookmark, 1 not found (said)", ok && info.links == 4 && info.bookmarks == 1 && info.links_broken == 1 &&
+                                                                             !info.notes_said.empty(), got + " ok=" + std::to_string(ok) + " links=" + std::to_string(info.links) + " " + err);
+        check("import: the web link as written", find("the site") != ls.end() && find("the site")->target == "https://example.org/x", got);
+        const auto bm = find("the mark");
+        check("import: the bookmark's link to its anchor (in its paragraph)", bm != ls.end() && !bm->broken && bm->target.size() > 1 &&
+                                                                               core::doc::find_anchor(d, bm->target.substr(1)).at.para == 2, got);
+        const auto hd = find("harbors");
+        check("import: the heading's link -- an anchor made at the heading", hd != ls.end() && !hd->broken &&
+                                                                              core::doc::find_anchor(d, hd->target.substr(1)).at.para == 0 &&
+                                                                              d.as<core::Story>("story.1")->paras[0].text.find("Harbors") == 3, got);
+        check("import: a place not found -- kept, broken", find("lost") != ls.end() && find("lost")->broken, got);
+    }
+    // -- s305: layers --------------------------------------------------------
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.pages().back();
+        const auto F = [&](const std::string& id) { return *d.as<core::Frame>(id); };
+        const auto a = D::add_frame(j, d, page, core::FrameKind::Shape, {40, 40, 100, 100});
+        check("layers: none at first; a frame on no layer", D::layers(d).empty() && F(a).layer.empty() && d.active_layer().empty());
+        const auto top = D::add_layer(j, d);
+        const auto ls = D::layers(d);
+        check("new layer: the first makes two -- Layer 1 (everything) under Layer 2, active",
+              ls.size() == 2 && ls.back() == top && d.as<core::Layer>(ls[0])->name == "Layer 1" && d.as<core::Layer>(top)->name == "Layer 2" &&
+                  d.active_layer() == top && D::frames_on_layer(d, ls[0]) == static_cast<int>(d.ids_of<core::Frame>().size()));
+        const auto base = ls[0];
+        j.undo();
+        check("new layer: one step", D::layers(d).empty());
+        j.redo();
+        d.set_active_layer(top);
+        const auto b = D::add_frame(j, d, page, core::FrameKind::Shape, {60, 60, 100, 100});
+        check("a new frame: on the active layer", F(b).layer == top);
+        // c drawn later, on the bottom layer: still under b
+        d.set_active_layer(base);
+        const auto c = D::add_frame(j, d, page, core::FrameKind::Shape, {80, 80, 100, 100});
+        const auto on = d.frames_on(page);
+        const auto at = [&](const std::string& id) { return std::find(on.begin(), on.end(), id) - on.begin(); };
+        check("order: by layer, then z -- the top layer's frame over a later one below", F(c).z > F(b).z && at(c) < at(b) && at(a) < at(c));
+        const auto pl = core::layout_pages(d, {page});
+        const double px = pl.front().r.x + 100, py = pl.front().r.y + 100;
+        check("picked: the top layer's first", core::hit_frame(d, pl, px, py, 0) == b);
+        check("moved down a layer -- the later frame now on top", D::move_layer(j, d, top, 0) && core::hit_frame(d, pl, px, py, 0) == c);
+        j.undo();
+        check("lock a layer: its frames not picked (the one under is)", D::edit_layer(j, d, top, "Lock Layer", [](core::Layer& l) { l.locked = true; }) &&
+                                                                        core::hit_frame(d, pl, px, py, 0) == c && D::frame_held(d, F(b)));
+        j.undo();
+        check("hide a layer: not shown, not picked, not printed", D::edit_layer(j, d, top, "Hide Layer", [](core::Layer& l) { l.visible = false; }) &&
+                                                                     !D::frame_shown(d, F(b)) && core::hit_frame(d, pl, px, py, 0) == c && !D::frame_prints(d, F(b)));
+        j.undo();
+        check("a non-printing layer: shown, picked, not printed", D::edit_layer(j, d, top, "Layer Options", [](core::Layer& l) { l.print = false; }) &&
+                                                                     D::frame_shown(d, F(b)) && core::hit_frame(d, pl, px, py, 0) == b && !D::frame_prints(d, F(b)));
+        {   // the print PDF leaves it out
+            namespace fs = std::filesystem;
+            const auto dir = fs::temp_directory_path() / "composix_selftest_layers";
+            std::error_code ec;
+            fs::create_directories(dir, ec);
+            L::PdfOptions opt;
+            opt.compress = false;
+            opt.only = {page};
+            std::string err;
+            const auto read = [](const std::string& f) { std::ifstream in(f, std::ios::binary); std::stringstream ss; ss << in.rdbuf(); return ss.str(); };
+            // b gets a fill only it has: its colour in the PDF tells whether it was drawn
+            D::edit_frames(j, d, {b}, "Fill", [&](core::Frame& f) { f.fill = d.ids_of<core::Swatch>().back(); });
+            const auto f1 = (dir / "a.pdf").string(), f2 = (dir / "b.pdf").string();
+            L::export_print_pdf(d, f1, opt, {}, nullptr, &err);
+            D::edit_layer(j, d, top, "Layer Options", [](core::Layer& l) { l.print = true; });
+            L::export_print_pdf(d, f2, opt, {}, nullptr, &err);
+            const auto p1 = read(f1), p2 = read(f2);
+            check("a non-printing layer: its frame out of the PDF (the printing one's in)", !p1.empty() && p2.size() > p1.size(),
+                  std::to_string(p1.size()) + " vs " + std::to_string(p2.size()));
+            fs::remove_all(dir, ec);
+        }
+        check("move to a layer (one step)", D::move_to_layer(j, d, {a}, top) == 1 && F(a).layer == top);
+        {
+            core::Doc e;
+            check("layers: saved", core::from_json(e, core::to_json(d)) && D::layers(e) == D::layers(d) && e.as<core::Frame>(a)->layer == top &&
+                                       *e.as<core::Layer>(top) == *d.as<core::Layer>(top));
+        }
+        const auto n = d.ids_of<core::Frame>().size();
+        check("delete a layer, keeping its frames -- to the one under", D::delete_layer(j, d, top, true) && d.as<core::Frame>(a) &&
+                                                                         F(a).layer == base && d.ids_of<core::Frame>().size() == n);
+        j.undo();
+        check("delete a layer -- its frames with it (one step)", D::delete_layer(j, d, top) && !d.as<core::Frame>(a) && !d.as<core::Frame>(b) &&
+                                                                  d.as<core::Frame>(c) && !d.as<core::Layer>(top));
+        j.undo();
+        check("... undone: the layer and its frames back", d.as<core::Layer>(top) && d.as<core::Frame>(a) && d.as<core::Frame>(b));
+        check("the last layer can't go", D::delete_layer(j, d, top) && !D::delete_layer(j, d, base));
+    }
+    // -- s306: spell check ---------------------------------------------------
+    {
+        namespace S = core::spell;
+        std::string got;
+        for (const auto& w : S::words_of("Don't stop—the harbor’s 3rd ferry at www.x.org, e-mail ann@x.org", 2)) got += w.text + "|";
+        check("words: apostrophes inside, dashes / hyphens part them, digits and addresses left alone",
+              got == "Don't|stop|the|harbor’s|ferry|at|e|mail|", got);
+        const auto ws = S::words_of("ab" + std::string(core::kMarkAnchor) + "cd 'quoted'", 0);
+        check("words: a mark parts them; quotes round a word not in it", ws.size() == 3 && ws[0].text == "ab" && ws[1].text == "cd" && ws[2].text == "quoted" &&
+                                                                      ws[1].from == 5 && ws[1].to == 7);
+        std::string err;
+        if (!S::built_in() || !S::load("en_US", &err)) {
+            check("spell: no en_US dictionary here -- the rest skipped (every word reads fine)", S::good("harbr"), err);
+        } else {
+            check("spell: en_US loaded", S::loaded() && S::language() == "en_US");
+            check("spell: right and wrong", S::good("harbor") && S::good("harbor’s") && S::good("Don't") && !S::good("harbr") && !S::good("smeled"));
+            const auto sg = S::suggest("harbr");
+            check("spell: suggestions", std::find(sg.begin(), sg.end(), "harbor") != sg.end(), sg.empty() ? "none" : sg.front());
+            core::Story st{"t", {{"s", "The harbr smelled of oranges."}, {"s", "Nothing wrong here."}, {"s", "Composix sets tipe."}}};
+            auto ms = S::misses(st);
+            got.clear();
+            for (const auto& m : ms) got += m.text + "@" + std::to_string(m.para) + ":" + std::to_string(m.from) + "|";
+            check("spell: a story's misses, in order, where they are", got == "harbr@0:4|Composix@2:0|tipe@2:14|", got);
+            namespace fs = std::filesystem;
+            const auto dir = fs::temp_directory_path() / "composix_selftest_spell";
+            std::error_code ec;
+            fs::remove_all(dir, ec);
+            S::set_user_file((dir / "words.txt").string());
+            check("spell: a word added -- good now, kept in the user's file", S::add_word("Composix") && S::good("Composix") && fs::exists(dir / "words.txt"));
+            S::ignore("tipe");
+            check("spell: Ignore All", S::misses(st).size() == 1);
+            S::clear_ignored();
+            const auto nm = S::next_miss(st, {0, 6});
+            const auto wrapped = S::next_miss(st, {2, 19});
+            check("spell: the next miss after the caret; past the end, round to the start", nm.text == "tipe" && wrapped.text == "harbr", nm.text + " / " + wrapped.text);
+            check("spell: the word removed again", S::remove_word("Composix") && !S::good("Composix"));
+            S::set_user_file({});
+            fs::remove_all(dir, ec);
+        }
     }
 }
 }  // namespace cxtest

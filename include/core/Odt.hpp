@@ -53,6 +53,9 @@ struct Style {
 };
 
 struct Span { int start = 0, end = 0; std::string style; };   // bytes of the paragraph's text
+// s304: a hyperlink (text:a) over bytes [start, end): its xlink:href as written
+// ("https://...", "#bookmark", "#Heading|outline").
+struct Link { int start = 0, end = 0; std::string href; };
 
 // s243 (T2b): a list style's level -- a bullet, or a number in a format.
 struct ListLevel {
@@ -104,6 +107,8 @@ struct Para {
     std::vector<Picture> pictures;      // s244: those anchored in it (Book::images takes them)
     std::vector<IndexMark> index;       // s286: one for each kMarkIndex in text, in order
     std::vector<std::string> cites;     // s291: one for each kMarkRef in text -- the source's identifier
+    std::vector<Link> links;            // s304: its hyperlinks
+    std::vector<std::string> bookmarks; // s304: one for each kMarkAnchor in text -- the bookmark's name
     int               section_cols = 0;  // s293: in a section of 2+ columns: how many, and the gap
     double            section_gap = 0;
 };

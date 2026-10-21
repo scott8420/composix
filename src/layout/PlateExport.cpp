@@ -272,6 +272,7 @@ void draw_image(Ctx& c, plate::Page& pg, const core::Frame& f) {
 void draw_frames(Ctx& c, plate::Page& pg, const core::Doc::Id& owner, const core::Doc::Id& on_page) {
     for (const auto& fid : c.d.frames_on(owner)) {
         if (owner != on_page && !core::master_item_on(c.d, fid, on_page)) continue;   // s025
+        if (!core::doc::frame_prints(c.d, *c.d.as<core::Frame>(fid))) continue;   // s305: its layer hidden or not printing
         // s155: a copy -- an item across the spine shifted on a right page,
         // cut at the spine.
         core::Frame f = *c.d.as<core::Frame>(fid);
@@ -487,8 +488,14 @@ bool export_print_pdf(const core::Doc& d, const std::string& path, const PdfOpti
         auto links = contents_links(d, flows);
         for (auto& l : note_links(d, flows)) links.push_back(std::move(l));   // s123: and the notes'
         for (auto& l : xref_links(d, flows)) links.push_back(std::move(l));   // s131: and the cross-references'
+        for (auto& l : hyperlink_links(d, flows)) links.push_back(std::move(l));   // s303: and the words' own links
         for (auto& l : index_links(d, flows)) links.push_back(std::move(l));   // s137: and the index'
         for (const auto& l : links) {
+            if (!l.uri.empty()) {   // s303: out of the document
+                if (const auto at = sheet_of(sheets, l.page); at.sheet >= 0)
+                    doc.add_uri(static_cast<std::size_t>(at.sheet), off_of(at.sheet) + at.x + l.box.x, off_of(at.sheet) + l.box.y, l.box.w, l.box.h, l.uri);
+                continue;
+            }
             const auto at = sheet_of(sheets, l.page), to = sheet_of(sheets, l.to);   // s084: by sheet
             if (at.sheet >= 0 && to.sheet >= 0)
                 doc.add_link(static_cast<std::size_t>(at.sheet), off_of(at.sheet) + at.x + l.box.x, off_of(at.sheet) + l.box.y, l.box.w, l.box.h,

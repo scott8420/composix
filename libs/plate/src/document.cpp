@@ -300,7 +300,10 @@ void Document::add_bookmark(const std::string& title, int level, std::size_t pag
 }
 
 void Document::add_link(std::size_t page, double x, double y, double w, double h, std::size_t to_page, double to_y) {
-    m_links.push_back({page, x, y, w, h, to_page, to_y});
+    m_links.push_back({page, x, y, w, h, to_page, to_y, {}});
+}
+void Document::add_uri(std::size_t page, double x, double y, double w, double h, const std::string& uri) {   // s303
+    if (!uri.empty()) m_links.push_back({page, x, y, w, h, 0, 0, uri});
 }
 
 bool Document::save(const std::string& path, std::string* err) {
@@ -481,7 +484,20 @@ bool Document::save(const std::string& path, std::string* err) {
         std::string annots;
         if (m_standard == Standard::None)
             for (const auto& l : m_links) {
-                if (l.page != i || l.to >= m_pages.size() || l.w <= 0 || l.h <= 0) continue;
+                if (l.page != i || l.w <= 0 || l.h <= 0) continue;
+                const std::string rect = "<< /Type /Annot /Subtype /Link /Rect [" + num(l.x) + " " + num(pg.m_h - l.y - l.h) + " " +
+                                         num(l.x + l.w) + " " + num(pg.m_h - l.y) + "] /Border [0 0 0] /P " + std::to_string(page_obj[i]) + " 0 R";
+                if (!l.uri.empty()) {   // s303: out of the document
+                    std::string u;
+                    static const char* hex = "0123456789ABCDEF";
+                    for (unsigned char ch : l.uri) {
+                        if (ch < 0x21 || ch > 0x7e) { u += '%'; u += hex[ch >> 4]; u += hex[ch & 15]; }
+                        else { if (ch == '(' || ch == ')' || ch == '\\') u += '\\'; u += static_cast<char>(ch); }
+                    }
+                    annots += std::to_string(o.add(rect + " /A << /S /URI /URI (" + u + ") >> >>")) + " 0 R ";
+                    continue;
+                }
+                if (l.to >= m_pages.size()) continue;
                 const auto& to = *m_pages[l.to];
                 const int a = o.add("<< /Type /Annot /Subtype /Link /Rect [" + num(l.x) + " " + num(pg.m_h - l.y - l.h) + " " +
                                     num(l.x + l.w) + " " + num(pg.m_h - l.y) + "] /Border [0 0 0] /P " +

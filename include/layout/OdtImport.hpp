@@ -37,6 +37,7 @@ struct OdtInfo {
     int list_pages = 0;                            // s290: pages added for a contents list / index running on
     int sources = 0, citations = 0, bibliographies = 0;   // s291: its bibliography's sources, the marks citing them, the lists made
     int section_styles = 0;                        // s293: styles split for its sections of columns
+    int links = 0, bookmarks = 0, links_broken = 0;   // s304: its hyperlinks, its bookmarks, links to places not found
     int tables = 0, pictures = 0, contents = 0;   // in the file, not brought in
     std::vector<std::string> notes_said;           // what didn't come over as it was, in words
 };

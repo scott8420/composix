@@ -61,6 +61,7 @@ bool Doc::changes_since(std::uint64_t rev, std::vector<Id>& ids) const {   // s1
 
 void Doc::reset() {
     m_recs.clear();
+    m_active_layer.clear();   // s305
     m_next.clear();
     ++m_rev;
     m_log.clear();
@@ -134,6 +135,8 @@ template std::vector<Doc::Id> Doc::ids_of<Swatch>() const;
 template std::vector<Doc::Id> Doc::ids_of<Asset>() const;
 template std::vector<Doc::Id> Doc::ids_of<GenList>() const;
 template std::vector<Doc::Id> Doc::ids_of<Guide>() const;
+template std::vector<Doc::Id> Doc::ids_of<Layer>() const;   // s305
+template double Doc::pos_after<Layer>(const Id&) const;
 template double Doc::pos_after<Page>(const Id&) const;
 template double Doc::pos_after<Master>(const Id&) const;
 template double Doc::pos_after<Style>(const Id&) const;
@@ -203,13 +206,28 @@ std::vector<Doc::Id> Doc::frames_on(const Id& owner) const {
         m_frames_on.clear();
         for (const auto& [id, r] : m_recs)   // s101: straight from the store (ids_of's order)
             if (const auto* f = std::get_if<Frame>(&r)) m_frames_on[f->owner].push_back(id);
+        // s305: by layer (bottom first; a frame on no layer, or one gone, the bottom), then z
+        std::map<Id, int> rank;
+        int k = 0;
+        for (const auto& l : ids_of<Layer>()) rank[l] = k++;
+        const auto rank_of = [&rank](const Frame& f) { const auto it = rank.find(f.layer); return it == rank.end() ? 0 : it->second; };
         for (auto& [o, ids] : m_frames_on)
-            std::stable_sort(ids.begin(), ids.end(),
-                             [this](const Id& a, const Id& b) { return as<Frame>(a)->z < as<Frame>(b)->z; });
+            std::stable_sort(ids.begin(), ids.end(), [this, &rank_of](const Id& a, const Id& b) {
+                const auto& fa = *as<Frame>(a);
+                const auto& fb = *as<Frame>(b);
+                const int ra = rank_of(fa), rb = rank_of(fb);
+                return ra != rb ? ra < rb : fa.z < fb.z;
+            });
         m_frames_on_rev = m_rev;
     }
     const auto it = m_frames_on.find(owner);
     return it == m_frames_on.end() ? std::vector<Id>{} : it->second;
+}
+
+Doc::Id Doc::active_layer() const {   // s305
+    const auto ls = ids_of<Layer>();
+    if (ls.empty()) return {};
+    return as<Layer>(m_active_layer) ? m_active_layer : ls.back();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1340,6 +1358,7 @@ Doc::Id add_frame(DocJournal& j, Doc& d, const Doc::Id& owner, FrameKind kind, c
         double z = 0;   // on top of the owner's frames
         for (const auto& o : d.frames_on(owner)) z = std::max(z, d.as<Frame>(o)->z);
         f.z = z + 1;
+        f.layer = d.active_layer();   // s305: on the layer being worked on
         if (kind == FrameKind::Text) {
             Doc::Id style;
             for (const auto& s : d.ids_of<Style>())
@@ -1520,7 +1539,7 @@ std::vector<Unit> units_of(const Doc& d, const std::vector<Placed>& pl, const st
     std::map<std::string, std::size_t> by_group;
     for (const auto& id : frames) {
         const auto* f = d.as<Frame>(id);
-        if (!f || f->locked) continue;
+        if (!f || frame_held(d, *f)) continue;
         const Rect r = frame_in_layout(d, pl, id);
         if (r.w <= 0 && r.h <= 0) continue;
         if (!f->group.empty()) {
@@ -1693,6 +1712,146 @@ int unlock_all(DocJournal& j, Doc& d, const std::vector<Doc::Id>& owners) {
     return static_cast<int>(ids.size());
 }
 
+// ── s305: layers ─────────────────────────────────────────────────────────────
+std::vector<Doc::Id> layers(const Doc& d) { return d.ids_of<Layer>(); }
+
+int layer_rank(const Doc& d, const Doc::Id& layer) {
+    const auto ls = d.ids_of<Layer>();
+    const auto it = std::find(ls.begin(), ls.end(), layer);
+    return it == ls.end() ? 0 : static_cast<int>(it - ls.begin());
+}
+
+const Layer* layer_of(const Doc& d, const Frame& f) {
+    if (const auto* l = d.as<Layer>(f.layer)) return l;
+    const auto ls = d.ids_of<Layer>();
+    return ls.empty() ? nullptr : d.as<Layer>(ls.front());
+}
+bool frame_shown(const Doc& d, const Frame& f) { const auto* l = layer_of(d, f); return !l || l->visible; }
+bool frame_held(const Doc& d, const Frame& f) {
+    if (f.locked) return true;
+    const auto* l = layer_of(d, f);
+    return l && (l->locked || !l->visible);
+}
+bool frame_prints(const Doc& d, const Frame& f) { const auto* l = layer_of(d, f); return !l || (l->visible && l->print); }
+
+int frames_on_layer(const Doc& d, const Doc::Id& layer) {
+    const auto ls = d.ids_of<Layer>();
+    if (ls.empty() || !d.as<Layer>(layer)) return 0;
+    int n = 0;
+    for (const auto& id : d.ids_of<Frame>()) {
+        const auto& f = *d.as<Frame>(id);
+        const Doc::Id on = d.as<Layer>(f.layer) ? f.layer : ls.front();
+        if (on == layer) ++n;
+    }
+    return n;
+}
+
+Doc::Id add_layer(DocJournal& j, Doc& d, const std::string& name) {
+    const auto ls = d.ids_of<Layer>();
+    Doc::Id made, first;
+    const auto fresh_name = [&](int extra) {
+        std::set<std::string> taken;
+        for (const auto& l : ls) taken.insert(d.as<Layer>(l)->name);
+        for (int n = static_cast<int>(ls.size()) + 1 + extra;; ++n)
+            if (!taken.count("Layer " + std::to_string(n))) return "Layer " + std::to_string(n);
+    };
+    std::vector<Doc::Id> ids;
+    j.run("New Layer", ids, [&] {
+        if (ls.empty()) {   // the document's frames were on a layer all along -- it gets a name
+            first = d.fresh_id("layer");
+            d.put(first, Layer{"Layer 1", 1.0, true, false, true, {}});
+        }
+        made = d.fresh_id("layer");
+        Layer l;
+        l.name = name.empty() ? (ls.empty() ? std::string("Layer 2") : fresh_name(0)) : name;
+        l.pos = d.pos_after<Layer>({});
+        d.put(made, l);
+        return first.empty() ? std::vector<Doc::Id>{made} : std::vector<Doc::Id>{first, made};
+    });
+    d.set_active_layer(made);
+    return made;
+}
+
+bool edit_layer(DocJournal& j, Doc& d, const Doc::Id& layer, const std::string& label, const std::function<void(Layer&)>& f) {
+    const auto* l = d.as<Layer>(layer);
+    if (!l) return false;
+    Layer n = *l;
+    f(n);
+    n.pos = l->pos;
+    if (n == *l) return false;
+    return j.run(label, {layer}, [&] { d.put(layer, n); });
+}
+
+bool move_layer(DocJournal& j, Doc& d, const Doc::Id& layer, int index) {
+    auto ls = d.ids_of<Layer>();
+    const auto it = std::find(ls.begin(), ls.end(), layer);
+    if (it == ls.end()) return false;
+    const int from = static_cast<int>(it - ls.begin());
+    index = std::clamp(index, 0, static_cast<int>(ls.size()) - 1);
+    if (index == from) return false;
+    ls.erase(it);
+    ls.insert(ls.begin() + index, layer);
+    return j.run("Move Layer", ls, [&] {
+        for (std::size_t k = 0; k < ls.size(); ++k) {
+            Layer l = *d.as<Layer>(ls[k]);
+            l.pos = static_cast<double>(k + 1);
+            d.put(ls[k], l);
+        }
+    });
+}
+
+bool delete_layer(DocJournal& j, Doc& d, const Doc::Id& layer, bool keep) {
+    const auto ls = d.ids_of<Layer>();
+    const auto it = std::find(ls.begin(), ls.end(), layer);
+    if (it == ls.end() || ls.size() < 2) return false;
+    const Doc::Id to = it == ls.begin() ? *(it + 1) : *(it - 1);
+    std::vector<Doc::Id> on;
+    for (const auto& id : d.ids_of<Frame>()) {
+        const auto& f = *d.as<Frame>(id);
+        const Doc::Id at = d.as<Layer>(f.layer) ? f.layer : ls.front();
+        if (at == layer) on.push_back(id);
+    }
+    if (!keep && !on.empty()) {   // its frames go with it -- as Delete Frames does them (threads mended, stories with no frame gone)
+        std::vector<Doc::Id> ids = d.ids_of<Frame>();   // (all a delete can touch: the frames, their stories and pictures)
+        for (const auto& s2 : d.ids_of<Story>()) ids.push_back(s2);
+        for (const auto& a : d.ids_of<Asset>()) ids.push_back(a);
+        ids.push_back(layer);
+        const bool done = j.run("Delete Layer", ids, [&] {
+            delete_frames(j, d, on);
+            d.put(layer, std::nullopt);
+        });
+        if (done && !d.as<Layer>(d.active_layer())) d.set_active_layer(to);
+        return done;
+    }
+    std::vector<Doc::Id> ids = on;
+    ids.push_back(layer);
+    const bool done = j.run("Delete Layer", ids, [&] {
+        for (const auto& id : on) {
+            Frame f = *d.as<Frame>(id);
+            f.layer = to;
+            d.put(id, f);
+        }
+        d.put(layer, std::nullopt);
+    });
+    return done;
+}
+
+int move_to_layer(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, const Doc::Id& layer) {
+    if (!d.as<Layer>(layer)) return 0;
+    std::vector<Doc::Id> ids;
+    for (const auto& id : with_groups(d, frames))
+        if (const auto* f = d.as<Frame>(id); f && f->layer != layer) ids.push_back(id);
+    if (ids.empty()) return 0;
+    j.run("Move to Layer", ids, [&] {
+        for (const auto& id : ids) {
+            Frame f = *d.as<Frame>(id);
+            f.layer = layer;
+            d.put(id, f);
+        }
+    });
+    return static_cast<int>(ids.size());
+}
+
 Doc::Id paste_text_frame(DocJournal& j, Doc& d, const Doc::Id& page, const Rect& r, const std::string& text) {
     if ((!d.as<Page>(page) && !d.as<Master>(page)) || r.w < 1) return {};
     std::string t = text;
@@ -1732,6 +1891,7 @@ Doc::Id paste_text_frame(DocJournal& j, Doc& d, const Doc::Id& page, const Rect&
         double z = 0;
         for (const auto& o : d.frames_on(page)) z = std::max(z, d.as<Frame>(o)->z);
         f.z = z + 1;
+        f.layer = d.active_layer();   // s305
         made = d.fresh_id("frame");
         d.put(made, f);
         ids.push_back(made);
@@ -1945,6 +2105,7 @@ Doc::Id add_path(DocJournal& j, Doc& d, const Doc::Id& owner, const std::vector<
         double z = 0;
         for (const auto& o : d.frames_on(owner)) z = std::max(z, d.as<Frame>(o)->z);
         f.z = z + 1;
+        f.layer = d.active_layer();   // s305
         made = d.fresh_id("frame");
         d.put(made, f);
         return std::vector<Doc::Id>{made};
@@ -3246,6 +3407,7 @@ bool build_list(DocJournal& j, Doc& d, const Doc::Id& list, const std::vector<Li
             Frame f;
             f.owner = nl.placed_on;
             f.kind = FrameKind::Text;
+        f.layer = d.active_layer();   // s305
             f.x = r.x; f.y = r.y; f.w = r.w; f.h = r.h;
             double z = 0;
             for (const auto& o : d.frames_on(nl.placed_on)) z = std::max(z, d.as<Frame>(o)->z);
@@ -3728,6 +3890,11 @@ TextPos edit_text(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPo
     Local local = (b != a && a.byte < static_cast<int>(pa.text.size())) ? local_at(pa, a.byte + 1)
                                                                         : local_at(pa, a.byte);   // s030
     local.kern.reset();   // s265: a kern belongs to its pair -- what's typed doesn't take it
+    // s303: typed at a link's end (or start) the words stay out of it -- only inside it do they join it
+    // (a selection replaced: the new words take its first character's link)
+    if (!local.link.empty() && b == a && !(a.byte > 0 && a.byte < static_cast<int>(pa.text.size()) &&
+                                 local_at(pa, a.byte).link == local.link && local_at(pa, a.byte + 1).link == local.link))
+        local.link.clear();
     const std::string style = pa.style;
     const int restart = pa.restart;   // s047: the first paragraph keeps its restart
     const ParaStart brk = pa.brk;     // s055: and its break
@@ -3916,6 +4083,81 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
     }
     if (s == *st) return false;
     return j.run(label, {story}, [&] { d.put(story, s); }, merge_key);
+}
+
+std::string normal_link(const std::string& typed) {   // s303
+    std::size_t a = 0, b = typed.size();
+    while (a < b && std::isspace(static_cast<unsigned char>(typed[a]))) ++a;
+    while (b > a && std::isspace(static_cast<unsigned char>(typed[b - 1]))) --b;
+    std::string t = typed.substr(a, b - a);
+    if (t.empty() || t[0] == '#') return t;
+    const auto colon = t.find(':');
+    const bool scheme = colon != std::string::npos && colon > 0 &&
+                        std::all_of(t.begin(), t.begin() + static_cast<long>(colon), [](char c) {
+                            return std::isalnum(static_cast<unsigned char>(c)) || c == '+' || c == '-' || c == '.';
+                        });
+    if (scheme) return t;
+    if (t.find('@') != std::string::npos && t.find('/') == std::string::npos) return "mailto:" + t;
+    return "https://" + t;
+}
+
+bool set_link(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& target) {   // s303
+    const std::string to = normal_link(target);
+    return set_local(j, d, story, a, b, to.empty() ? "Remove hyperlink" : "Hyperlink", [&](Local& l) { l.link = to; });
+}
+
+std::vector<LinkSpan> links_in(const Doc& d, const Doc::Id& story) {   // s303
+    std::vector<LinkSpan> out;
+    const auto* st = d.as<Story>(story);
+    if (!st) return out;
+    for (std::size_t p = 0; p < st->paras.size(); ++p) {
+        const auto& para = st->paras[p];
+        for (const auto& r : para.runs) {
+            if (r.local.link.empty() || r.end <= r.start) continue;
+            if (!out.empty() && out.back().para == static_cast<int>(p) && out.back().to == r.start && out.back().target == r.local.link)
+                out.back().to = r.end;
+            else
+                out.push_back({story, static_cast<int>(p), r.start, r.end, r.local.link, {}, false});
+        }
+    }
+    for (auto& l : out) {
+        const auto& text = st->paras[static_cast<std::size_t>(l.para)].text;
+        l.words = text.substr(static_cast<std::size_t>(l.from), static_cast<std::size_t>(l.to - l.from));
+        l.broken = l.target.size() > 1 && l.target[0] == '#' && find_anchor(d, l.target.substr(1)).story.empty();
+        if (l.target == "#") l.broken = true;
+    }
+    return out;
+}
+
+std::vector<LinkSpan> hyperlinks(const Doc& d) {   // s303
+    std::vector<LinkSpan> out;
+    for (const auto& sid : d.ids_of<Story>()) {
+        auto v = links_in(d, sid);
+        out.insert(out.end(), v.begin(), v.end());
+    }
+    return out;
+}
+
+std::string link_at(const Doc& d, const Doc::Id& story, TextPos a, TextPos b) {   // s303
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return {};
+    a = clamp_pos(*st, a);
+    b = clamp_pos(*st, b);
+    if (b < a) std::swap(a, b);
+    if (a == b) {
+        const auto& para = st->paras[static_cast<std::size_t>(a.para)];
+        const auto before = local_at(para, a.byte).link, after = local_at(para, a.byte + 1).link;
+        return a.byte > 0 && before == after ? before : (a.byte == 0 ? after : (before.empty() ? after : before));
+    }
+    std::optional<std::string> one;
+    for (TextPos q = a; q < b; q = next_char(*st, q)) {
+        const auto& para = st->paras[static_cast<std::size_t>(q.para)];
+        if (q.byte >= static_cast<int>(para.text.size())) continue;
+        const auto l = local_at(para, q.byte + 1).link;
+        if (!one) one = l;
+        else if (*one != l) return {};
+    }
+    return one.value_or(std::string());
 }
 
 namespace {
@@ -5277,6 +5519,7 @@ Doc::Id place_image_new(DocJournal& j, Doc& d, const Doc::Id& owner, const Rect&
         Frame f;
         f.owner = owner;
         f.kind = FrameKind::Image;
+        f.layer = d.active_layer();   // s305
         f.x = r.x; f.y = r.y; f.w = r.w; f.h = r.h;
         double z = 0;
         for (const auto& o : d.frames_on(owner)) z = std::max(z, d.as<Frame>(o)->z);
@@ -5934,6 +6177,8 @@ const std::vector<Verb>& verbs() {
         {"paste_text_frame", [](DocJournal& j, Doc& d) { paste_text_frame(j, d, "page.8", {54, 54, 200, 40}, "Words\nfrom elsewhere"); }},   // s297
         {"group_frames", [](DocJournal& j, Doc& d) { group_frames(j, d, {"frame.2", "frame.4"}); }},   // s300
         {"lock_frames", [](DocJournal& j, Doc& d) { lock_frames(j, d, {"frame.2"}, true); }},          // s301
+        {"set_link", [](DocJournal& j, Doc& d) { set_link(j, d, "story.1", {1, 4}, {1, 12}, "www.example.com"); }},   // s303
+        {"add_layer", [](DocJournal& j, Doc& d) { add_layer(j, d, "Notes"); }},   // s305
         {"align_frames", [](DocJournal& j, Doc& d) {   // s299
             align_frames(j, d, layout_pages(d, d.pages()), {"frame.1"}, 0, AlignTo::Page);
         }},
@@ -6843,7 +7088,7 @@ Doc::Id hit_frame(const Doc& d, const std::vector<Placed>& pl, double x, double 
         for (auto it = own.rbegin(); it != own.rend(); ++it) {   // topmost first
             if (!on_panel(d, p, *it)) continue;
             const auto& fr = *d.as<Frame>(*it);
-            if (fr.locked) continue;   // s301: a locked frame isn't picked
+            if (doc::frame_held(d, fr)) continue;   // s301: a locked frame isn't picked (s305: nor one on a locked / hidden layer)
             double bx = x - p.r.x, by = y - p.r.y;   // s228: in its box, before the turn
             to_box(fr, bx, by);
             if (doc::has_outline(fr)) {   // s203: a line or a path by its outline, not its box
@@ -6915,7 +7160,7 @@ std::vector<Doc::Id> frames_in(const Doc& d, const std::vector<Placed>& pl, cons
         for (const auto& f : d.frames_on(p.id)) {
             if (!on_panel(d, p, f) || std::find(out.begin(), out.end(), f) != out.end()) continue;
             const auto& fr = *d.as<Frame>(f);
-            if (fr.locked) continue;   // s301
+            if (doc::frame_held(d, fr)) continue;   // s301; s305
             const Rect b = frame_bounds(fr);   // s228: where it reaches, turned
             if (Rect{p.r.x + b.x, p.r.y + b.y, b.w, b.h}.intersects(r)) out.push_back(f);   // s150: per panel
         }
@@ -6929,7 +7174,7 @@ std::vector<Doc::Id> with_groups(const Doc& d, const std::vector<Doc::Id>& ids) 
         if (const auto* f = d.as<Frame>(id); f && !f->group.empty()) groups.insert(f->group);
     if (groups.empty()) return out;
     for (const auto& id : d.ids_of<Frame>())
-        if (const auto* f = d.as<Frame>(id); groups.count(f->group) && !f->locked && std::find(out.begin(), out.end(), id) == out.end())
+        if (const auto* f = d.as<Frame>(id); groups.count(f->group) && !doc::frame_held(d, *f) && std::find(out.begin(), out.end(), id) == out.end())
             out.push_back(id);
     return out;
 }

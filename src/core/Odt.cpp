@@ -362,6 +362,7 @@ struct Gather {
                 node(k, st);
                 const int e = static_cast<int>(p.text.size());
                 if (nm == "text:span" && !st.empty() && e > a) p.spans.push_back({a, e, st});
+                if (nm == "text:a" && e > a && !k.attr_or("xlink:href").empty()) p.links.push_back({a, e, k.attr_or("xlink:href")});   // s304
             } else if (nm == "text:s") {
                 const int c = std::max(1, std::atoi(k.attr_or("text:c", "1").c_str()));
                 p.text.append(static_cast<std::size_t>(std::min(c, 1000)), ' ');
@@ -454,6 +455,9 @@ struct Gather {
                     pic.at = static_cast<int>(p.text.size());
                     p.pictures.push_back(std::move(pic));
                 }
+            } else if ((nm == "text:bookmark" || nm == "text:bookmark-start") && !k.attr_or("text:name").empty()) {   // s304: a place a link can go to
+                raw(kMarkAnchor);
+                p.bookmarks.push_back(k.attr_or("text:name"));
             } else if (nm == "text:bookmark" || nm == "text:bookmark-start" || nm == "text:bookmark-end" || nm == "text:soft-page-break" ||
                        nm == "office:annotation" || nm == "office:annotation-end" || nm == "text:sequence-ref" || nm == "text:reference-mark") {
                 // nothing to keep

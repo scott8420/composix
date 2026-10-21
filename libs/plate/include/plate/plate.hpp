@@ -200,6 +200,9 @@ public:
     // Not written under PDF/X (annotations inside the bleed are refused), nor
     // when either page isn't there.
     void add_link(std::size_t page, double x, double y, double w, double h, std::size_t to_page, double to_y);
+    // s303: a link out of the document -- a box that opens a URI (a web
+    // address, mailto:). Bytes past ASCII are %-escaped. Not under PDF/X.
+    void add_uri(std::size_t page, double x, double y, double w, double h, const std::string& uri);
 
     bool save(const std::string& path, std::string* err = nullptr);
 
@@ -213,7 +216,7 @@ private:
     std::string m_title, m_creator = "Plate", m_author;
     struct Mark { std::string title; int level; std::size_t page; double y; };
     std::vector<Mark> m_marks;   // s054
-    struct Link { std::size_t page; double x, y, w, h; std::size_t to; double to_y; };
+    struct Link { std::size_t page; double x, y, w, h; std::size_t to; double to_y; std::string uri; };   // s303: uri set -- out
     std::vector<Link> m_links;   // s083
     bool m_compress = true;
 

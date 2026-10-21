@@ -180,6 +180,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         // ── Text (s023: special characters, while editing) ─────────────────
         {"Text", "win.bold",                {"<Ctrl>b"}, "", "Bold the selected words (or the word at the caret) -- again: off"},
         {"Text", "win.italic",              {"<Ctrl>i"}, "", "Italic the selected words (or the word at the caret) -- again: off"},
+        {"Text", "win.hyperlink",           {"<Ctrl>k"}, "", "Hyperlink -- the selected words a link (a web address, mailto:, #anchor)"},   // s304
         {"Text", "win.underline",           {"<Ctrl>u"}, "", "Underline the selected words -- again: off"},   // s263
         {"Text", "win.strikethrough",       {"<Ctrl><Alt>s"}, "", "Strike through the selected words -- again: off"},
         {"Text", "win.superscript",         {"<Ctrl><Alt>equal", "<Ctrl><Alt>plus"}, "Ctrl+Alt+=", "Superscript (smaller, raised) -- again: normal"},

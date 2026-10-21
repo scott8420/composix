@@ -123,6 +123,7 @@ add_library(composix_core STATIC
     src/core/Zip.cpp          # s235: zip entries (ODT, SwatchBooker)
     src/core/Xml.cpp          # s235: an XML tree (ODT import)
     src/core/Odt.cpp          # s235: an OpenDocument text file, read
+    src/core/Spell.cpp        # s306: spell check (Hunspell when it's there)
     ${CMAKE_CURRENT_BINARY_DIR}/HyphenData.cpp
 )
 target_include_directories(composix_core PUBLIC include)
@@ -130,6 +131,19 @@ target_link_libraries(composix_core PUBLIC ZLIB::ZLIB PRIVATE Clipper2)   # s202
 # Vendored nlohmann/json (header-only, MIT), PRIVATE -- an implementation detail
 # of the pump, no consumer inherits the include (CANON: surprise-free build).
 target_include_directories(composix_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+# s306: spell check through Hunspell when it's there (Fedora: hunspell-devel
+# and hunspell-en-US; Ubuntu: libhunspell-dev and hunspell-en-us). Without it
+# the app builds and runs, and Check Spelling says no dictionary is found.
+pkg_check_modules(HUNSPELL hunspell)
+if(HUNSPELL_FOUND)
+    target_compile_definitions(composix_core PRIVATE COMPOSIX_HAVE_HUNSPELL=1)
+    target_include_directories(composix_core SYSTEM PRIVATE ${HUNSPELL_INCLUDE_DIRS})
+    target_link_directories(composix_core PUBLIC ${HUNSPELL_LIBRARY_DIRS})
+    target_link_libraries(composix_core PRIVATE ${HUNSPELL_LIBRARIES})
+    message(STATUS "hunspell ${HUNSPELL_VERSION}: spell check on")
+else()
+    message(STATUS "hunspell not found: spell check off")
+endif()
 
 # ── Plate (s015): our PDF writer -- a standalone library in libs/plate, reusable
 # by other apps (its own CMakeLists, tests, README). plate_pango feeds it Pango
@@ -263,7 +277,7 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s302")
+set(COMPOSIX_BUILD "s306")
 # s194: on the About window's file alone -- on the whole target, each bump
 # rebuilt every app file and missed ccache.
 set_source_files_properties(src/AboutWindow.cpp PROPERTIES

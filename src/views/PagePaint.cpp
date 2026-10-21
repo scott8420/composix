@@ -106,6 +106,7 @@ void paint_canvas_page(const Cairo::RefPtr<Cairo::Context>& cr, const CanvasLook
     // s155: an item across the spine -- shifted for a right page, cut at the spine.
     const core::Side sd = core::side_for(P.doc, p.id, p.side);
     const auto across = [&](const core::Frame& f, bool from_master, const std::string& fid) {
+        if (!core::doc::frame_shown(P.doc, f)) return;   // s305: its layer hidden
         const double dx = core::across_dx(P.doc, f, sd);
         if (!f.across || sd == core::Side::Any) { paint_frame(cr, P, f, p.r.x, p.r.y, from_master, fid, p.id); return; }
         const Rect page = P.to_screen(p.r);

@@ -76,6 +76,7 @@ json local_json(const Local& l) {
     if (l.strike >= 0) o["strike"] = l.strike;
     if (l.ot) o["ot"] = ot_json(*l.ot);   // s264
     if (l.kern) o["kern"] = *l.kern;     // s265
+    if (!l.link.empty()) o["link"] = l.link;   // s303
     return o;
 }
 Local local_of_json(const json& l) {
@@ -89,6 +90,7 @@ Local local_of_json(const json& l) {
     o.strike = std::clamp(val(l, "strike", -1), -1, 1);
     if (l.contains("ot")) o.ot = ot_of_json(l.at("ot"));   // s264
     if (l.contains("kern") && l.at("kern").is_number()) o.kern = l.at("kern").get<double>();   // s265
+    o.link = val<std::string>(l, "link", "");   // s303
     return o;
 }
 
@@ -190,6 +192,7 @@ json to(const Record& r) {
             if (v.ignore_wrap) j["ignore_wrap"] = true;                // s069
             if (!v.group.empty()) j["group"] = v.group;               // s300
             if (v.locked) j["locked"] = true;                         // s301
+            if (!v.layer.empty()) j["layer"] = v.layer;               // s305
             if (v.role) j["role"] = v.role;                            // s275
             if (!(v.inset == Sides{})) j["inset"] = {v.inset.top, v.inset.right, v.inset.bottom, v.inset.left};   // s040
             if (!(v.col_rule == ColumnRule{}))   // s055
@@ -342,6 +345,9 @@ json to(const Record& r) {
                 }
                 j["paths"] = ps;
             }
+        } else if constexpr (std::is_same_v<T, Layer>) {   // s305
+            j = {{"kind", "layer"}, {"name", v.name}, {"pos", v.pos}, {"visible", v.visible}, {"locked", v.locked}, {"print", v.print}};
+            if (!v.color.empty()) j["color"] = v.color;
         } else if constexpr (std::is_same_v<T, Guide>) {
             j = {{"kind", "guide"}, {"owner", v.owner}, {"vertical", v.vertical}, {"pos", v.pos}};
         } else if constexpr (std::is_same_v<T, GenList>) {
@@ -486,6 +492,7 @@ std::optional<Record> from(const json& j) {
         v.ignore_wrap = val(j, "ignore_wrap", false);   // s069
         v.group = val(j, "group", std::string{});      // s300
         v.locked = val(j, "locked", false);            // s301
+        v.layer = val<std::string>(j, "layer", "");    // s305
         v.role = std::clamp(val(j, "role", 0), 0, 2);   // s275
         v.across = val(j, "across", false);   // s155
         v.shape = de(j, "shape", ShapeKind::Rect);   // s197
@@ -698,6 +705,16 @@ std::optional<Record> from(const json& j) {
                 if (p.contains("clip") && p["clip"].is_array()) for (const auto& e : p["clip"]) if (e.is_number()) c.push_back(e.get<float>());
                 if (p.contains("shape") && p["shape"].is_array()) for (const auto& e : p["shape"]) if (e.is_number()) s.push_back(e.get<float>());
             }
+        return v;
+    }
+    if (k == "layer") {   // s305
+        Layer v;
+        v.name = val<std::string>(j, "name", "Layer");
+        v.pos = val(j, "pos", 0.0);
+        v.visible = val(j, "visible", true);
+        v.locked = val(j, "locked", false);
+        v.print = val(j, "print", true);
+        v.color = val<std::string>(j, "color", "");
         return v;
     }
     if (k == "guide") {

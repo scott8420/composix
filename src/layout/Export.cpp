@@ -77,6 +77,7 @@ bool draw_frames(cairo_t* cr, const core::Doc& d, const core::Doc::Id& owner, Fl
                  const core::Doc::Id& on_page) {
     for (const auto& fid : d.frames_on(owner)) {
         if (owner != on_page && !core::master_item_on(d, fid, on_page)) continue;   // s025
+        if (!core::doc::frame_prints(d, *d.as<core::Frame>(fid))) continue;   // s305: its layer hidden or not printing
         // s155: a copy -- an item across the spine sits shifted on a right
         // page, and each page shows only its side of the spine.
         core::Frame f = *d.as<core::Frame>(fid);
@@ -790,35 +791,89 @@ std::vector<PdfLink> index_links(const core::Doc& d, FlowCache& flows) {   // s1
     return out;
 }
 
-std::vector<PdfLink> xref_links(const core::Doc& d, FlowCache& flows) {   // s131
+namespace {
+// s131 / s303: where an anchor points -- its page and how far down; page "" none.
+struct AnchorDest { std::string page; double y = 0; };
+AnchorDest anchor_dest(const core::Doc& d, FlowCache& flows, const std::string& id) {
+    AnchorDest dst;
+    const auto at = core::doc::find_anchor(d, id);
+    if (at.story.empty()) return dst;
+    const auto& st = *d.as<core::Story>(at.story);
+    const auto& flow = flows.get(d, at.story);
+    const auto& text = st.paras[static_cast<std::size_t>(at.at.para)].text;
+    if (core::note_at(text, static_cast<std::size_t>(at.at.byte) + 3)) {   // a note: where it is set
+        const int k = core::notes_in(text, 0, static_cast<std::size_t>(at.at.byte) + 3);
+        for (const auto& ft : flow.frames)
+            for (const auto& np : ft.notes)
+                if (np.para == at.at.para && np.k == k && !np.cont && dst.page.empty())
+                    if (const auto* nf = d.as<core::Frame>(ft.frame); nf && d.as<core::Page>(nf->owner))
+                        dst = {nf->owner, std::max(0.0, nf->y + np.y - 4)};
+    }
+    if (dst.page.empty()) {
+        const auto c = caret_at(d, at.story, flow, at.at);
+        if (const auto* f = c.ok ? d.as<core::Frame>(c.frame) : nullptr; f && d.as<core::Page>(f->owner))
+            dst = {f->owner, std::max(0.0, f->y + c.y - 4)};
+    }
+    return dst;
+}
+}  // namespace
+
+std::vector<PdfLink> hyperlink_links(const core::Doc& d, FlowCache& flows) {   // s303
     std::vector<PdfLink> out;
-    // Where an anchor points: its page and how far down; page "" none.
-    struct Dest { std::string page; double y = 0; };
-    std::map<std::string, Dest> dests;
-    const auto dest_of = [&](const std::string& id) -> Dest {
-        if (const auto it = dests.find(id); it != dests.end()) return it->second;
-        Dest dst;
-        const auto at = core::doc::find_anchor(d, id);
-        if (!at.story.empty()) {
-            const auto& st = *d.as<core::Story>(at.story);
-            const auto& flow = flows.get(d, at.story);
-            const auto& text = st.paras[static_cast<std::size_t>(at.at.para)].text;
-            if (core::note_at(text, static_cast<std::size_t>(at.at.byte) + 3)) {   // a note: where it is set
-                const int k = core::notes_in(text, 0, static_cast<std::size_t>(at.at.byte) + 3);
-                for (const auto& ft : flow.frames)
-                    for (const auto& np : ft.notes)
-                        if (np.para == at.at.para && np.k == k && !np.cont && dst.page.empty())
-                            if (const auto* nf = d.as<core::Frame>(ft.frame); nf && d.as<core::Page>(nf->owner))
-                                dst = {nf->owner, std::max(0.0, nf->y + np.y - 4)};
+    std::map<std::string, AnchorDest> dests;
+    for (const auto& sid : d.ids_of<core::Story>()) {
+        const auto spans = core::doc::links_in(d, sid);
+        if (spans.empty()) continue;
+        const auto& rs = flows.resolved(d, sid, {});
+        const core::Story* text = rs.any ? &rs.text : d.as<core::Story>(sid);
+        const StoryFlow& flow = rs.any ? rs.flow : flows.get(d, sid);
+        // the resolved words' own runs (a reference's words widen a paragraph) -- their links' spans
+        std::vector<core::doc::LinkSpan> here;
+        for (std::size_t p = 0; p < text->paras.size(); ++p)
+            for (const auto& r : text->paras[p].runs) {
+                if (r.local.link.empty() || r.end <= r.start) continue;
+                if (!here.empty() && here.back().para == static_cast<int>(p) && here.back().to == r.start && here.back().target == r.local.link)
+                    here.back().to = r.end;
+                else
+                    here.push_back({sid, static_cast<int>(p), r.start, r.end, r.local.link, {}, false});
             }
-            if (dst.page.empty()) {
-                const auto c = caret_at(d, at.story, flow, at.at);
-                if (const auto* f = c.ok ? d.as<core::Frame>(c.frame) : nullptr; f && d.as<core::Page>(f->owner))
-                    dst = {f->owner, std::max(0.0, f->y + c.y - 4)};
+        for (const auto& span : here) {
+            PdfLink proto;
+            if (span.target[0] == '#') {
+                const auto id = span.target.substr(1);
+                auto it = dests.find(id);
+                if (it == dests.end()) it = dests.emplace(id, anchor_dest(d, flows, id)).first;
+                if (it->second.page.empty()) continue;
+                proto.to = it->second.page;
+                proto.to_y = it->second.y;
+            } else {
+                proto.uri = span.target;
+            }
+            for (const auto& ft : flow.frames) {
+                const auto* f = d.as<core::Frame>(ft.frame);
+                if (!f || f->rot != 0 || !d.as<core::Page>(f->owner)) continue;
+                const bool on = std::any_of(ft.lines.begin(), ft.lines.end(), [&](const Line& l) {
+                    return l.para == span.para && l.start < span.to && l.end > span.from;
+                });
+                if (!on) continue;
+                for (const auto& r : selection_rects(d, sid, flow, ft.frame, {span.para, span.from}, {span.para, span.to}, rs.any ? &rs.text : nullptr)) {
+                    PdfLink l = proto;
+                    l.page = f->owner;
+                    l.box = {f->x + r.x, f->y + r.y, r.w, r.h};
+                    out.push_back(std::move(l));
+                }
             }
         }
-        dests.emplace(id, dst);
-        return dst;
+    }
+    return out;
+}
+
+std::vector<PdfLink> xref_links(const core::Doc& d, FlowCache& flows) {   // s131
+    std::vector<PdfLink> out;
+    std::map<std::string, AnchorDest> dests;
+    const auto dest_of = [&](const std::string& id) -> AnchorDest {
+        if (const auto it = dests.find(id); it != dests.end()) return it->second;
+        return dests.emplace(id, anchor_dest(d, flows, id)).first->second;
     };
     for (const auto& sid : d.ids_of<core::Story>()) {
         const auto& st = *d.as<core::Story>(sid);
@@ -1259,6 +1314,8 @@ ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOpti
             if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.note_links;
         for (const auto& l : xref_links(d, flows))   // s131
             if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.xref_links;
+        for (const auto& l : hyperlink_links(d, flows))   // s303
+            if (sheet_of(sheets, l.page).sheet >= 0 && (!l.uri.empty() || sheet_of(sheets, l.to).sheet >= 0)) ++s.hyperlinks;
         for (const auto& l : index_links(d, flows))   // s137
             if (sheet_of(sheets, l.page).sheet >= 0 && sheet_of(sheets, l.to).sheet >= 0) ++s.index_links;
     }
@@ -1269,6 +1326,7 @@ ExportSummary export_summary(const core::Doc& d, FlowCache& flows, const PdfOpti
             (x ? std::string("contents links left out (PDF/X)") : n(s.links, "contents link", "contents links"));
     if (!x && s.note_links > 0) s.nav += " \u00b7 " + n(s.note_links, "note link", "note links");   // s123
     if (!x && s.xref_links > 0) s.nav += " \u00b7 " + n(s.xref_links, "cross-reference link", "cross-reference links");   // s131
+    if (!x && s.hyperlinks > 0) s.nav += " \u00b7 " + n(s.hyperlinks, "hyperlink", "hyperlinks");   // s303
     if (!x && s.index_links > 0) s.nav += " \u00b7 " + n(s.index_links, "index link", "index links");   // s137
     return s;
 }
@@ -1321,6 +1379,7 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
     auto links = contents_links(d, flows);   // s083
     for (auto& l : note_links(d, flows)) links.push_back(std::move(l));   // s123: and the notes'
     for (auto& l : xref_links(d, flows)) links.push_back(std::move(l));   // s131: and the cross-references'
+    for (auto& l : hyperlink_links(d, flows)) links.push_back(std::move(l));   // s303: and the words' own links
     for (auto& l : index_links(d, flows)) links.push_back(std::move(l));   // s137: and the index'
     std::set<std::string> missing;
     int n = 0;
@@ -1345,6 +1404,16 @@ bool export_pdf(const core::Doc& d, const std::string& path, const PdfOptions& o
                 opt.progress(0.3 + 0.67 * n / npages, "Writing page " + std::to_string(n) + " of " + std::to_string(npages) + "\u2026");
             for (const auto& l : links) {   // s083: the contents page's entries, clickable
                 if (l.page != pid) continue;
+                if (!l.uri.empty()) {   // s303: out of the document
+                    std::string u;
+                    for (char ch : l.uri) { if (ch == '\'' || ch == '\\') u += '\\'; u += ch; }
+                    char box[120];
+                    std::snprintf(box, sizeof box, "rect=[%g %g %g %g] ", off + sh.x[k] + l.box.x, off + l.box.y, l.box.w, l.box.h);
+                    const std::string attr = std::string(box) + "uri='" + u + "'";
+                    cairo_tag_begin(cr, CAIRO_TAG_LINK, attr.c_str());
+                    cairo_tag_end(cr, CAIRO_TAG_LINK);
+                    continue;
+                }
                 const auto to = sheet_of(sheets, l.to);
                 if (to.sheet < 0) continue;
                 char attr[160];

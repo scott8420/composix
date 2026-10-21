@@ -334,6 +334,7 @@ struct Frame {
     // (last, so the aggregate initialisers that fill the front keep working)
     std::string group;                   // s300: frames grouped share an id ("group.N"; "" none) -- picked and moved as one
     bool        locked = false;          // s301: not picked on the canvas, so not moved or changed by hand
+    std::string layer;                   // s305: its layer's id ("" the bottom layer)
     bool operator==(const Frame&) const = default;
 };
 
@@ -371,9 +372,12 @@ struct Local {
     int         position = -1, caps = -1, underline = -1, strike = -1;
     std::optional<OtFeatures> ot;         // s264: the words' own features (all of them, over the styles')
     std::optional<double> kern;           // s265: manual kerning after this character (1/1000 em)
+    // s303: a hyperlink over these words -- a web address / mailto: (out of
+    // the document), or "#" and an anchor's id (s304: to that place). "" none.
+    std::string link;
     bool empty() const {
         return bold < 0 && italic < 0 && size <= 0 && color.empty() && no_break < 0 && !tracking && !shift && position < 0 &&
-               caps < 0 && underline < 0 && strike < 0 && !ot && !kern;
+               caps < 0 && underline < 0 && strike < 0 && !ot && !kern && link.empty();
     }
     bool operator==(const Local&) const = default;
 };
@@ -674,7 +678,20 @@ struct Guide {
     bool operator==(const Guide&) const = default;
 };
 
-using Record = std::variant<Settings, Section, Page, Master, Frame, Story, Style, Swatch, Asset, GenList, Guide>;
+// s305: a layer -- the whole document's (as InDesign), bottom first by pos.
+// Frames on a layer are drawn above those on the layers under it; a hidden
+// layer's frames aren't drawn or picked, a locked one's aren't picked, a
+// non-printing one's are drawn on screen but left out of exports. A frame
+// on no layer ("" or one gone) is on the bottom layer.
+struct Layer {
+    std::string name;
+    double      pos = 0;
+    bool        visible = true, locked = false, print = true;
+    std::string color;                   // its frames' selection colour ("" the usual)
+    bool operator==(const Layer&) const = default;
+};
+
+using Record = std::variant<Settings, Section, Page, Master, Frame, Story, Style, Swatch, Asset, GenList, Guide, Layer>;
 
 class Doc {
 public:
@@ -705,7 +722,12 @@ public:
     std::string folio(const Id& page) const;            // "iv", "7"
     Side        side_of(const Id& page) const;          // Right / Left (facing), Any (single)
     std::vector<Id> pages_of(const Id& section) const;
-    std::vector<Id> frames_on(const Id& owner) const;   // by z
+    std::vector<Id> frames_on(const Id& owner) const;   // by z (s305: by layer, then z)
+
+    // s305: the layer new frames go on ("" or one gone: the top layer). Not
+    // a document change -- not saved, not an undo step.
+    void set_active_layer(const Id& layer) { m_active_layer = layer; }
+    Id   active_layer() const;
 
     // A fresh id with a prefix: "page" -> "page.13". Never reused in a session.
     Id fresh_id(const std::string& prefix);
@@ -755,6 +777,7 @@ private:
     mutable std::map<Id, Id>   m_section_at;             // page -> its section
     mutable std::uint64_t      m_section_at_rev = ~0ull;
     int                        m_strays = 0;
+    Id                         m_active_layer;          // s305
     int                        m_loading = 0;
     std::function<bool()>      m_door;
     std::function<void()>      m_changed;
@@ -1233,6 +1256,32 @@ bool distribute_frames(DocJournal& j, Doc& d, const std::vector<Placed>& pl, con
 // old group) / Ungroup (every group among them). One step each.
 bool group_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
 bool ungroup_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames);
+// s305: layers. layers(): bottom first. layer_rank: its place (0 the bottom;
+// a frame on no layer 0). frame_shown -- its layer visible; frame_held -- it
+// or its layer locked (or hidden): not picked; frame_prints -- shown and its
+// layer printing.
+std::vector<Doc::Id> layers(const Doc& d);
+int  layer_rank(const Doc& d, const Doc::Id& layer);
+const Layer* layer_of(const Doc& d, const Frame& f);
+bool frame_shown(const Doc& d, const Frame& f);
+bool frame_held(const Doc& d, const Frame& f);
+bool frame_prints(const Doc& d, const Frame& f);
+// s305: a new layer on top ("Layer N" when `name` is ""), made active. The
+// first layer made in a document without layers is "Layer 1" holding every
+// frame, the new one "Layer 2" above it. One step; its id.
+Doc::Id add_layer(DocJournal& j, Doc& d, const std::string& name = {});
+// A layer's settings (`f` changes it; the label names the step). One step.
+bool edit_layer(DocJournal& j, Doc& d, const Doc::Id& layer, const std::string& label, const std::function<void(Layer&)>& f);
+// A layer moved to place `index` (0 the bottom). One step.
+bool move_layer(DocJournal& j, Doc& d, const Doc::Id& layer, int index);
+// A layer gone, its frames deleted with it (InDesign) -- or, `keep`, moved to
+// the layer under it (the one above when it was the bottom). The last layer
+// can't go. One step.
+bool delete_layer(DocJournal& j, Doc& d, const Doc::Id& layer, bool keep = false);
+// Frames moved to a layer (each group whole). One step; how many moved.
+int  move_to_layer(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, const Doc::Id& layer);
+// How many frames each layer holds (a frame on no layer: the bottom's).
+int  frames_on_layer(const Doc& d, const Doc::Id& layer);
 // s301: Lock / Unlock frames; Unlock every frame on `owners`. One step each.
 bool lock_frames(DocJournal& j, Doc& d, const std::vector<Doc::Id>& frames, bool lock);
 int  unlock_all(DocJournal& j, Doc& d, const std::vector<Doc::Id>& owners);
@@ -1484,6 +1533,26 @@ bool set_para_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
 // piece's Local (Clear overrides: f = reset). One step.
 bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
                const std::function<void(Local&)>& f, const std::string& merge_key = {});
+// s303: hyperlinks. [a, b) made a link to `target` ("" takes the link off);
+// the target as normal_link gives it. One step ("Hyperlink").
+bool set_link(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& target);
+// s303: what a typed target means -- trimmed; "www.x" -> "https://www.x";
+// "a@b.c" (no scheme) -> "mailto:a@b.c"; "#id" kept (s304: an anchor).
+std::string normal_link(const std::string& typed);
+// s303: every link's words, story by story, paragraph by paragraph (runs
+// side by side with the same target as one); `broken`: a "#" target whose
+// anchor is gone (s304).
+struct LinkSpan {
+    Doc::Id story;
+    int para = 0, from = 0, to = 0;   // bytes in that paragraph
+    std::string target, words;
+    bool broken = false;
+    bool operator==(const LinkSpan&) const = default;
+};
+std::vector<LinkSpan> links_in(const Doc& d, const Doc::Id& story);
+std::vector<LinkSpan> hyperlinks(const Doc& d);
+// s303: the link at a caret / over a whole selection ("" none or mixed).
+std::string link_at(const Doc& d, const Doc::Id& story, TextPos a, TextPos b);
 // s265: Alt+Left / Right while typing (InDesign's): at a caret, the kern of
 // the pair it stands in (on the character before it; not at a paragraph's
 // start); a selection, its tracking -- `by` thousandths of an em, presses
