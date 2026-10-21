@@ -3753,6 +3753,46 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
     m_proof_pill->set_valign(Gtk::Align::CENTER);
     m_proof_pill->set_visible(false);
     m_head.append(*m_proof_pill);
+    {   // s277 (Scott): Go to Page -- the spread before, the folio typed, the spread after.
+        auto box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+        box->set_name("canvas_view.goto_box");
+        box->add_css_class("linked");
+        box->add_css_class("cx-goto");
+        box->set_valign(Gtk::Align::CENTER);
+        const auto arrow = [box](const char* name, const char* icon, const char* action, const char* tip) {
+            auto b = Gtk::make_managed<Gtk::Button>();
+            b->set_name(name);
+            b->set_icon_name(icon);
+            b->set_action_name(action);
+            b->set_tooltip_text(tip);
+            b->add_css_class("cx-chrome-button");
+            box->append(*b);
+        };
+        arrow("canvas_view.prev_spread", "pan-start-symbolic", "win.prev-spread", "Previous spread  (Page Up)");
+        m_goto = Gtk::make_managed<Gtk::Entry>();
+        m_goto->set_name("canvas_view.goto");
+        m_goto->set_width_chars(4);
+        m_goto->set_max_width_chars(6);
+        m_goto->set_alignment(0.5f);
+        m_goto->set_placeholder_text("Page");
+        m_goto->set_tooltip_text("Go to page  (Ctrl+J) \u2014 a folio (8, iv), +N for the Nth page, or a master (A)");
+        m_goto->signal_activate().connect([this] {
+            const std::string t = m_goto->get_text();
+            if (auto lg = log::get(log::Area::View)) lg->info("go to: '{}'", t);
+            m_goto_sig.emit(t);
+        });
+        auto esc = Gtk::EventControllerKey::create();
+        esc->signal_key_pressed().connect([this](guint k, guint, Gdk::ModifierType) {
+            if (k != GDK_KEY_Escape) return false;
+            m_goto->set_text(m_goto_shown);
+            m_canvas.grab_focus();
+            return true;
+        }, false);
+        m_goto->add_controller(esc);
+        box->append(*m_goto);
+        arrow("canvas_view.next_spread", "pan-end-symbolic", "win.next-spread", "Next spread  (Page Down)");
+        m_head.append(*box);
+    }
     m_head.append(m_fit);
     m_head.append(m_zoom);
     append(m_head);
@@ -3817,6 +3857,27 @@ void CanvasView::set_title(const std::string& t, std::size_t n) {
     m_title.set_text(t);
     m_count.set_text(std::to_string(n));
     m_count.set_visible(n > 1);
+}
+
+void CanvasView::set_goto_text(const std::string& t) {   // s277
+    m_goto_shown = t;
+    if (m_goto && !m_goto->has_focus()) m_goto->set_text(t);
+    else if (m_goto) m_goto->set_text(t);
+    if (m_goto) m_goto->remove_css_class("error");
+}
+
+void CanvasView::focus_goto() {
+    if (!m_goto) return;
+    m_goto->grab_focus();
+    m_goto->select_region(0, -1);
+}
+
+void CanvasView::flag_goto_miss() {
+    if (!m_goto) return;
+    m_goto->add_css_class("error");
+    m_goto->select_region(0, -1);
+    Gtk::Entry* e = m_goto;
+    Glib::signal_timeout().connect_once([e] { e->remove_css_class("error"); }, 1200);
 }
 
 void CanvasView::sync_zoom() {

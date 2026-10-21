@@ -344,3 +344,66 @@ row.cx-drop-on { background: alpha(@cx_ink, 0.18); }
 .cx-start-sub   { color: @cx_dim; font-size: 1.05em; margin-bottom: 6px; }
 .cx-start flowbox.cx-tile-grid { padding: 4px 0 24px; }
 .cx-start .cx-tile-group { padding-left: 0; }
+
+/* ── s277: the navigator as cards -- each section a card on the sidebar ──── */
+.cx-cards { padding: 10px 10px 16px; }
+.cx-card {
+  background: @cx_card;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px alpha(black, 0.06), 0 0 0 1px @cx_hair;
+}
+.cx-card-head {
+  padding: 6px 8px 6px 6px;
+  border-radius: 12px;
+  min-height: 26px;
+  transition: background 120ms ease-out;
+}
+.cx-card-head:hover        { background: @cx_faint; }
+.cx-card.cx-open > .cx-card-head { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.cx-card-head.cx-picked    { background: alpha(@cx_ink, 0.16); }
+.cx-card-body              { padding: 0 6px 8px; }
+.cx-card-body .cx-nav-list > row { margin: 1px 2px; }
+.cx-card-body .cx-nav-list > row.cx-item-row { padding-left: 28px; }
+
+/* S / M / L */
+.cx-size-seg { background: @cx_faint; border-radius: 7px; padding: 2px; }
+.cx-size-seg > button {
+  min-width: 20px; min-height: 18px; padding: 0 3px;
+  border-radius: 5px; font-size: 0.72em; font-weight: 800;
+  background: none; box-shadow: none; color: @cx_dim;
+}
+.cx-size-seg > button:checked { background: @cx_card; color: @cx_ink; box-shadow: 0 1px 2px alpha(black, 0.15); }
+
+/* the pictures: spreads (pages) and mock-ups (masters) */
+.cx-card-pictures { padding: 2px 0 0; }
+.cx-pic-slot { padding: 4px; border-radius: 8px; }
+.cx-pic-slot:hover { background: @cx_faint; }
+.cx-thumb-paper { box-shadow: 0 0 0 1px alpha(black, 0.16), 0 1px 3px alpha(black, 0.10); }
+.cx-thumb-page.cx-left  > .cx-thumb-paper { box-shadow: 0 0 0 1px alpha(black, 0.16), 0 1px 3px alpha(black, 0.10); }
+.cx-thumb-page.cx-picked > .cx-thumb-paper,
+.cx-thumb-master.cx-picked > .cx-thumb-paper { box-shadow: 0 0 0 2px @cx_ink, 0 2px 6px alpha(@cx_ink, 0.30); }
+.cx-thumb-page.cx-drop-on > .cx-thumb-paper { box-shadow: 0 0 0 3px @cx_ink; }
+.cx-folio, .cx-master-name { font-size: 0.72em; color: @cx_dim; }
+.cx-thumb-page.cx-picked > .cx-folio,
+.cx-thumb-master.cx-picked > .cx-master-name { color: @cx_ink; font-weight: 700; }
+.cx-master-badge {
+  font-size: 0.62em; font-weight: 800;
+  color: @cx_ink; background: alpha(@cx_ink, 0.14);
+  border-radius: 3px; padding: 0 3px; margin: 2px;
+}
+.cx-thumb-master { margin: 0 2px; }
+
+/* s278: drag and drop in the navigator -- where a page / master will land; a card's new place */
+.cx-spread-folios { border-radius: 4px; }
+.cx-spread-folios:hover { background: @cx_faint; }
+.cx-thumb-page.cx-drop-before > .cx-thumb-paper { box-shadow: -4px 0 0 -1px @cx_ink, 0 0 0 1px alpha(black, 0.16); }
+.cx-thumb-page.cx-drop-after  > .cx-thumb-paper { box-shadow: 4px 0 0 -1px @cx_ink, 0 0 0 1px alpha(black, 0.16); }
+.cx-card.cx-card-drop-before { box-shadow: 0 -3px 0 0 @cx_ink, 0 0 0 1px @cx_hair; }
+.cx-card.cx-card-drop-after  { box-shadow: 0 3px 0 0 @cx_ink, 0 0 0 1px @cx_hair; }
+/* s278: no GTK drop glow on the whole card -- the page / card marks say where */
+.cx-card-body:drop(active), .cx-card:drop(active) { box-shadow: 0 1px 2px alpha(black, 0.06), 0 0 0 1px @cx_hair; outline: none; }
+.cx-card-body:drop(active) { box-shadow: none; }
+
+/* s280: an inspector group dragged to a new place */
+button.cx-insp-group.cx-group-drop-before { box-shadow: inset 0 3px 0 0 @cx_ink; }
+button.cx-insp-group.cx-group-drop-after  { box-shadow: inset 0 -3px 0 0 @cx_ink; }

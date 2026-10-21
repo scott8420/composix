@@ -1,6 +1,8 @@
 #include "core/Outline.hpp"
 
 #include <algorithm>
+#include <set>
+#include <map>
 #include <stdexcept>
 
 namespace composix::core {
@@ -53,6 +55,52 @@ std::vector<const Item*> Outline::in(Segment s) const {
     std::vector<const Item*> out;
     for (const auto& it : m_items)
         if (it.segment == s) out.push_back(&it);
+    return out;
+}
+
+std::vector<std::vector<std::string>> spread_slots(const std::vector<std::string>& pages,
+                                                   const std::vector<std::vector<std::string>>& groups,
+                                                   const std::function<bool(const std::string&)>& is_left) {
+    std::vector<std::vector<std::string>> out;
+    std::map<std::string, std::size_t> group_of;
+    for (std::size_t g = 0; g < groups.size(); ++g)
+        for (const auto& id : groups[g]) group_of[id] = g;
+    std::set<std::size_t> done;
+    for (const auto& id : pages) {
+        const auto it = group_of.find(id);
+        if (it == group_of.end()) { out.push_back({id}); continue; }
+        if (!done.insert(it->second).second) continue;
+        std::vector<std::string> row;
+        for (const auto& p : groups[it->second])
+            if (std::find(pages.begin(), pages.end(), p) != pages.end()) row.push_back(p);
+        if (row.size() == 1) {
+            if (is_left && is_left(row.front())) row.push_back("");
+            else                                 row.insert(row.begin(), "");
+        }
+        out.push_back(row);
+    }
+    return out;
+}
+
+std::vector<Field> order_groups(const std::vector<Field>& fields, const std::vector<std::string>& order) {
+    std::vector<Field> head, tail;
+    std::vector<std::string> names;
+    std::map<std::string, std::vector<Field>> blocks;
+    bool seen_group = false;
+    for (const auto& f : fields) {
+        if (f.group.empty()) { (seen_group ? tail : head).push_back(f); continue; }
+        seen_group = true;
+        if (!blocks.count(f.group)) names.push_back(f.group);
+        blocks[f.group].push_back(f);
+    }
+    if (names.empty()) return fields;
+    std::stable_sort(names.begin(), names.end(), [&order](const std::string& a, const std::string& b) {
+        const auto ia = std::find(order.begin(), order.end(), a), ib = std::find(order.begin(), order.end(), b);
+        return ia < ib;   // not named: order.end() -- after the named, as they came
+    });
+    std::vector<Field> out = head;
+    for (const auto& n : names) out.insert(out.end(), blocks[n].begin(), blocks[n].end());
+    out.insert(out.end(), tail.begin(), tail.end());
     return out;
 }
 

@@ -45,11 +45,13 @@ void Shell::build_shell() {  // zone: header + panes
     m_title_box.append(m_subtitle);
     header->set_title_widget(m_title_box);
 
-    m_menu_button.set_icon_name("open-menu-symbolic");
-    m_menu_button.set_menu_model(build_menu());
-    m_menu_button.set_tooltip_text("Main menu");
-    m_menu_button.add_css_class("cx-chrome-button");
-    header->pack_end(m_menu_button);
+    // s279 (Scott): a menubar -- File, Edit, Type, Object, Layout, View, Help --
+    // in place of the one menu button (one menu to keep, not two).
+    m_menubar = Gtk::make_managed<Gtk::PopoverMenuBar>(build_menu());
+    m_menubar->set_name("shell.menubar");
+    m_menubar->add_css_class("cx-menubar");
+    m_menubar->set_valign(Gtk::Align::CENTER);
+    header->pack_start(*m_menubar);
 
     m_insp_toggle.set_icon_name("sidebar-show-right-symbolic");
     m_insp_toggle.set_tooltip_text("Show / hide the inspector  (Ctrl+Alt+2)");
@@ -188,35 +190,56 @@ void Shell::build_welcome() {  // zone: the main view when nothing is picked
     m_welcome.append(*body);
 }
 
-Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
-    auto menu = Gio::Menu::create();
+Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: the menubar's model (s279; was the hamburger's, s101)
+    auto bar = Gio::Menu::create();
+    const auto section = [](const Glib::RefPtr<Gio::Menu>& into, std::initializer_list<std::pair<const char*, const char*>> items) {
+        auto sec = Gio::Menu::create();
+        for (const auto& [label, action] : items) sec->append(label, action);
+        into->append_section(sec);
+        return sec;
+    };
 
-    // s101 (Scott): the menu ran ~30 items long -- the everyday file and
-    // output verbs stay on top; Edit, View and Help are submenus.
+    // ── File ──
     auto file = Gio::Menu::create();
-    file->append("New\u2026", "win.new");   // s019
-    file->append("Open Project…", "win.open");
-    file->append("Close Project", "win.close-project");   // s145; s146: under Open (Scott)
-    m_recents_menu = Gio::Menu::create();
-    file->append_submenu("Open Recent", m_recents_menu);
-    file->append("Save", "win.save");
-    file->append("Save As\u2026", "win.save-as");
-    menu->append_section(file);
+    {
+        auto docs = section(file, {{"New\u2026", "win.new"}, {"Open Project\u2026", "win.open"}});
+        m_recents_menu = Gio::Menu::create();
+        docs->append_submenu("Open Recent", m_recents_menu);
+        docs->append("Close Project", "win.close-project");   // s145; s146: under Open (Scott)
+        section(file, {{"Save", "win.save"}, {"Save As\u2026", "win.save-as"}});
+        section(file, {{"Place Image\u2026", "win.place"}, {"Import ODT\u2026", "win.import-odt"}});
+        section(file, {{"Export PDF\u2026", "win.export-pdf"}, {"Colour Report\u2026", "win.color-report"}});
+        section(file, {{"Quit", "win.quit"}});
+    }
+    bar->append_submenu("_File", file);
 
-    auto place = Gio::Menu::create();   // s009
-    place->append("Place Image\u2026", "win.place");
-    place->append("Import ODT\u2026", "win.import-odt");   // s238
-    place->append("Export PDF\u2026", "win.export-pdf");   // s013
-    place->append("Colour Report\u2026", "win.color-report");   // s053
-    menu->append_section(place);
-
-    // Edit: rebuilt in place after each step (the undo labels) -- Shell_helpers.
+    // ── Edit ── (the Undo / Redo section is rebuilt after each step: their labels)
+    auto edit = Gio::Menu::create();
     m_edit_menu = Gio::Menu::create();
     m_edit_menu->append("Undo", "win.undo");
     m_edit_menu->append("Redo", "win.redo");
-    m_edit_menu->append("Find / Change\u2026", "win.find");   // s022
-    m_edit_menu->append_submenu("Insert Special Character", special_menu());   // s023
-    m_edit_menu->append_submenu("Type Style", type_style_menu());   // s263
+    edit->append_section(m_edit_menu);
+    section(edit, {{"Find / Change\u2026", "win.find"}});
+    section(edit, {{"Delete Frames", "win.delete-frames"}});
+    bar->append_submenu("_Edit", edit);
+
+    // ── Type ──
+    auto type = Gio::Menu::create();
+    {
+        auto ins = Gio::Menu::create();
+        ins->append_submenu("Insert Special Character", special_menu());   // s023
+        ins->append_submenu("Insert Field", field_menu());                 // s274
+        ins->append_submenu("Type Style", type_style_menu());              // s263
+        type->append_section(ins);
+        section(type, {{"Footnote", "win.insert-footnote"}, {"Index Entry\u2026", "win.index-mark"}, {"Cross-Reference\u2026", "win.insert-xref"}});
+        section(type, {{"Story Editor", "win.story-editor"}});
+        section(type, {{"Footnotes\u2026", "win.notes-panel"}, {"Sources\u2026", "win.sources-panel"}, {"Cross-References\u2026", "win.xrefs-panel"}});
+        section(type, {{"New Index\u2026", "win.new-index"}});
+    }
+    bar->append_submenu("_Type", type);
+
+    // ── Object ── (also the canvas's right-click Arrange)
+    auto object = Gio::Menu::create();
     {   // s070
         m_arrange_menu = Gio::Menu::create();
         m_arrange_menu->append("Bring to Front", "win.bring-front");
@@ -243,49 +266,46 @@ Glib::RefPtr<Gio::Menu> Shell::build_menu() {  // zone: hamburger model
         outline->append("Offset Path\u2026", "win.offset-path");
         outline->append("Outline Stroke", "win.outline-stroke");
         m_arrange_menu->append_section(outline);
-        m_edit_menu->append_submenu("Arrange", m_arrange_menu);
+        // The menubar's Object: the same items, laid out flat.
+        object->append_section(m_arrange_menu);
+        auto wrap = Gio::Menu::create();
+        wrap->append("None", "win.frame-wrap::0");
+        wrap->append("Wrap Around", "win.frame-wrap::1");
+        wrap->append("Jump Over", "win.frame-wrap::2");
+        wrap->append("Wrap to Shape", "win.frame-wrap::3");
+        auto w = Gio::Menu::create();
+        w->append_submenu("Text Wrap", wrap);
+        w->append("Ignore Others' Wrap", "win.frame-ignore-wrap");
+        object->append_section(w);
+        section(object, {{"Remove Override", "win.remove-override"}});
     }
+    bar->append_submenu("_Object", object);
 
+    // ── Layout ── (s277: Go to Page; s279: the page verbs for the spread shown)
+    auto layout = Gio::Menu::create();
+    section(layout, {{"Go to Page\u2026", "win.go-to-page"}, {"Previous Spread", "win.prev-spread"}, {"Next Spread", "win.next-spread"}});
+    section(layout, {{"Back", "win.go-up"}, {"Forward", "win.go-forward"}});
+    section(layout, {{"Add Page After", "win.layout-add-page"}, {"Delete Pages", "win.layout-delete-pages"}});
+    section(layout, {{"Override All Master Items", "win.layout-override-all"}, {"Remove All Overrides", "win.layout-remove-overrides"}});
+    bar->append_submenu("_Layout", layout);
+
+    // ── View ──
     auto view = Gio::Menu::create();
-    auto panels = Gio::Menu::create();
-    panels->append("Navigator", "win.toggle-nav");
-    panels->append("Inspector", "win.toggle-inspector");
-    view->append_section(panels);
-    auto canvas = Gio::Menu::create();   // s006
-    canvas->append("Rulers", "win.toggle-rulers");
-    canvas->append("Guides", "win.toggle-guides");
-    canvas->append("Lock Guides", "win.toggle-guide-lock");   // s153
-    canvas->append("Baseline Grid", "win.toggle-grid");   // s036
-    canvas->append("Hidden Characters", "win.toggle-hidden");   // s059
-    canvas->append("Proof Colours", "win.toggle-proof");        // s099
-    canvas->append("Simulate Paper", "win.toggle-paper");       // s107
-    canvas->append("Snap to Guides & Edges", "win.toggle-snap");
-    view->append_section(canvas);
+    section(view, {{"Navigator", "win.toggle-nav"}, {"Inspector", "win.toggle-inspector"}});
+    section(view, {{"Zoom In", "win.zoom-in"}, {"Zoom Out", "win.zoom-out"}, {"Fit the Pages", "win.zoom-fit"},
+                   {"Actual Size", "win.zoom-100"}, {"200%", "win.zoom-200"}, {"300%", "win.zoom-300"}});
+    section(view, {{"Rulers", "win.toggle-rulers"}, {"Guides", "win.toggle-guides"}, {"Lock Guides", "win.toggle-guide-lock"},
+                   {"Baseline Grid", "win.toggle-grid"}, {"Hidden Characters", "win.toggle-hidden"}, {"Snap to Guides & Edges", "win.toggle-snap"}});
+    section(view, {{"Proof Colours", "win.toggle-proof"}, {"Simulate Paper", "win.toggle-paper"}});
+    bar->append_submenu("_View", view);
 
+    // ── Help ──
     auto help = Gio::Menu::create();
-    auto start = Gio::Menu::create();
-    start->append("Start Screen", "win.start");   // s064
-    start->append("Keyboard Shortcuts", "win.shortcuts");
-    help->append_section(start);
-    auto books = Gio::Menu::create();
-    books->append("Open Sample Book", "win.open-sample");   // s019
-    books->append("Open Big Test Book", "win.open-big-book");   // s100
-    help->append_section(books);
-    auto diag = Gio::Menu::create();
-    diag->append("Dump Registry", "win.dump-registry");
-    diag->append("About Composix", "win.about");
-    help->append_section(diag);
-
-    auto subs = Gio::Menu::create();
-    subs->append_submenu("Edit", m_edit_menu);
-    subs->append_submenu("View", view);
-    subs->append_submenu("Help", help);
-    menu->append_section(subs);
-
-    auto app = Gio::Menu::create();
-    app->append("Quit", "win.quit");
-    menu->append_section(app);
-    return menu;
+    section(help, {{"Start Screen", "win.start"}, {"Keyboard Shortcuts", "win.shortcuts"}});
+    section(help, {{"Open Sample Book", "win.open-sample"}, {"Open Big Test Book", "win.open-big-book"}});
+    section(help, {{"Dump Registry", "win.dump-registry"}, {"About Composix", "win.about"}});
+    bar->append_submenu("_Help", help);
+    return bar;
 }
 
 }  // namespace composix

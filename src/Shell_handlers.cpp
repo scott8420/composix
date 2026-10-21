@@ -199,6 +199,40 @@ void Shell::on_tiles_move(const std::vector<std::string>& ids, const std::string
     }
 }
 
+// s278: pages dragged in the navigator's Pages card -- moved, one step; the
+// sides reshuffle as they fall (a page dropped inside a spread pushes the rest
+// on), and the canvas shows them where they landed.
+void Shell::on_nav_move_pages(const std::vector<std::string>& ids, const std::string& target, bool before) {  // handler
+    if (std::find(ids.begin(), ids.end(), target) != ids.end()) return;
+    std::vector<std::string> rest;
+    for (const auto& p : m_doc.pages())
+        if (std::find(ids.begin(), ids.end(), p) == ids.end()) rest.push_back(p);
+    const auto it = std::find(rest.begin(), rest.end(), target);
+    if (it == rest.end()) return;
+    const std::string after = before ? (it == rest.begin() ? std::string{} : *(it - 1)) : target;
+    if (!core::doc::move_pages(m_journal, m_doc, ids, after)) return;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("nav: moved {} page(s) {} {}", ids.size(), before ? "before" : "after", target);
+    Glib::signal_idle().connect_once([this, ids] { m_nav.select_items(ids); });
+}
+
+// s278: a master dropped between pages -- new pages on it there (a facing
+// master in a facing book: a spread's two; else one), one step.
+void Shell::on_nav_master_insert(const std::string& master, const std::string& page, bool before) {  // handler
+    const auto* m = m_doc.as<core::Master>(master);
+    if (!m) return;
+    const int n = m->facing && core::any_facing(m_doc) && m->folds.empty() ? 2 : 1;
+    std::string at = page;   // insert BEFORE this page ("" = at the end)
+    if (!before) {
+        const auto pages = m_doc.pages();
+        const auto it = std::find(pages.begin(), pages.end(), page);
+        at = it == pages.end() || it + 1 == pages.end() ? std::string{} : *(it + 1);
+    }
+    const auto made = core::doc::insert_pages(m_journal, m_doc, at, n, master);
+    if (made.empty()) return;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("nav: {} page(s) on {} {} {}", made.size(), master, before ? "before" : "after", page);
+    Glib::signal_idle().connect_once([this, made] { m_nav.select_items(made); });
+}
+
 // s016: where CMYK output profiles live (Fedora / Debian system folders, the
 // user's own).
 std::vector<std::string> Shell::profile_dirs() const {  // helper
@@ -806,6 +840,45 @@ void Shell::bind_context_actions() {  // bindings
     add_action("override-page", [this] { if (!m_ctx.page.empty()) core::doc::override_all(m_journal, m_doc, {m_ctx.page}); });
     add_action("remove-page-overrides", [this] { if (!m_ctx.page.empty()) core::doc::remove_all_overrides(m_journal, m_doc, {m_ctx.page}); });
     add_action("page-add-after", [this] { if (!m_ctx.page.empty()) page_action("add", {m_ctx.page}); });
+    // s279: the Layout menu -- on the picked pages, else the spread on the canvas.
+    add_action("layout-add-page", [this] {
+        const auto pages = layout_pages();
+        if (pages.empty()) return;
+        const auto last = pages.back();
+        const auto made = core::doc::add_pages(m_journal, m_doc, last, 1, m_doc.as<core::Page>(last)->master);
+        if (!made.empty()) Glib::signal_idle().connect_once([this, made] { m_nav.select_items(made); });
+    });
+    add_action("layout-delete-pages", [this] { page_action("delete", layout_pages()); });
+    // s279: the navigator's right-click
+    add_action("nav-open", [this] { if (!m_nav_ctx.items.empty()) m_nav.select_items(m_nav_ctx.items); });
+    add_action("nav-add-page", [this] {
+        if (m_nav_ctx_pages.empty()) return;
+        const auto last = m_nav_ctx_pages.back();
+        const auto made = core::doc::add_pages(m_journal, m_doc, last, 1, m_doc.as<core::Page>(last)->master);
+        if (!made.empty()) Glib::signal_idle().connect_once([this, made] { m_nav.select_items(made); });
+    });
+    add_action("nav-delete-pages", [this] { page_action("delete", m_nav_ctx_pages); });
+    add_action("nav-section", [this] { page_action("section", m_nav_ctx_pages); });
+    add_action("nav-override-all", [this] { core::doc::override_all(m_journal, m_doc, m_nav_ctx_pages); });
+    add_action("nav-remove-overrides", [this] { core::doc::remove_all_overrides(m_journal, m_doc, m_nav_ctx_pages); });
+    add_action_with_parameter("nav-apply-master", Glib::Variant<Glib::ustring>::variant_type(), [this](const Glib::VariantBase& p) {
+        const std::string m = Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(p).get();
+        if (m_nav_ctx_pages.empty()) return;
+        core::doc::set_master(m_journal, m_doc, m_nav_ctx_pages, m == "none" ? std::string{} : m);
+    });
+    add_action("nav-master-page", [this] {   // a page on the master, at the end
+        if (m_nav_ctx.items.empty()) return;
+        on_nav_master_insert(m_nav_ctx.items.front(), m_doc.pages().empty() ? std::string{} : m_doc.pages().back(), false);
+    });
+    add_action_with_parameter("nav-tiles", Glib::Variant<Glib::ustring>::variant_type(), [this](const Glib::VariantBase& p) {
+        const std::string k = Glib::VariantBase::cast_dynamic<Glib::Variant<Glib::ustring>>(p).get();
+        for (const auto& si : core::segments()) if (si.key == k) m_nav.select_section(si.id);
+    });
+    add_action("nav-open-all", [this] { m_nav.open_all(true); });
+    add_action("nav-close-all", [this] { m_nav.open_all(false); });
+    add_action("nav-reset-order", [this] { m_nav.reset_order(); });
+    add_action("layout-override-all", [this] { core::doc::override_all(m_journal, m_doc, layout_pages()); });
+    add_action("layout-remove-overrides", [this] { core::doc::remove_all_overrides(m_journal, m_doc, layout_pages()); });
 }
 
 void Shell::on_canvas_context(const views::Canvas::ContextHit& hit) {  // handler
@@ -929,6 +1002,106 @@ void Shell::on_go_forward() {  // handler
     m_nav.select_items(items);
     m_moving = false;
     sync_up();
+}
+
+void Shell::on_nav_context(const views::Pick& p, double x, double y) {  // handler
+    m_nav_ctx = p;
+    m_nav_ctx_pages.clear();
+    auto menu = Gio::Menu::create();
+    const auto masters_menu = [this] {
+        auto mm = Gio::Menu::create();
+        for (const auto& mid : m_doc.ids_of<core::Master>())
+            mm->append(core::master_label(m_doc, mid), "win.nav-apply-master::" + mid);
+        mm->append("None", "win.nav-apply-master::none");
+        return mm;
+    };
+    if (p.segment) {   // a card's header
+        const auto& si = core::segment_info(*p.segment);
+        auto top = Gio::Menu::create();
+        top->append("Show " + si.title + " as Tiles", "win.nav-tiles::" + si.key);
+        menu->append_section(top);
+        auto cards = Gio::Menu::create();
+        cards->append("Open All Cards", "win.nav-open-all");
+        cards->append("Close All Cards", "win.nav-close-all");
+        cards->append("Cards in Their First Order", "win.nav-reset-order");
+        menu->append_section(cards);
+    } else if (!p.items.empty() && m_doc.as<core::Master>(p.items.front())) {   // a master
+        for (const auto& id : m_pick.items) if (m_doc.as<core::Page>(id)) m_nav_ctx_pages.push_back(id);
+        auto top = Gio::Menu::create();
+        top->append("Edit Master", "win.nav-open");
+        if (!m_nav_ctx_pages.empty())
+            top->append(m_nav_ctx_pages.size() == 1 ? "Apply to the Picked Page" : "Apply to the " + std::to_string(m_nav_ctx_pages.size()) + " Picked Pages",
+                        "win.nav-apply-master::" + p.items.front());
+        top->append("Add a Page on It (at the End)", "win.nav-master-page");
+        menu->append_section(top);
+    } else {   // pages
+        for (const auto& id : p.items) if (m_doc.as<core::Page>(id)) m_nav_ctx_pages.push_back(id);
+        if (m_nav_ctx_pages.empty()) return;
+        const std::size_t n = m_nav_ctx_pages.size();
+        auto top = Gio::Menu::create();
+        top->append(n == 1 ? "Add Page After" : "Add Page After Them", "win.nav-add-page");
+        top->append_submenu("Apply Master", masters_menu());
+        top->append("Start Section Here", "win.nav-section");
+        menu->append_section(top);
+        auto over = Gio::Menu::create();
+        over->append("Override All Master Items", "win.nav-override-all");
+        over->append("Remove All Overrides", "win.nav-remove-overrides");
+        menu->append_section(over);
+        auto del = Gio::Menu::create();
+        del->append(n == 1 ? "Delete Page" : "Delete " + std::to_string(n) + " Pages", "win.nav-delete-pages");
+        menu->append_section(del);
+    }
+    if (!m_nav_menu) {
+        m_nav_menu = std::make_unique<Gtk::PopoverMenu>(menu, Gtk::PopoverMenu::Flags::NESTED);
+        m_nav_menu->set_name("nav.context");
+        m_nav_menu->set_has_arrow(false);
+        m_nav_menu->set_parent(m_nav);
+    } else {
+        m_nav_menu->set_menu_model(menu);
+    }
+    m_nav_menu->set_pointing_to(Gdk::Rectangle(static_cast<int>(x), static_cast<int>(y), 1, 1));
+    m_nav_menu->set_size_request(-1, -1);
+    m_nav_menu->popup();
+    Glib::signal_idle().connect_once([this] {   // as the canvas's: up, measured, its natural height
+        if (!m_nav_menu || !m_nav_menu->get_visible()) return;
+        int mn = 0, nat = 0, b1 = 0, b2 = 0;
+        m_nav_menu->measure(Gtk::Orientation::VERTICAL, -1, mn, nat, b1, b2);
+        if (nat > m_nav_menu->get_height()) {
+            m_nav_menu->set_size_request(-1, nat);
+            m_nav_menu->present();
+        }
+    });
+}
+
+std::vector<std::string> Shell::layout_pages() {  // helper
+    std::vector<std::string> out;
+    for (const auto& id : m_pick.items) if (m_doc.as<core::Page>(id)) out.push_back(id);
+    if (!out.empty()) return out;
+    if (m_main.get_visible_child_name() == "canvas")
+        for (const auto& id : m_canvas_view.canvas().shown()) if (m_doc.as<core::Page>(id)) out.push_back(id);
+    return out;
+}
+
+// s277: Ctrl+J -- to the Go to Page field; from anywhere but the canvas,
+// the canvas first (the page picked, else the first).
+void Shell::on_go_to_page() {  // handler
+    if (m_main.get_visible_child_name() != "canvas") {
+        const auto pages = m_doc.pages();
+        if (pages.empty()) return;
+        std::string to = pages.front();
+        for (const auto& id : m_pick.items) if (m_doc.as<core::Page>(id)) { to = id; break; }
+        m_nav.select_items({to});
+    }
+    Glib::signal_idle().connect_once([this] { m_canvas_view.focus_goto(); });
+}
+
+void Shell::on_goto_typed(const std::string& t) {  // handler
+    const auto id = core::go_to_target(m_doc, t);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("go to '{}' -> {}", t, id.empty() ? "nothing" : id);
+    if (id.empty()) { m_canvas_view.flag_goto_miss(); return; }
+    m_nav.select_items({id});
+    sync_up();
+    Glib::signal_idle().connect_once([this] { m_canvas_view.canvas().grab_focus(); });
 }
 
 void Shell::on_tiles_selection(const std::vector<std::string>& ids) {  // handler

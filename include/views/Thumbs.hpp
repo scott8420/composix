@@ -27,6 +27,10 @@ void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& w,
 void paint_spread(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& w, int width, int height,
                   const std::vector<core::Thumb>& pages);
 
+// s277: one page drawn to fill exactly W x H (no margin, no shadow).
+void paint_page_exact(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& w, int width, int height,
+                      const core::Thumb& t);
+
 // s020: who draws a page's real contents into its paper (x, y, w, h -- the
 // paper, device units). The shell sets one (PageThumbs); false = not drawn,
 // so the stand-in type bars show. `large`: the preview (margin guides too).

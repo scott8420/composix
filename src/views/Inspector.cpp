@@ -23,6 +23,13 @@
 #include <gtkmm/listitem.h>
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/separator.h>
+#include <giomm/menu.h>
+#include <giomm/simpleactiongroup.h>
+#include <gdkmm/contentprovider.h>
+#include <gtkmm/widgetpaintable.h>
+#include <gtkmm/gestureclick.h>
+#include <gtkmm/droptarget.h>
+#include <gtkmm/dragsource.h>
 
 namespace composix::views {
 
@@ -259,7 +266,8 @@ void Inspector::fill(const std::string& title, const std::string& sub,
     std::map<int, std::string> row_group;                 // a row -> its group
     std::map<std::string, std::vector<const core::Field*>> group_fields;
     std::vector<std::pair<std::string, Gtk::Button*>> headers;
-    for (const auto& f : fields) {
+    const auto shown = ordered(fields, m_order);   // s280: the groups in the kept order
+    for (const auto& f : shown) {
         if (f.group != cur_group) {
             cur_group = f.group;
             if (!cur_group.empty()) {
@@ -562,6 +570,7 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             for (auto* w : rows) w->set_visible(open);
         };
         apply();
+        wire_group_header(*hb, name);   // s280: dragged to reorder; right-click for all
         hb->signal_clicked().connect([this, name, apply] {
             if (m_open.count(name)) m_open.erase(name); else m_open.insert(name);
             apply();
@@ -570,7 +579,143 @@ void Inspector::fill(const std::string& title, const std::string& sub,
             m_groups_sig.emit(csv);
         });
     }
+    m_shown_groups.clear();
+    for (const auto& h : headers) m_shown_groups.push_back(h.first);
     m_painting = false;
+}
+
+// s280: the groups as blocks, in the kept order. Rows before the first
+// group stay first; rows of no group found among or after the groups follow
+// them; groups the order doesn't name keep their own order, after the named.
+std::vector<core::Field> Inspector::ordered(const std::vector<core::Field>& fields, const std::vector<std::string>& order) {
+    return core::order_groups(fields, order);
+}
+
+void Inspector::set_group_order(const std::string& csv) {
+    m_order.clear();
+    std::string cur;
+    for (char c : csv + ",") {
+        if (c == ',') { if (!cur.empty()) m_order.push_back(cur); cur.clear(); }
+        else cur += c;
+    }
+}
+
+std::string Inspector::group_order() const {
+    std::string csv;
+    for (const auto& g : m_order) csv += (csv.empty() ? "" : ",") + g;
+    return csv;
+}
+
+void Inspector::refill() {
+    if (!m_has_shown || !m_pending.empty()) return;   // changes waiting: the next showing takes the new order
+    m_staged_next = m_staged;
+    m_stage_ids_next = m_stage_ids;
+    m_has_shown = false;
+    const auto title = m_shown_title, sub = m_shown_sub;
+    const auto fields = m_shown;
+    fill(title, sub, fields);
+}
+
+void Inspector::open_all_groups(bool open) {
+    if (open) for (const auto& g : m_shown_groups) m_open.insert(g);
+    else      m_open.clear();
+    std::string csv;
+    for (const auto& g : m_open) csv += (csv.empty() ? "" : ",") + g;
+    m_groups_sig.emit(csv);
+    refill();
+}
+
+void Inspector::reset_group_order() {
+    m_order.clear();
+    m_order_sig.emit(group_order());
+    refill();
+}
+
+void Inspector::wire_group_header(Gtk::Button& hb, const std::string& name) {
+    auto src = Gtk::DragSource::create();
+    src->set_actions(Gdk::DragAction::MOVE);
+    src->signal_prepare().connect([name](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
+        Glib::Value<Glib::ustring> v;
+        v.init(v.value_type());
+        v.set("composix-group:" + name);
+        return Gdk::ContentProvider::create(v);
+    }, false);
+    auto* srcp = src.get();
+    Gtk::Button* hp = &hb;
+    src->signal_drag_begin().connect([srcp, hp](const Glib::RefPtr<Gdk::Drag>&) {
+        srcp->set_icon(Gtk::WidgetPaintable::create(*hp), 20, 10);
+    });
+    hb.add_controller(src);
+
+    auto drop = Gtk::DropTarget::create(G_TYPE_STRING, Gdk::DragAction::MOVE);
+    drop->signal_motion().connect([hp](double, double y) {
+        const bool above = y < hp->get_height() / 2.0;
+        hp->remove_css_class(above ? "cx-group-drop-after" : "cx-group-drop-before");
+        hp->add_css_class(above ? "cx-group-drop-before" : "cx-group-drop-after");
+        return Gdk::DragAction::MOVE;
+    }, false);
+    drop->signal_leave().connect([hp] { hp->remove_css_class("cx-group-drop-before"); hp->remove_css_class("cx-group-drop-after"); });
+    drop->signal_drop().connect([this, hp, name](const Glib::ValueBase& value, double, double y) {
+        hp->remove_css_class("cx-group-drop-before");
+        hp->remove_css_class("cx-group-drop-after");
+        Glib::Value<Glib::ustring> v;
+        v.init(value.gobj());
+        const std::string t = v.get(), tag = "composix-group:";
+        if (t.rfind(tag, 0) != 0) return false;
+        const std::string moving = t.substr(tag.size());
+        if (moving == name) return false;
+        const bool above = y < hp->get_height() / 2.0;
+        // The order as it is now: what's kept, then the groups shown that it doesn't name.
+        std::vector<std::string> order = m_order;
+        for (const auto& g : m_shown_groups)
+            if (std::find(order.begin(), order.end(), g) == order.end()) order.push_back(g);
+        order.erase(std::remove(order.begin(), order.end(), moving), order.end());
+        auto at = std::find(order.begin(), order.end(), name);
+        if (!above && at != order.end()) ++at;
+        order.insert(at, moving);
+        m_order = order;
+        m_order_sig.emit(group_order());
+        Glib::signal_idle().connect_once([this] { refill(); });   // not while GTK is still in the drop
+        return true;
+    }, false);
+    hb.add_controller(drop);
+
+    // A right-click: every group open / closed; the first order.
+    auto rc = Gtk::GestureClick::create();
+    rc->set_button(GDK_BUTTON_SECONDARY);
+    rc->signal_pressed().connect([this, hp](int, double x, double y) {
+        if (!m_insp_actions) {
+            auto ag = Gio::SimpleActionGroup::create();
+            ag->add_action("open-all", [this] { Glib::signal_idle().connect_once([this] { open_all_groups(true); }); });
+            ag->add_action("close-all", [this] { Glib::signal_idle().connect_once([this] { open_all_groups(false); }); });
+            ag->add_action("first-order", [this] { Glib::signal_idle().connect_once([this] { reset_group_order(); }); });
+            insert_action_group("insp", ag);
+            m_insp_actions = true;
+        }
+        auto menu = Gio::Menu::create();
+        menu->append("Open All Groups", "insp.open-all");
+        menu->append("Close All Groups", "insp.close-all");
+        auto sec = Gio::Menu::create();
+        sec->append("Groups in Their First Order", "insp.first-order");
+        menu->append_section(sec);
+        if (!m_group_menu) {
+            m_group_menu = std::make_unique<Gtk::PopoverMenu>(menu);
+            m_group_menu->set_name("inspector.group_menu");
+            m_group_menu->set_has_arrow(false);
+            m_group_menu->set_parent(*this);
+        } else {
+            m_group_menu->set_menu_model(menu);
+        }
+        graphene_point_t in = GRAPHENE_POINT_INIT(static_cast<float>(x), static_cast<float>(y)), out;
+        if (!gtk_widget_compute_point(GTK_WIDGET(hp->gobj()), GTK_WIDGET(gobj()), &in, &out)) return;
+        m_group_menu->set_pointing_to(Gdk::Rectangle(static_cast<int>(out.x), static_cast<int>(out.y), 1, 1));
+        m_group_menu->popup();
+    });
+    hb.add_controller(rc);
+}
+
+Inspector::~Inspector() {
+    if (m_group_menu) m_group_menu->unparent();
 }
 
 void Inspector::set_open_groups(const std::string& csv) {   // s161

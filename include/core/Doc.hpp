@@ -803,6 +803,10 @@ std::string length_text(double pt, Units u);
 std::string numbering_text(Numbering n);
 std::string side_text(Side s);
 std::string master_label(const Doc& d, const Doc::Id& master);  // "B-Body", "None"
+// s277: Go to Page -- what the typed text names: a page by its folio ("8",
+// "iv"; letters' case ignored), "+N" the Nth page from the front, or a master
+// by its prefix or label ("B", "B-Body"). "" when nothing matches.
+Doc::Id go_to_target(const Doc& d, const std::string& typed);
 
 // ── text positions (s010) ───────────────────────────────────────────────────
 // A place in a story: paragraph index, BYTE offset into its UTF-8 text (always
@@ -922,6 +926,9 @@ std::vector<SizePreset> size_presets(const Doc& d, const Doc::Id& page);
 std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int count,
                                const Doc::Id& master);
 bool remove_pages(DocJournal& j, Doc& d, const std::vector<Doc::Id>& pages);
+// s277: `count` new pages on `master` placed BEFORE page `before` ("" or not
+// a page: at the end) -- one step. The navigator's master dropped in a gap.
+std::vector<Doc::Id> insert_pages(DocJournal& j, Doc& d, const Doc::Id& before, int count, const Doc::Id& master);
 // s256: remove_pages' parts, for a step of one's own -- the ids it touches
 // (pages, their frames and guides, the sections) and the removal itself
 // (call inside the step; no check that a page is left).

@@ -12,9 +12,11 @@
 #include "widgets/Widgets.hpp"
 
 #include <gtkmm/entry.h>
+#include <gtkmm/popovermenu.h>
 #include <sigc++/signal.h>
 #include <functional>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -27,6 +29,7 @@ namespace composix::views {
 class Inspector : public widgets::Box {
 public:
     Inspector();
+    ~Inspector() override;   // s280: the group menu let go
 
     void show_items(const std::vector<const core::Item*>& sel);
     void show_section(const core::Outline& o, core::Segment s,
@@ -54,12 +57,24 @@ public:
     // s161: the groups shown open ("Text,Paragraph"), kept by the shell.
     void set_open_groups(const std::string& csv);
     sigc::signal<void(const std::string& csv)>& signal_groups() { return m_groups_sig; }
+    // s280 (Scott): the groups' ORDER, dragged by their headings ("Frame,Text,...";
+    // groups not named keep their place after). Kept by the shell.
+    void set_group_order(const std::string& csv);
+    std::string group_order() const;
+    sigc::signal<void(const std::string& csv)>& signal_group_order() { return m_order_sig; }
+    // s280: every group open / closed; the groups in their first order.
+    void open_all_groups(bool open);
+    void reset_group_order();
+    // s280: the fields as they'll be shown -- the groups in the kept order (selftest).
+    static std::vector<core::Field> ordered(const std::vector<core::Field>& fields, const std::vector<std::string>& order);
 
 private:
     void fill(const std::string& title, const std::string& sub, const std::vector<core::Field>& fields);
     Gtk::MenuButton* presets_button(const std::string& key, const std::vector<core::Choice>& choices, Gtk::Entry* show_in = nullptr);
     void send(const std::string& key, const std::string& value);   // s162: an edit -- now, or staged
     void update_bar();
+    void refill();   // s280: the same subject drawn again (a new group order / all opened)
+    void wire_group_header(Gtk::Button& hb, const std::string& name);
     void ask_pending(std::vector<std::string> ids, Pending pend, const std::string& name, std::function<void()> then);
     Gtk::Entry* typed_entry(const std::string& name, const std::string& value, double unit, double lo, double hi,
                             std::function<void(const std::string&)> send, bool percent = false);
@@ -79,6 +94,11 @@ private:
     // s161: groups
     std::set<std::string> m_open{"Text", "Paragraph"};
     sigc::signal<void(const std::string&)> m_groups_sig;
+    std::vector<std::string> m_order;                 // s280
+    std::vector<std::string> m_shown_groups;          // the groups drawn, top to bottom
+    sigc::signal<void(const std::string&)> m_order_sig;
+    std::unique_ptr<Gtk::PopoverMenu> m_group_menu;   // s280: a heading's right-click
+    bool m_insp_actions = false;
     // s162: staged edits
     bool m_staged = false, m_staged_next = false;
     std::vector<std::string> m_stage_ids, m_stage_ids_next;

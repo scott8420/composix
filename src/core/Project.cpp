@@ -199,6 +199,30 @@ std::string style_group(const Field& f) {
     return "";   // Kind: above the groups
 }
 
+// s280: a frame's rows under headings (as a style's, s161) -- what it is and
+// where stays on top (Kind, On, Content, Shape, Bounds); the rest folds.
+std::string frame_group(const Field& f) {
+    static const std::map<std::string, std::string> by_edit{
+        {"path_from", "Path"}, {"path_to", "Path"}, {"path_flip", "Path"}, {"path_align", "Path"}, {"path_effect", "Path"},
+        {"path_spacing", "Path"},
+        {"rot", "Transform"}, {"shear", "Transform"}, {"scale_x", "Transform"}, {"scale_y", "Transform"},
+        {"turn_ref", "Transform"}, {"turn", "Transform"},
+        {"fill", "Fill & Stroke"}, {"fill_tint", "Fill & Stroke"}, {"stroke", "Fill & Stroke"}, {"stroke_tint", "Fill & Stroke"},
+        {"stroke_w", "Fill & Stroke"}, {"dash", "Fill & Stroke"}, {"cap", "Fill & Stroke"}, {"join", "Fill & Stroke"},
+        {"end_a", "Fill & Stroke"}, {"end_b", "Fill & Stroke"}, {"radius", "Fill & Stroke"}, {"opacity", "Fill & Stroke"},
+        {"columns", "Columns"}, {"gutter", "Columns"}, {"colw", "Columns"}, {"balance", "Columns"},
+        {"frole", "Text Frame"}, {"ignore_wrap", "Text Frame"}, {"autosize", "Text Frame"}, {"autosize_from", "Text Frame"},
+        {"autosize_min", "Text Frame"}, {"valign", "Text Frame"}, {"inset", "Text Frame"},
+        {"wrap", "Wrap"}, {"wrap_off", "Wrap"},
+        {"fit", "Picture"}, {"pic_scale", "Picture"}, {"pic_off", "Picture"}, {"clip_path", "Picture"}, {"frame_image", "Picture"}};
+    if (const auto it = by_edit.find(f.edit); it != by_edit.end()) return it->second;
+    if (f.edit.rfind("col_rule", 0) == 0) return "Columns";
+    if (f.edit.rfind("poly", 0) == 0 || f.edit.rfind("star", 0) == 0) return "Fill & Stroke";
+    if (f.label == "Story" || f.label == "Thread") return "Text Frame";
+    if (f.label == "Image" || f.label == "Effective ppi" || f.label == "Status") return "Picture";
+    return "";   // Kind, On, Content, Shape, Bounds, Shows on, Overrides: not folded
+}
+
 // s073: a unit as the Units dropdown reads it.
 std::string unit_label(Units u) {
     switch (u) {
@@ -1230,6 +1254,7 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
             fields.push_back(back);
         }
         mark_typed(fields, unit_pt(d.settings().units));   // s041
+        for (auto& fl : fields) fl.group = frame_group(fl);   // s280
         out.push_back({id, Segment::Pages, title, "", {}, fields});
     }
     return out;

@@ -3,6 +3,7 @@
 
 #include <map>
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 #include <atomic>
 #include <mutex>
@@ -514,6 +515,32 @@ std::string master_label(const Doc& d, const Doc::Id& master) {
     return m->prefix + "-" + m->name;
 }
 
+Doc::Id go_to_target(const Doc& d, const std::string& typed) {
+    std::string t;
+    for (char ch : typed)
+        if (!std::isspace(static_cast<unsigned char>(ch))) t += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (t.empty()) return {};
+    const auto lower = [](std::string s) {
+        for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return s;
+    };
+    const auto pages = d.pages();
+    for (const auto& p : pages)
+        if (lower(d.folio(p)) == t) return p;
+    if (t.size() > 1 && t[0] == '+' && std::all_of(t.begin() + 1, t.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)); })) {
+        const long n = std::strtol(t.c_str() + 1, nullptr, 10);
+        if (n >= 1 && n <= static_cast<long>(pages.size())) return pages[static_cast<std::size_t>(n - 1)];
+        return {};
+    }
+    for (const auto& m : d.ids_of<Master>()) {
+        const auto* ms = d.as<Master>(m);
+        std::string lab;
+        for (char ch : master_label(d, m)) if (!std::isspace(static_cast<unsigned char>(ch))) lab += ch;
+        if (lower(ms->prefix) == t || lower(lab) == t) return m;
+    }
+    return {};
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The verbs
 // ─────────────────────────────────────────────────────────────────────────────
@@ -978,6 +1005,32 @@ std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int 
             d.put(id, pg);
             made.push_back(id);
             prev = id;
+        }
+        return made;
+    });
+    return made;
+}
+
+std::vector<Doc::Id> insert_pages(DocJournal& j, Doc& d, const Doc::Id& before, int count, const Doc::Id& master) {
+    const auto order = d.pages();
+    const auto it = std::find(order.begin(), order.end(), before);
+    if (before.empty() || it == order.end()) return add_pages(j, d, "", count, master);
+    std::vector<Doc::Id> made;
+    if (count <= 0) return made;
+    j.run("Insert " + plural(static_cast<std::size_t>(count), "page", "pages"), {}, [&] {
+        const auto& s = d.settings();
+        const double hi = d.as<Page>(*it)->pos;
+        const double lo = it == order.begin() ? hi - 1.0 : d.as<Page>(*(it - 1))->pos;
+        for (int i = 0; i < count; ++i) {
+            const Doc::Id id = d.fresh_id("page");
+            Page pg;
+            pg.pos = lo + (hi - lo) * (i + 1) / (count + 1);
+            pg.w = s.trim_w;
+            pg.h = s.trim_h;
+            if (const auto* m = d.as<Master>(master)) { pg.w = m->w; pg.h = m->h; }
+            pg.master = master;
+            d.put(id, pg);
+            made.push_back(id);
         }
         return made;
     });
@@ -5282,6 +5335,7 @@ const std::vector<Verb>& verbs() {
     // lacks is the gap the gate cannot see -- add it in the same change.
     static const std::vector<Verb> table = {
         {"add_pages", [](DocJournal& j, Doc& d) { add_pages(j, d, d.pages()[2], 2, "master.2"); }},
+        {"insert_pages", [](DocJournal& j, Doc& d) { insert_pages(j, d, d.pages()[0], 2, "master.2"); }},   // s277
         {"remove_pages", [](DocJournal& j, Doc& d) {
              const auto p = d.pages();
              remove_pages(j, d, {p[0], p[4]});   // p[0] starts a section: it moves

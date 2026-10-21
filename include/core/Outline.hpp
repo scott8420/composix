@@ -13,6 +13,7 @@
 //
 // GTK-free: lives in composix_core, guarded headless by the selftest.
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <map>
 #include <string>
@@ -127,6 +128,22 @@ private:
 // s068: one level up from opened items -- the section they belong to (the
 // first one found decides); none when nothing given is in the outline.
 std::optional<Segment> parent_of(const Outline& o, const std::vector<std::string>& ids);
+
+// s277: the pages laid out as the navigator's card shows them -- each spread
+// a row of slots, "" an empty side: a facing book's lone right-hand page gets
+// an empty left beside it (and a lone left page an empty right), so every
+// spine lines up. `groups` are core::spreads (empty: not facing -- one page a
+// row, no padding); `is_left` says a page's side. Pages in no group stand
+// alone, in order.
+std::vector<std::vector<std::string>> spread_slots(const std::vector<std::string>& pages,
+                                                   const std::vector<std::vector<std::string>>& groups,
+                                                   const std::function<bool(const std::string&)>& is_left);
+
+// s280: the inspector's rows with their groups in `order` (Scott: groups
+// dragged into an order of his own). Rows before the first group stay first;
+// rows of no group found among or after the groups follow them; groups the
+// order doesn't name keep their own order, after the named.
+std::vector<Field> order_groups(const std::vector<Field>& fields, const std::vector<std::string>& order);
 
 class Doc;
 // The document, as the navigator / tiles / inspector see it. `project_dir`

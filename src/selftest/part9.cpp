@@ -1359,5 +1359,76 @@ void part9() {
         const auto back = core::new_from_settings(st);
         check("the sheet remembers them", back.folio_outside && back.head == 1);
     }
+
+    // -- s277: the navigator's spreads, as its card lays them out ----------
+    {
+        const std::vector<std::string> pages{"p1", "p2", "p3", "p4", "p5"};
+        const std::vector<std::vector<std::string>> groups{{"p1"}, {"p2", "p3"}, {"p4", "p5"}};
+        const auto left = [](const std::string& id) { return id == "p2" || id == "p4"; };
+        const auto s = core::spread_slots(pages, groups, left);
+        check("spreads: a lone right-hand first page gets an empty left", s.size() == 3 && s[0] == std::vector<std::string>{"", "p1"});
+        check("spreads: pairs as they are", s[1] == std::vector<std::string>{"p2", "p3"} && s[2] == std::vector<std::string>{"p4", "p5"});
+        const auto t = core::spread_slots({"p1", "p2", "p3", "p4"}, {{"p1"}, {"p2", "p3"}, {"p4"}}, left);
+        check("spreads: a lone left-hand last page gets an empty right", t.size() == 3 && t[2] == std::vector<std::string>{"p4", ""});
+        const auto u = core::spread_slots(pages, {}, left);
+        check("spreads: not facing -- a page a row, no empty sides", u.size() == 5 && u[0] == std::vector<std::string>{"p1"});
+    }
+
+    // -- s277: Go to Page -- what a typed folio names ----------------------
+    {
+        core::Doc d;
+        core::load_sample(d);
+        const auto pages = d.pages();
+        std::string p3, piv;
+        for (const auto& p : pages) {
+            if (d.folio(p) == "3") p3 = p;
+            if (d.folio(p) == "iv") piv = p;
+        }
+        check("go to: a folio", !p3.empty() && core::go_to_target(d, "3") == p3);
+        check("go to: a roman folio, any case, spaces ignored", !piv.empty() && core::go_to_target(d, " IV ") == piv);
+        check("go to: +1 is the first page", core::go_to_target(d, "+1") == pages.front());
+        check("go to: +N past the end, nothing", core::go_to_target(d, "+999").empty());
+        const auto masters = d.ids_of<core::Master>();
+        const auto* m0 = masters.empty() ? nullptr : d.as<core::Master>(masters.front());
+        check("go to: a master by its prefix", m0 && core::go_to_target(d, m0->prefix) == masters.front());
+        check("go to: a master by its label", m0 && core::go_to_target(d, core::master_label(d, masters.front())) == masters.front());
+        check("go to: nothing matches, nothing", core::go_to_target(d, "zz9").empty() && core::go_to_target(d, "").empty());
+    }
+
+    // -- s278: a master dropped in a gap -- pages inserted there, one step --
+    {
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = d.pages();
+        const auto masters = d.ids_of<core::Master>();
+        const auto made = core::doc::insert_pages(j, d, before.front(), 2, masters.front());
+        const auto after = d.pages();
+        check("insert: before the first page, two new pages lead", made.size() == 2 && after.size() == before.size() + 2 &&
+                                                                         after[0] == made[0] && after[1] == made[1] && after[2] == before[0]);
+        check("insert: on the master given", d.as<core::Page>(made[0])->master == masters.front());
+        const auto mid = core::doc::insert_pages(j, d, before[3], 1, masters.front());
+        const auto now = d.pages();
+        const auto at = std::find(now.begin(), now.end(), before[3]);
+        check("insert: before a page in the middle", mid.size() == 1 && at != now.begin() && *(at - 1) == mid[0]);
+        j.undo();
+        j.undo();
+        check("insert: each one step (two undos, as before)", d.pages() == before);
+    }
+
+    // -- s280: the inspector's groups in a kept order ----------------------
+    {
+        const auto F = [](const char* label, const char* group) { core::Field f; f.label = label; f.group = group; return f; };
+        const std::vector<core::Field> fs{F("Name", ""), F("Font", "Text"), F("Size", "Text"), F("Align", "Paragraph"),
+                                          F("X", "Frame"), F("Y", "Frame"), F("", "")};
+        const auto labels = [](const std::vector<core::Field>& v) { std::string s; for (const auto& f : v) s += f.label + std::string("|"); return s; };
+        check("groups: no order kept -- as they came", labels(core::order_groups(fs, {})) == "Name|Font|Size|Align|X|Y||");
+        check("groups: Frame first -- its rows together, the rest after in their order",
+              labels(core::order_groups(fs, {"Frame"})) == "Name|X|Y|Font|Size|Align||");
+        check("groups: a full order; ungrouped rows keep the top and the end",
+              labels(core::order_groups(fs, {"Paragraph", "Frame", "Text"})) == "Name|Align|X|Y|Font|Size||");
+        check("groups: names not shown are ignored", labels(core::order_groups(fs, {"Nope", "Text"})) == "Name|Font|Size|Align|X|Y||");
+    }
 }
 }  // namespace cxtest

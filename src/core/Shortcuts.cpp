@@ -218,6 +218,9 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"View", "", {}, "Drag out of a ruler", "Pull a guide onto a page -- it snaps to edges, margins, columns, guides (off the page removes it)"},
         {"View", "win.go-up",            {"<Alt>Left", "<Alt>Up"}, "", "Back -- up a level, from an open page, master, story ... to its section's tiles (mouse: back button)"},
         {"View", "win.go-forward",       {"<Alt>Right"}, "", "Forward -- back into what you just came up from (mouse: forward button)"},
+        {"View", "win.go-to-page",       {"<Ctrl>j"}, "", "Go to page -- type a folio (8, iv), +N for the Nth page, or a master's prefix (A)"},   // s277
+        {"View", "win.prev-spread",      {}, "Page Up", "The previous spread"},
+        {"View", "win.next-spread",      {}, "Page Down", "The next spread"},
         {"View", "win.toggle-nav",       {"<Ctrl><Alt>1"}, "", "Show / hide the navigator"},
         {"View", "win.toggle-inspector", {"<Ctrl><Alt>2"}, "", "Show / hide the inspector"},
 

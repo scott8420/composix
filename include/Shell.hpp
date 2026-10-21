@@ -14,6 +14,7 @@
 #include "core/Swatches.hpp"   // s172: the Colour Libraries window
 
 #include <gtkmm/popovermenu.h>
+#include <gtkmm/popovermenubar.h>
 #include <gtkmm/applicationwindow.h>
 #include <giomm/menu.h>
 #include <gtkmm/dropdown.h>
@@ -159,6 +160,13 @@ private:
     std::vector<const core::Item*> resolve(const std::vector<std::string>& ids) const;  // category: helper
     void queue_refresh();
     std::vector<std::string> next_spread();         // category: helper: s269 -- the spread after the canvas's (Forward)
+    bool step_spread(int by);                       // category: helper: s277 -- Page Up / Down, the head's < > (false: not on pages)
+    void on_nav_move_pages(const std::vector<std::string>& ids, const std::string& target, bool before);   // category: handler: s278 -- pages dragged in the navigator
+    void on_nav_master_insert(const std::string& master, const std::string& page, bool before);              // category: handler: s278 -- a master dropped in a gap
+    std::vector<std::string> layout_pages();        // category: helper: s279 -- Layout's pages: the picked pages, else the spread shown
+    void on_nav_context(const views::Pick& p, double x, double y);   // category: handler: s279 -- the navigator's right-click menus
+    void on_go_to_page();                           // category: handler: s277 -- Ctrl+J: the head's Go to Page field
+    void on_goto_typed(const std::string& t);       // category: handler: s277 -- a folio / +N / master typed there
     void check_reflow();                          // category: helper: s255 -- overset stories in page frames get pages                         // category: helper: one re-projection per idle, after the writes
     core::Outline project_now() const;            // category: helper: the projection, with overset measured
     void refresh();                               // category: helper: re-project; every view repaints, keeping its place
@@ -264,6 +272,10 @@ private:
     widgets::Label        m_subtitle;
     widgets::ToggleButton m_insp_toggle;
     widgets::MenuButton   m_menu_button;
+    Gtk::PopoverMenuBar*  m_menubar = nullptr;   // s279
+    std::unique_ptr<Gtk::PopoverMenu> m_nav_menu;   // s279: the navigator's right-click
+    views::Pick           m_nav_ctx;                // ... and what it was on
+    std::vector<std::string> m_nav_ctx_pages;       // the pages its page verbs take
 
     // Body.
     // [nav (slides)][nav handle][right] -- s007 fix: was a Gtk::Paned, whose

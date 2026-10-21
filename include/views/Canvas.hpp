@@ -452,6 +452,12 @@ public:
     void set_proof_label(const std::string& profile);   // s099: "" hides the header's Proof pill
     // s068: where back / forward before the title go ("Document").
     void set_nav(const std::string& back_to, const std::string& fwd_to) { m_nav_btns.set(back_to, fwd_to); }
+    // s277: Go to Page in the head -- [<][ folio ][>]. The shell fills in what
+    // is shown and hears what is typed (Enter).
+    void set_goto_text(const std::string& t);
+    void focus_goto();
+    void flag_goto_miss();   // nothing matched: the field says so a moment
+    sigc::signal<void(const std::string&)>& signal_goto() { return m_goto_sig; }
 
 private:
     void sync_zoom();
@@ -465,6 +471,9 @@ private:
     widgets::Button m_fit;
     widgets::Label  m_zoom;
     Gtk::Label*     m_proof_pill = nullptr;   // s099
+    Gtk::Entry*     m_goto = nullptr;         // s277
+    std::string     m_goto_shown;
+    sigc::signal<void(const std::string&)> m_goto_sig;
     widgets::Grid   m_grid;     // [corner][top ruler] / [left ruler][canvas]
     Canvas          m_canvas;
     std::unique_ptr<Ruler> m_top, m_left;

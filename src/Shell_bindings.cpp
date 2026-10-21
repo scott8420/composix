@@ -245,6 +245,10 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     m_act_up = add_action("go-up", sigc::mem_fun(*this, &Shell::on_go_up));   // s068
     m_act_up->set_enabled(false);
     m_act_fwd = add_action("go-forward", sigc::mem_fun(*this, &Shell::on_go_forward));   // s068
+    add_action("prev-spread", [this] { step_spread(-1); });   // s277: the head's < >
+    add_action("next-spread", [this] { step_spread(+1); });
+    add_action("go-to-page", sigc::mem_fun(*this, &Shell::on_go_to_page));   // s277: Ctrl+J
+    m_canvas_view.signal_goto().connect(sigc::mem_fun(*this, &Shell::on_goto_typed));
     m_act_fwd->set_enabled(false);
     // s068: the mouse's back / forward (thumb) buttons, anywhere in the window.
     {
@@ -312,16 +316,7 @@ void Shell::bind_actions() {  // bindings: actions + recents group
             // s027: Page Up / Page Down -- the previous / next spread on the canvas.
             if (!act && mods == Gdk::ModifierType{} && (keyval == GDK_KEY_Page_Up || keyval == GDK_KEY_Page_Down) &&
                 !focus_is_text() && m_main.get_visible_child_name() == "canvas" && !m_canvas_view.canvas().editing()) {
-                const auto& now = m_canvas_view.canvas().shown();
-                if (now.empty() || !m_doc.as<core::Page>(now.front())) return false;
-                const auto all = core::spreads(m_doc);
-                for (std::size_t i = 0; i < all.size(); ++i)
-                    if (std::find(all[i].begin(), all[i].end(), now.front()) != all[i].end()) {
-                        const std::size_t to = keyval == GDK_KEY_Page_Down ? std::min(i + 1, all.size() - 1) : (i ? i - 1 : 0);
-                        if (to != i) m_nav.select_items({all[to].front()});
-                        return true;
-                    }
-                return false;
+                return step_spread(keyval == GDK_KEY_Page_Down ? 1 : -1);
             }
             if (!act || focus_is_text()) return false;
             if (auto lg = log::get(log::Area::Shell)) lg->info("window key -> {}", act);
@@ -396,6 +391,25 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     }
     // s033: the story editor's edits refresh the other views.
     m_story_ed.signal_edited().connect([this] { set_dirty(m_journal.mark() != m_saved_mark); queue_refresh(); });
+    // s277: the navigator's cards -- which are open, the pictures' size -- kept between runs.
+    m_nav.set_thumb_height(core::setting_int(m_settings, "nav.thumbs", views::Navigator::kMedium, 32, 200));
+    if (m_settings.count("nav.cards")) m_nav.set_open_keys(m_settings["nav.cards"]);
+    m_nav.signal_thumb_height().connect([this](int px) {
+        m_settings["nav.thumbs"] = std::to_string(px);
+        core::save_settings(m_settings_file, m_settings);
+    });
+    if (m_settings.count("nav.order")) m_nav.set_order_keys(m_settings["nav.order"]);   // s278
+    m_nav.signal_order_changed().connect([this] {
+        m_settings["nav.order"] = m_nav.order_keys();
+        core::save_settings(m_settings_file, m_settings);
+    });
+    m_nav.signal_move_pages().connect(sigc::mem_fun(*this, &Shell::on_nav_move_pages));      // s278
+    m_nav.signal_context().connect(sigc::mem_fun(*this, &Shell::on_nav_context));            // s279
+    m_nav.signal_master_insert().connect(sigc::mem_fun(*this, &Shell::on_nav_master_insert));
+    m_nav.signal_open_changed().connect([this] {
+        m_settings["nav.cards"] = m_nav.open_keys();
+        core::save_settings(m_settings_file, m_settings);
+    });
     // s031: the navigator brackets them too.
     m_nav.set_grouping([this] {
         return core::any_facing(m_doc) ? core::spreads(m_doc) : std::vector<std::vector<std::string>>{};   // s147
@@ -409,6 +423,11 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_inspector.signal_staged().connect([this] { m_item.redraw(); });                        // s164: the specimen, live
     // s161: which inspector groups are open -- kept between runs.
     m_inspector.set_open_groups(m_settings.count("insp.groups") ? m_settings["insp.groups"] : std::string("Text,Paragraph"));
+    m_inspector.set_group_order(m_settings.count("insp.order") ? m_settings["insp.order"] : std::string{});   // s280
+    m_inspector.signal_group_order().connect([this](const std::string& csv) {
+        m_settings["insp.order"] = csv;
+        core::save_settings(m_settings_file, m_settings);
+    });
     m_inspector.signal_groups().connect([this](const std::string& csv) {
         m_settings["insp.groups"] = csv;
         core::save_settings(m_settings_file, m_settings);

@@ -44,6 +44,7 @@ Shell::~Shell() {
     m_work_poll.disconnect();   // s108
     if (m_flow_thread.joinable()) m_flow_thread.join();   // s106
     if (m_ctx_menu) m_ctx_menu->unparent();
+    if (m_nav_menu) m_nav_menu->unparent();   // s279
     if (m_xref_pop) m_xref_pop->unparent();   // s128
     if (m_note_pop) m_note_pop->unparent();   // s110   // s074: a popover parented by hand goes by hand
 }
@@ -105,7 +106,7 @@ void Shell::restore_window() {  // helper
                      core::setting_int(st, "window.height", 820, 480, 10000));
     if (core::setting_int(st, "window.maximized", 0, 0, 1)) maximize();
     if (m_nav_handle) {
-        m_nav_handle->set_width(core::setting_int(st, "nav.width", 250, 0, 10000));
+        m_nav_handle->set_width(core::setting_int(st, "nav.width", 280, 0, 10000));
         m_nav_handle->set_open(core::setting_int(st, "nav.open", 1, 0, 1) == 1);
     }
     if (m_insp_handle) {

@@ -177,6 +177,22 @@ std::vector<std::string> Shell::next_spread() {  // helper
     return {};
 }
 
+// s277: the spread `by` before / after the one the canvas shows (Page Up /
+// Down, the head's arrows). False when the canvas isn't showing pages.
+bool Shell::step_spread(int by) {  // helper
+    if (m_main.get_visible_child_name() != "canvas") return false;
+    const auto& now = m_canvas_view.canvas().shown();
+    if (now.empty() || !m_doc.as<core::Page>(now.front())) return false;
+    const auto all = core::spreads(m_doc);
+    for (std::size_t i = 0; i < all.size(); ++i)
+        if (std::find(all[i].begin(), all[i].end(), now.front()) != all[i].end()) {
+            const long to = std::clamp(static_cast<long>(i) + by, 0L, static_cast<long>(all.size()) - 1);
+            if (to != static_cast<long>(i)) m_nav.select_items({all[static_cast<std::size_t>(to)].front()});
+            return true;
+        }
+    return false;
+}
+
 void Shell::sync_up() {  // helper
     std::optional<core::Segment> parent;
     if (!m_pick.segment && !m_pick.items.empty() && m_main.get_visible_child_name() != "start")
@@ -245,6 +261,11 @@ void Shell::show_pick_now(const views::Pick& p, const std::vector<std::string>& 
                 m_canvas_view.set_title("Pages " + m_doc.folio(show[0]) + "\u2013" + m_doc.folio(show[1]), 2);
             else
                 m_canvas_view.set_title(core::selection_title(items), items.size());
+            {   // s277: Go to Page shows where we are -- the folio, or the master's prefix
+                const auto& first = p.items.front();
+                if (m_doc.as<core::Page>(first)) m_canvas_view.set_goto_text(m_doc.folio(first));
+                else if (const auto* ms = m_doc.as<core::Master>(first)) m_canvas_view.set_goto_text(ms->prefix);
+            }
             m_main.set_visible_child("canvas");
             if (!cv.selection().empty()) { on_canvas_selection(); return; }
             m_inspected = p.items;
@@ -526,11 +547,7 @@ void Shell::update_undo_ui() {  // helper
     if (m_edit_menu) {
         m_edit_menu->remove_all();
         m_edit_menu->append(u.empty() ? "Undo" : "Undo " + u, "win.undo");
-        m_edit_menu->append(r.empty() ? "Redo" : "Redo " + r, "win.redo");
-        m_edit_menu->append("Find / Change\u2026", "win.find");   // s022
-        m_edit_menu->append_submenu("Insert Special Character", special_menu());   // s023
-        m_edit_menu->append_submenu("Type Style", type_style_menu());   // s263
-        if (m_arrange_menu) m_edit_menu->append_submenu("Arrange", m_arrange_menu);   // s070
+        m_edit_menu->append(r.empty() ? "Redo" : "Redo " + r, "win.redo");   // s279: the Edit menu's first section only
     }
 }
 

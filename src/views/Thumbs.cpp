@@ -210,6 +210,22 @@ void paint_spread(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int 
     }
 }
 
+// s277: one page filling the whole w x h (the navigator's cards size the
+// widget to the page) -- paper, the page drawn for real or its stand-in bars.
+void paint_page_exact(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W, int H, const core::Thumb& t) {
+    cr->save();
+    cr->set_source_rgb(1, 1, 1);
+    cr->rectangle(0, 0, W, H);
+    cr->fill();
+    watch_page(wd, t.page);
+    const bool real = !t.page.empty() && painter() && painter()(cr, t.page, 0, 0, W, H, false);
+    if (!real) {
+        const double m = W * 0.12;
+        type_bars(cr, m, m * 1.1, W - 2 * m, H - 2.2 * m, std::max(2.0, H / 30.0), 0);
+    }
+    cr->restore();
+}
+
 void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W, int H,
                  const core::Thumb& t, bool large) {
     using K = core::ThumbKind;
