@@ -1592,7 +1592,8 @@ int insert_table(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const 
 // The table paragraph `para` holds (nullptr none).
 const Table* table_at(const Doc& d, const Doc::Id& story, int para);
 // A table changed by `f` (`label` names the step). One step.
-bool edit_table(DocJournal& j, Doc& d, const Doc::Id& story, int para, const std::string& label, const std::function<void(Table&)>& f);
+bool edit_table(DocJournal& j, Doc& d, const Doc::Id& story, int para, const std::string& label, const std::function<void(Table&)>& f,
+                const std::string& merge_key = {});   // s328: steps sharing a key merge (a burst of typing in a cell)
 // A cell's words: paragraphs a line each ('\n' between); style "" (the table's).
 std::string cell_text(const TableCell& c);
 void set_cell_words(TableCell& c, const std::string& text);
@@ -1635,6 +1636,23 @@ int text_to_table(DocJournal& j, Doc& d, const Doc::Id& story, int p0, int p1, d
 // cells empty), the cells' character formatting kept. One step ("Convert
 // Table to Text"); the rows' count (0 none).
 int table_to_text(DocJournal& j, Doc& d, const Doc::Id& story, int para);
+// ── s328: typing in a cell ─────────────────────────────────────────────────
+// Places in a cell are TextPos over ITS paragraphs (an empty cell: {0, 0}).
+// [a, b) of cell (row, col) -- a merge's own cell -- replaced by `text`, as
+// edit_text does in a story ('\n' a new paragraph in the cell; the words'
+// formatting kept, what's typed taking what it lands in). One step, or
+// merged into the last with the same `merge_key`. The place after it ({-1,
+// -1} when there's no such cell).
+TextPos edit_cell(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
+                  const std::string& text, const std::string& label = "Typing", const std::string& merge_key = {});
+// The cell's end (its last paragraph's end; {0, 0} empty).
+TextPos cell_end(const TableCell& c);
+// The next (dir +1) / previous (-1) cell in reading order -- across, then
+// down; a merge's covered cells passed over. {-1, -1} past either end.
+std::pair<int, int> next_cell(const Table& t, int r, int c, int dir);
+// Tab in the table's last cell: a row added at the body's end (before the
+// footer). One step; the new row's index (-1 none).
+int table_tab_row(DocJournal& j, Doc& d, const Doc::Id& story, int para);
 // s307: the document's language for spell check ("" the app's). One step.
 bool set_language(DocJournal& j, Doc& d, const std::string& lang);
 // s307: a misspelled word put right -- [from, to) of paragraph `para`, if it

@@ -142,6 +142,13 @@ public:
     // change is core::doc::edit_text -- a burst of typing is one step.
     bool editing() const { return !m_edit_story.empty(); }
     void end_edit();
+    // s330: typing in a table's cell on the canvas -- double-click a cell;
+    // Tab / Shift+Tab to the next / previous (Tab in the last adds a row),
+    // the arrows, Home / End, Enter a paragraph in the cell, Esc out.
+    bool cell_editing() const { return m_cell.para >= 0; }
+    const layout::CellRef& typing_cell() const { return m_cell; }
+    const std::string& cell_story() const { return m_cell_story; }
+    void end_cell();
     // s022: edit `frame` with a..b selected (a Find hit). `focus`: take the
     // keyboard (else it stays where it is -- the find bar).
     void select_text(const std::string& frame, core::TextPos a, core::TextPos b, bool focus);
@@ -193,7 +200,7 @@ public:
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew, Zoom, TableCol };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew, Zoom, TableCol, CellText };
     // s035: Alt+drag a picture inside its frame -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
@@ -298,6 +305,22 @@ private:
     };
     TableEdge table_edge_hit(double sx, double sy) const;
     const core::Story* edit_story() const { return m_doc.as<core::Story>(m_edit_story); }
+    // s330: typing in a cell
+    void begin_cell(const std::string& frame, const std::string& story, layout::CellRef c, core::TextPos at, bool select_all = false);
+    bool cell_ok() const;                         // the cell still there (an undo may take it)
+    core::Story cell_words() const;               // its paragraphs as a story (one empty when empty)
+    bool cell_key(guint kv, Gdk::ModifierType st);
+    void cell_insert(const std::string& text, const std::string& kind, const std::string& label);
+    void cell_set_caret(core::TextPos p, bool extend, bool keep_goal = false);
+    void cell_go(int r, int c, bool select_all, bool at_end);   // to another cell of the table
+    void cell_follow();
+    void draw_cell_edit(const Cairo::RefPtr<Cairo::Context>& cr);
+    std::string     m_cell_story, m_cell_frame;
+    layout::CellRef m_cell;
+    core::TextPos   m_ccaret, m_canchor;
+    double          m_cgoal = NAN;
+    std::string     m_cburst_kind;
+    int             m_cburst = 0;
 
     core::Doc&        m_doc;
     core::DocJournal& m_journal;

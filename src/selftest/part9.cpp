@@ -2927,5 +2927,130 @@ void part9() {
             check("drag: a narrowed table's edge at its drawn place", false, "no row");
         }
     }
+    // -- s328: typing in a cell ------------------------------------------------------
+    {
+        std::cout << "--- s328 typing in a cell ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto t0 = D::make_table(3, 3, 240);
+        t0.header_rows = 1;
+        t0.footer_rows = 1;
+        D::table_merge(t0, 1, 1, 2, 1);   // (1,1) across (1,2)
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, t0);
+        const auto cell = [&](int r, int c) { return D::cell_text(D::table_at(d, "story.1", p)->rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)]); };
+        const auto n0 = j.size();
+        // a burst: one step
+        core::TextPos at{0, 0};
+        for (const char* ch : {"F", "e", "e"}) at = D::edit_cell(j, d, "story.1", p, 0, 1, at, at, ch, "Typing", "typing:cell:1");
+        check("cell: typed into an empty cell", cell(0, 1) == "Fee" && at == core::TextPos{0, 3});
+        check("cell: a burst one step", j.size() == n0 + 1, std::to_string(j.size() - n0));
+        at = D::edit_cell(j, d, "story.1", p, 0, 1, at, at, "\nper ton");
+        check("cell: a new paragraph in the cell", cell(0, 1) == "Fee\nper ton" && at == core::TextPos{1, 7} &&
+                                                       D::cell_end(D::table_at(d, "story.1", p)->rows[0].cells[1]) == core::TextPos{1, 7});
+        at = D::edit_cell(j, d, "story.1", p, 0, 1, {0, 3}, {1, 0}, "");   // the break taken out
+        check("cell: paragraphs joined", cell(0, 1) == "Feeper ton" && at == core::TextPos{0, 3});
+        // bold kept round an insertion
+        D::edit_table(j, d, "story.1", p, "bold", [](core::Table& x) {
+            core::Run r;
+            r.start = 0; r.end = 3; r.local.bold = 1;
+            x.rows[0].cells[1].paras[0].runs = {r};
+        });
+        D::edit_cell(j, d, "story.1", p, 0, 1, {0, 1}, {0, 1}, "X");
+        const auto& cp = D::table_at(d, "story.1", p)->rows[0].cells[1].paras[0];
+        check("cell: typed inside bold words -- bold", cp.text == "FXeeper ton" && cp.runs.size() == 1 && cp.runs[0].end == 4 && cp.runs[0].local.bold == 1);
+        D::edit_cell(j, d, "story.1", p, 0, 1, {0, 0}, D::cell_end(D::table_at(d, "story.1", p)->rows[0].cells[1]), "");
+        check("cell: all its words out -- an empty cell again", D::table_at(d, "story.1", p)->rows[0].cells[1].paras.empty());
+        check("cell: a covered cell refused", D::edit_cell(j, d, "story.1", p, 1, 2, {0, 0}, {0, 0}, "z") == core::TextPos{-1, -1});
+        // undo
+        const auto before = core::to_json(d);
+        D::edit_cell(j, d, "story.1", p, 2, 0, {0, 0}, {0, 0}, "Total");
+        j.undo();
+        check("cell: undone exactly", core::to_json(d) == before);
+        // Tab's order: across, down, a merge passed over
+        const auto& t = *D::table_at(d, "story.1", p);
+        check("tab: across", D::next_cell(t, 0, 0, 1) == std::pair<int, int>{0, 1});
+        check("tab: on to the next row", D::next_cell(t, 0, 2, 1) == std::pair<int, int>{1, 0});
+        check("tab: over a merge's covered cell", D::next_cell(t, 1, 1, 1) == std::pair<int, int>{2, 0} &&
+                                                     D::next_cell(t, 1, 2, 1) == std::pair<int, int>{2, 0});
+        check("shift+tab: back, to a merge's own cell", D::next_cell(t, 2, 0, -1) == std::pair<int, int>{1, 1});
+        check("tab: past the ends -- none", D::next_cell(t, 2, 2, 1).first < 0 && D::next_cell(t, 0, 0, -1).first < 0);
+        const int nr = D::table_tab_row(j, d, "story.1", p);
+        check("tab in the last cell: a row before the footer", nr == 2 && D::table_at(d, "story.1", p)->rows.size() == 4 &&
+                                                                 D::table_at(d, "story.1", p)->footer_rows == 1);
+    }
+    // -- s329: a cell's caret, hits, line moves, selection -------------------------
+    {
+        std::cout << "--- s329 cell geometry ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto t0 = D::make_table(2, 3, 240);
+        D::set_cell_words(t0.rows[0].cells[1], "Harbor fees are charged per ton of cargo landed on the quay\nSecond");
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, t0);
+        const auto fl = L::flow_story(d, "story.1");
+        const L::CellRef c{p, 0, 1};
+        const std::string fr = L::cell_frame(fl, c);
+        const auto& words = D::table_at(d, "story.1", p)->rows[0].cells[1].paras[0].text;
+        check("cell geo: its frame found", !fr.empty());
+        const auto c0 = L::cell_caret(d, "story.1", fl, fr, c, {0, 0});
+        const auto c5 = L::cell_caret(d, "story.1", fl, fr, c, {0, 6});
+        // the cell's box, from the hit test at the caret
+        const auto th = L::table_hit(d, "story.1", fl, fr, c0.x + 1, c0.y + c0.h / 2);
+        check("cell geo: the caret inside its cell", c0.ok && th.row == 0 && th.col == 1 && c0.x >= th.cell.x && c0.x < th.cell.x + th.cell.w &&
+                                                        c0.y >= th.cell.y - 0.01 && c0.h > 2);
+        check("cell geo: further along, further right (same line)", c5.ok && c5.x > c0.x + 1 && std::abs(c5.y - c0.y) < 0.01);
+        bool round = true;
+        for (int b : {0, 3, 6, 12}) {
+            const auto cc = L::cell_caret(d, "story.1", fl, fr, c, {0, b});
+            const auto back = L::cell_hit(d, "story.1", fl, fr, c, cc.x + 0.01, cc.y + cc.h / 2);
+            round = round && back == core::TextPos{0, b};
+        }
+        check("cell geo: a click at the caret comes back to it", round);
+        const auto down = L::cell_line_move(d, "story.1", fl, fr, c, {0, 0}, 1, c0.x);
+        check("cell geo: down a line -- the wrapped words' next line", down.para == 0 && down.byte > 6 && down.byte < static_cast<int>(words.size()),
+              std::to_string(down.byte));
+        check("cell geo: up from the first line leaves the cell", L::cell_line_move(d, "story.1", fl, fr, c, {0, 0}, -1, c0.x).para < 0);
+        const auto end0 = L::cell_line_edge(d, "story.1", fl, fr, c, {0, 2}, true);
+        const auto beg1 = L::cell_line_edge(d, "story.1", fl, fr, c, down, false);
+        check("cell geo: a wrapped line's end before the next's start", end0.para == 0 && end0.byte > 2 && end0.byte < beg1.byte && beg1.byte <= down.byte);
+        auto lastp = core::TextPos{1, 6};
+        const auto cl = L::cell_caret(d, "story.1", fl, fr, c, lastp);
+        check("cell geo: the second paragraph below the first", cl.ok && cl.y > c0.y + c0.h);
+        check("cell geo: down past the last line leaves the cell", L::cell_line_move(d, "story.1", fl, fr, c, lastp, 1, cl.x).para < 0);
+        const auto rs = L::cell_selection_rects(d, "story.1", fl, fr, c, {0, 3}, {1, 3});
+        check("cell geo: a selection over the lines it takes", rs.size() >= 3 && std::all_of(rs.begin(), rs.end(), [](const core::Rect& r) { return r.w > 0; }),
+              std::to_string(rs.size()));
+        const auto ce = L::cell_caret(d, "story.1", fl, fr, L::CellRef{p, 1, 2}, {0, 0});
+        check("cell geo: an empty cell has a caret", ce.ok && ce.h > 2);
+        check("cell geo: a covered / missing cell none", !L::cell_caret(d, "story.1", fl, fr, L::CellRef{p, 5, 0}, {0, 0}).ok);
+    }
+    // -- s330: a page's picture knows its tables' cells ---------------------------
+    {
+        std::cout << "--- s330 page key ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(2, 2, 160));
+        L::FlowCache flows;
+        const std::string fr = L::cell_frame(flows.get(d, "story.1"), L::CellRef{p, 0, 0});
+        const std::string page = d.as<core::Frame>(fr)->owner;
+        const auto k0 = L::page_key(d, flows, page);
+        D::edit_cell(j, d, "story.1", p, 0, 0, {0, 0}, {0, 0}, "Dover");
+        const auto k1 = L::page_key(d, flows, page);
+        check("page key: a cell's words change it", !(k0 == k1));
+        D::edit_table(j, d, "story.1", p, "bold", [](core::Table& t) {
+            core::Run r;
+            r.start = 0; r.end = 5; r.local.bold = 1;
+            t.rows[0].cells[0].paras[0].runs = {r};
+        });
+        check("page key: a cell's bold changes it", !(L::page_key(d, flows, page) == k1));
+    }
 }
 }  // namespace cxtest

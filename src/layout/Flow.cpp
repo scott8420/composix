@@ -3095,6 +3095,180 @@ TableHit table_hit(const core::Doc& d, const std::string& story, const StoryFlow
     return h;
 }
 
+// ── s329: a cell's words -- the caret, hits, line moves, a selection ─────────
+namespace {
+// Where a cell's words are set in a frame: their origin (the inset in, the
+// valign's drop down) and their lines, as visit_tables draws them.
+struct CellBox {
+    bool ok = false;
+    double x0 = 0, y0 = 0;
+    std::vector<CellLine> lines;
+    std::vector<int> first;   // [para]: its first line's index in `lines`
+};
+CellBox cell_box(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, const CellRef& cr) {
+    CellBox b;
+    const auto* st = d.as<core::Story>(story);
+    if (!st || cr.para < 0 || cr.para >= static_cast<int>(st->paras.size())) return b;
+    const auto& tp = st->paras[static_cast<std::size_t>(cr.para)];
+    if (tp.tables.empty()) return b;
+    const auto& t = tp.tables.front();
+    if (core::doc::owner_of(t, cr.row, cr.col) != std::pair<int, int>{cr.row, cr.col}) return b;
+    const std::string fid = frame.empty() ? cell_frame(flow, cr) : frame;
+    const FrameText* ft = frame_text(flow, fid);
+    if (!ft) return b;
+    const StoryScope scope(d, st);
+    for (const auto& ln : ft->lines) {
+        if (ln.para != cr.para || ln.row != cr.row) continue;
+        const TableGeo g = table_geo(d, tp, ln.w);
+        const int n = static_cast<int>(g.col_w.size()), R = static_cast<int>(t.rows.size());
+        if (cr.col >= n) return b;
+        const auto& cell = t.rows[static_cast<std::size_t>(cr.row)].cells[static_cast<std::size_t>(cr.col)];
+        double cw = 0, ch = 0;
+        for (int k = cr.col; k < std::min(n, cr.col + cell.span_cols); ++k) cw += g.col_w[static_cast<std::size_t>(k)];
+        for (int k = cr.row; k < std::min(R, cr.row + cell.span_rows); ++k) ch += g.row_h[static_cast<std::size_t>(k)];
+        const double in = std::max(0.0, t.inset);
+        b.lines = cell_lines(d, t, tp, cell, cw - 2 * in);
+        const double drop = std::max(0.0, ch - 2 * in - cell_height(b.lines)) * std::clamp(cell.valign, 0, 2) / 2.0;
+        b.x0 = ln.x + g.col_x[static_cast<std::size_t>(cr.col)] + in;
+        b.y0 = ln.y + in + drop;
+        for (int i = 0; i < static_cast<int>(b.lines.size()); ++i)
+            if (b.lines[static_cast<std::size_t>(i)].pi >= static_cast<int>(b.first.size())) b.first.push_back(i);
+        b.ok = !b.lines.empty();
+        return b;
+    }
+    return b;
+}
+core::TextPos clamp_in(const CellBox& b, core::TextPos p) {
+    const int np = static_cast<int>(b.first.size());
+    p.para = std::clamp(p.para, 0, std::max(0, np - 1));
+    const auto& cl = b.lines[static_cast<std::size_t>(b.first[static_cast<std::size_t>(p.para)])];
+    p.byte = std::clamp(p.byte, 0, static_cast<int>(cl.para->text.size()));
+    return p;
+}
+// the line (index into b.lines) the place is on
+int line_of(const CellBox& b, core::TextPos p) {
+    const auto& c0 = b.lines[static_cast<std::size_t>(b.first[static_cast<std::size_t>(p.para)])];
+    int line_no = 0, xpos = 0;
+    pango_layout_index_to_line_x(c0.lay.get(), p.byte, 0, &line_no, &xpos);
+    const int i = b.first[static_cast<std::size_t>(p.para)] + std::max(0, line_no);
+    const int last = p.para + 1 < static_cast<int>(b.first.size()) ? b.first[static_cast<std::size_t>(p.para) + 1] - 1 : static_cast<int>(b.lines.size()) - 1;
+    return std::min(i, last);
+}
+double x_at(const CellBox& b, const CellLine& cl, int byte) {
+    PangoRectangle r;
+    pango_layout_index_to_pos(cl.lay.get(), byte, &r);
+    return b.x0 + r.x / static_cast<double>(PANGO_SCALE);
+}
+double line_left(const CellLine& cl) {
+    PangoLayoutIter* it = pango_layout_get_iter(cl.lay.get());
+    double lx = 0;
+    do {
+        if (pango_layout_iter_get_line_readonly(it) == cl.line) {
+            PangoRectangle le;
+            pango_layout_iter_get_line_extents(it, nullptr, &le);
+            lx = le.x / static_cast<double>(PANGO_SCALE);
+            break;
+        }
+    } while (pango_layout_iter_next_line(it));
+    pango_layout_iter_free(it);
+    return lx;
+}
+core::TextPos hit_line(const CellBox& b, int li, double x) {
+    const auto& cl = b.lines[static_cast<std::size_t>(li)];
+    int idx = 0, trailing = 0;
+    pango_layout_line_x_to_index(cl.line, static_cast<int>((x - b.x0 - line_left(cl)) * PANGO_SCALE), &idx, &trailing);
+    const std::string& s = cl.para->text;
+    for (int k = 0; k < trailing && idx < static_cast<int>(s.size()); ++k) idx = static_cast<int>(g_utf8_next_char(s.c_str() + idx) - s.c_str());
+    return {cl.pi, std::clamp(idx, 0, static_cast<int>(s.size()))};
+}
+}  // namespace
+
+std::string cell_frame(const StoryFlow& flow, const CellRef& c) {
+    for (const auto& ft : flow.frames)
+        for (const auto& ln : ft.lines)
+            if (ln.para == c.para && ln.row == c.row) return ft.frame;
+    return {};
+}
+
+Caret cell_caret(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                 const CellRef& c, core::TextPos p) {
+    Caret out;
+    const CellBox b = cell_box(d, story, flow, frame, c);
+    if (!b.ok) return out;
+    p = clamp_in(b, p);
+    const auto& cl = b.lines[static_cast<std::size_t>(line_of(b, p))];
+    const LineBox box = line_box(cl.line);
+    const double base = b.y0 + cl.top + (cl.h - box.h) / 2 + box.asc;
+    out.ok = true;
+    out.frame = frame.empty() ? cell_frame(flow, c) : frame;
+    out.x = x_at(b, cl, p.byte);
+    out.y = base - box.asc;
+    out.h = box.h > 0 ? box.h : cl.h;
+    return out;
+}
+
+core::TextPos cell_hit(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                       const CellRef& c, double x, double y) {
+    const CellBox b = cell_box(d, story, flow, frame, c);
+    if (!b.ok) return {0, 0};
+    int best = 0;
+    double bd = 1e18;
+    for (int i = 0; i < static_cast<int>(b.lines.size()); ++i) {
+        const auto& cl = b.lines[static_cast<std::size_t>(i)];
+        const double top = b.y0 + cl.top, bot = top + cl.h;
+        const double dd = y < top ? top - y : y > bot ? y - bot : 0;
+        if (dd < bd) { bd = dd; best = i; }
+    }
+    return hit_line(b, best, x);
+}
+
+core::TextPos cell_line_move(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                             const CellRef& c, core::TextPos p, int dir, double goal_x) {
+    const CellBox b = cell_box(d, story, flow, frame, c);
+    if (!b.ok) return {-1, -1};
+    const int li = line_of(b, clamp_in(b, p)) + (dir < 0 ? -1 : 1);
+    if (li < 0 || li >= static_cast<int>(b.lines.size())) return {-1, -1};
+    return hit_line(b, li, goal_x);
+}
+
+core::TextPos cell_line_edge(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                             const CellRef& c, core::TextPos p, bool end) {
+    const CellBox b = cell_box(d, story, flow, frame, c);
+    if (!b.ok) return p;
+    p = clamp_in(b, p);
+    const int li = line_of(b, p);
+    const auto& cl = b.lines[static_cast<std::size_t>(li)];
+    const int s0 = cl.line->start_index, e0 = s0 + cl.line->length;
+    if (!end) return {p.para, s0};
+    // a wrapped line's end: before the space it broke at (the next line's start otherwise)
+    const bool wrapped = li + 1 < static_cast<int>(b.lines.size()) && b.lines[static_cast<std::size_t>(li) + 1].pi == cl.pi;
+    int e = e0;
+    if (wrapped && e > s0 && (cl.para->text[static_cast<std::size_t>(e - 1)] == ' ')) --e;
+    return {p.para, e};
+}
+
+std::vector<core::Rect> cell_selection_rects(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                                             const std::string& frame, const CellRef& c, core::TextPos a, core::TextPos bb) {
+    std::vector<core::Rect> out;
+    const CellBox b = cell_box(d, story, flow, frame, c);
+    if (!b.ok) return out;
+    a = clamp_in(b, a);
+    bb = clamp_in(b, bb);
+    if (bb < a) std::swap(a, bb);
+    if (a == bb) return out;
+    for (const auto& cl : b.lines) {
+        if (cl.pi < a.para || cl.pi > bb.para) continue;
+        const int s0 = cl.line->start_index, e0 = s0 + cl.line->length;
+        const int lo = cl.pi == a.para ? std::max(s0, a.byte) : s0;
+        const int hi = cl.pi == bb.para ? std::min(e0, bb.byte) : e0;
+        const bool to_end = cl.pi < bb.para && hi == e0;   // a paragraph break selected: a little past the words
+        if (hi < lo || (hi == lo && !to_end)) continue;
+        const double x0 = x_at(b, cl, lo), x1 = x_at(b, cl, hi) + (to_end ? 3 : 0);
+        out.push_back({std::min(x0, x1), b.y0 + cl.top, std::abs(x1 - x0), cl.h});
+    }
+    return out;
+}
+
 // ── s023: markers filled in ─────────────────────────────────────────────────
 std::string marker_value(const core::Doc& d, int k, const std::string& page, const std::string& frame) {
     if (!d.as<core::Page>(page)) return {};

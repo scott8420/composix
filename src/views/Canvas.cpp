@@ -205,6 +205,7 @@ Canvas::Canvas(core::Doc& d, core::DocJournal& j)
         auto* c = static_cast<Canvas*>(self);
         c->m_preedit.clear();
         if (c->editing() && t) c->edit_insert(t, "type", "Typing");
+        else if (c->cell_editing() && t) c->cell_insert(t, "type", "Typing");   // s330
         c->queue_draw();
     }), this);
     g_signal_connect(m_im, "preedit-changed", G_CALLBACK(+[](GtkIMContext* im, gpointer self) {
@@ -274,6 +275,14 @@ void Canvas::model_changed() {
         else {
             m_caret = core::clamp_pos(*edit_story(), m_caret);
             m_anchor = core::clamp_pos(*edit_story(), m_anchor);
+        }
+    }
+    if (cell_editing()) {   // s330: the cell gone (an undo, the editor) -- typing in it ends
+        if (!cell_ok()) end_cell();
+        else {
+            const auto w = cell_words();
+            m_ccaret = core::clamp_pos(w, m_ccaret);
+            m_canchor = core::clamp_pos(w, m_canchor);
         }
     }
     // Drop picks that are gone or no longer on a shown page.
@@ -725,9 +734,9 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
     }
     bool live = m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Gutter || m_drag == Drag::Tab || m_drag == Drag::TableCol ||
                 m_drag == Drag::Picture || m_drag == Drag::PicScale || clipped;
-    if (!live && editing())
+    if (!live && (editing() || cell_editing()))   // s330: typing in a cell too
         for (const auto& fid : m_doc.frames_on(p.id))
-            if (const auto* f = m_doc.as<core::Frame>(fid); f && f->story == m_edit_story) { live = true; break; }
+            if (const auto* f = m_doc.as<core::Frame>(fid); f && f->story == (editing() ? m_edit_story : m_cell_story)) { live = true; break; }
     const std::shared_ptr<const plate::Proof> proof = m_proof;
     const core::Placed placed = p;
     const layout::ThumbStore::Render render = [v, placed, box, ds, proof](const core::Doc& d, layout::FlowCache& fl,
@@ -1052,6 +1061,7 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         }
     }
     if (editing()) { draw_edit(cr); draw_tab_strip(cr); }   // s034
+    if (cell_editing()) draw_cell_edit(cr);   // s330
     // s186: the Direct tool -- the whole picture: the part its frame crops
     // ghosted, its edge and handles in brown (InDesign's colour for content).
     Rect dfl, dpl;
@@ -1384,6 +1394,29 @@ void Canvas::on_drag_begin(double x, double y) {
     m_last_press = now;
     m_last_px = x;
     m_last_py = y;
+    // s330: typing in a cell -- a click in the story's tables moves there (a
+    // drag selects in the cell; a triple-click its words); anywhere else ends it.
+    if (cell_editing()) {
+        const auto under = core::hit_frame(m_doc, m_placed, px0, py0, 3 / m_vp.scale());
+        const auto* uf = m_doc.as<core::Frame>(under);
+        if (uf && uf->story == m_cell_story && uf->rot == 0 && uf->shear == 0) {
+            const Rect fl = core::frame_in_layout(m_doc, m_placed, under);
+            const auto th = layout::table_hit(m_doc, m_cell_story, flows().get(m_doc, m_cell_story), under, px0 - fl.x, py0 - fl.y);
+            if (th.ok() && th.row >= 0) {
+                const layout::CellRef c{th.para, th.row, th.col};
+                const bool same = c.para == m_cell.para && c.row == m_cell.row && c.col == m_cell.col;
+                const auto at = layout::cell_hit(m_doc, m_cell_story, flows().get(m_doc, m_cell_story), under, c, px0 - fl.x, py0 - fl.y);
+                const bool shift = m_mods_shift;
+                if (!same) begin_cell(under, m_cell_story, c, at, m_clicks >= 3);
+                else if (m_clicks >= 3) { m_canchor = {0, 0}; cell_set_caret(core::story_end(cell_words()), true); }
+                else cell_set_caret(at, shift);
+                m_cell_frame = under;
+                m_drag = m_clicks >= 3 ? Drag::None : Drag::CellText;
+                return;
+            }
+        }
+        end_cell();
+    }
     // s241: the Zoom tool -- a click zooms in a step about the pointer (Alt: out); a drag zooms to its box.
     if (m_tool == Tool::Zoom) {
         m_dx0 = x;
@@ -1549,9 +1582,11 @@ void Canvas::on_drag_begin(double x, double y) {
             const Rect fl = core::frame_in_layout(m_doc, m_placed, under);
             if (tf && !tf->story.empty() && tf->rot == 0) {
                 const auto th = layout::table_hit(m_doc, tf->story, flows().get(m_doc, tf->story), under, px0 - fl.x, py0 - fl.y);
-                if (th.ok()) {
-                    m_drag = Drag::None;
-                    m_sig_table.emit(tf->story, th.para, th.row, th.col);
+                if (th.ok() && th.row >= 0) {   // s330: typing in the cell, where it was clicked (was: the table editor)
+                    const layout::CellRef c{th.para, th.row, th.col};
+                    const auto at = layout::cell_hit(m_doc, tf->story, flows().get(m_doc, tf->story), under, c, px0 - fl.x, py0 - fl.y);
+                    begin_cell(under, tf->story, c, at);
+                    m_drag = Drag::CellText;
                     return;
                 }
             }
@@ -2068,6 +2103,14 @@ void Canvas::on_drag_update(double ox, double oy) {
         queue_draw();
         return;
     }
+    case Drag::CellText: {   // s330: drag-select inside the cell
+        if (!cell_editing()) return;
+        double lx, ly;
+        m_vp.to_doc(m_px + ox, m_py + oy, lx, ly);
+        const Rect fl = core::frame_in_layout(m_doc, m_placed, m_cell_frame);
+        cell_set_caret(layout::cell_hit(m_doc, m_cell_story, flows().get(m_doc, m_cell_story), m_cell_frame, m_cell, lx - fl.x, ly - fl.y), true);
+        return;
+    }
     case Drag::TableCol: {   // s327
         if (!m_begun) {
             if (std::abs(ox) < 2) return;
@@ -2541,6 +2584,7 @@ void Canvas::cancel_drag() {
 bool Canvas::on_key(guint kv, Gdk::ModifierType st) {
     if (m_take && kv == GDK_KEY_Escape) { cancel_take(); return true; }   // s180
     if (editing()) return edit_key(kv, st);
+    if (cell_editing()) return cell_key(kv, st);   // s330
     const bool shift = (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
     const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
     if (kv == GDK_KEY_space && !ctrl) {
@@ -3015,7 +3059,7 @@ void Canvas::blink_restart() {
     m_blink = Glib::signal_timeout().connect([this] {
         m_caret_on = !m_caret_on;
         queue_draw();
-        return editing();
+        return editing() || cell_editing();   // s330
     }, 530);
     queue_draw();
 }
@@ -3194,6 +3238,252 @@ bool Canvas::edit_key(guint kv, Gdk::ModifierType st) {
         }
     }
     return true;   // anything else typed is the input method's (or nothing)
+}
+
+// ── s330: typing in a table's cell ──────────────────────────────────────────
+bool Canvas::cell_ok() const {
+    const auto* t = core::doc::table_at(m_doc, m_cell_story, m_cell.para);
+    return t && core::doc::owner_of(*t, m_cell.row, m_cell.col) == std::pair<int, int>{m_cell.row, m_cell.col};
+}
+
+core::Story Canvas::cell_words() const {
+    core::Story s;
+    if (cell_ok()) s.paras = core::doc::table_at(m_doc, m_cell_story, m_cell.para)->rows[static_cast<std::size_t>(m_cell.row)].cells[static_cast<std::size_t>(m_cell.col)].paras;
+    if (s.paras.empty()) s.paras.emplace_back();
+    return s;
+}
+
+void Canvas::begin_cell(const std::string& frame, const std::string& story, layout::CellRef c, core::TextPos at, bool select_all) {
+    if (editing()) end_edit();
+    const bool was = cell_editing();
+    m_cell_story = story;
+    m_cell_frame = frame;
+    m_cell = c;
+    if (!cell_ok()) { m_cell = {}; return; }
+    const auto w = cell_words();
+    m_ccaret = core::clamp_pos(w, select_all ? core::story_end(w) : at);
+    m_canchor = select_all ? core::TextPos{0, 0} : m_ccaret;
+    m_cgoal = NAN;
+    m_cburst_kind.clear();
+    ++m_cburst;
+    if (!was) {
+        gtk_im_context_set_client_widget(m_im, GTK_WIDGET(gobj()));
+        gtk_event_controller_key_set_im_context(m_keys->gobj(), m_im);
+        gtk_im_context_focus_in(m_im);
+    }
+    grab_focus();
+    if (std::find(m_sel.begin(), m_sel.end(), frame) == m_sel.end()) pick({frame});
+    if (auto lg = log::get(log::Area::View)) lg->info("cell: typing in {} para {} ({}, {})", story, c.para, c.row, c.col);
+    cell_follow();
+    blink_restart();
+    m_sig_caret.emit();
+}
+
+void Canvas::end_cell() {
+    if (!cell_editing()) return;
+    gtk_im_context_focus_out(m_im);
+    gtk_im_context_reset(m_im);
+    gtk_event_controller_key_set_im_context(m_keys->gobj(), nullptr);
+    gtk_im_context_set_client_widget(m_im, nullptr);
+    m_blink.disconnect();
+    m_cell = {};
+    m_drag = m_drag == Drag::CellText ? Drag::None : m_drag;
+    queue_draw();
+    update_cursor();
+    m_sig_caret.emit();
+}
+
+void Canvas::cell_set_caret(core::TextPos p, bool extend, bool keep_goal) {
+    if (!cell_ok()) return;
+    m_ccaret = core::clamp_pos(cell_words(), p);
+    if (!extend) m_canchor = m_ccaret;
+    if (!keep_goal) m_cgoal = NAN;
+    m_cburst_kind.clear();
+    cell_follow();
+    blink_restart();
+    m_sig_caret.emit();
+}
+
+void Canvas::cell_follow() {
+    const auto c = layout::cell_caret(m_doc, m_cell_story, flows().get(m_doc, m_cell_story), m_cell_frame, m_cell, m_ccaret);
+    if (!c.ok) {   // its row went on into another frame (it grew): that one
+        m_cell_frame = layout::cell_frame(flows().get(m_doc, m_cell_story), m_cell);
+        return;
+    }
+    const Rect fr = core::frame_in_layout(m_doc, m_placed, c.frame);
+    if (fr.w > 0 && m_vp.reveal({fr.x + c.x - 2, fr.y + c.y, 4, c.h}, 48)) queue_draw();
+}
+
+void Canvas::cell_insert(const std::string& text, const std::string& kind, const std::string& label) {
+    if (!cell_ok()) { end_cell(); return; }
+    if (kind.empty() || kind != m_cburst_kind) { ++m_cburst; m_cburst_kind = kind; }
+    const std::string key = kind.empty() ? std::string{} : kind + ":cell:" + m_cell_story + ":" + std::to_string(m_cburst);
+    const auto at = core::doc::edit_cell(m_journal, m_doc, m_cell_story, m_cell.para, m_cell.row, m_cell.col, m_canchor, m_ccaret, text, label, key);
+    if (at.para < 0) return;
+    m_ccaret = m_canchor = at;
+    m_cgoal = NAN;
+    if (kind.empty()) m_cburst_kind.clear();
+    relayout();
+    if (layout::cell_frame(flows().get(m_doc, m_cell_story), m_cell).empty()) {}   // overset: still typed, not shown
+    else if (!layout::cell_caret(m_doc, m_cell_story, flows().get(m_doc, m_cell_story), m_cell_frame, m_cell, m_ccaret).ok)
+        m_cell_frame = layout::cell_frame(flows().get(m_doc, m_cell_story), m_cell);
+    m_sig_edited.emit();
+    cell_follow();
+    blink_restart();
+    m_sig_caret.emit();
+}
+
+void Canvas::cell_go(int r, int c, bool select_all, bool at_end) {
+    const auto* t = core::doc::table_at(m_doc, m_cell_story, m_cell.para);
+    if (!t) return;
+    const auto o = core::doc::owner_of(*t, r, c);
+    if (o.first < 0) return;
+    const layout::CellRef to{m_cell.para, o.first, o.second};
+    std::string fr = m_cell_frame;
+    const auto& flow = flows().get(m_doc, m_cell_story);
+    if (!layout::cell_caret(m_doc, m_cell_story, flow, fr, to, {0, 0}).ok) fr = layout::cell_frame(flow, to);   // its row set in another frame
+    const auto& cell = t->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)];
+    begin_cell(fr, m_cell_story, to, at_end ? core::doc::cell_end(cell) : core::TextPos{0, 0}, select_all);
+}
+
+bool Canvas::cell_key(guint kv, Gdk::ModifierType st) {
+    if (!cell_ok()) { end_cell(); return false; }
+    const bool shift = (st & Gdk::ModifierType::SHIFT_MASK) == Gdk::ModifierType::SHIFT_MASK;
+    const bool ctrl = (st & Gdk::ModifierType::CONTROL_MASK) == Gdk::ModifierType::CONTROL_MASK;
+    const bool sel = m_canchor != m_ccaret;
+    const auto lo = std::min(m_canchor, m_ccaret), hi = std::max(m_canchor, m_ccaret);
+    const auto w = cell_words();
+    const auto& flow = flows().get(m_doc, m_cell_story);
+    const auto* t = core::doc::table_at(m_doc, m_cell_story, m_cell.para);
+    const auto& cell = t->rows[static_cast<std::size_t>(m_cell.row)].cells[static_cast<std::size_t>(m_cell.col)];
+    switch (kv) {
+    case GDK_KEY_Escape: {
+        const auto f = m_cell_frame;
+        end_cell();
+        pick({f});
+        return true;
+    }
+    case GDK_KEY_Tab: case GDK_KEY_ISO_Left_Tab: case GDK_KEY_KP_Tab: {
+        if (ctrl) { cell_insert("\t", "type", "Typing"); return true; }   // Ctrl+Tab: a tab in the words
+        const bool back = shift || kv == GDK_KEY_ISO_Left_Tab;
+        auto n = core::doc::next_cell(*t, m_cell.row, m_cell.col, back ? -1 : 1);
+        if (n.first < 0 && !back) {   // the last cell: a new row
+            const int r = core::doc::table_tab_row(m_journal, m_doc, m_cell_story, m_cell.para);
+            if (r < 0) return true;
+            relayout();
+            m_sig_edited.emit();
+            n = {r, 0};
+        }
+        if (n.first >= 0) cell_go(n.first, n.second, true, false);
+        return true;
+    }
+    case GDK_KEY_BackSpace:
+        if (!sel) m_canchor = ctrl ? core::prev_word(w, m_ccaret) : core::prev_char(w, m_ccaret);
+        if (m_canchor != m_ccaret) cell_insert("", "erase", "Delete text");
+        return true;
+    case GDK_KEY_Delete: case GDK_KEY_KP_Delete:
+        if (!sel) m_ccaret = ctrl ? core::next_word(w, m_ccaret) : core::next_char(w, m_ccaret);
+        if (m_canchor != m_ccaret) cell_insert("", "erase", "Delete text");
+        return true;
+    case GDK_KEY_Return: case GDK_KEY_KP_Enter:
+        cell_insert("\n", "type", "Typing");
+        return true;
+    case GDK_KEY_Left: case GDK_KEY_KP_Left:
+        if (sel && !shift) { cell_set_caret(lo, false); return true; }
+        if (m_ccaret == core::TextPos{0, 0} && !shift) {   // off its start: the previous cell's end
+            if (const auto n = core::doc::next_cell(*t, m_cell.row, m_cell.col, -1); n.first >= 0) cell_go(n.first, n.second, false, true);
+            return true;
+        }
+        cell_set_caret(ctrl ? core::prev_word(w, m_ccaret) : core::prev_char(w, m_ccaret), shift);
+        return true;
+    case GDK_KEY_Right: case GDK_KEY_KP_Right:
+        if (sel && !shift) { cell_set_caret(hi, false); return true; }
+        if (m_ccaret == core::story_end(w) && !shift) {   // off its end: the next cell's start
+            if (const auto n = core::doc::next_cell(*t, m_cell.row, m_cell.col, 1); n.first >= 0) cell_go(n.first, n.second, false, false);
+            return true;
+        }
+        cell_set_caret(ctrl ? core::next_word(w, m_ccaret) : core::next_char(w, m_ccaret), shift);
+        return true;
+    case GDK_KEY_Up: case GDK_KEY_Down: case GDK_KEY_KP_Up: case GDK_KEY_KP_Down: {
+        const int dir = (kv == GDK_KEY_Up || kv == GDK_KEY_KP_Up) ? -1 : 1;
+        if (std::isnan(m_cgoal)) m_cgoal = layout::cell_caret(m_doc, m_cell_story, flow, m_cell_frame, m_cell, m_ccaret).x;
+        const auto to = layout::cell_line_move(m_doc, m_cell_story, flow, m_cell_frame, m_cell, m_ccaret, dir, m_cgoal);
+        if (to.para >= 0) { cell_set_caret(to, shift, true); return true; }
+        if (shift) return true;   // a selection stays in its cell
+        // out of the cell: the one above / below (in this column)
+        const int r = dir < 0 ? m_cell.row - 1 : m_cell.row + std::max(1, cell.span_rows);
+        if (r >= 0 && r < static_cast<int>(t->rows.size())) cell_go(r, m_cell.col, false, dir < 0);
+        return true;
+    }
+    case GDK_KEY_Home: case GDK_KEY_KP_Home:
+        cell_set_caret(ctrl ? core::TextPos{0, 0} : layout::cell_line_edge(m_doc, m_cell_story, flow, m_cell_frame, m_cell, m_ccaret, false), shift);
+        return true;
+    case GDK_KEY_End: case GDK_KEY_KP_End:
+        cell_set_caret(ctrl ? core::story_end(w) : layout::cell_line_edge(m_doc, m_cell_story, flow, m_cell_frame, m_cell, m_ccaret, true), shift);
+        return true;
+    default: break;
+    }
+    if (ctrl) {
+        switch (kv) {
+        case GDK_KEY_a: case GDK_KEY_A:
+            m_canchor = {0, 0};
+            cell_set_caret(core::story_end(w), true);
+            return true;
+        case GDK_KEY_c: case GDK_KEY_C: case GDK_KEY_x: case GDK_KEY_X:
+            if (!sel) return true;
+            m_clip_text = core::text_between(w, lo, hi);
+            m_clip = {};
+            get_clipboard()->set_text(m_clip_text);
+            if (kv == GDK_KEY_x || kv == GDK_KEY_X) cell_insert("", "", "Cut");
+            return true;
+        case GDK_KEY_v: case GDK_KEY_V:
+            get_clipboard()->read_text_async([this](const Glib::RefPtr<Gio::AsyncResult>& r) {
+                try {
+                    const auto tx = get_clipboard()->read_text_finish(r);
+                    if (cell_editing() && !tx.empty()) cell_insert(tx.raw(), "", "Paste");
+                } catch (const Glib::Error&) {}
+            });
+            return true;
+        default:
+            return false;   // Ctrl+Z, Ctrl+S ... belong to the window
+        }
+    }
+    return true;   // anything else typed is the input method's (or nothing)
+}
+
+void Canvas::draw_cell_edit(const Cairo::RefPtr<Cairo::Context>& cr) {
+    if (!cell_ok()) return;
+    const auto& flow = flows().get(m_doc, m_cell_story);
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, m_cell_frame);
+    if (lr.w <= 0) return;
+    const auto c = layout::cell_caret(m_doc, m_cell_story, flow, m_cell_frame, m_cell, m_ccaret);
+    cr->save();
+    // the cell: a quiet accent outline
+    if (c.ok) {
+        const auto th = layout::table_hit(m_doc, m_cell_story, flow, m_cell_frame, c.x, c.y + c.h / 2);
+        if (th.ok() && th.row == m_cell.row && th.col == m_cell.col) {
+            const Rect sr = m_vp.to_screen(Rect{lr.x + th.cell.x, lr.y + th.cell.y, th.cell.w, th.cell.h});
+            cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.85);
+            cr->set_line_width(2);
+            cr->rectangle(std::round(sr.x) + 0.5, std::round(sr.y) + 0.5, std::round(sr.w) - 1, std::round(sr.h) - 1);
+            cr->stroke();
+        }
+    }
+    for (const auto& r : layout::cell_selection_rects(m_doc, m_cell_story, flow, m_cell_frame, m_cell, m_canchor, m_ccaret)) {
+        const Rect sr = m_vp.to_screen(Rect{lr.x + r.x, lr.y + r.y, r.w, r.h});
+        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.28);
+        cr->rectangle(sr.x, sr.y, sr.w, sr.h);
+        cr->fill();
+    }
+    if (m_caret_on && m_canchor == m_ccaret && c.ok) {
+        const Rect sr = m_vp.to_screen(Rect{lr.x + c.x, lr.y + c.y, 0, c.h});
+        cr->set_source_rgb(0.05, 0.05, 0.08);
+        cr->set_line_width(std::max(1.0, std::min(2.0, m_vp.scale())));
+        cr->move_to(std::round(sr.x) + 0.5, sr.y);
+        cr->line_to(std::round(sr.x) + 0.5, sr.b());
+        cr->stroke();
+    }
+    cr->restore();
 }
 
 // ── s034: the tab ruler ─────────────────────────────────────────────────────

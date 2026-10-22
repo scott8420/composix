@@ -401,6 +401,45 @@ std::uint32_t sample_page(const core::Doc& d, const core::Doc::Id& id, FlowCache
     return (avg(r) << 16) | (avg(g) << 8) | avg(b);
 }
 
+namespace {
+// s330: what a table's row draws -- its cells' words and formatting, fills,
+// merges, and the table's look -- for the page's key (a row's place alone
+// misses a cell typed in).
+std::string table_row_key(const core::Table& t, int r) {
+    std::string k = "T" + std::to_string(t.header_rows) + "/" + std::to_string(t.footer_rows) + "|" + std::to_string(t.inset) + "|" +
+                    std::to_string(t.rule_w) + t.rule_color + "|" + t.cell_style + "|" + t.header_fill + std::to_string(t.header_tint) + "|" +
+                    t.band_fill + std::to_string(t.band_tint) + "/" + std::to_string(t.band_every) + "|" + std::to_string(t.align) + "|";
+    for (double w : t.widths) k += std::to_string(w) + ",";
+    if (r < 0 || r >= static_cast<int>(t.rows.size())) return k;
+    // a merge over several rows draws from its own row: the rows it covers count too
+    const int R = static_cast<int>(t.rows.size());
+    for (int rr = 0; rr < R; ++rr) {
+        const auto& row = t.rows[static_cast<std::size_t>(rr)];
+        bool reaches = rr == r;
+        for (const auto& c : row.cells) reaches = reaches || (rr < r && rr + c.span_rows > r);
+        if (!reaches) continue;
+        k += "#" + std::to_string(rr) + "|" + std::to_string(row.min_h);
+        for (const auto& c : row.cells) {
+            k += "[" + c.fill + std::to_string(c.fill_tint) + "|" + std::to_string(c.span_cols) + "x" + std::to_string(c.span_rows) + "|" +
+                 std::to_string(c.valign);
+            for (const auto& p : c.paras) {
+                k += "{" + p.style + "|";
+                for (const auto& run : p.runs) {
+                    const auto& L = run.local;
+                    k += std::to_string(run.start) + "-" + std::to_string(run.end) + run.style + "(" + std::to_string(L.bold) + std::to_string(L.italic) +
+                         std::to_string(L.size) + L.color + std::to_string(L.position) + std::to_string(L.caps) + std::to_string(L.underline) +
+                         std::to_string(L.strike) + std::to_string(L.tracking.value_or(-1e9)) + std::to_string(L.shift.value_or(-1e9)) +
+                         std::to_string(L.kern.value_or(-1e9)) + (L.ot ? "ot" : "") + L.link + ");";
+                }
+                k += "|" + p.text + "}";
+            }
+            k += "]";
+        }
+    }
+    return k;
+}
+}  // namespace
+
 PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) {
     PageKey k;
     std::map<std::string, StoryFlow> ref_flows;   // s128: where references' targets are set
@@ -432,6 +471,7 @@ PageKey page_key(const core::Doc& d, FlowCache& flows, const core::Doc::Id& id) 
                         if (r.end > l.start && r.start < l.end)
                             line += std::to_string(r.start - l.start) + "-" + std::to_string(r.end - l.start) + r.style + ",";
                     line += "|" + p.text.substr(static_cast<std::size_t>(l.start), static_cast<std::size_t>(l.end - l.start));
+                    if (l.row >= 0 && !p.tables.empty()) line += "|" + table_row_key(p.tables.front(), l.row);   // s330: a table's row -- its cells
                     // s109: a footnote mark's number (it moves when one is added before).
                     for (std::size_t i = p.text.find(core::kMarkNote, static_cast<std::size_t>(l.start));
                          i != std::string::npos && static_cast<int>(i) < l.end; i = p.text.find(core::kMarkNote, i + 3))

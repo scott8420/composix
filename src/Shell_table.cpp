@@ -148,6 +148,7 @@ void Shell::on_table_to_text() {  // handler
     std::string story;
     int from = 0;
     if (cv.editing()) { story = cv.edit_story_id(); from = cv.edit_range().first.para; }
+    else if (cv.cell_editing()) { story = cv.cell_story(); from = cv.typing_cell().para; }   // s330
     else
         for (const auto& id : cv.selection())
             if (const auto* f = m_doc.as<core::Frame>(id); f && f->kind == core::FrameKind::Text && !f->story.empty()) { story = f->story; break; }
@@ -163,6 +164,7 @@ void Shell::on_table_to_text() {  // handler
     }
     if (m_table_win) m_table_win->hide();   // its table is going
     if (cv.editing()) cv.end_edit();
+    cv.end_cell();   // s330
     const int rows = core::doc::table_to_text(m_journal, m_doc, story, para);
     if (auto lg = log::get(log::Area::Shell)) lg->info("table to text: {} para {} -> {} paragraphs", story, para, rows);
     cv.model_changed();
@@ -170,6 +172,11 @@ void Shell::on_table_to_text() {  // handler
 
 void Shell::on_edit_table() {  // handler
     auto& cv = m_canvas_view.canvas();
+    if (cv.cell_editing()) {   // s330: typing in a cell -- its table, that cell
+        const auto c = cv.typing_cell();
+        open_table_editor(cv.cell_story(), c.para, c.row, c.col);
+        return;
+    }
     std::string story;
     int from = 0;
     if (cv.editing()) { story = cv.edit_story_id(); from = cv.edit_range().first.para; }

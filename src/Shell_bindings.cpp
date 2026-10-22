@@ -362,7 +362,8 @@ void Shell::bind_actions() {  // bindings: actions + recents group
             else if ((keyval == GDK_KEY_y || keyval == GDK_KEY_Y) && mods == CTRL)          act = "win.redo";
             // s282: frames copied / cut / pasted -- the canvas's, while it's not typing (it keeps
             // Ctrl+C / X / V for its text then, and entries for theirs).
-            if (!act && !focus_is_text() && m_main.get_visible_child_name() == "canvas" && !m_canvas_view.canvas().editing()) {
+            if (!act && !focus_is_text() && m_main.get_visible_child_name() == "canvas" && !m_canvas_view.canvas().editing() &&
+                !m_canvas_view.canvas().cell_editing()) {   // s330: nor typing in a cell
                 const bool c = keyval == GDK_KEY_c || keyval == GDK_KEY_C, x = keyval == GDK_KEY_x || keyval == GDK_KEY_X,
                            v = keyval == GDK_KEY_v || keyval == GDK_KEY_V;
                 const auto ALT = Gdk::ModifierType::ALT_MASK;
@@ -373,7 +374,8 @@ void Shell::bind_actions() {  // bindings: actions + recents group
             }
             // s027: Page Up / Page Down -- the previous / next spread on the canvas.
             if (!act && mods == Gdk::ModifierType{} && (keyval == GDK_KEY_Page_Up || keyval == GDK_KEY_Page_Down) &&
-                !focus_is_text() && m_main.get_visible_child_name() == "canvas" && !m_canvas_view.canvas().editing()) {
+                !focus_is_text() && m_main.get_visible_child_name() == "canvas" && !m_canvas_view.canvas().editing() &&
+                !m_canvas_view.canvas().cell_editing()) {   // s330: nor typing in a cell
                 return step_spread(keyval == GDK_KEY_Page_Down ? 1 : -1);
             }
             if (!act || focus_is_text()) return false;

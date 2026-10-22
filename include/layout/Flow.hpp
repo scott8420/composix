@@ -356,6 +356,31 @@ std::vector<core::Rect> selection_rects(const core::Doc& d, const std::string& s
                                         const std::string& frame, core::TextPos a, core::TextPos b,
                                         const core::Story* text = nullptr);   // s131: text -- a resolved story's
 
+// ── s329: a cell's words -- the caret, hits, line moves, a selection ─────────
+// Frame coordinates in `frame` (the piece of the table set there; "" the
+// first frame its row is in). Places are TextPos over the cell's paragraphs.
+// From the cell layouts the drawing uses, so the caret sits on the glyphs.
+struct CellRef {
+    int para = -1, row = -1, col = -1;   // the table's paragraph, the cell (a merge's own)
+};
+Caret cell_caret(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                 const CellRef& c, core::TextPos p);
+// The place in the cell nearest (x, y).
+core::TextPos cell_hit(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                       const CellRef& c, double x, double y);
+// A line up / down (dir -1 / +1) inside the cell at `goal_x`; {-1, -1} when
+// that leaves the cell (above its first line / below its last).
+core::TextPos cell_line_move(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                             const CellRef& c, core::TextPos p, int dir, double goal_x);
+// The start / end of the line the place is on.
+core::TextPos cell_line_edge(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
+                             const CellRef& c, core::TextPos p, bool end);
+// [a, b) in the cell as rectangles.
+std::vector<core::Rect> cell_selection_rects(const core::Doc& d, const std::string& story, const StoryFlow& flow,
+                                             const std::string& frame, const CellRef& c, core::TextPos a, core::TextPos b);
+// The frame the cell's row is set in first ("" none -- overset).
+std::string cell_frame(const StoryFlow& flow, const CellRef& c);
+
 // The installed font families (Pango / fontconfig), sorted, with the generic
 // Serif / Sans / Monospace first. Read once.
 const std::vector<std::string>& font_families();

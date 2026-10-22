@@ -2925,14 +2925,15 @@ int insert_table(DocJournal& j, Doc& d, const Doc::Id& story, TextPos at, const 
     return para;
 }
 
-bool edit_table(DocJournal& j, Doc& d, const Doc::Id& story, int para, const std::string& label, const std::function<void(Table&)>& f) {
+bool edit_table(DocJournal& j, Doc& d, const Doc::Id& story, int para, const std::string& label, const std::function<void(Table&)>& f,
+                const std::string& merge_key) {
     if (!table_at(d, story, para)) return false;
     Story s = *d.as<Story>(story);
     Table& t = s.paras[static_cast<std::size_t>(para)].tables.front();
     const Table was = t;
     f(t);
     if (t == was) return false;
-    return j.run(label, {story}, [&] { d.put(story, s); });
+    return j.run(label, {story}, [&] { d.put(story, s); }, merge_key);
 }
 
 std::string cell_text(const TableCell& c) {
@@ -3197,6 +3198,52 @@ int table_to_text(DocJournal& j, Doc& d, const Doc::Id& story, int para) {
     s.paras.insert(s.paras.begin() + para, out.begin(), out.end());
     if (!j.run("Convert Table to Text", {story}, [&] { d.put(story, s); })) return 0;
     return static_cast<int>(out.size());
+}
+
+// ── s328: typing in a cell ──────────────────────────────────────────────────
+TextPos cell_end(const TableCell& c) {
+    if (c.paras.empty()) return {0, 0};
+    return {static_cast<int>(c.paras.size()) - 1, static_cast<int>(c.paras.back().text.size())};
+}
+
+TextPos edit_cell(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
+                  const std::string& text, const std::string& label, const std::string& merge_key) {
+    const auto* t = table_at(d, story, para);
+    if (!t || owner_of(*t, row, col) != std::pair<int, int>{row, col}) return {-1, -1};
+    const auto& cell = t->rows[static_cast<std::size_t>(row)].cells[static_cast<std::size_t>(col)];
+    // the cell's paragraphs as a story of their own, edited as a story's are
+    Doc e;
+    DocJournal je{e};
+    e.set_door([&je] { return je.open(); });
+    Story s;
+    s.paras = cell.paras;
+    if (s.paras.empty()) s.paras.emplace_back();   // style "": the table's
+    je.run("cell", {"story.cell"}, [&] { e.put("story.cell", s); });
+    const TextPos at = edit_text(je, e, "story.cell", a, b, text, label);
+    auto out = e.as<Story>("story.cell")->paras;
+    if (out.size() == 1 && out[0] == Para{}) out.clear();   // one empty paragraph: an empty cell
+    edit_table(j, d, story, para, label, [&](Table& x) { x.rows[static_cast<std::size_t>(row)].cells[static_cast<std::size_t>(col)].paras = out; },
+               merge_key);
+    return at;
+}
+
+std::pair<int, int> next_cell(const Table& t, int r, int c, int dir) {
+    const int R = static_cast<int>(t.rows.size()), C = table_cols(t);
+    const auto o = owner_of(t, r, c);
+    if (o.first < 0 || C == 0) return {-1, -1};
+    for (int k = o.first * C + o.second + (dir < 0 ? -1 : 1); k >= 0 && k < R * C; k += dir < 0 ? -1 : 1) {
+        const int rr = k / C, cc = k % C;
+        if (owner_of(t, rr, cc) == std::pair<int, int>{rr, cc}) return {rr, cc};
+    }
+    return {-1, -1};
+}
+
+int table_tab_row(DocJournal& j, Doc& d, const Doc::Id& story, int para) {
+    const auto* t = table_at(d, story, para);
+    if (!t) return -1;
+    const int at = static_cast<int>(t->rows.size()) - std::clamp(t->footer_rows, 0, static_cast<int>(t->rows.size()));
+    if (!edit_table(j, d, story, para, "Insert Row", [&](Table& x) { table_insert_row(x, at); })) return -1;
+    return at;
 }
 
 bool set_language(DocJournal& j, Doc& d, const std::string& lang) {   // s307
