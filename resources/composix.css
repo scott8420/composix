@@ -400,6 +400,9 @@ row.cx-drop-on { background: alpha(@cx_ink, 0.18); }
 .cx-thumb-page.cx-drop-after  > .cx-thumb-paper { box-shadow: 4px 0 0 -1px @cx_ink, 0 0 0 1px alpha(black, 0.16); }
 .cx-card.cx-card-drop-before { box-shadow: 0 -3px 0 0 @cx_ink, 0 0 0 1px @cx_hair; }
 .cx-card.cx-card-drop-after  { box-shadow: 0 3px 0 0 @cx_ink, 0 0 0 1px @cx_hair; }
+/* s341: a layer's row dropped above / below another */
+.cx-item-row.cx-row-drop-before { box-shadow: inset 0 3px 0 0 @cx_ink; }
+.cx-item-row.cx-row-drop-after  { box-shadow: inset 0 -3px 0 0 @cx_ink; }
 /* s278: no GTK drop glow on the whole card -- the page / card marks say where */
 .cx-card-body:drop(active), .cx-card:drop(active) { box-shadow: 0 1px 2px alpha(black, 0.06), 0 0 0 1px @cx_hair; outline: none; }
 .cx-card-body:drop(active) { box-shadow: none; }

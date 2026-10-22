@@ -242,6 +242,25 @@ void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const 
             row->set_name("nav.item." + it->id);
             row->add_css_class("cx-item-row");
             auto ib = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+            if (s == core::Segment::Layers) {   // s341: its colour, a small chip first
+                auto rgb = std::make_shared<std::uint32_t>(it->thumb.rgb);
+                auto chip = Gtk::make_managed<Gtk::DrawingArea>();
+                chip->set_name("nav.layer." + it->id + ".colour");
+                chip->set_content_width(10);
+                chip->set_content_height(10);
+                chip->set_valign(Gtk::Align::CENTER);
+                chip->set_tooltip_text("The layer's colour (its frames' selection) -- the inspector's Colour row");
+                chip->set_draw_func([rgb](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+                    cr->rectangle(0.5, 0.5, w - 1, h - 1);
+                    cr->set_source_rgb(((*rgb >> 16) & 0xff) / 255.0, ((*rgb >> 8) & 0xff) / 255.0, (*rgb & 0xff) / 255.0);
+                    cr->fill_preserve();
+                    cr->set_source_rgba(0, 0, 0, 0.25);
+                    cr->set_line_width(1);
+                    cr->stroke();
+                });
+                ib->append(*chip);
+                c.layer_chips[it->id] = {chip, rgb};
+            }
             if (s == core::Segment::Layers) layer_toggles(c, *it, *ib);   // s308: eye, padlock, printer
             auto il = Gtk::make_managed<Gtk::Label>(it->title);
             il->set_xalign(0.0f);
@@ -272,6 +291,7 @@ void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const 
             c.list->append(*row);
             c.rows[it->id] = row;
             c.labels[it->id] = {il, b};
+            if (s == core::Segment::Layers) layer_row_drag(*row, it->id);   // s341: dragged into another place
         }
         c.list->signal_selected_rows_changed().connect([this, s] {
             if (auto* cc = card(s)) on_list_changed(*cc);
@@ -1209,6 +1229,10 @@ void Navigator::refresh(const core::Outline* o) {
                 badge->set_text(it->badge);
                 badge->set_visible(!it->badge.empty());
                 if (c.segment == core::Segment::Layers) set_layer_toggles(c, *it);   // s308
+                if (auto ch = c.layer_chips.find(it->id); ch != c.layer_chips.end() && *ch->second.second != it->thumb.rgb) {   // s341
+                    *ch->second.second = it->thumb.rgb;
+                    ch->second.first->queue_draw();
+                }
                 if (it->thumb.flag) badge->add_css_class("cx-warn");
                 else                badge->remove_css_class("cx-warn");
             }
@@ -1216,6 +1240,59 @@ void Navigator::refresh(const core::Outline* o) {
     }
     show_picks();
     if (!m_filter.empty()) apply_filter();   // s298
+}
+
+// s341: a layer's row drags above / below another (the list is top first,
+// as the layers stack); the mark shows where it goes.
+void Navigator::layer_row_drag(Gtk::ListBoxRow& row, const std::string& id) {
+    auto src = Gtk::DragSource::create();
+    src->set_actions(Gdk::DragAction::MOVE);
+    src->signal_prepare().connect([id](double, double) -> Glib::RefPtr<Gdk::ContentProvider> {
+        Glib::Value<Glib::ustring> v;
+        v.init(v.value_type());
+        v.set("composix-layer:" + id);
+        return Gdk::ContentProvider::create(v);
+    }, false);
+    auto* srcp = src.get();
+    Gtk::ListBoxRow* rp = &row;
+    src->signal_drag_begin().connect([srcp, rp](const Glib::RefPtr<Gdk::Drag>&) {
+        srcp->set_icon(Gtk::WidgetPaintable::create(*rp), 20, 10);
+    });
+    row.add_controller(src);
+
+    auto drop = Gtk::DropTarget::create(G_TYPE_STRING, Gdk::DragAction::MOVE);
+    drop->set_preload(true);
+    auto* dp = drop.get();
+    const auto moving = [dp]() -> std::string {
+        const auto& v = dp->get_value();
+        if (!G_VALUE_HOLDS_STRING(v.gobj())) return {};
+        const char* t = g_value_get_string(v.gobj());
+        const std::string s = t ? t : "", tag = "composix-layer:";
+        return s.rfind(tag, 0) == 0 ? s.substr(tag.size()) : std::string{};
+    };
+    drop->signal_motion().connect([rp, moving, id](double, double y) {
+        const auto m = moving();
+        if (m.empty() || m == id) return Gdk::DragAction{};
+        const bool above = y < rp->get_height() / 2.0;
+        rp->remove_css_class(above ? "cx-row-drop-after" : "cx-row-drop-before");
+        rp->add_css_class(above ? "cx-row-drop-before" : "cx-row-drop-after");
+        return Gdk::DragAction::MOVE;
+    }, false);
+    drop->signal_leave().connect([rp] { rp->remove_css_class("cx-row-drop-before"); rp->remove_css_class("cx-row-drop-after"); });
+    drop->signal_drop().connect([this, rp, id](const Glib::ValueBase& value, double, double y) {
+        rp->remove_css_class("cx-row-drop-before");
+        rp->remove_css_class("cx-row-drop-after");
+        Glib::Value<Glib::ustring> v;
+        v.init(value.gobj());
+        const std::string t = v.get(), tag = "composix-layer:";
+        if (t.rfind(tag, 0) != 0) return false;
+        const std::string m = t.substr(tag.size());
+        if (m == id) return false;
+        const bool above = y < rp->get_height() / 2.0;
+        Glib::signal_idle().connect_once([this, m, id, above] { m_layer_move_sig.emit(m, id, above); });
+        return true;
+    }, false);
+    row.add_controller(drop);
 }
 
 // s308: a layer's three switches before its name -- shown / locked / prints.

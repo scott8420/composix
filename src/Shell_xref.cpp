@@ -351,17 +351,30 @@ void Shell::open_xref(int edit_para, int edit_k) {
 // edited or removed.
 void Shell::on_hyperlink() {  // handler
     auto& cv = m_canvas_view.canvas();
-    if (!cv.editing()) {
+    const bool in_cell = !cv.editing() && cv.cell_editing();   // s340: typing in a table's cell
+    if (!cv.editing() && !in_cell) {
         alert("Select words first", "A hyperlink goes on words: double-click a text frame and select them, then Hyperlink.");
         return;
     }
-    const std::string story = cv.edit_story_id();
-    auto [a, b] = cv.edit_range();
+    const std::string story = in_cell ? cv.cell_story() : cv.edit_story_id();
+    const layout::CellRef cref = in_cell ? cv.typing_cell() : layout::CellRef{};
+    auto [a, b] = in_cell ? cv.cell_range() : cv.edit_range();
     if (b < a) std::swap(a, b);
-    std::string cur = core::doc::link_at(m_doc, story, a, b);
-    if (a == b) {   // a caret: the whole link it stands in
+    std::string cur;
+    if (in_cell) {   // the link the cell's words carry there (a caret: the one it stands in)
         for (const auto& l : core::doc::links_in(m_doc, story))
-            if (l.para == a.para && a.byte >= l.from && a.byte <= l.to && l.target == cur) { a = {l.para, l.from}; b = {l.para, l.to}; break; }
+            if (l.row == cref.row && l.col == cref.col && l.para == cref.para && l.cpara == a.para && a.byte >= l.from &&
+                (a == b ? a.byte <= l.to : b.para == a.para && b.byte <= l.to)) {
+                cur = l.target;
+                if (a == b) { a = {l.cpara, l.from}; b = {l.cpara, l.to}; }
+                break;
+            }
+    } else {
+        cur = core::doc::link_at(m_doc, story, a, b);
+    }
+    if (a == b && !in_cell) {   // a caret: the whole link it stands in
+        for (const auto& l : core::doc::links_in(m_doc, story))
+            if (l.row < 0 && l.para == a.para && a.byte >= l.from && a.byte <= l.to && l.target == cur) { a = {l.para, l.from}; b = {l.para, l.to}; break; }
         if (a == b) {
             alert("Select words first", "Select the words the link goes on, then Hyperlink.");
             return;
@@ -418,8 +431,9 @@ void Shell::on_hyperlink() {  // handler
     buttons->append(*ok);
     box->append(*buttons);
     m_xref_pop->set_child(*box);
-    const auto apply = [this, story, a, b](const std::string& to) {
-        const bool did = core::doc::set_link(m_journal, m_doc, story, a, b, to);
+    const auto apply = [this, story, a, b, in_cell, cref](const std::string& to) {
+        const bool did = in_cell ? core::doc::set_cell_link(m_journal, m_doc, story, cref.para, cref.row, cref.col, a, b, to)
+                                 : core::doc::set_link(m_journal, m_doc, story, a, b, to);
         if (auto lg = log::get(log::Area::Shell)) lg->info("hyperlink: {}:{}-{}:{} -> '{}' ({})", a.para, a.byte, b.para, b.byte, core::doc::normal_link(to), did);
         if (m_xref_pop) m_xref_pop->popdown();
         auto& c = m_canvas_view.canvas();
@@ -427,11 +441,12 @@ void Shell::on_hyperlink() {  // handler
         Glib::signal_idle().connect_once([this] { m_canvas_view.canvas().grab_focus(); });
     };
     // s313: a heading picked -- linked to it; "page 7" -- to that page; else as typed
-    const auto go = [this, apply, entry, to, places, story, a, b] {
+    const auto go = [this, apply, entry, to, places, story, a, b, in_cell, cref] {
         const guint k = to->get_selected();
         if (k > 0 && k <= places.size()) {
             const auto& pl = places[k - 1];
-            const bool did = core::doc::link_to_paragraph(m_journal, m_doc, story, a, b, pl.story, pl.para);
+            const bool did = in_cell ? core::doc::cell_link_to_paragraph(m_journal, m_doc, story, cref.para, cref.row, cref.col, a, b, pl.story, pl.para)
+                                     : core::doc::link_to_paragraph(m_journal, m_doc, story, a, b, pl.story, pl.para);
             if (auto lg = log::get(log::Area::Shell)) lg->info("hyperlink: to \u201c{}\u201d ({})", pl.words, did);
             if (m_xref_pop) m_xref_pop->popdown();
             if (did) m_canvas_view.canvas().model_changed();

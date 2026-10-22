@@ -20,6 +20,8 @@
 #include "widgets/Widgets.hpp"
 
 #include <sigc++/signal.h>
+#include <gtkmm/drawingarea.h>
+#include <memory>
 
 #include <array>
 #include <functional>
@@ -81,6 +83,8 @@ public:
     std::string order_keys() const;
     void        set_order_keys(const std::string& csv);
     sigc::signal<void()>&            signal_order_changed() { return m_order_sig; }
+    // s341: a layer's row dropped above / below another's -- (layer, onto, above?).
+    sigc::signal<void(const std::string&, const std::string&, bool)>& signal_layer_move() { return m_layer_move_sig; }
     // s279: a right-click -- on pictures (pages: picked first, as a click
     // would; a master: as it is), or a card's header (the section). x, y in
     // the navigator's own coordinates.
@@ -128,6 +132,7 @@ private:
         std::map<std::string, Gtk::ToggleButton*> sizes; // pages: S / M / L
         Gtk::Box*                     chips = nullptr;   // s287: Colors -- the chips' column (its first row is `flow`)
         std::map<std::string, Gtk::Label*> samples;      // s292: Stories -- each one's first words
+        std::map<std::string, std::pair<Gtk::DrawingArea*, std::shared_ptr<std::uint32_t>>> layer_chips;   // s341: Layers -- each one's colour
         std::vector<std::pair<Gtk::Widget*, WrapBox*>> chip_heads;   // s298: Colors -- a group's heading, its row
         std::map<std::string, std::array<Gtk::ToggleButton*, 3>> layer_btns;   // s308: Layers -- eye, padlock, printer
     };
@@ -182,9 +187,11 @@ private:
     sigc::signal<void(const std::vector<std::string>&, const std::string&, bool, bool)> m_move_sig;
     sigc::signal<void(const std::string&, const std::string&, bool)> m_insert_sig;
     sigc::signal<void()>            m_order_sig;
+    sigc::signal<void(const std::string&, const std::string&, bool)> m_layer_move_sig;   // s341
     sigc::signal<void(const Pick&, double, double)> m_ctx_sig;
     sigc::signal<void(const std::string&, const std::string&, const std::string&)> m_layer_sig;   // s308
     void        layer_toggles(Card& c, const core::Item& it, Gtk::Box& row);                          // s308
+    void        layer_row_drag(Gtk::ListBoxRow& row, const std::string& id);                        // s341
     void        set_layer_toggles(Card& c, const core::Item& it);
     std::function<std::vector<std::vector<std::string>>()> m_grouping;
 };

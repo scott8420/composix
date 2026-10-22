@@ -478,6 +478,11 @@ void Shell::bind_views() {  // bindings: navigator / tiles -> handlers
     m_nav.signal_move_pages().connect(sigc::mem_fun(*this, &Shell::on_nav_move_pages));      // s278
     m_nav.signal_context().connect(sigc::mem_fun(*this, &Shell::on_nav_context));            // s279
     m_nav.signal_master_insert().connect(sigc::mem_fun(*this, &Shell::on_nav_master_insert));
+    m_nav.signal_layer_move().connect([this](const std::string& layer, const std::string& onto, bool above) {   // s341
+        const bool did = core::doc::move_layer_by(m_journal, m_doc, layer, onto, above);
+        if (auto lg = log::get(log::Area::Shell)) lg->info("layers: {} dropped {} {}: {}", layer, above ? "above" : "below", onto, did);
+        if (did) m_canvas_view.canvas().model_changed();
+    });
     m_canvas_view.canvas().signal_table().connect([this](const std::string& story, int para, int row, int col) {   // s323
         if (auto lg = log::get(log::Area::Shell)) lg->info("table: double-click {} para {} cell {},{}", story, para, row, col);
         open_table_editor(story, para, row, col);

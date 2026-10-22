@@ -1516,6 +1516,20 @@ std::vector<core::Field> Shell::section_fields(core::Segment s) const {  // help
         out.push_back(act);
         return out;
     }
+    if (s == core::Segment::Links) {   // s339: how many, how many broken; how to make one
+        const auto us = core::doc::link_uses(m_doc);
+        int broken = 0, uses = 0;
+        for (const auto& u : us) { broken += u.broken; uses += static_cast<int>(u.uses.size()); }
+        if (us.empty()) {
+            out.push_back({"Hyperlinks", "None yet"});
+            out.push_back({"", "Select words while typing, then Ctrl+K."});
+            return out;
+        }
+        out.push_back({"Hyperlinks", std::to_string(us.size()) + (us.size() == 1 ? " target, " : " targets, ") + std::to_string(uses) +
+                                         (uses == 1 ? " use" : " uses")});
+        out.push_back({"Broken", broken ? std::to_string(broken) : "None"});
+        return out;
+    }
     if (s == core::Segment::Notes) {   // s121: the settings, in their panel
         core::Field act{"", "", "notes_panel", {{"open", "Footnotes & Endnotes\u2026"}}};
         act.buttons = true;
@@ -1625,6 +1639,29 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         return;
     }
     if (m_inspected.empty()) return;
+    if (key == "link_to" || key == "link_act") {   // s339: a link picked in Hyperlinks
+        const std::string id = m_inspected.front();
+        if (id.rfind("link:", 0) != 0) return;
+        const std::string target = id.substr(5);
+        if (key == "link_to" || choice == "remove") {
+            const std::string to = key == "link_to" ? choice : std::string{};
+            if (key == "link_to" && core::doc::normal_link(to).empty()) return;   // emptied: Remove Link does that
+            const int n = core::doc::retarget_links(m_journal, m_doc, target, to);
+            if (auto lg = log::get(log::Area::Shell)) lg->info("hyperlinks: {} -> {} on {} run(s)", target, to, n);
+            if (n > 0) {   // the item is now another (or gone): show the new one, or the section
+                const std::string now = core::doc::normal_link(to);
+                Glib::signal_idle().connect_once([this, now] {
+                    if (now.empty()) on_tiles_selection({});
+                    else { m_tiles.show_section(m_outline, core::Segment::Links, {"link:" + now}); on_tiles_selection({"link:" + now}); }
+                });
+            }
+            return;
+        }
+        if (choice == "first")
+            for (const auto& u : core::doc::link_uses(m_doc))
+                if (u.target == target) { show_link_use(u.uses.front()); break; }
+        return;
+    }
     if (key == "note" || key == "note_words") {   // s115: a footnote picked in Footnotes
         std::string story;
         int p = 0, k = 0;

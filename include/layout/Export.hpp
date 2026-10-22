@@ -131,6 +131,7 @@ struct TextMark {
     enum Kind { Misspelled, Link } kind = Misspelled;
     core::Rect box;
     int para = 0, from = 0, to = 0;   // in the story (its words as drawn: a resolved story's)
+    int row = -1, col = -1, cpara = -1;   // s340: in a table's cell (para: the table's; from / to in its paragraph cpara)
     bool operator==(const TextMark&) const = default;
 };
 std::vector<TextMark> text_marks(const core::Doc& d, FlowCache& flows, const std::string& frame, bool spelling = true, bool links = true);

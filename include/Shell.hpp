@@ -184,6 +184,8 @@ private:
     // the words' place, the row's height, borders, rows / columns / merges.
     // One step each; the typing follows the cell when rows / columns move it.
     bool cell_edit(const std::string& key, const std::string& choice);
+    // s339: a link's words on the canvas, selected (in the text, or typing in its cell).
+    void show_link_use(const core::doc::LinkSpan& l);
     void on_text_to_table();                        // category: handler: s324 -- Type > Convert Text to Table
     void on_table_to_text();                        // category: handler: s324 -- Type > Convert Table to Text
     std::string table_header_black() const;         // category: helper: s324 -- the light header fill (the document's Black)

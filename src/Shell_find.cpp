@@ -538,6 +538,27 @@ void Shell::find_change(bool all) {  // helper
     find_show(next % static_cast<int>(m_hits.size()), false);
 }
 
+// s339: a hyperlink's words shown -- its page, the words selected.
+void Shell::show_link_use(const core::doc::LinkSpan& l) {  // helper
+    auto& cv = m_canvas_view.canvas();
+    const auto flow = layout::flow_story(m_doc, l.story);
+    if (l.row >= 0) {
+        const layout::CellRef ref{l.para, l.row, l.col};
+        const std::string fr = layout::cell_frame(flow, ref);
+        const auto* f = m_doc.as<core::Frame>(fr);
+        if (!f) { alert("Not on a page", "That link is in a table cell that doesn't fit its frames (overset)."); return; }
+        m_nav.select_items({f->owner});
+        cv.select_cell_text(fr, l.story, ref, {l.cpara, l.from}, {l.cpara, l.to});
+        return;
+    }
+    const core::TextPos a{l.para, l.from}, b{l.para, l.to};
+    const auto c = layout::caret_at(m_doc, l.story, flow, a);
+    if (!c.ok) { alert("Not on a page", flow.frames.empty() ? "That link's story isn't placed." : "That link's words are overset."); return; }
+    const auto* f = m_doc.as<core::Frame>(c.frame);
+    m_nav.select_items({f->owner});
+    cv.select_text(c.frame, a, b, true);
+}
+
 }  // namespace composix
 
 namespace composix {

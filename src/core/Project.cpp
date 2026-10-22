@@ -875,7 +875,17 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             }
             act.buttons = true;
             fields.push_back(act);
-            o.add({*it, G::Layers, l.name, badge, {K::Section, 1, 1}, fields});
+            Thumb lth{K::Section, 1, 1};   // s341: its colour, for the row's chip ("" the usual blue)
+            lth.rgb = 0x3585e3;
+            {
+                Frame probe;
+                probe.layer = *it;
+                double c3[3];
+                if (doc::layer_rgb(d, probe, c3))
+                    lth.rgb = (static_cast<std::uint32_t>(std::lround(c3[0] * 255)) << 16) | (static_cast<std::uint32_t>(std::lround(c3[1] * 255)) << 8) |
+                              static_cast<std::uint32_t>(std::lround(c3[2] * 255));
+            }
+            o.add({*it, G::Layers, l.name, badge, lth, fields});
         }
     }
 
@@ -915,6 +925,29 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                        {w, {"Story", sname}, {"Number", std::to_string(n) + " in the story"}, {"In", in.empty() ? "\u2014" : in}, go}});
             }
         }
+    }
+
+    // ── s339: Hyperlinks -- each target once, its uses ──────────────────────
+    for (const auto& u : doc::link_uses(d)) {
+        const auto& first = u.uses.front();
+        const std::string where = doc::link_where(d, u.target);
+        const int n = static_cast<int>(u.uses.size());
+        Field to{"Goes to", u.target, "link_to"};
+        to.text = true;
+        std::string words;
+        for (const auto& l : u.uses) {
+            if (!words.empty()) words += " \u00b7 ";
+            words += "\u201c" + l.words + "\u201d";
+            if (words.size() > 160) { words += " \u2026"; break; }
+        }
+        const auto* st = d.as<Story>(first.story);
+        Field act{"", "", "link_act", {{"first", "Show First"}, {"remove", "Remove Link"}}};
+        act.buttons = true;
+        Thumb th{K::Text, 6, 9};
+        th.sample = first.words;
+        o.add({"link:" + u.target, G::Links, where, u.broken ? "Broken" : n > 1 ? std::to_string(n) + " uses" : "", th,
+               {to, {"Shows as", where}, {"Used", n == 1 ? "Once" : std::to_string(n) + " times"}, {"Words", words},
+                {"First in", (st ? st->name : first.story) + (first.row >= 0 ? " (a table)" : "")}, act}});
     }
 
     // ── Generated lists ─────────────────────────────────────────────────────

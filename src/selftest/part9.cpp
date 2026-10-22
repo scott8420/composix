@@ -3443,5 +3443,137 @@ void part9() {
                 for (const auto& fl : it.fields) row = row || (fl.edit == "layer_color" && fl.value == D::layer_colors()[2].name);
         check("layers card: its Colour row", row);
     }
+    // -- s339: the Hyperlinks list; a link's target changed everywhere ------------------
+    {
+        std::cout << "--- s339 hyperlinks ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto base = D::link_uses(d).size();
+        D::set_link(j, d, "story.1", {1, 0}, {1, 4}, "example.com");
+        D::set_link(j, d, "story.1", {2, 0}, {2, 3}, "https://example.com");
+        D::set_link(j, d, "story.1", {3, 0}, {3, 2}, "a@b.org");
+        const int p = D::insert_table(j, d, "story.1", {4, 0}, D::make_table(2, 2, 160));
+        D::edit_cell(j, d, "story.1", p, 1, 1, {0, 0}, {0, 0}, "see the site");
+        D::edit_table(j, d, "story.1", p, "x", [](core::Table& t) {
+            core::Run r;
+            r.start = 4; r.end = 12; r.local.link = "https://example.com";
+            t.rows[1].cells[1].paras[0].runs = {r};
+        });
+        const auto all = D::hyperlinks(d);
+        int cells = 0;
+        for (const auto& l : all) if (l.row == 1 && l.col == 1 && l.cpara == 0 && l.words == "the site") ++cells;
+        check("links: a cell's found, its words and place", cells == 1);
+        const auto us = D::link_uses(d);
+        const D::LinkUse* ex = nullptr;
+        for (const auto& u : us) if (u.target == "https://example.com") ex = &u;
+        check("link uses: each target once, its uses in reading order", us.size() == base + 2 && ex && ex->uses.size() == 3 &&
+                                                                         ex->uses[0].para == 1 && ex->uses[1].para == 2 && ex->uses[2].row == 1);
+        const auto o = core::project(d, "");
+        bool item = false;
+        for (const auto& it : o.items())
+            if (it.id == "link:https://example.com" && it.segment == core::Segment::Links && it.badge == "3 uses") item = true;
+        check("outline: a Hyperlinks item per target", item);
+        const auto before = core::to_json(d);
+        const auto n0 = j.size();
+        check("retarget: every use, one step", D::retarget_links(j, d, "https://example.com", "www.example.org") == 3 && j.size() == n0 + 1 && d.strays() == 0);
+        bool moved = true;
+        for (const auto& l : D::hyperlinks(d)) moved = moved && l.target != "https://example.com";
+        int now = 0;
+        for (const auto& l : D::hyperlinks(d)) now += l.target == "https://www.example.org";
+        check("retarget: none left at the old, all at the new (normalised), the cell's too", moved && now == 3);
+        check("retarget: the same -- nothing", D::retarget_links(j, d, "https://www.example.org", "https://www.example.org") == 0);
+        check("remove: the link taken off, the words kept", D::retarget_links(j, d, "mailto:a@b.org", "") == 1 &&
+                                                            D::link_uses(d).size() == base + 1);
+        j.undo();
+        j.undo();
+        check("retarget: undone", core::to_json(d) == before);
+        // the segment once, in order
+        int seen = 0;
+        for (const auto& si : core::segments()) seen += si.id == core::Segment::Links;
+        check("segments: Hyperlinks once", seen == 1);
+    }
+    // -- s340: a cell's links in the PDF; its links and misspelled words marked ----------
+    {
+        std::cout << "--- s340 cell links and marks ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(2, 2, 160));
+        D::edit_cell(j, d, "story.1", p, 0, 1, {0, 0}, {0, 0}, "see the site");
+        D::edit_table(j, d, "story.1", p, "x", [](core::Table& t) {
+            core::Run r;
+            r.start = 4; r.end = 12; r.local.link = "https://example.com";
+            t.rows[0].cells[1].paras[0].runs = {r};
+        });
+        L::FlowCache flows;
+        const std::string fr = L::cell_frame(flows.get(d, "story.1"), L::CellRef{p, 0, 1});
+        int marked = 0;
+        for (const auto& m : L::text_marks(d, flows, fr, false, true))
+            marked += m.kind == L::TextMark::Link && m.row == 0 && m.col == 1 && m.cpara == 0 && m.from == 4 && m.to == 12 && m.box.w > 0;
+        check("marks: a cell's link marked on screen", marked >= 1, std::to_string(marked));
+        int pdf = 0;
+        const auto page = d.as<core::Frame>(fr)->owner;
+        for (const auto& l : L::hyperlink_links(d, flows)) pdf += l.uri == "https://example.com" && l.page == page && l.box.w > 0;
+        check("pdf: a cell's link a live box on its page", pdf >= 1, std::to_string(pdf));
+        if (core::spell::loaded()) {
+            D::edit_cell(j, d, "story.1", p, 1, 0, {0, 0}, {0, 0}, "qwzxv words");
+            int waved = 0;
+            for (const auto& m : L::text_marks(d, flows, fr, true, false)) waved += m.kind == L::TextMark::Misspelled && m.row == 1 && m.col == 0 && m.from == 0 && m.to == 5;
+            check("marks: a cell's misspelled word waved", waved >= 1, std::to_string(waved));
+        }
+    }
+    // -- s340: Ctrl+K in a cell -------------------------------------------------------
+    {
+        std::cout << "--- s340 links typed in a cell ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(2, 2, 160));
+        D::edit_cell(j, d, "story.1", p, 1, 1, {0, 0}, {0, 0}, "see the site");
+        const auto n0 = j.size();
+        check("cell link: one step", D::set_cell_link(j, d, "story.1", p, 1, 1, {0, 4}, {0, 12}, "example.com") && j.size() == n0 + 1);
+        int found = 0;
+        for (const auto& l : D::hyperlinks(d)) found += l.row == 1 && l.col == 1 && l.target == "https://example.com" && l.words == "the site";
+        check("cell link: normalised, found", found == 1);
+        check("cell link: off again", D::set_cell_link(j, d, "story.1", p, 1, 1, {0, 4}, {0, 12}, ""));
+        // to a paragraph (one with no anchor yet): the anchor made, the link not broken
+        const int to = 3;
+        check("cell link to a paragraph: one step", D::cell_link_to_paragraph(j, d, "story.1", p, 1, 1, {0, 0}, {0, 3}, "story.1", to + (to >= p ? 1 : 0)));
+        bool ok = false;
+        for (const auto& l : D::hyperlinks(d)) if (l.row == 1 && l.col == 1) ok = l.target.size() > 1 && l.target[0] == '#' && !l.broken;
+        check("cell link to a paragraph: its anchor made, not broken", ok);
+        check("cell link to a paragraph: the table's own refused", !D::cell_link_to_paragraph(j, d, "story.1", p, 1, 1, {0, 0}, {0, 3}, "story.1", p));
+        check("cell link: the table still where it was", D::table_at(d, "story.1", p) != nullptr);
+    }
+    // -- s341: a layer dragged into another place; its colour on its row -----------------
+    {
+        std::cout << "--- s341 layer rows ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto b = D::add_layer(j, d);   // the first named too: [first, b]
+        const auto c = D::add_layer(j, d);   // [first, b, c]
+        const auto a = D::layers(d).front();
+        check("drop: c below a -- the bottom", D::move_layer_by(j, d, c, a, false) && D::layers(d) == std::vector<std::string>{c, a, b});
+        check("drop: c above b -- the top", D::move_layer_by(j, d, c, b, true) && D::layers(d) == std::vector<std::string>{a, b, c});
+        check("drop: where it already is -- nothing", !D::move_layer_by(j, d, c, b, true) && !D::move_layer_by(j, d, c, c, true));
+        check("drop: a between", D::move_layer_by(j, d, a, c, false) && D::layers(d) == std::vector<std::string>{b, a, c});
+        j.undo();
+        check("drop: undone", D::layers(d) == std::vector<std::string>{a, b, c});
+        const auto o = core::project(d, "");
+        bool rgb = false;
+        for (const auto& it : o.items())
+            if (it.id == b) rgb = it.thumb.rgb == 0xe63c3c;   // the second layer: Red
+        check("layers card: a row carries its colour", rgb);
+    }
 }
 }  // namespace cxtest

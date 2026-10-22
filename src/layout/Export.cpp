@@ -880,23 +880,46 @@ std::vector<PdfLink> hyperlink_links(const core::Doc& d, FlowCache& flows) {   /
                 else
                     here.push_back({sid, static_cast<int>(p), r.start, r.end, r.local.link, {}, false});
             }
-        for (const auto& span : here) {
-            PdfLink proto;
-            if (span.target.rfind("page:", 0) == 0) {   // s311: to a page's top
-                const auto pid = span.target.substr(5);
-                if (!d.as<core::Page>(pid)) continue;
+        // s340: where a target goes, for the PDF (false: nowhere -- a gone anchor / page)
+        const auto proto_of = [&](const std::string& target, PdfLink& proto) {
+            if (target.rfind("page:", 0) == 0) {   // s311: to a page's top
+                const auto pid = target.substr(5);
+                if (!d.as<core::Page>(pid)) return false;
                 proto.to = pid;
                 proto.to_y = 0;
-            } else if (span.target[0] == '#') {
-                const auto id = span.target.substr(1);
+            } else if (target[0] == '#') {
+                const auto id = target.substr(1);
                 auto it = dests.find(id);
                 if (it == dests.end()) it = dests.emplace(id, anchor_dest(d, flows, id)).first;
-                if (it->second.page.empty()) continue;
+                if (it->second.page.empty()) return false;
                 proto.to = it->second.page;
                 proto.to_y = it->second.y;
             } else {
-                proto.uri = span.target;
+                proto.uri = target;
             }
+            return true;
+        };
+        // s340: a table's cells' links -- the cell's words' boxes, frame by frame
+        for (const auto& span : spans) {
+            if (span.row < 0) continue;
+            PdfLink proto;
+            if (!proto_of(span.target, proto)) continue;
+            const CellRef ref{span.para, span.row, span.col};
+            for (const auto& ft : flow.frames) {
+                const auto* f = d.as<core::Frame>(ft.frame);
+                if (!f || f->rot != 0 || !d.as<core::Page>(f->owner)) continue;
+                for (const auto& r : cell_selection_rects(d, sid, flow, ft.frame, ref, {span.cpara, span.from}, {span.cpara, span.to})) {
+                    if (r.w <= 0) continue;
+                    PdfLink l = proto;
+                    l.page = f->owner;
+                    l.box = {f->x + r.x, f->y + r.y, r.w, r.h};
+                    out.push_back(std::move(l));
+                }
+            }
+        }
+        for (const auto& span : here) {
+            PdfLink proto;
+            if (!proto_of(span.target, proto)) continue;
             for (const auto& ft : flow.frames) {
                 const auto* f = d.as<core::Frame>(ft.frame);
                 if (!f || f->rot != 0 || !d.as<core::Page>(f->owner)) continue;
@@ -949,6 +972,42 @@ std::vector<TextMark> text_marks(const core::Doc& d, FlowCache& flows, const std
             }
             if (a >= 0) add(TextMark::Link, p, a, b);
         }
+        // s340: a table's cells set in this frame -- their misspelled words and links too
+        for (const auto& t : para.tables)
+            for (int r = 0; r < static_cast<int>(t.rows.size()); ++r) {
+                if (std::none_of(ft->lines.begin(), ft->lines.end(), [&](const Line& l) { return l.para == p && l.row == r; })) continue;
+                for (int c = 0; c < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()); ++c) {
+                    if (core::doc::owner_of(t, r, c) != std::pair<int, int>{r, c}) continue;
+                    const auto& cell = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+                    const CellRef ref{p, r, c};
+                    const auto cadd = [&](TextMark::Kind k, int q, int a, int b) {
+                        for (const auto& rr : cell_selection_rects(d, sid, flow, frame, ref, {q, a}, {q, b})) {
+                            if (rr.w <= 0) continue;
+                            TextMark m{k, rr, p, a, b};
+                            m.row = r;
+                            m.col = c;
+                            m.cpara = q;
+                            out.push_back(m);
+                        }
+                    };
+                    for (int q = 0; q < static_cast<int>(cell.paras.size()); ++q) {
+                        const auto& cp = cell.paras[static_cast<std::size_t>(q)];
+                        if (spelling && core::spell::loaded())
+                            for (const auto& w : core::spell::para_misses(cp.text, q)) cadd(TextMark::Misspelled, q, w.from, w.to);
+                        if (links) {
+                            int a = -1, b = -1;
+                            std::string at;
+                            for (const auto& rn : cp.runs) {
+                                if (rn.local.link.empty()) continue;
+                                if (a >= 0 && rn.start == b && rn.local.link == at) { b = rn.end; continue; }
+                                if (a >= 0) cadd(TextMark::Link, q, a, b);
+                                a = rn.start; b = rn.end; at = rn.local.link;
+                            }
+                            if (a >= 0) cadd(TextMark::Link, q, a, b);
+                        }
+                    }
+                }
+            }
     }
     return out;
 }

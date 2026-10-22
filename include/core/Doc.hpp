@@ -1341,6 +1341,9 @@ std::string layer_color_name(const std::string& hex);   // "Custom" when it isn'
 bool layer_rgb(const Doc& d, const Frame& f, double rgb[3]);
 // A layer moved to place `index` (0 the bottom). One step.
 bool move_layer(DocJournal& j, Doc& d, const Doc::Id& layer, int index);
+// s341: a layer dropped just above (`above`) or below `onto` in the stack.
+// One step; false when it is already there.
+bool move_layer_by(DocJournal& j, Doc& d, const Doc::Id& layer, const Doc::Id& onto, bool above);
 // A layer gone, its frames deleted with it (InDesign) -- or, `keep`, moved to
 // the layer under it (the one above when it was the bottom). The last layer
 // can't go. One step.
@@ -1721,13 +1724,34 @@ struct LinkSpan {
     int para = 0, from = 0, to = 0;   // bytes in that paragraph
     std::string target, words;
     bool broken = false;
+    // s339: in a table's cell -- `para` the table's paragraph, the cell
+    // (row, col), from / to bytes in its paragraph `cpara`. -1: in the text.
+    int row = -1, col = -1, cpara = -1;
     bool operator==(const LinkSpan&) const = default;
 };
 std::vector<LinkSpan> links_in(const Doc& d, const Doc::Id& story);
-std::vector<LinkSpan> hyperlinks(const Doc& d);
+std::vector<LinkSpan> hyperlinks(const Doc& d);   // s339: the stories' in reading order, a table's cells where it stands
+// s339: the document's links by where they go -- each target once, in the
+// order first met: its uses (in reading order), broken or not.
+struct LinkUse {
+    std::string target;
+    std::vector<LinkSpan> uses;
+    bool broken = false;
+};
+std::vector<LinkUse> link_uses(const Doc& d);
+// s339: every use of link `from` -- in the text, notes and cells -- goes to
+// `to` instead (as normal_link gives it; "" takes the link off). One step;
+// how many runs changed.
+int retarget_links(DocJournal& j, Doc& d, const std::string& from, const std::string& to);
 // s311: a link to a paragraph -- its anchor (the first at its start, else
 // one made there) -- over [a, b). One step.
 bool link_to_paragraph(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& to_story, int to_para);
+// s340: the same two in a table's cell -- [a, b) of cell (row, col)'s words
+// (the table at paragraph `para`) a link to `target` ("" off), or to a
+// paragraph (its anchor, made when it has none). One step each.
+bool set_cell_link(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b, const std::string& target);
+bool cell_link_to_paragraph(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
+                            const Doc::Id& to_story, int to_para);
 // s311: a link to a page: "page:" and its id (to its top). links_in calls it
 // broken when the page is gone.
 std::string page_link(const Doc::Id& page);

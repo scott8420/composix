@@ -3,6 +3,7 @@
 #include "core/Spell.hpp"
 
 #include <map>
+#include <tuple>
 #include <algorithm>
 #include <cstdlib>
 #include <memory>
@@ -1841,6 +1842,17 @@ bool move_layer(DocJournal& j, Doc& d, const Doc::Id& layer, int index) {
             d.put(ls[k], l);
         }
     });
+}
+
+bool move_layer_by(DocJournal& j, Doc& d, const Doc::Id& layer, const Doc::Id& onto, bool above) {   // s341
+    if (layer == onto) return false;
+    auto ls = d.ids_of<Layer>();
+    if (std::find(ls.begin(), ls.end(), layer) == ls.end()) return false;
+    ls.erase(std::remove(ls.begin(), ls.end(), layer), ls.end());
+    const auto at = std::find(ls.begin(), ls.end(), onto);
+    if (at == ls.end()) return false;
+    const int idx = static_cast<int>(at - ls.begin());
+    return move_layer(j, d, layer, above ? idx + 1 : idx);
 }
 
 bool delete_layer(DocJournal& j, Doc& d, const Doc::Id& layer, bool keep) {
@@ -4681,7 +4693,42 @@ std::vector<LinkSpan> links_in(const Doc& d, const Doc::Id& story) {   // s303
                 out.push_back({story, static_cast<int>(p), r.start, r.end, r.local.link, {}, false});
         }
     }
+    // s339: a table's cells -- after the text's (sorted into place below)
+    for (std::size_t p = 0; p < st->paras.size(); ++p)
+        for (const auto& t : st->paras[p].tables)
+            for (int r = 0; r < static_cast<int>(t.rows.size()); ++r)
+                for (int c = 0; c < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()); ++c) {
+                    if (owner_of(t, r, c) != std::pair<int, int>{r, c}) continue;
+                    const auto& cell = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+                    for (int q = 0; q < static_cast<int>(cell.paras.size()); ++q) {
+                        const auto& cp = cell.paras[static_cast<std::size_t>(q)];
+                        bool run_on = false;
+                        for (const auto& rn : cp.runs) {
+                            if (rn.local.link.empty() || rn.end <= rn.start) { run_on = false; continue; }
+                            if (run_on && out.back().to == rn.start && out.back().target == rn.local.link) { out.back().to = rn.end; continue; }
+                            LinkSpan l{story, static_cast<int>(p), rn.start, rn.end, rn.local.link, {}, false};
+                            l.row = r;
+                            l.col = c;
+                            l.cpara = q;
+                            l.words = cp.text.substr(static_cast<std::size_t>(rn.start), static_cast<std::size_t>(rn.end - rn.start));
+                            out.push_back(l);
+                            run_on = true;
+                        }
+                    }
+                }
+    for (auto& l : out) if (l.row >= 0) {   // the words grown by runs joined
+        const auto& cp = table_at(d, story, l.para)->rows[static_cast<std::size_t>(l.row)].cells[static_cast<std::size_t>(l.col)].paras[static_cast<std::size_t>(l.cpara)];
+        l.words = cp.text.substr(static_cast<std::size_t>(l.from), static_cast<std::size_t>(l.to - l.from));
+    }
+    std::stable_sort(out.begin(), out.end(), [](const LinkSpan& x, const LinkSpan& y) {
+        return std::tie(x.para, x.row, x.col, x.cpara, x.from) < std::tie(y.para, y.row, y.col, y.cpara, y.from);
+    });
     for (auto& l : out) {
+        if (l.row >= 0) {
+            l.broken = (l.target.size() > 1 && l.target[0] == '#' && find_anchor(d, l.target.substr(1)).story.empty()) || l.target == "#" ||
+                       (l.target.rfind("page:", 0) == 0 && !d.as<Page>(l.target.substr(5)));
+            continue;
+        }
         const auto& text = st->paras[static_cast<std::size_t>(l.para)].text;
         l.words = text.substr(static_cast<std::size_t>(l.from), static_cast<std::size_t>(l.to - l.from));
         l.broken = l.target.size() > 1 && l.target[0] == '#' && find_anchor(d, l.target.substr(1)).story.empty();
@@ -4693,11 +4740,59 @@ std::vector<LinkSpan> links_in(const Doc& d, const Doc::Id& story) {   // s303
 
 std::vector<LinkSpan> hyperlinks(const Doc& d) {   // s303
     std::vector<LinkSpan> out;
-    for (const auto& sid : d.ids_of<Story>()) {
+    for (const auto& sid : stories_in_order(d)) {   // s339: reading order (was by id)
         auto v = links_in(d, sid);
         out.insert(out.end(), v.begin(), v.end());
     }
     return out;
+}
+
+std::vector<LinkUse> link_uses(const Doc& d) {   // s339
+    std::vector<LinkUse> out;
+    std::map<std::string, std::size_t> at;
+    for (auto& l : hyperlinks(d)) {
+        auto it = at.find(l.target);
+        if (it == at.end()) {
+            it = at.emplace(l.target, out.size()).first;
+            out.push_back({l.target, {}, false});
+        }
+        auto& u = out[it->second];
+        u.broken = u.broken || l.broken;
+        u.uses.push_back(std::move(l));
+    }
+    return out;
+}
+
+int retarget_links(DocJournal& j, Doc& d, const std::string& from, const std::string& to_typed) {   // s339
+    if (from.empty()) return 0;
+    const std::string to = normal_link(to_typed);
+    if (to == from) return 0;
+    int n = 0;
+    std::vector<std::pair<Doc::Id, Story>> changed;
+    const auto fix = [&](std::vector<Run>& runs) {
+        for (auto& r : runs)
+            if (r.local.link == from) { r.local.link = to; ++n; }
+    };
+    for (const auto& sid : d.ids_of<Story>()) {
+        Story s = *d.as<Story>(sid);
+        const int n0 = n;
+        for (auto& p : s.paras) {
+            fix(p.runs);
+            for (auto& note : p.notes) fix(note.runs);
+            for (auto& t : p.tables)
+                for (auto& row : t.rows)
+                    for (auto& c : row.cells)
+                        for (auto& cp : c.paras) fix(cp.runs);
+        }
+        if (n > n0) changed.emplace_back(sid, std::move(s));
+    }
+    if (changed.empty()) return 0;
+    std::vector<Doc::Id> ids;
+    for (const auto& c : changed) ids.push_back(c.first);
+    j.run(to.empty() ? "Remove Hyperlink" : "Hyperlink Target", ids, [&] {
+        for (auto& c : changed) d.put(c.first, std::move(c.second));
+    });
+    return n;
 }
 
 std::string page_link(const Doc::Id& page) { return "page:" + page; }   // s311
@@ -4723,6 +4818,32 @@ bool link_to_paragraph(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, T
         did = set_link(j, d, story, a, b, "#" + id) || !id.empty();
     });
     return did;
+}
+
+bool set_cell_link(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
+                   const std::string& target) {   // s340
+    const std::string to = normal_link(target);
+    return set_cell_local(j, d, story, para, row, col, a, b, to.empty() ? "Remove hyperlink" : "Hyperlink", [&](Local& l) { l.link = to; });
+}
+
+bool cell_link_to_paragraph(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
+                            const Doc::Id& to_story, int to_para) {   // s340
+    const auto* ts = d.as<Story>(to_story);
+    if (!ts || to_para < 0 || to_para >= static_cast<int>(ts->paras.size())) return false;
+    if (story == to_story && to_para == para) return false;   // the table's own paragraph: not a place
+    const auto* t = table_at(d, story, para);
+    if (!t || owner_of(*t, row, col) != std::pair<int, int>{row, col}) return false;
+    if (b < a) std::swap(a, b);
+    if (a == b) return false;
+    std::string id;
+    {
+        const auto& tp = ts->paras[static_cast<std::size_t>(to_para)];
+        if (tp.text.rfind(kMarkAnchor, 0) == 0 && !tp.anchors.empty()) id = tp.anchors.front();
+    }
+    return j.run("Hyperlink", {story, to_story}, [&] {
+        if (id.empty()) id = insert_anchor(j, d, to_story, {to_para, 0});   // within its own paragraph: the table keeps its place
+        set_cell_local(j, d, story, para, row, col, a, b, "Hyperlink", [&](Local& l) { l.link = "#" + id; });
+    });
 }
 
 std::vector<LinkPlace> link_places(const Doc& d) {   // s311
@@ -6842,6 +6963,13 @@ const std::vector<Verb>& verbs() {
              const int p = insert_table(j, d, "story.1", {1, 10}, make_table(2, 2, 200));
              edit_cell(j, d, "story.1", p, 0, 0, {0, 0}, {0, 0}, "Dover Sole");
              set_cell_char_style(j, d, "story.1", p, 0, 0, {0, 0}, {0, 5}, "style.5");
+             j.commit();
+         }},
+        {"set_cell_link", [](DocJournal& j, Doc& d) {   // s340
+             j.begin("Table", {"story.1"});
+             const int p = insert_table(j, d, "story.1", {1, 10}, make_table(2, 2, 200));
+             edit_cell(j, d, "story.1", p, 0, 0, {0, 0}, {0, 0}, "the site");
+             set_cell_link(j, d, "story.1", p, 0, 0, {0, 4}, {0, 8}, "example.com");
              j.commit();
          }},
         {"cell_border", [](DocJournal& j, Doc& d) {   // s334

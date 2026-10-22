@@ -17,6 +17,7 @@ const std::vector<SegmentInfo>& segments() {
         {Segment::Notes,     "notes",     "Footnotes",       "composix-footnote-symbolic"},   // s115 (bundled)
         {Segment::Styles,    "styles",    "Styles",          "format-text-bold-symbolic"},
         {Segment::Assets,    "assets",    "Links & Assets",  "image-x-generic-symbolic"},
+        {Segment::Links,     "hyperlinks","Hyperlinks",      "insert-link-symbolic"},   // s339
         {Segment::Colors,    "colors",    "Colors",          "applications-graphics-symbolic"},
         {Segment::Generated, "generated", "Contents & Index","view-list-bullet-symbolic"},
     };
