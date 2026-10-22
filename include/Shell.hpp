@@ -175,6 +175,11 @@ private:
     void ensure_spell();
     void on_insert_table();                         // category: handler: s318 -- Type > Insert Table...
     void on_edit_table();                           // category: handler: s318 -- Type > Edit Table...
+    // s333: formatting toggled on the words being typed in a table's cell
+    // (the word at the caret when nothing's selected): `all_on` -- is every
+    // character already so; `set` turns it on / off. One step.
+    void cell_local(const std::string& label, const std::function<bool(const core::Story&, core::TextPos, core::TextPos)>& all_on,
+                    const std::function<void(core::Local&, bool)>& set);
     void on_text_to_table();                        // category: handler: s324 -- Type > Convert Text to Table
     void on_table_to_text();                        // category: handler: s324 -- Type > Convert Table to Text
     std::string table_header_black() const;         // category: helper: s324 -- the light header fill (the document's Black)

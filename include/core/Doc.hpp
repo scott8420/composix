@@ -472,6 +472,14 @@ std::string ref_pattern(const XRef& r);
 // between rows from column to column, frame to frame, its header rows set
 // again at the top of each. A cell holds paragraphs of its own words.
 struct Para;
+// s334: one side of a cell's own border. w < 0: the table's grid; 0: none.
+struct CellBorder {
+    double      w = -1;                  // points
+    std::string color;                   // a swatch id ("" the grid's colour)
+    double      tint = 1;
+    bool operator==(const CellBorder&) const = default;
+};
+enum CellSide { kTop = 0, kRight = 1, kBottom = 2, kLeft = 3 };
 struct TableCell {
     std::vector<Para> paras;             // its words ("" style: the table's cell style); empty = one empty paragraph
     std::string fill;                    // a swatch id ("" none)
@@ -480,6 +488,7 @@ struct TableCell {
     // rows (the cells it covers kept, empty, not drawn).
     int         span_cols = 1, span_rows = 1;
     int         valign = 0;              // s321: its words at the top 0, middle 1, bottom 2
+    std::array<CellBorder, 4> borders;   // s334: its own -- top, right, bottom, left (CellSide)
     bool operator==(const TableCell&) const;
 };
 struct TableRow {
@@ -531,7 +540,7 @@ struct Para {
     bool operator==(const Para&) const = default;
 };
 inline bool TableCell::operator==(const TableCell& o) const {
-    return paras == o.paras && fill == o.fill && fill_tint == o.fill_tint && span_cols == o.span_cols && span_rows == o.span_rows && valign == o.valign;
+    return paras == o.paras && fill == o.fill && fill_tint == o.fill_tint && span_cols == o.span_cols && span_rows == o.span_rows && valign == o.valign && borders == o.borders;
 }
 
 struct Story {
@@ -1625,6 +1634,21 @@ bool table_set_row_height(Table& t, int r, double h);
 // header row); else the bands' (a body row in a filled run). "" none;
 // `tint` set when one.
 std::string table_cell_fill(const Table& t, int r, int c, double* tint = nullptr);
+// s334: a shared edge's line -- between owner cells `a` (its side `sa`) and
+// `b` (its side `sb`; {-1, -1} at the table's outside): a cell's own border
+// where one is set (both set: the wider; a tie: a's), else the grid's.
+// w 0: none.
+struct EdgeLook {
+    double      w = 0;
+    std::string color;
+    double      tint = 1;
+};
+EdgeLook table_edge_look(const Table& t, std::pair<int, int> a, int sa, std::pair<int, int> b, int sb);
+// s334: the cell at (r, c) -- a merge's own cell -- its `sides` (bits: 1
+// top, 2 right, 4 bottom, 8 left) set to `b` (w < 0: back to the grid);
+// the cells across each of those edges take it on their facing side too,
+// so a shared edge is one line. True when it changed.
+bool table_set_border(Table& t, int r, int c, int sides, const CellBorder& b);
 // s324: paragraphs [p0, p1] a table -- each paragraph a row, its tabs
 // between the cells (as many columns as the row with most); the words keep
 // their character formatting; `header_rows` (clamped) the header. The table
@@ -1650,6 +1674,11 @@ TextPos edit_cell(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row
                   const std::string& text, const std::string& label = "Typing", const std::string& merge_key = {});
 // The cell's end (its last paragraph's end; {0, 0} empty).
 TextPos cell_end(const TableCell& c);
+// s333: formatting on [a, b) of cell (row, col)'s words -- a merge's own
+// cell; places over ITS paragraphs -- as set_local does in a story. One
+// step (a covered cell, an empty range, no change: false).
+bool set_cell_local(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
+                    const std::string& label, const std::function<void(Local&)>& f, const std::string& merge_key = {});
 // The next (dir +1) / previous (-1) cell in reading order -- across, then
 // down; a merge's covered cells passed over. {-1, -1} past either end.
 std::pair<int, int> next_cell(const Table& t, int r, int c, int dir);
@@ -1954,6 +1983,9 @@ struct Hit {
     // s113: a hit in a footnote's words -- paragraph a.para's note-th note,
     // a.byte .. b.byte in its words. -1: in the text.
     int note = -1;
+    // s335: a hit in a table's cell -- the table at paragraph `table`, its
+    // cell (row, col), a .. b over the CELL's paragraphs. -1: not in a cell.
+    int table = -1, row = -1, col = -1;
     bool operator==(const Hit&) const = default;
 };
 // s056: is `f.what` a pattern that reads (Wildcards / Regex)? `err` says

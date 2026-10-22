@@ -176,7 +176,7 @@ target_link_directories(composix_layout PUBLIC ${PANGOCAIRO_LIBRARY_DIRS})
 target_compile_options(composix_layout PUBLIC ${PANGOCAIRO_CFLAGS_OTHER})
 
 # ── Headless selftest -- exercises the core with no display ────────────────────
-# s196: its blocks in eight files, so they compile side by side (one file was
+# s196: its blocks in several files (nine as of s335), so they compile side by side (one file was
 # the build's slowest by far). src/selftest/Selftest.hpp says how to add one.
 add_executable(composix_selftest src/selftest.cpp
     src/selftest/part1.cpp src/selftest/part2.cpp src/selftest/part3.cpp src/selftest/part4.cpp
@@ -278,7 +278,7 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s331")
+set(COMPOSIX_BUILD "s335")
 # s194: on the About window's file alone -- on the whole target, each bump
 # rebuilt every app file and missed ccache.
 set_source_files_properties(src/AboutWindow.cpp PROPERTIES

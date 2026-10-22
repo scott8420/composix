@@ -306,6 +306,7 @@ void Shell::on_find() {  // handler
     auto& cv = m_canvas_view.canvas();
     m_find_story.clear();
     m_find_from = m_find_to = {};
+    if (!cv.editing() && cv.cell_editing()) m_find_story = cv.cell_story();   // s335: typing in a cell -- This story is the table's
     if (cv.editing()) {
         const auto [a, b] = cv.edit_range();
         m_find_story = cv.edit_story_id();
@@ -395,6 +396,26 @@ void Shell::find_show(int i, bool focus) {  // helper
     } else {
         close_find_note();
     }
+    if (h.table >= 0) {   // s335: in a table's cell -- typing in it, the words selected
+        close_find_note();
+        auto& cv = m_canvas_view.canvas();
+        const layout::CellRef ref{h.table, h.row, h.col};
+        const std::string fr = layout::cell_frame(layout::flow_story(m_doc, h.story), ref);
+        const auto* f = m_doc.as<core::Frame>(fr);
+        if (!f) {
+            find_status(std::to_string(i + 1) + " of " + std::to_string(m_hits.size()) + " (in a table, overset)");
+            return;
+        }
+        m_nav.select_items({f->owner});
+        cv.select_cell_text(fr, h.story, ref, h.a, h.b);
+        if (had) {
+            if (had == m_find_what || had->is_ancestor(*m_find_what)) m_find_what->grab_focus_without_selecting();
+            else if (had == m_find_with || had->is_ancestor(*m_find_with)) m_find_with->grab_focus_without_selecting();
+            else had->grab_focus();
+        }
+        find_status(std::to_string(i + 1) + " of " + std::to_string(m_hits.size()) + " \u00b7 in a table");
+        return;
+    }
     const auto flow = layout::flow_story(m_doc, h.story);
     const auto c = layout::caret_at(m_doc, h.story, flow, a);
     if (!c.ok) {
@@ -442,6 +463,7 @@ void Shell::find_change(bool all) {  // helper
         const int n = core::doc::change_hits(m_journal, m_doc, m_hits,
                                              c, "Change All (" + std::to_string(m_hits.size()) + ")");
         cv.end_edit();
+        cv.end_cell();   // s335: a cell's words may have changed under its caret
         m_hit = -1;
         m_hits_rev = ~0ull;
         find_refresh();
@@ -452,6 +474,26 @@ void Shell::find_change(bool all) {  // helper
     // Change: the hit on show (else the first one, shown -- look before changing).
     if (m_hit < 0) { find_show(0, false); return; }
     const auto h = m_hits[static_cast<std::size_t>(m_hit)];
+    if (h.table >= 0) {   // s335: in a cell -- on to the next hit after what was put there
+        const int end = c.set_text ? h.a.byte + static_cast<int>(core::doc::change_text(c, h).size()) : h.b.byte;
+        const int end_para = h.a.para;
+        cv.end_cell();
+        core::doc::change_hits(m_journal, m_doc, {h}, c, "Change");
+        m_hits_rev = ~0ull;
+        find_refresh();
+        if (m_hits.empty()) { m_hit = -1; find_status("Done"); return; }
+        int next = -1;
+        for (int i = 0; i < static_cast<int>(m_hits.size()) && next < 0; ++i) {
+            const auto& x = m_hits[static_cast<std::size_t>(i)];
+            if (x.story == h.story && x.table == h.table && x.row == h.row && x.col == h.col &&
+                (x.a.para > end_para || (x.a.para == end_para && x.a.byte >= end)))
+                next = i;
+        }
+        if (next < 0) next = std::min(m_hit, static_cast<int>(m_hits.size()) - 1);
+        if (next >= 0 && m_hits[static_cast<std::size_t>(next)] == h) next = (next + 1) % static_cast<int>(m_hits.size());
+        find_show(next, false);
+        return;
+    }
     if (h.note >= 0) {   // s113: in a note -- on to the next hit after what was put there
         const int end = c.set_text ? h.a.byte + static_cast<int>(core::doc::change_text(c, h).size()) : h.b.byte;
         core::doc::change_hits(m_journal, m_doc, {h}, c, "Change");

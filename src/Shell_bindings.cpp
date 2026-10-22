@@ -29,6 +29,14 @@ void Shell::bind_actions() {  // bindings: actions + recents group
             // s049: typing in the story editor -- its words.
             if (m_story_ed.text_has_focus()) { m_story_ed.toggle_look(bold); return; }
             auto& cv = m_canvas_view.canvas();
+            if (cv.cell_editing()) {   // s333: typing in a cell -- its words
+                cell_local(bold ? "Bold" : "Italic",
+                           [this, bold](const core::Story& w, core::TextPos a, core::TextPos b) {
+                               return bold ? core::all_bold(m_doc, w, a, b) : core::all_italic(m_doc, w, a, b);
+                           },
+                           [bold](core::Local& l, bool on) { (bold ? l.bold : l.italic) = on ? 1 : 0; });
+                return;
+            }
             if (!cv.editing()) return;
             auto [a, b] = cv.edit_range();
             const auto story = cv.edit_story_id();
@@ -58,6 +66,10 @@ void Shell::bind_actions() {  // bindings: actions + recents group
         add_action(t.action, [this, t] {
             if (m_story_ed.text_has_focus()) { m_story_ed.toggle_char(t.label, t.has, t.set); return; }
             auto& cv = m_canvas_view.canvas();
+            if (cv.cell_editing()) {   // s333
+                cell_local(t.label, [this, t](const core::Story& w, core::TextPos a, core::TextPos b) { return core::all_look(m_doc, w, a, b, t.has); }, t.set);
+                return;
+            }
             if (!cv.editing()) return;
             auto [a, b] = cv.edit_range();
             const auto story = cv.edit_story_id();

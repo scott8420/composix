@@ -422,6 +422,7 @@ std::string table_row_key(const core::Table& t, int r) {
         for (const auto& c : row.cells) {
             k += "[" + c.fill + std::to_string(c.fill_tint) + "|" + std::to_string(c.span_cols) + "x" + std::to_string(c.span_rows) + "|" +
                  std::to_string(c.valign);
+            for (const auto& b : c.borders) k += "b" + std::to_string(b.w) + b.color + std::to_string(b.tint);   // s334
             for (const auto& p : c.paras) {
                 k += "{" + p.style + "|";
                 for (const auto& run : p.runs) {

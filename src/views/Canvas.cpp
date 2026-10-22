@@ -732,7 +732,7 @@ void Canvas::draw_page(const Cairo::RefPtr<Cairo::Context>& cr, const core::Plac
                         if (const int n = file.empty() ? 0 : images::arrivals(file)) var += "|i" + std::to_string(n);
                     }
     }
-    bool live = m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Gutter || m_drag == Drag::Tab || m_drag == Drag::TableCol ||
+    bool live = m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Gutter || m_drag == Drag::Tab || m_drag == Drag::TableCol || m_drag == Drag::TableRow ||
                 m_drag == Drag::Picture || m_drag == Drag::PicScale || clipped;
     if (!live && (editing() || cell_editing()))   // s330: typing in a cell too
         for (const auto& fid : m_doc.frames_on(p.id))
@@ -1806,6 +1806,12 @@ void Canvas::on_drag_begin(double x, double y) {
         m_drag = Drag::TableCol;
         return;
     }
+    // s332: ... a row's bottom edge (its least height; never below its words).
+    if (auto re = table_row_hit(x, y); re.ok()) {
+        m_redge = std::move(re);
+        m_drag = Drag::TableRow;
+        return;
+    }
     // Handles first (on the whole selection), then a frame, then empty space.
     if (!m_sel.empty()) {
         m_handle = pick_handle(x, y);
@@ -2123,6 +2129,19 @@ void Canvas::on_drag_update(double ox, double oy) {
         core::doc::edit_table(m_journal, m_doc, m_tedge.story, m_tedge.para, "Column width", [&](core::Table& t) {
             t.widths = m_tedge.widths0;
             core::doc::table_set_width(t, m_tedge.col, w);
+        });
+        queue_draw();
+        return;
+    }
+    case Drag::TableRow: {   // s332
+        if (!m_begun) {
+            if (std::abs(oy) < 2) return;
+            m_journal.begin("Row height", {m_redge.story});
+            m_begun = true;
+        }
+        const double h = std::max(0.0, m_redge.h0 + oy / s);
+        core::doc::edit_table(m_journal, m_doc, m_redge.story, m_redge.para, "Row height", [&](core::Table& t) {
+            core::doc::table_set_row_height(t, m_redge.row, h);
         });
         queue_draw();
         return;
@@ -2545,7 +2564,7 @@ void Canvas::on_drag_end(double, double) {
     }
     if (was == Drag::Guide && m_begun && m_guide_off)
         core::doc::guide_remove_in_gesture(m_journal, m_doc, m_guide);
-    if ((was == Drag::Move || was == Drag::Resize || was == Drag::Guide || was == Drag::Gutter || was == Drag::TableCol) && m_begun) {
+    if ((was == Drag::Move || was == Drag::Resize || was == Drag::Guide || was == Drag::Gutter || was == Drag::TableCol || was == Drag::TableRow) && m_begun) {
         m_begun = false;
         // s027: dragged across the spine (onto another shown page): that
         // page's now -- part of the drag's one step.
@@ -2564,7 +2583,7 @@ void Canvas::on_drag_end(double, double) {
 
 // Escape mid-drag: everything back where it was, no step.
 void Canvas::cancel_drag() {
-    if ((m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Guide || m_drag == Drag::Gutter || m_drag == Drag::TableCol ||
+    if ((m_drag == Drag::Move || m_drag == Drag::Resize || m_drag == Drag::Guide || m_drag == Drag::Gutter || m_drag == Drag::TableCol || m_drag == Drag::TableRow ||
          m_drag == Drag::Picture || m_drag == Drag::PicScale || m_drag == Drag::PathPoint || m_drag == Drag::PathStart || m_drag == Drag::PathEnd || m_drag == Drag::Rotate || m_drag == Drag::Skew) && m_begun) {   // s200: a picture's / a point's drag too
         core::doc::frames_cancel(m_journal);
         m_sig_edited.emit();
@@ -2740,6 +2759,7 @@ void Canvas::on_motion(double x, double y) {
     if (h != m_hover) { m_hover = h; queue_draw(); }
     m_hover_gutter = gutter_hit(x, y);
     m_hover_tedge = m_hover_gutter < 0 && table_edge_hit(x, y).ok();   // s327
+    m_hover_redge = m_hover_gutter < 0 && !m_hover_tedge && table_row_hit(x, y).ok();   // s332
     if (const bool sz = m_drag == Drag::None && skew_zone(x, y) != core::Handle::None; sz != m_skew_hover) { m_skew_hover = sz; queue_draw(); }   // s234
     if (const bool cz = m_drag == Drag::None && scale_corner(x, y); cz != m_scale_hover) { m_scale_hover = cz; queue_draw(); }
     if (const bool rz = m_drag == Drag::None && rotate_zone(x, y); rz != m_rot_hover) { m_rot_hover = rz; queue_draw(); }   // s231
@@ -2938,6 +2958,29 @@ Canvas::TableEdge Canvas::table_edge_hit(double sx, double sy) const {
     }
     if (te.ratio > 1) te.ratio = 1;
     return te;
+}
+
+// s332: within 4 px of a table row's bottom edge in the one picked text
+// frame (not turned), the Select tool -- the row and its drawn height.
+Canvas::RowEdgeHit Canvas::table_row_hit(double sx, double sy) const {
+    RowEdgeHit re;
+    if (m_sel.size() != 1 || editing() || m_tool != Tool::Select) return re;
+    const auto* f = m_doc.as<core::Frame>(m_sel.front());
+    if (!f || f->kind != core::FrameKind::Text || f->story.empty() || f->rot != 0 || f->shear != 0) return re;
+    const Rect lr = core::frame_in_layout(m_doc, m_placed, m_sel.front());
+    if (lr.w <= 0) return re;
+    double lx = 0, ly = 0;
+    m_vp.to_doc(sx, sy, lx, ly);
+    const double s = std::max(1e-6, m_vp.scale());
+    const auto e = layout::table_row_edge(m_doc, f->story, flows().get(m_doc, f->story), m_sel.front(), lx - lr.x, ly - lr.y, 4 / s);
+    if (!e.ok() || !core::doc::table_at(m_doc, f->story, e.para)) return re;
+    if (pick_handle(sx, sy) != core::Handle::None) return re;   // the frame's own handle wins (a table at the frame's foot)
+    re.frame = m_sel.front();
+    re.story = f->story;
+    re.para = e.para;
+    re.row = e.row;
+    re.h0 = e.height;
+    return re;
 }
 
 // ── s010: editing text ──────────────────────────────────────────────────────
@@ -3276,6 +3319,17 @@ void Canvas::begin_cell(const std::string& frame, const std::string& story, layo
     if (auto lg = log::get(log::Area::View)) lg->info("cell: typing in {} para {} ({}, {})", story, c.para, c.row, c.col);
     cell_follow();
     blink_restart();
+    m_sig_caret.emit();
+}
+
+void Canvas::select_cell_text(const std::string& frame, const std::string& story, layout::CellRef c, core::TextPos a, core::TextPos b) {   // s335
+    begin_cell(frame, story, c, b);
+    if (!cell_editing()) return;
+    const auto w = cell_words();
+    m_canchor = core::clamp_pos(w, a);
+    m_ccaret = core::clamp_pos(w, b);
+    cell_follow();
+    queue_draw();
     m_sig_caret.emit();
 }
 
@@ -3940,6 +3994,7 @@ void Canvas::update_cursor() {
         }
     }
     if (m_hover_gutter >= 0 || m_drag == Drag::Gutter || m_hover_tedge || m_drag == Drag::TableCol) { set_cursor(Gdk::Cursor::create("col-resize")); return; }   // s327: a table's column edge too
+    if (m_hover_redge || m_drag == Drag::TableRow) { set_cursor(Gdk::Cursor::create("row-resize")); return; }   // s332: a row's bottom edge
     if (!m_hover_guide.empty()) {
         const auto* g = m_doc.as<core::Guide>(m_hover_guide);
         set_cursor(Gdk::Cursor::create(g && g->vertical ? "col-resize" : "row-resize"));

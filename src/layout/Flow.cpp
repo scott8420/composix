@@ -3034,26 +3034,36 @@ void visit_tables(const core::Doc& d, const std::string& story, const StoryFlow&
                 f(p);
             }
         }
-        // the grid: each column edge, the row's top and bottom -- not inside a merge
-        if (t.rule_w > 0) {
-            const double hw = t.rule_w / 2;
-            const auto rule = [&](core::Rect rr) {
+        // the grid: each column edge, the row's top and bottom -- not inside a merge;
+        // s334: each edge the line its two cells call for (their own borders, else the grid's)
+        {
+            const auto rule = [&](core::Rect rr, const core::doc::EdgeLook& e) {
                 TablePiece p;
                 p.kind = TablePiece::Rule;
                 p.r = rr;
-                p.color = t.rule_color;
+                p.color = e.color;
+                p.tint = e.tint;
                 p.row = r;
                 f(p);
             };
+            const std::pair<int, int> none{-1, -1};
             for (int c = 0; c <= n; ++c) {
                 if (c > 0 && c < n && own(r, c - 1) == own(r, c)) continue;   // s319: inside a merge across
+                const auto e = core::doc::table_edge_look(t, c > 0 ? own(r, c - 1) : none, core::kRight, c < n ? own(r, c) : none, core::kLeft);
+                if (e.w <= 0) continue;
                 const double x = ln.x + (c < n ? g.col_x[static_cast<std::size_t>(c)] : g.width);
-                rule({x - hw, ln.y - hw, t.rule_w, ln.h + t.rule_w});
+                rule({x - e.w / 2, ln.y - e.w / 2, e.w, ln.h + e.w}, e);
             }
             for (int c = 0; c < n; ++c) {
                 const double x0 = ln.x + g.col_x[static_cast<std::size_t>(c)], w = g.col_w[static_cast<std::size_t>(c)];
-                if (!(r > 0 && own(r - 1, c) == own(r, c))) rule({x0 - hw, ln.y - hw, w + t.rule_w, t.rule_w});
-                if (!(r + 1 < R && own(r + 1, c) == own(r, c))) rule({x0 - hw, ln.y + ln.h - hw, w + t.rule_w, t.rule_w});
+                if (!(r > 0 && own(r - 1, c) == own(r, c))) {
+                    const auto e = core::doc::table_edge_look(t, own(r, c), core::kTop, r > 0 ? own(r - 1, c) : none, core::kBottom);
+                    if (e.w > 0) rule({x0 - e.w / 2, ln.y - e.w / 2, w + e.w, e.w}, e);
+                }
+                if (!(r + 1 < R && own(r + 1, c) == own(r, c))) {
+                    const auto e = core::doc::table_edge_look(t, own(r, c), core::kBottom, r + 1 < R ? own(r + 1, c) : none, core::kTop);
+                    if (e.w > 0) rule({x0 - e.w / 2, ln.y + ln.h - e.w / 2, w + e.w, e.w}, e);
+                }
             }
         }
     }

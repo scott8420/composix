@@ -3052,5 +3052,255 @@ void part9() {
         });
         check("page key: a cell's bold changes it", !(L::page_key(d, flows, page) == k1));
     }
+    // -- s332: a row's height -- at least, never cutting its words; its edge dragged --
+    {
+        std::cout << "--- s332 row heights ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(3, 2, 180));
+        {
+            core::Table t = D::make_table(3, 2, 180);
+            check("row height: set, half points", D::table_set_row_height(t, 1, 40.3) && t.rows[1].min_h == 40.5);
+            check("row height: the same again -- no change", !D::table_set_row_height(t, 1, 40.5));
+            check("row height: off the table refused", !D::table_set_row_height(t, 3, 20) && !D::table_set_row_height(t, -1, 20));
+            check("row height: never below 0", D::table_set_row_height(t, 0, -10) == false && t.rows[0].min_h == 0);
+        }
+        auto row_line = [&](int r, std::string* frame = nullptr) -> L::Line {
+            const auto fl = L::flow_story(d, "story.1");
+            for (const auto& ft : fl.frames)
+                for (const auto& l : ft.lines)
+                    if (l.para == p && l.row == r) { if (frame) *frame = ft.frame; return l; }
+            return {};
+        };
+        const double h0 = row_line(1).h;
+        check("row height: as its words need at first", h0 > 0 && h0 < 60, std::to_string(h0));
+        const auto before = core::to_json(d);
+        const auto n0 = j.size();
+        // as the canvas does: begin, the height from the start at each move, commit
+        j.begin("Row height", {"story.1"});
+        for (double h : {h0 + 10, h0 + 30, h0 + 50})
+            D::edit_table(j, d, "story.1", p, "Row height", [&](core::Table& t) { D::table_set_row_height(t, 1, h); });
+        check("row drag: one step at the end", j.commit() && j.size() == n0 + 1 && d.strays() == 0);
+        const double h1 = row_line(1).h;
+        check("row drag: the row as tall as dropped", std::abs(h1 - (h0 + 50)) < 0.6, std::to_string(h1));
+        check("row drag: the rows around it as they were", std::abs(row_line(0).h - h0) < 0.6 && std::abs(row_line(2).h - h0) < 0.6);
+        {
+            core::Doc e;
+            check("row height: saved", core::from_json(e, core::to_json(d)) && std::abs(D::table_at(e, "story.1", p)->rows[1].min_h - (h0 + 50)) < 0.6);
+        }
+        // its bottom edge found where it's drawn; not mid-row
+        std::string fr;
+        const auto ln = row_line(1, &fr);
+        const auto fl = L::flow_story(d, "story.1");
+        const auto e = L::table_row_edge(d, "story.1", fl, fr, ln.x + ln.w / 2, ln.y + ln.h + 1, 2);
+        check("row edge: found at the row's foot", e.ok() && e.para == p && e.row == 1 && std::abs(e.height - ln.h) < 1e-6);
+        check("row edge: none mid-row", !L::table_row_edge(d, "story.1", fl, fr, ln.x + ln.w / 2, ln.y + ln.h / 2, 2).ok());
+        // smaller than its words: the words win (never cut)
+        D::edit_table(j, d, "story.1", p, "Row height", [&](core::Table& t) { D::table_set_row_height(t, 1, 1); });
+        check("row height: less than the words need -- as tall as they need", std::abs(row_line(1).h - h0) < 0.6, std::to_string(row_line(1).h));
+        j.undo();
+        j.undo();
+        check("row drag: undone", core::to_json(d) == before);
+    }
+    // -- s333: formatting while typing in a cell ------------------------------------
+    {
+        std::cout << "--- s333 cell formatting ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(2, 2, 160));
+        D::edit_cell(j, d, "story.1", p, 0, 0, {0, 0}, {0, 0}, "Dover Sole\nCrab");
+        const auto before = core::to_json(d);
+        const auto n0 = j.size();
+        auto words = [&](int r, int c) {
+            core::Story s;
+            s.paras = D::table_at(d, "story.1", p)->rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)].paras;
+            return s;
+        };
+        check("cell bold: one step", D::set_cell_local(j, d, "story.1", p, 0, 0, {0, 0}, {0, 5}, "Bold", [](core::Local& l) { l.bold = 1; }) &&
+                                        j.size() == n0 + 1 && d.strays() == 0);
+        {
+            const auto w = words(0, 0);
+            check("cell bold: those words, not the rest", core::all_bold(d, w, {0, 0}, {0, 5}) && !core::all_bold(d, w, {0, 6}, {0, 10}) &&
+                                                         w.paras[0].text == "Dover Sole" && w.paras.size() == 2);
+        }
+        check("cell bold: again the same -- no step", !D::set_cell_local(j, d, "story.1", p, 0, 0, {0, 0}, {0, 5}, "Bold", [](core::Local& l) { l.bold = 1; }) &&
+                                                     j.size() == n0 + 1);
+        // across its paragraphs; an attribute through all_look
+        D::set_cell_local(j, d, "story.1", p, 0, 0, {0, 6}, {1, 4}, "Underline", [](core::Local& l) { l.underline = 1; });
+        {
+            const auto w = words(0, 0);
+            check("cell underline: across the cell's paragraphs",
+                  core::all_look(d, w, {0, 6}, {1, 4}, [](const core::CharLook& k) { return k.underline; }) &&
+                  !core::all_look(d, w, {0, 0}, {0, 5}, [](const core::CharLook& k) { return k.underline; }));
+        }
+        check("cell format: other cells untouched", words(0, 1).paras.size() <= 1 && words(1, 0).paras.size() <= 1 &&
+                                                     (words(0, 1).paras.empty() || words(0, 1).paras[0].runs.empty()));
+        // a covered cell refused
+        D::edit_table(j, d, "story.1", p, "Merge", [](core::Table& t) { D::table_merge(t, 0, 0, 2, 1); });
+        check("cell format: a covered cell refused", !D::set_cell_local(j, d, "story.1", p, 0, 1, {0, 0}, {0, 1}, "Bold", [](core::Local& l) { l.bold = 1; }));
+        {
+            L::FlowCache flows;
+            const std::string fr = L::cell_frame(flows.get(d, "story.1"), L::CellRef{p, 0, 0});
+            const std::string page = d.as<core::Frame>(fr)->owner;
+            const auto k0 = L::page_key(d, flows, page);
+            D::set_cell_local(j, d, "story.1", p, 0, 0, {1, 0}, {1, 4}, "Italic", [](core::Local& l) { l.italic = 1; });
+            check("cell italic: the page's picture redrawn", !(L::page_key(d, flows, page) == k0));
+        }
+        {
+            core::Doc e;
+            check("cell format: saved", core::from_json(e, core::to_json(d)) && core::to_json(e) == core::to_json(d));
+        }
+        for (auto k = j.size(); k > n0; --k) j.undo();
+        check("cell format: undone", core::to_json(d) == before);
+    }
+    // -- s334: a cell's own borders ------------------------------------------------
+    {
+        std::cout << "--- s334 cell borders ---\n";
+        namespace D = core::doc;
+        {
+            core::Table t = D::make_table(3, 3, 180);
+            t.rule_w = 0.5;
+            const auto e0 = D::table_edge_look(t, {1, 1}, core::kTop, {0, 1}, core::kBottom);
+            check("border: none set -- the grid's", e0.w == 0.5 && e0.color.empty());
+            core::CellBorder b;
+            b.w = 2;
+            b.color = "swatch.x";
+            check("border: set on the middle cell's top", D::table_set_border(t, 1, 1, 1, b));
+            check("border: the cell above takes it on its bottom (one line)",
+                  t.rows[0].cells[1].borders[core::kBottom] == t.rows[1].cells[1].borders[core::kTop]);
+            const auto e1 = D::table_edge_look(t, {0, 1}, core::kBottom, {1, 1}, core::kTop);
+            check("border: the shared edge as set, from either side", e1.w == 2 && e1.color == "swatch.x" &&
+                                                                      D::table_edge_look(t, {1, 1}, core::kTop, {0, 1}, core::kBottom).w == 2);
+            check("border: the other sides still the grid's", D::table_edge_look(t, {1, 1}, core::kLeft, {1, 0}, core::kRight).w == 0.5);
+            check("border: the same again -- no change", !D::table_set_border(t, 1, 1, 1, b));
+            core::CellBorder none;
+            none.w = 0;
+            D::table_set_border(t, 1, 1, 2 | 8, none);
+            check("border: 0 -- no line on those sides", D::table_edge_look(t, {1, 1}, core::kRight, {1, 2}, core::kLeft).w == 0 &&
+                                                         D::table_edge_look(t, {1, 0}, core::kRight, {1, 1}, core::kLeft).w == 0);
+            check("border: back to the grid", D::table_set_border(t, 1, 1, 15, core::CellBorder{}) &&
+                                              D::table_edge_look(t, {0, 1}, core::kBottom, {1, 1}, core::kTop).w == 0.5 &&
+                                              t.rows[0].cells[1].borders[core::kBottom].w < 0);
+            // the outside: the table's own edge takes the cell's alone
+            D::table_set_border(t, 0, 0, 1 | 8, b);
+            check("border: the table's outside edge", D::table_edge_look(t, {0, 0}, core::kTop, {-1, -1}, core::kBottom).w == 2);
+            // a merge: the cells across all its length take it
+            D::table_merge(t, 1, 0, 2, 1);
+            D::table_set_border(t, 1, 0, 4, b);
+            check("border: a merge's bottom -- each cell under it", t.rows[2].cells[0].borders[core::kTop].w == 2 && t.rows[2].cells[1].borders[core::kTop].w == 2);
+            check("border: a covered cell refers to its merge", D::table_set_border(t, 1, 1, 1, b) && t.rows[1].cells[0].borders[core::kTop].w == 2);
+        }
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(2, 2, 160));
+        const std::string sw = d.ids_of<core::Swatch>().back();
+        L::FlowCache flows;
+        const std::string fr = L::cell_frame(flows.get(d, "story.1"), L::CellRef{p, 0, 0});
+        auto rules = [&](double w, const std::string& col) {
+            int n = 0;
+            L::visit_tables(d, "story.1", flows.get(d, "story.1"), fr, [&](const L::TablePiece& tp) {
+                if (tp.kind != L::TablePiece::Rule) return;
+                const double thin = std::min(tp.r.w, tp.r.h);
+                n += std::abs(thin - w) < 1e-6 && tp.color == col;
+            });
+            return n;
+        };
+        const int grid0 = rules(D::table_at(d, "story.1", p)->rule_w, D::table_at(d, "story.1", p)->rule_color);
+        const auto page = d.as<core::Frame>(fr)->owner;
+        const auto k0 = L::page_key(d, flows, page);
+        core::CellBorder b;
+        b.w = 3;
+        b.color = sw;
+        check("border: one step", D::edit_table(j, d, "story.1", p, "Cell border", [&](core::Table& t) { D::table_set_border(t, 0, 0, 15, b); }) &&
+                                  d.strays() == 0);
+        check("border: drawn -- its four sides heavy, in its colour", rules(3, sw) >= 4, std::to_string(rules(3, sw)));
+        check("border: the rest still the grid", rules(D::table_at(d, "story.1", p)->rule_w, D::table_at(d, "story.1", p)->rule_color) > 0 &&
+                                                 rules(D::table_at(d, "story.1", p)->rule_w, D::table_at(d, "story.1", p)->rule_color) < grid0);
+        check("border: the page's picture redrawn", !(L::page_key(d, flows, page) == k0));
+        check("border: its colour in use", core::doc::swatch_uses(d, sw) > 0);
+        {
+            core::Doc e;
+            check("border: saved", core::from_json(e, core::to_json(d)) && D::table_at(e, "story.1", p)->rows[0].cells[0].borders[core::kRight].w == 3 &&
+                                   D::table_at(e, "story.1", p)->rows[0].cells[1].borders[core::kLeft].color == sw &&
+                                   D::table_at(e, "story.1", p)->rows[1].cells[1].borders[core::kTop].w < 0);
+        }
+        // the grid off: a cell's own border still drawn
+        D::edit_table(j, d, "story.1", p, "Grid", [](core::Table& t) { t.rule_w = 0; });
+        check("border: drawn with the grid off", rules(3, sw) >= 4 && rules(0, "") == 0);
+    }
+    // -- s335: Find / Change in a table's cells -------------------------------------
+    {
+        std::cout << "--- s335 find in cells ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(2, 2, 160));
+        D::edit_cell(j, d, "story.1", p, 0, 0, {0, 0}, {0, 0}, "zebrine one\nzebrine two");
+        D::edit_cell(j, d, "story.1", p, 1, 1, {0, 0}, {0, 0}, "a Zebrine");
+        D::edit_table(j, d, "story.1", p, "Merge", [](core::Table& t) { D::table_merge(t, 0, 0, 2, 1); });
+        D::FindOpts f;
+        f.what = "zebrine";
+        auto hits = D::find_all(d, f);
+        int in_cells = 0;
+        for (const auto& h : hits) in_cells += h.table == p;
+        check("find: the cells' words found (a merge once, every paragraph)", in_cells == 3, std::to_string(in_cells));
+        bool placed = true;
+        for (const auto& h : hits)
+            if (h.table == p) placed = placed && h.story == "story.1" && h.a.byte >= 0 && h.b.byte - h.a.byte == 7;
+        check("find: each hit its cell and its place in the cell's words", placed);
+        {
+            int k = -1, last = -1;   // read where the table is: after the table paragraph's own, before the next paragraph's
+            bool order = true;
+            for (const auto& h : hits) {
+                ++k;
+                if (h.story != "story.1") continue;
+                const int at = h.table >= 0 ? h.table : h.a.para;
+                order = order && at >= last;
+                last = at;
+            }
+            check("find: read in order, where the table is", order);
+        }
+        f.match_case = true;
+        int cased = 0;
+        for (const auto& h : D::find_all(d, f)) cased += h.table == p;
+        check("find: match case in cells", cased == 2, std::to_string(cased));
+        f.match_case = false;
+        const auto before = core::to_json(d);
+        const auto n0 = j.size();
+        D::ChangeOpts c;
+        c.set_text = true;
+        c.with = "okapi";
+        std::vector<D::Hit> cell_hits;
+        for (const auto& h : hits) if (h.table == p) cell_hits.push_back(h);
+        check("change all: in the cells, one step", D::change_hits(j, d, cell_hits, c, "Change All") == 3 && j.size() == n0 + 1 && d.strays() == 0);
+        {
+            const auto* t = D::table_at(d, "story.1", p);
+            check("change all: the words changed, the rest kept",
+                  D::cell_text(t->rows[0].cells[0]) == "okapi one\nokapi two" && D::cell_text(t->rows[1].cells[1]) == "a okapi");
+        }
+        j.undo();
+        check("change all: undone", core::to_json(d) == before);
+        // in the text and in a cell together: both, the table kept in its place
+        f.what = "the";
+        auto both = D::find_all(d, f);
+        D::edit_cell(j, d, "story.1", p, 1, 0, {0, 0}, {0, 0}, "the end");
+        both = D::find_all(d, f);
+        int nc = 0;
+        for (const auto& h : both) nc += h.table == p;
+        c.with = "THE";
+        D::change_hits(j, d, both, c, "Change All");
+        check("change all: text and cells together", nc == 1 && D::cell_text(D::table_at(d, "story.1", p)->rows[1].cells[0]) == "THE end");
+        check("change all: nothing left in either", D::find_all(d, [] { D::FindOpts o; o.what = "the"; o.match_case = true; return o; }()).empty());
+    }
 }
 }  // namespace cxtest

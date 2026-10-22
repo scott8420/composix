@@ -471,6 +471,81 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
         cb->append(*ta);
         outer->append(*cb);
     }
+    {   // s334: the picked cell's own borders -- which sides, how heavy, what colour; Grid puts them back
+        auto bb = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        auto bl = Gtk::make_managed<Gtk::Label>("Cell border");
+        bb->append(*bl);
+        static const int masks[] = {15, 1, 4, 8, 2, 5, 10};
+        auto sides = Gtk::make_managed<Gtk::DropDown>(
+            Gtk::StringList::create({"All sides", "Top", "Bottom", "Left", "Right", "Top & bottom", "Left & right"}));
+        sides->set_name("table.border_sides");
+        sides->set_tooltip_text("Which of the picked cell's sides (an edge it shares is one line: the cell across it takes the same)");
+        bb->append(*sides);
+        auto bw = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->rule_w, 0, 12, 0.25, 1), 0.25, 2);
+        bw->set_name("table.border_w");
+        bw->set_tooltip_text("The border's weight, points (0: none on those sides)");
+        bb->append(*bw);
+        auto pl = Gtk::make_managed<Gtk::Label>("pt");
+        bb->append(*pl);
+        std::vector<Glib::ustring> bnames = sw_names;
+        bnames[0] = "The grid's colour";
+        auto bc = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(bnames));
+        bc->set_name("table.border_color");
+        bc->set_tooltip_text("The border's colour");
+        bb->append(*bc);
+        auto set = Gtk::make_managed<Gtk::Button>("Set");
+        set->set_name("table.border_set");
+        set->set_tooltip_text("The picked cell's chosen sides take this weight and colour");
+        bb->append(*set);
+        auto grid_b = Gtk::make_managed<Gtk::Button>("As the grid");
+        grid_b->set_name("table.border_grid");
+        grid_b->set_tooltip_text("The picked cell's chosen sides back to the table's grid");
+        bb->append(*grid_b);
+        auto state = Gtk::make_managed<Gtk::Label>("");
+        state->set_name("table.border_state");
+        state->add_css_class("dim-label");
+        state->set_margin_start(6);
+        bb->append(*state);
+        const auto mask = [sides] { return masks[std::min<guint>(sides->get_selected(), 6)]; };
+        // what the picked cell's first chosen side has now
+        const auto show = std::make_shared<std::function<void()>>();
+        *show = [work, cur, mask, bw, bc, state, sw_index] {
+            const auto o = core::doc::owner_of(*work, cur->first, cur->second);
+            if (o.first < 0) return;
+            const auto& x = work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)];
+            int side = 0;
+            while (side < 3 && !(mask() & (1 << side))) ++side;
+            const auto& b = x.borders[static_cast<std::size_t>(side)];
+            if (b.w >= 0) {
+                bw->set_value(b.w);
+                bc->set_selected(sw_index(b.color));
+                state->set_text("its own");
+            } else {
+                bw->set_value(work->rule_w);
+                bc->set_selected(0);
+                state->set_text("as the grid");
+            }
+        };
+        sides->property_selected().signal_changed().connect([show] { (*show)(); });
+        set->signal_clicked().connect([keep, fill, work, cur, mask, bw, bc, sw_ids] {
+            keep();
+            core::CellBorder b;
+            b.w = bw->get_value();
+            const auto k = bc->get_selected();
+            b.color = k < sw_ids.size() ? sw_ids[k] : std::string{};
+            core::doc::table_set_border(*work, cur->first, cur->second, mask(), b);
+            (*fill)();
+        });
+        grid_b->signal_clicked().connect([keep, fill, work, cur, mask] {
+            keep();
+            core::doc::table_set_border(*work, cur->first, cur->second, mask(), core::CellBorder{});
+            (*fill)();
+        });
+        const auto prev = *picked;
+        *picked = [prev, show] { prev(); (*show)(); };
+        (*show)();
+        outer->append(*bb);
+    }
     auto sc = Gtk::make_managed<Gtk::ScrolledWindow>();
     sc->set_vexpand(true);
     sc->set_child(*grid);
@@ -497,6 +572,22 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
     m_table_win->present();
     if (focus_row >= 0 && focus_col >= 0 && focus_row < static_cast<int>(entries->size()))   // s323: the cell double-clicked
         if (auto* e = (*entries)[static_cast<std::size_t>(focus_row)][static_cast<std::size_t>(std::max(0, focus_col))]) e->grab_focus();
+}
+
+// s333: formatting on the words typed in a cell -- the selection, else the
+// word at the caret (as on a story).
+void Shell::cell_local(const std::string& label, const std::function<bool(const core::Story&, core::TextPos, core::TextPos)>& all_on,
+                       const std::function<void(core::Local&, bool)>& set) {
+    auto& cv = m_canvas_view.canvas();
+    if (!cv.cell_editing()) return;
+    const auto w = cv.typing_cell_words();
+    auto [a, b] = cv.cell_range();
+    if (a == b) std::tie(a, b) = core::word_at(w, a);
+    if (a == b) return;
+    const bool on = !all_on(w, a, b);
+    const auto& c = cv.typing_cell();
+    core::doc::set_cell_local(m_journal, m_doc, cv.cell_story(), c.para, c.row, c.col, a, b, label, [&](core::Local& l) { set(l, on); });
+    cv.grab_focus();
 }
 
 }  // namespace composix

@@ -130,6 +130,19 @@ json table_json(const Table& t) {
             if (c.span_cols > 1) jc["span_cols"] = c.span_cols;   // s319
             if (c.span_rows > 1) jc["span_rows"] = c.span_rows;
             if (c.valign) jc["valign"] = c.valign;                // s321
+            {   // s334: its own borders (top, right, bottom, left), only those set
+                json jb = json::array();
+                bool any = false;
+                for (const auto& b : c.borders) {
+                    if (b.w < 0) { jb.push_back(nullptr); continue; }
+                    json x = {{"w", b.w}};
+                    if (!b.color.empty()) x["color"] = b.color;
+                    if (b.tint < 1) x["tint"] = b.tint;
+                    jb.push_back(x);
+                    any = true;
+                }
+                if (any) jc["borders"] = jb;
+            }
             cells.push_back(jc);
         }
         json jr = {{"cells", cells}};
@@ -161,6 +174,14 @@ Table table_of_json(const json& j) {
                     c.span_cols = std::max(1, val(jc, "span_cols", 1));   // s319
                     c.span_rows = std::max(1, val(jc, "span_rows", 1));
                     c.valign = std::clamp(val(jc, "valign", 0), 0, 2);   // s321
+                    if (jc.contains("borders") && jc.at("borders").is_array())   // s334
+                        for (std::size_t k = 0; k < 4 && k < jc.at("borders").size(); ++k) {
+                            const auto& x = jc.at("borders")[k];
+                            if (!x.is_object()) continue;
+                            c.borders[k].w = std::clamp(val(x, "w", 0.0), 0.0, 72.0);
+                            c.borders[k].color = val<std::string>(x, "color", "");
+                            c.borders[k].tint = std::clamp(val(x, "tint", 1.0), 0.0, 1.0);
+                        }
                     if (jc.contains("paras") && jc.at("paras").is_array())
                         for (const auto& jp : jc.at("paras")) {
                             Para p;

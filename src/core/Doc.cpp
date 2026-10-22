@@ -3024,6 +3024,58 @@ std::string table_cell_fill(const Table& t, int r, int c, double* tint) {   // s
     return t.band_fill;
 }
 
+EdgeLook table_edge_look(const Table& t, std::pair<int, int> a, int sa, std::pair<int, int> b, int sb) {   // s334
+    const auto own = [&](std::pair<int, int> o, int side) -> const CellBorder* {
+        if (o.first < 0 || o.first >= static_cast<int>(t.rows.size()) || side < 0 || side > 3) return nullptr;
+        const auto& row = t.rows[static_cast<std::size_t>(o.first)];
+        if (o.second < 0 || o.second >= static_cast<int>(row.cells.size())) return nullptr;
+        const auto& x = row.cells[static_cast<std::size_t>(o.second)].borders[static_cast<std::size_t>(side)];
+        return x.w >= 0 ? &x : nullptr;
+    };
+    const CellBorder* x = own(a, sa);
+    const CellBorder* y = own(b, sb);
+    if (x && y && y->w > x->w) x = y;
+    if (!x) x = y;
+    if (!x) return {t.rule_w, t.rule_color, 1};
+    return {x->w, x->color.empty() ? t.rule_color : x->color, x->tint};
+}
+
+bool table_set_border(Table& t, int r, int c, int sides, const CellBorder& b) {   // s334
+    const auto o = owner_of(t, r, c);
+    if (o.first < 0) return false;
+    CellBorder v = b;
+    if (v.w < 0) v = CellBorder{};
+    else v.w = std::clamp(std::round(v.w * 4) / 4, 0.0, 72.0);
+    v.tint = std::clamp(v.tint, 0.0, 1.0);
+    const auto& me = t.rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)];
+    const int r0 = o.first, c0 = o.second, r1 = r0 + me.span_rows - 1, c1 = c0 + me.span_cols - 1;
+    const int R = static_cast<int>(t.rows.size()), C = table_cols(t);
+    bool changed = false;
+    const auto put = [&](std::pair<int, int> at, int side) {
+        if (at.first < 0) return;
+        auto& row = t.rows[static_cast<std::size_t>(at.first)];
+        if (at.second >= static_cast<int>(row.cells.size())) return;
+        auto& x = row.cells[static_cast<std::size_t>(at.second)].borders[static_cast<std::size_t>(side)];
+        if (x == v) return;
+        x = v;
+        changed = true;
+    };
+    for (int side = 0; side < 4; ++side) {
+        if (!(sides & (1 << side))) continue;
+        put(o, side);
+        // the cells across that edge
+        if (side == kTop && r0 > 0)
+            for (int k = c0; k <= c1; ++k) put(owner_of(t, r0 - 1, k), kBottom);
+        if (side == kBottom && r1 + 1 < R)
+            for (int k = c0; k <= c1; ++k) put(owner_of(t, r1 + 1, k), kTop);
+        if (side == kLeft && c0 > 0)
+            for (int k = r0; k <= r1; ++k) put(owner_of(t, k, c0 - 1), kRight);
+        if (side == kRight && c1 + 1 < C)
+            for (int k = r0; k <= r1; ++k) put(owner_of(t, k, c1 + 1), kLeft);
+    }
+    return changed;
+}
+
 bool table_unmerge(Table& t, int r, int c) {   // s319
     if (r < 0 || c < 0 || r >= static_cast<int>(t.rows.size()) || c >= static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size())) return false;
     auto& x = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
@@ -4501,15 +4553,16 @@ bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
                  [&] { d.put(story, s); });
 }
 
-bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
-               const std::function<void(Local&)>& f, const std::string& merge_key) {
-    const auto* st = d.as<Story>(story);
-    if (!st || st->paras.empty()) return false;
-    a = clamp_pos(*st, a);
-    b = clamp_pos(*st, b);
+namespace {
+// s333: [a, b) of `s` (clamped) -- each piece's Local changed by `f`, the
+// paragraphs' own settings and attachments kept. What set_local and
+// set_cell_local share. False when [a, b) is empty.
+bool local_over(Story& s, TextPos a, TextPos b, const std::function<void(Local&)>& f) {
+    if (s.paras.empty()) return false;
+    a = clamp_pos(s, a);
+    b = clamp_pos(s, b);
     if (b < a) std::swap(a, b);
     if (a == b) return false;
-    Story s = *st;
     for (int p = a.para; p <= b.para; ++p) {
         auto& para = s.paras[static_cast<std::size_t>(p)];
         const int n = static_cast<int>(para.text.size());
@@ -4529,8 +4582,29 @@ bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b
         para.index = std::move(was.index);     // s134
         para.tables = std::move(was.tables);   // s314
     }
-    if (s == *st) return false;
+    return true;
+}
+}  // namespace
+
+bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
+               const std::function<void(Local&)>& f, const std::string& merge_key) {
+    const auto* st = d.as<Story>(story);
+    if (!st) return false;
+    Story s = *st;
+    if (!local_over(s, a, b, f) || s == *st) return false;
     return j.run(label, {story}, [&] { d.put(story, s); }, merge_key);
+}
+
+bool set_cell_local(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
+                    const std::string& label, const std::function<void(Local&)>& f, const std::string& merge_key) {   // s333
+    const auto* t = table_at(d, story, para);
+    if (!t || owner_of(*t, row, col) != std::pair<int, int>{row, col}) return false;
+    return edit_table(j, d, story, para, label, [&](Table& x) {
+        auto& cell = x.rows[static_cast<std::size_t>(row)].cells[static_cast<std::size_t>(col)];
+        Story s;
+        s.paras = cell.paras;
+        if (local_over(s, a, b, f)) cell.paras = std::move(s.paras);
+    }, merge_key);
 }
 
 std::string normal_link(const std::string& typed) {   // s303
@@ -6704,6 +6778,34 @@ const std::vector<Verb>& verbs() {
         {"set_language", [](DocJournal& j, Doc& d) { set_language(j, d, "en_GB"); }},   // s307
         {"insert_table", [](DocJournal& j, Doc& d) { insert_table(j, d, "story.1", {1, 10}, make_table(3, 3, 288)); }},   // s314
         {"text_to_table", [](DocJournal& j, Doc& d) { text_to_table(j, d, "story.1", 1, 1, 240); }},   // s324
+        // s332 - s334 (and s328's, missed then): a table's own verbs, on a table put in first (one gesture: one step)
+        {"edit_cell", [](DocJournal& j, Doc& d) {   // s328
+             j.begin("Table", {"story.1"});
+             const int p = insert_table(j, d, "story.1", {1, 10}, make_table(2, 2, 200));
+             edit_cell(j, d, "story.1", p, 0, 0, {0, 0}, {0, 0}, "Dover");
+             j.commit();
+         }},
+        {"row_height", [](DocJournal& j, Doc& d) {   // s332
+             j.begin("Table", {"story.1"});
+             const int p = insert_table(j, d, "story.1", {1, 10}, make_table(2, 2, 200));
+             edit_table(j, d, "story.1", p, "Row height", [](Table& t) { table_set_row_height(t, 1, 60); });
+             j.commit();
+         }},
+        {"set_cell_local", [](DocJournal& j, Doc& d) {   // s333
+             j.begin("Table", {"story.1"});
+             const int p = insert_table(j, d, "story.1", {1, 10}, make_table(2, 2, 200));
+             edit_cell(j, d, "story.1", p, 0, 0, {0, 0}, {0, 0}, "Dover Sole");
+             set_cell_local(j, d, "story.1", p, 0, 0, {0, 0}, {0, 5}, "Bold", [](Local& l) { l.bold = 1; });
+             j.commit();
+         }},
+        {"cell_border", [](DocJournal& j, Doc& d) {   // s334
+             j.begin("Table", {"story.1"});
+             const int p = insert_table(j, d, "story.1", {1, 10}, make_table(2, 2, 200));
+             CellBorder b;
+             b.w = 2;
+             edit_table(j, d, "story.1", p, "Cell border", [&](Table& t) { table_set_border(t, 0, 0, 15, b); });
+             j.commit();
+         }},
         {"link_to_paragraph", [](DocJournal& j, Doc& d) { link_to_paragraph(j, d, "story.2", {0, 0}, {0, 4}, "story.1", 4); }},   // s311
         {"replace_word", [](DocJournal& j, Doc& d) { replace_word(j, d, "story.1", 1, 4, 10, "harbor", "harbour"); }},
         {"change_all_words", [](DocJournal& j, Doc& d) { change_all_words(j, d, "the", "thee"); }},

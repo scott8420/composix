@@ -148,6 +148,13 @@ public:
     bool cell_editing() const { return m_cell.para >= 0; }
     const layout::CellRef& typing_cell() const { return m_cell; }
     const std::string& cell_story() const { return m_cell_story; }
+    // s333: the selection in the cell (reading order; equal = the caret), and
+    // the cell's words as a story (one empty paragraph when empty).
+    std::pair<core::TextPos, core::TextPos> cell_range() const { return {std::min(m_canchor, m_ccaret), std::max(m_canchor, m_ccaret)}; }
+    core::Story typing_cell_words() const { return cell_words(); }
+    // s335: type in cell `c` (in `frame`) with a .. b of its words selected
+    // (a Find hit). It takes the keyboard (Find gives it back).
+    void select_cell_text(const std::string& frame, const std::string& story, layout::CellRef c, core::TextPos a, core::TextPos b);
     void end_cell();
     // s022: edit `frame` with a..b selected (a Find hit). `focus`: take the
     // keyboard (else it stays where it is -- the find bar).
@@ -200,7 +207,7 @@ public:
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew, Zoom, TableCol, CellText };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew, Zoom, TableCol, CellText, TableRow };
     // s035: Alt+drag a picture inside its frame -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
@@ -304,6 +311,15 @@ private:
         bool ok() const { return para >= 0; }
     };
     TableEdge table_edge_hit(double sx, double sy) const;
+    // s332: a picked text frame's table -- a row's bottom edge under the
+    // pointer (screen), the row whose least height dragging it sets.
+    struct RowEdgeHit {
+        std::string frame, story;
+        int para = -1, row = -1;
+        double h0 = 0;                // the row's height as drawn when the drag began
+        bool ok() const { return para >= 0; }
+    };
+    RowEdgeHit table_row_hit(double sx, double sy) const;
     const core::Story* edit_story() const { return m_doc.as<core::Story>(m_edit_story); }
     // s330: typing in a cell
     void begin_cell(const std::string& frame, const std::string& story, layout::CellRef c, core::TextPos at, bool select_all = false);
@@ -470,6 +486,8 @@ private:
     int                 m_hover_gutter = -1;
     TableEdge           m_tedge;                // s327: the table column edge being dragged
     bool                m_hover_tedge = false;
+    RowEdgeHit          m_redge;                // s332: the table row edge being dragged
+    bool                m_hover_redge = false;
     std::vector<double> m_col0;                 // every column's width (points) at press
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool, m_sig_caret;
     sigc::signal<void(const ContextHit&)> m_sig_context;   // s074

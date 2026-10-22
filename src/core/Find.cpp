@@ -8,6 +8,7 @@
 #include <map>
 #include <regex>
 #include <string_view>
+#include <tuple>
 
 namespace composix::core::doc {
 
@@ -557,6 +558,27 @@ std::vector<Hit> find_all(const Doc& d, const FindOpts& f) {
                 for (auto& [key, h] : keyed) here.push_back(std::move(h));
             }
             for (auto& h : here) out.push_back(std::move(h));
+            // s335: a table's cells, row by row (a merge once) -- read where its
+            // paragraph is; with a paragraph style asked for, only cell
+            // paragraphs set in it.
+            for (const auto& t : para.tables)
+                for (int r = 0; r < static_cast<int>(t.rows.size()); ++r)
+                    for (int c = 0; c < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()); ++c) {
+                        if (owner_of(t, r, c) != std::pair<int, int>{r, c}) continue;
+                        const auto& cell = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+                        for (int q = 0; q < static_cast<int>(cell.paras.size()); ++q) {
+                            const auto& cp = cell.paras[static_cast<std::size_t>(q)];
+                            if (!f.pstyle.empty() && cp.style != f.pstyle) continue;
+                            std::vector<Hit> in;
+                            search(sid, cp, q, -1, 0, static_cast<int>(cp.text.size()), in);
+                            for (auto& h : in) {
+                                h.table = p;
+                                h.row = r;
+                                h.col = c;
+                                out.push_back(std::move(h));
+                            }
+                        }
+                    }
         }
     }
     return out;
@@ -584,6 +606,7 @@ int swatch_uses(const Doc& d, const Doc::Id& sw) {
                 for (const auto& row : t.rows)
                     for (const auto& c : row.cells) {
                         n += c.fill == sw;
+                        for (const auto& b : c.borders) n += b.w >= 0 && b.color == sw;   // s334: its own border
                         for (const auto& cp : c.paras) in_runs(cp.runs);
                     }
             }
@@ -606,6 +629,14 @@ int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& 
     // from under its hit), each note's last to first.
     std::stable_sort(hits.begin(), hits.end(), [](const Hit& x, const Hit& y) {
         if (x.story != y.story) return x.story < y.story;
+        // s335: the cells' hits first of all (nothing in the text then moves a
+        // table out from under them), each cell's last to first
+        if ((x.table >= 0) != (y.table >= 0)) return x.table >= 0;
+        if (x.table >= 0) {
+            if (x.table != y.table || x.row != y.row || x.col != y.col)
+                return std::tie(x.table, x.row, x.col) < std::tie(y.table, y.row, y.col);
+            return y.a < x.a;
+        }
         if ((x.note >= 0) != (y.note >= 0)) return x.note >= 0;
         if (x.note >= 0 && (x.a.para != y.a.para || x.note != y.note))
             return x.a.para != y.a.para ? y.a.para < x.a.para : y.note < x.note;
@@ -619,6 +650,11 @@ int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& 
     // An unchanged run leaves no step (the journal drops it): 0 then.
     const bool did = j.run(label, stories, [&] {
         for (const auto& h : hits) {
+            if (h.table >= 0) {   // s335: in a cell's words -- the text (styles not yet)
+                if (!c.set_text) continue;
+                if (edit_cell(j, d, h.story, h.table, h.row, h.col, h.a, h.b, change_text(c, h), label).para >= 0) ++n;
+                continue;
+            }
             if (h.note >= 0) {   // s113: in a note's words -- the text and / or a character style
                 if (!c.set_text && c.cstyle.empty()) continue;
                 const auto* sty = c.cstyle.empty() ? nullptr : d.as<Style>(c.cstyle);
