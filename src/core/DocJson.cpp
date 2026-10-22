@@ -495,6 +495,8 @@ json to(const Record& r) {
             if (!v.header_cell.empty()) j["header_cell"] = v.header_cell;
             if (!v.body_cell.empty()) j["body_cell"] = v.body_cell;
             if (!v.footer_cell.empty()) j["footer_cell"] = v.footer_cell;
+            if (!v.left_cell.empty()) j["left_cell"] = v.left_cell;     // s346
+            if (!v.right_cell.empty()) j["right_cell"] = v.right_cell;
         } else if constexpr (std::is_same_v<T, Layer>) {   // s305
             j = {{"kind", "layer"}, {"name", v.name}, {"pos", v.pos}, {"visible", v.visible}, {"locked", v.locked}, {"print", v.print}};
             if (!v.color.empty()) j["color"] = v.color;
@@ -892,6 +894,8 @@ std::optional<Record> from(const json& j) {
         v.header_cell = val<std::string>(j, "header_cell", "");
         v.body_cell = val<std::string>(j, "body_cell", "");
         v.footer_cell = val<std::string>(j, "footer_cell", "");
+        v.left_cell = val<std::string>(j, "left_cell", "");   // s346
+        v.right_cell = val<std::string>(j, "right_cell", "");
         return v;
     }
     if (k == "layer") {   // s305

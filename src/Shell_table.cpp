@@ -650,6 +650,16 @@ bool Shell::cell_edit(const std::string& key, const std::string& choice) {
             const auto id = core::doc::add_cell_style(m_journal, m_doc, "Cell Style", &cnow);
             did = !id.empty() && edit("Cell Style", [&](core::Table& t) { cell(t).style = id; });
         }
+    } else if (key == "cell_restyle") {   // s347
+        const core::Table tnow = *t0;
+        const core::TableCell cnow = here;
+        if (choice == "redefine_table" && !tnow.style.empty()) did = core::doc::redefine_table_style(m_journal, m_doc, tnow.style, tnow);
+        else if (choice == "redefine_cell" && !cnow.style.empty()) did = core::doc::redefine_cell_style(m_journal, m_doc, cnow.style, cnow);
+        else if (choice == "clear")   // the table back to its style (its cells to theirs), else just this cell
+            did = edit("Clear Overrides", [&](core::Table& t) {
+                if (!t.style.empty()) core::doc::clear_overrides(m_doc, t);
+                else core::doc::clear_overrides(m_doc, t, ref.row, ref.col);
+            });
     } else if (key == "cell_rows") {
         if (choice == "above") { did = edit("Insert row", [&](core::Table& t) { core::doc::table_insert_row(t, ref.row); }); go.first += 1; }
         else if (choice == "below") did = edit("Insert row", [&](core::Table& t) { core::doc::table_insert_row(t, ref.row + span_r); });
@@ -730,6 +740,8 @@ bool Shell::table_style_edit(const std::string& key, const std::string& choice) 
                 else if (k == "header_cell") t.header_cell = choice;
                 else if (k == "body_cell") t.body_cell = choice;
                 else if (k == "footer_cell") t.footer_cell = choice;
+                else if (k == "left_cell") t.left_cell = choice;     // s346
+                else if (k == "right_cell") t.right_cell = choice;
             }) || did;
         } else if (key.rfind("cs_", 0) == 0 && m_doc.as<core::CellStyle>(id)) {
             if (key == "cs_act") {

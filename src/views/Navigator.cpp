@@ -267,6 +267,17 @@ void Navigator::build_card(const core::SegmentInfo& si, const std::vector<const 
             il->set_hexpand(true);
             il->set_ellipsize(Pango::EllipsizeMode::END);
             if (s == core::Segment::Styles) specimen(*il, *it);   // s287: the name set in the style
+            if (s == core::Segment::Styles && it->thumb.kind == core::ThumbKind::Table) {   // s345: a small picture of it
+                auto th = std::make_shared<core::Thumb>(it->thumb);
+                auto pic = Gtk::make_managed<Gtk::DrawingArea>();
+                pic->set_name("nav.style." + it->id + ".specimen");
+                pic->set_content_width(30);
+                pic->set_content_height(20);
+                pic->set_valign(Gtk::Align::CENTER);
+                pic->set_draw_func([th, pic](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) { paint_thumb(cr, *pic, w, h, *th, false); });
+                ib->append(*pic);
+                c.table_specs[it->id] = {pic, th};
+            }
             if (s != core::Segment::Stories) ib->append(*il);
             if (s == core::Segment::Stories) {   // s292: its first words under its name
                 auto col2 = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 0);
@@ -1222,6 +1233,10 @@ void Navigator::refresh(const core::Outline* o) {
                 auto& [title, badge] = l->second;
                 if (title->get_text().raw() != it->title) title->set_text(it->title);
                 if (c.segment == core::Segment::Styles) specimen(*title, *it);   // s287: its face may have changed
+                if (auto sp = c.table_specs.find(it->id); sp != c.table_specs.end()) {   // s345
+                    *sp->second.second = it->thumb;
+                    sp->second.first->queue_draw();
+                }
                 if (auto sm = c.samples.find(it->id); sm != c.samples.end()) {   // s292
                     sm->second->set_text(readable(it->thumb.sample));
                     sm->second->set_visible(!readable(it->thumb.sample).empty());

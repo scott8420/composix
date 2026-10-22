@@ -132,7 +132,8 @@ private:
         std::map<std::string, Gtk::ToggleButton*> sizes; // pages: S / M / L
         Gtk::Box*                     chips = nullptr;   // s287: Colors -- the chips' column (its first row is `flow`)
         std::map<std::string, Gtk::Label*> samples;      // s292: Stories -- each one's first words
-        std::map<std::string, std::pair<Gtk::DrawingArea*, std::shared_ptr<std::uint32_t>>> layer_chips;   // s341: Layers -- each one's colour
+        std::map<std::string, std::pair<Gtk::DrawingArea*, std::shared_ptr<std::uint32_t>>> layer_chips;   // s341
+        std::map<std::string, std::pair<Gtk::DrawingArea*, std::shared_ptr<core::Thumb>>> table_specs;   // s345: Styles -- table / cell styles' pictures: Layers -- each one's colour
         std::vector<std::pair<Gtk::Widget*, WrapBox*>> chip_heads;   // s298: Colors -- a group's heading, its row
         std::map<std::string, std::array<Gtk::ToggleButton*, 3>> layer_btns;   // s308: Layers -- eye, padlock, printer
     };

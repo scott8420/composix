@@ -343,6 +343,57 @@ void paint_thumb(const Cairo::RefPtr<Cairo::Context>& cr, Gtk::Widget& wd, int W
         break;
     }
 
+    case K::Table: {   // s345: a table style's specimen -- 5 rows x 3, header, bands, the grid; a cell style: its cell
+        const double w = std::min(W * 0.84, H * 1.5), h = w / 1.5;
+        const double x = std::round((W - w) / 2) + 0.5, y = std::round((H - h) / 2) + 0.5;
+        cr->set_source_rgb(1, 1, 1);
+        cr->rectangle(x, y, w, h);
+        cr->fill();
+        const auto col = [&](std::uint32_t v) { return rgb(v); };
+        const int R = 5, C = 3;
+        const double rh = h / R, cw = w / C;
+        const bool cell = t.panels == 1;
+        if (!cell) {
+            if (t.rgb != core::Thumb::kNoFill) {
+                const auto hc = col(t.rgb);
+                cr->set_source_rgb(hc.r, hc.g, hc.b);
+                cr->rectangle(x, y, w, rh);
+                cr->fill();
+            }
+            if (t.rgb2 != core::Thumb::kNoFill) {
+                const auto bc = col(t.rgb2);
+                cr->set_source_rgb(bc.r, bc.g, bc.b);
+                for (int r = 2; r < R; r += 2) { cr->rectangle(x, y + r * rh, w, rh); cr->fill(); }
+            }
+        } else if (t.rgb != core::Thumb::kNoFill) {   // the middle cell, filled
+            const auto fc = col(t.rgb);
+            cr->set_source_rgb(fc.r, fc.g, fc.b);
+            cr->rectangle(x + cw, y + 2 * rh, cw, rh);
+            cr->fill();
+        }
+        const auto gc = col(t.rgb3);
+        const double lw = std::clamp(t.rule * (large ? 1.2 : 0.6), 0.0, large ? 4.0 : 2.0);
+        if (lw > 0) {
+            if (cell) cr->set_source_rgb(0.75, 0.75, 0.75);   // the table round it, quiet
+            else cr->set_source_rgb(gc.r, gc.g, gc.b);
+            cr->set_line_width(std::max(0.6, lw));
+            for (int r = 0; r <= R; ++r) { cr->move_to(x, y + r * rh); cr->line_to(x + w, y + r * rh); }
+            for (int k = 0; k <= C; ++k) { cr->move_to(x + k * cw, y); cr->line_to(x + k * cw, y + h); }
+            cr->stroke();
+        }
+        if (cell && t.bold) {   // its own borders, heavy
+            cr->set_source_rgb(gc.r, gc.g, gc.b);
+            cr->set_line_width(large ? 3 : 2);
+            cr->rectangle(x + cw, y + 2 * rh, cw, rh);
+            cr->stroke();
+        }
+        cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.25);
+        cr->set_line_width(1);
+        cr->rectangle(x, y, w, h);
+        cr->stroke();
+        break;
+    }
+
     case K::Style: {   // a specimen
         cr->set_source_rgba(fg.get_red(), fg.get_green(), fg.get_blue(), 0.9);
         auto lay = wd.create_pango_layout(t.sample.empty() ? "Aa" : t.sample);

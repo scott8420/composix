@@ -807,6 +807,8 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
             f.push_back({"Header cells", cell_name(t.header_cell), "ts_header_cell", cells});
             f.push_back({"Body cells", cell_name(t.body_cell), "ts_body_cell", cells});
             f.push_back({"Footer cells", cell_name(t.footer_cell), "ts_footer_cell", cells});
+            f.push_back({"Left column", cell_name(t.left_cell), "ts_left_cell", cells});     // s346
+            f.push_back({"Right column", cell_name(t.right_cell), "ts_right_cell", cells});
             f.push_back({"Used", uses ? std::to_string(uses) + (uses == 1 ? " table" : " tables") : "Not used"});
             Field act{"", "", "ts_act", {{"duplicate", "Duplicate"}, {"delete", "Delete"}}};
             act.buttons = true;
@@ -817,7 +819,16 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 if (fl.edit == "ts_header_tint" || fl.edit == "ts_band_tint") { fl.percent = true; fl.lo = 1; fl.hi = 100; }
                 fl.group = "Table style";
             }
-            Thumb th{K::Section, 6, 9, 0x5b7fa6};
+            Thumb th{K::Table, 6, 4};   // s345: its specimen
+            th.panels = 0;
+            const auto ink = [&](const std::string& swid, double tintv) {
+                const auto* x = d.as<Swatch>(swid);
+                return x ? tint_rgb(doc::screen_rgb(*x), tintv) : Thumb::kNoFill;
+            };
+            th.rgb = ink(t.header_fill, t.header_tint);
+            th.rgb2 = ink(t.band_fill, t.band_tint);
+            th.rgb3 = d.as<Swatch>(t.rule_color) ? doc::screen_rgb(*d.as<Swatch>(t.rule_color)) : 0x222222;
+            th.rule = t.rule_w;
             o.add({id, G::Styles, t.name, uses ? "Table" : "Table \u00b7 Unused", th, f});
         }
         for (const auto& id : d.ids_of<CellStyle>()) {
@@ -858,7 +869,18 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 if (fl.edit == "cs_tint") { fl.percent = true; fl.lo = 1; fl.hi = 100; }
                 fl.group = "Cell style";
             }
-            Thumb th{K::Section, 6, 9, 0x8fa37a};
+            Thumb th{K::Table, 6, 4};   // s345: its cell among others
+            th.panels = 1;
+            {
+                const auto* fx = c.fill ? d.as<Swatch>(*c.fill) : nullptr;
+                th.rgb = fx ? tint_rgb(doc::screen_rgb(*fx), c.fill_tint) : Thumb::kNoFill;
+                double heavy = -1;
+                std::string bcol;
+                for (const auto& b : c.borders) if (b.w > heavy) { heavy = b.w; bcol = b.color; }
+                th.bold = heavy > 0.5;
+                th.rule = 0.5;
+                th.rgb3 = d.as<Swatch>(bcol) ? doc::screen_rgb(*d.as<Swatch>(bcol)) : 0x222222;
+            }
             o.add({id, G::Styles, c.name, uses ? "Cell" : "Cell \u00b7 Unused", th, f});
         }
     }
@@ -1691,6 +1713,14 @@ std::vector<Field> cell_text_fields(const Doc& d, const std::string& story, int 
             Field ns{"New style", "", "cell_newstyle", {{"table", "Table Style from This"}, {"cell", "Cell Style from This"}}};
             ns.buttons = true;
             cf.push_back(ns);
+            if (ts || cs) {   // s347: the styles in use -- redefined from here, or what's here put back to them
+                Field rs{"Styles", "", "cell_restyle", {}};
+                if (ts) rs.choices.push_back({"redefine_table", "Redefine Table Style"});
+                if (cs) rs.choices.push_back({"redefine_cell", "Redefine Cell Style"});
+                rs.choices.push_back({"clear", "Clear Overrides"});
+                rs.buttons = true;
+                cf.push_back(rs);
+            }
         }
         Field rows_f{"Rows", "", "cell_rows", {{"above", "Above"}, {"below", "Below"}, {"delete", "Delete"}}};
         rows_f.buttons = true;

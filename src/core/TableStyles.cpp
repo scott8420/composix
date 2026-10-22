@@ -72,10 +72,15 @@ std::string fresh_name(const std::vector<std::string>& taken, const std::string&
 
 }  // namespace
 
-std::string region_cell_style(const TableStyle& ts, const Table& t, int r) {
-    const int R = static_cast<int>(t.rows.size());
+std::string region_cell_style(const TableStyle& ts, const Table& t, int r, int c) {
+    const int R = static_cast<int>(t.rows.size()), C = table_cols(t);
     if (r < t.header_rows) return ts.header_cell;
     if (t.footer_rows > 0 && r >= R - t.footer_rows) return ts.footer_cell;
+    int last = c;
+    if (r >= 0 && r < R && c >= 0 && c < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()))
+        last = c + t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)].span_cols - 1;
+    if (c == 0 && !ts.left_cell.empty()) return ts.left_cell;   // s346
+    if (last >= C - 1 && !ts.right_cell.empty()) return ts.right_cell;
     return ts.body_cell;
 }
 
@@ -97,15 +102,15 @@ void apply_table_style(const Doc& d, Table& t, const Doc::Id& id) {
     t.band_fill = ts->band_fill;
     t.band_tint = ts->band_tint;
     t.band_every = ts->band_every;
-    for (int r = 0; r < static_cast<int>(t.rows.size()); ++r) {
-        const std::string region = region_cell_style(*ts, t, r);
-        const std::string old_region = was ? region_cell_style(*was, t, r) : std::string{};
-        for (auto& c : t.rows[static_cast<std::size_t>(r)].cells) {
+    for (int r = 0; r < static_cast<int>(t.rows.size()); ++r)
+        for (int k = 0; k < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()); ++k) {
+            const std::string region = region_cell_style(*ts, t, r, k);
+            const std::string old_region = was ? region_cell_style(*was, t, r, k) : std::string{};
+            auto& c = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(k)];
             if (!c.style.empty() && c.style != old_region) continue;   // a style of its own
             if (region.empty()) { if (!c.style.empty()) c.style.clear(); continue; }
             apply_cell_style(d, c, region);
         }
-    }
 }
 
 Doc::Id add_table_style(DocJournal& j, Doc& d, const std::string& name, const Table* from) {
@@ -193,15 +198,15 @@ bool edit_table_style(DocJournal& j, Doc& d, const Doc::Id& id, const std::strin
         through(t.band_fill, o.band_fill, n.band_fill);
         through(t.band_tint, o.band_tint, n.band_tint);
         through(t.band_every, o.band_every, n.band_every);
-        for (int r = 0; r < static_cast<int>(t.rows.size()); ++r) {
-            const auto ro = region_cell_style(o, t, r), rn = region_cell_style(n, t, r);
-            if (ro == rn) continue;
-            for (auto& c : t.rows[static_cast<std::size_t>(r)].cells) {
+        for (int r = 0; r < static_cast<int>(t.rows.size()); ++r)
+            for (int k = 0; k < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()); ++k) {
+                const auto ro = region_cell_style(o, t, r, k), rn = region_cell_style(n, t, r, k);
+                if (ro == rn) continue;
+                auto& c = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(k)];
                 if (c.style != ro) continue;   // a style of its own
                 if (rn.empty()) c.style.clear();
                 else apply_cell_style(d, c, rn);
             }
-        }
         return !(t == was);
     });
 }
@@ -222,7 +227,7 @@ bool delete_cell_style(DocJournal& j, Doc& d, const Doc::Id& id) {
     for (const auto& ts : d.ids_of<TableStyle>()) {
         TableStyle v = *d.as<TableStyle>(ts);
         bool any = false;
-        for (auto* s : {&v.header_cell, &v.body_cell, &v.footer_cell})
+        for (auto* s : {&v.header_cell, &v.body_cell, &v.footer_cell, &v.left_cell, &v.right_cell})
             if (*s == id) { s->clear(); any = true; }
         if (any) { tss.push_back(ts); fixed.emplace_back(ts, v); }
     }
@@ -237,6 +242,42 @@ bool delete_cell_style(DocJournal& j, Doc& d, const Doc::Id& id) {
                 if (c.style == id) { c.style.clear(); any = true; }
         return any;
     });
+}
+
+bool redefine_table_style(DocJournal& j, Doc& d, const Doc::Id& id, const Table& from) {   // s347
+    return edit_table_style(j, d, id, "Redefine Table Style", [&](TableStyle& t) {
+        t.rule_w = from.rule_w;
+        t.rule_color = from.rule_color;
+        t.inset = from.inset;
+        t.header_fill = from.header_fill;
+        t.header_tint = from.header_tint;
+        t.band_fill = from.band_fill;
+        t.band_tint = from.band_tint;
+        t.band_every = from.band_every;
+    });
+}
+
+bool redefine_cell_style(DocJournal& j, Doc& d, const Doc::Id& id, const TableCell& from) {   // s347
+    return edit_cell_style(j, d, id, "Redefine Cell Style", [&](CellStyle& c) {
+        c.fill = from.fill;
+        c.fill_tint = from.fill_tint;
+        c.valign = from.valign;
+        c.borders = from.borders;
+    });
+}
+
+void clear_overrides(const Doc& d, Table& t, int r, int c) {   // s347
+    if (r >= 0) {
+        if (r < static_cast<int>(t.rows.size()) && c >= 0 && c < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size())) {
+            auto& x = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+            if (!x.style.empty()) apply_cell_style(d, x, x.style);
+        }
+        return;
+    }
+    if (!t.style.empty()) apply_table_style(d, t, t.style);
+    for (auto& row : t.rows)
+        for (auto& x : row.cells)
+            if (!x.style.empty()) apply_cell_style(d, x, x.style);
 }
 
 int table_style_uses(const Doc& d, const Doc::Id& id) {

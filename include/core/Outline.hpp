@@ -41,7 +41,7 @@ bool parse_note_item_id(const std::string& id, std::string& story, int& para, in
 
 // How a tile draws its thumbnail. The painter lives on the GTK side; the core
 // says only WHAT it is.
-enum class ThumbKind { Page, Text, Image, Swatch, Style, Section, Generated };
+enum class ThumbKind { Page, Text, Image, Swatch, Style, Section, Generated, Table };   // s345: Table (a table / cell style's specimen)
 
 struct Thumb {
     ThumbKind     kind   = ThumbKind::Page;
@@ -57,6 +57,14 @@ struct Thumb {
     std::int64_t  stamp  = 0;        // its time, so a changed file redraws
     std::string   family;            // style specimens (s011): its font
     std::string   page;              // s020: pages / masters -- the record to draw ("" = stand-in)
+    // s345: a table style's specimen -- rgb the header's fill, rgb2 the
+    // bands' (kNoFill: none), rgb3 the grid's colour, rule its weight
+    // (points); `panels` 0 a table, 1 a cell style (one cell, its borders
+    // heavy when `bold`).
+    static constexpr std::uint32_t kNoFill = 0xffffffffu;
+    std::uint32_t rgb2   = kNoFill;
+    std::uint32_t rgb3   = 0x222222;
+    double        rule   = 0.5;
 };
 
 // A field the inspector may EDIT carries a key (what the UI asks the shell to

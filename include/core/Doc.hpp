@@ -779,6 +779,7 @@ struct TableStyle {
     double      band_tint = 0.1;
     int         band_every = 1;
     std::string header_cell, body_cell, footer_cell;
+    std::string left_cell, right_cell;   // s346: the body's first / last column (header and footer rows win)
     bool operator==(const TableStyle&) const = default;
 };
 
@@ -1696,8 +1697,18 @@ bool delete_cell_style(DocJournal& j, Doc& d, const Doc::Id& id);
 // style of its own keeps it); a cell takes a cell style's set settings.
 void apply_table_style(const Doc& d, Table& t, const Doc::Id& id);
 void apply_cell_style(const Doc& d, TableCell& c, const Doc::Id& id);
-// The region cell style row `r` of `t` takes under table style `ts`.
-std::string region_cell_style(const TableStyle& ts, const Table& t, int r);
+// The region cell style cell (r, c) of `t` takes under table style `ts` --
+// header / footer rows; else the first / last column's (s346) when set;
+// else the body's. A merge counts by its own cell and its last column.
+std::string region_cell_style(const TableStyle& ts, const Table& t, int r, int c);
+// s347 (InDesign's Redefine Style): a style takes a table's / a cell's look
+// as it is now (a table: its own settings, not its cells'; a cell: its
+// fill, words' place, borders) -- written through as any edit. One step.
+bool redefine_table_style(DocJournal& j, Doc& d, const Doc::Id& id, const Table& from);
+bool redefine_cell_style(DocJournal& j, Doc& d, const Doc::Id& id, const TableCell& from);
+// s347: Clear Overrides -- pure: a styled table back to its style and its
+// styled cells to theirs (r < 0); else just cell (r, c) to its cell style.
+void clear_overrides(const Doc& d, Table& t, int r = -1, int c = -1);
 // How many tables / cells use a style.
 int table_style_uses(const Doc& d, const Doc::Id& id);
 int cell_style_uses(const Doc& d, const Doc::Id& id);

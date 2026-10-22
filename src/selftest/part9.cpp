@@ -3698,5 +3698,91 @@ void part9() {
         j.undo();
         check("alt+drag: undone in one", core::to_json(d) == before);
     }
+    // -- s345: table / cell styles' specimens -------------------------------------------
+    {
+        std::cout << "--- s345 style specimens ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const std::string sw = d.ids_of<core::Swatch>().back();
+        const auto ts = D::add_table_style(j, d, "Grid");
+        D::edit_table_style(j, d, ts, "x", [&](core::TableStyle& t) { t.header_fill = sw; t.header_tint = 1; t.rule_w = 2; });
+        const auto cs = D::add_cell_style(j, d, "Hot");
+        D::edit_cell_style(j, d, cs, "x", [&](core::CellStyle& c) { c.fill = sw; c.borders[0].w = 2; });
+        const auto o = core::project(d, "");
+        const core::Thumb *tt = nullptr, *ct = nullptr;
+        for (const auto& it : o.items()) { if (it.id == ts) tt = &it.thumb; if (it.id == cs) ct = &it.thumb; }
+        const auto rgb = core::doc::screen_rgb(*d.as<core::Swatch>(sw));
+        check("specimen: a table style -- its header's colour, no bands, its grid", tt && tt->kind == core::ThumbKind::Table && tt->panels == 0 &&
+                                                                                   tt->rgb == rgb && tt->rgb2 == core::Thumb::kNoFill && tt->rule == 2);
+        check("specimen: a cell style -- one cell, its fill, heavy borders", ct && ct->kind == core::ThumbKind::Table && ct->panels == 1 && ct->rgb == rgb && ct->bold);
+    }
+    // -- s346: a table style's left / right column cell styles ------------------------
+    {
+        std::cout << "--- s346 column cell styles ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto head = D::add_cell_style(j, d, "Head");
+        const auto left = D::add_cell_style(j, d, "Left");
+        const auto right = D::add_cell_style(j, d, "Right");
+        const auto body = D::add_cell_style(j, d, "Body");
+        const auto ts = D::add_table_style(j, d, "Grid");
+        D::edit_table_style(j, d, ts, "x", [&](core::TableStyle& t) { t.header_cell = head; t.body_cell = body; t.left_cell = left; t.right_cell = right; });
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(3, 3, 180));
+        D::edit_table(j, d, "story.1", p, "x", [&](core::Table& t) { t.header_rows = 1; D::table_merge(t, 2, 1, 2, 1); D::apply_table_style(d, t, ts); });
+        auto T = [&] { return *D::table_at(d, "story.1", p); };
+        auto t = T();
+        check("columns: the header row its own, not the columns'", t.rows[0].cells[0].style == head && t.rows[0].cells[2].style == head);
+        check("columns: the body's first / last column, the middle the body's", t.rows[1].cells[0].style == left && t.rows[1].cells[2].style == right &&
+                                                                               t.rows[1].cells[1].style == body);
+        check("columns: a merge reaching the last column takes the right's", t.rows[2].cells[1].style == right);
+        D::edit_table_style(j, d, ts, "x", [](core::TableStyle& x) { x.left_cell.clear(); });
+        check("columns: the left one cleared -- those cells the body's", T().rows[1].cells[0].style == body && T().rows[1].cells[2].style == right);
+        {
+            core::Doc e;
+            check("columns: saved", core::from_json(e, core::to_json(d)) && e.as<core::TableStyle>(ts)->right_cell == right);
+        }
+        D::delete_cell_style(j, d, right);
+        check("columns: a deleted cell style leaves the table style", d.as<core::TableStyle>(ts)->right_cell.empty());
+    }
+    // -- s347: Redefine Style; Clear Overrides ---------------------------------------
+    {
+        std::cout << "--- s347 redefine / clear ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const std::string sw = d.ids_of<core::Swatch>().back();
+        const auto body = D::add_cell_style(j, d, "Body");
+        D::edit_cell_style(j, d, body, "x", [](core::CellStyle& c) { c.valign = 0; });
+        const auto ts = D::add_table_style(j, d, "Grid");
+        D::edit_table_style(j, d, ts, "x", [&](core::TableStyle& t) { t.body_cell = body; });
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(3, 2, 160));
+        D::edit_table(j, d, "story.1", p, "x", [&](core::Table& t) { D::apply_table_style(d, t, ts); });
+        auto T = [&] { return *D::table_at(d, "story.1", p); };
+        // a cell changed by hand, then the style redefined from it: every body cell follows
+        D::edit_table(j, d, "story.1", p, "x", [&](core::Table& t) { t.rows[1].cells[1].fill = sw; t.rows[1].cells[1].valign = 1; });
+        const auto n0 = j.size();
+        check("redefine cell style: one step", D::redefine_cell_style(j, d, body, T().rows[1].cells[1]) && j.size() == n0 + 1);
+        check("redefine cell style: the style took the look", d.as<core::CellStyle>(body)->fill && *d.as<core::CellStyle>(body)->fill == sw &&
+                                                              *d.as<core::CellStyle>(body)->valign == 1);
+        check("redefine cell style: its other cells follow", T().rows[2].cells[0].fill == sw && T().rows[0].cells[0].valign == 1);
+        D::edit_table(j, d, "story.1", p, "x", [](core::Table& t) { t.rule_w = 3; });
+        check("redefine table style: from the table", D::redefine_table_style(j, d, ts, T()) && d.as<core::TableStyle>(ts)->rule_w == 3);
+        // overrides cleared
+        D::edit_table(j, d, "story.1", p, "x", [](core::Table& t) { t.rule_w = 1; t.rows[2].cells[1].valign = 2; t.rows[0].cells[1].valign = 2; });
+        auto t1 = T();
+        D::clear_overrides(d, t1, 2, 1);
+        check("clear: one cell back to its style, the rest kept", t1.rows[2].cells[1].valign == 1 && t1.rows[0].cells[1].valign == 2 && t1.rule_w == 1);
+        auto t2 = T();
+        D::clear_overrides(d, t2);
+        check("clear: the whole table back to its style", t2.rule_w == 3 && t2.rows[0].cells[1].valign == 1 && t2.rows[2].cells[1].valign == 1);
+    }
 }
 }  // namespace cxtest
