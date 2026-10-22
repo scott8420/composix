@@ -573,9 +573,21 @@ int swatch_uses(const Doc& d, const Doc::Id& sw) {
         const auto& s = *d.as<Style>(id);
         n += (s.color == sw) + (s.rule_above.color == sw) + (s.rule_below.color == sw);
     }
+    for (const auto& id : d.ids_of<Frame>()) n += d.as<Frame>(id)->col_rule.color == sw;   // s325: a column rule's
+    const auto in_runs = [&](const std::vector<Run>& runs) { for (const auto& r : runs) n += r.local.color == sw; };
     for (const auto& id : d.ids_of<Story>())
-        for (const auto& p : d.as<Story>(id)->paras)
-            for (const auto& r : p.runs) n += r.local.color == sw;
+        for (const auto& p : d.as<Story>(id)->paras) {
+            in_runs(p.runs);
+            for (const auto& note : p.notes) in_runs(note.runs);   // s325: a note's words
+            for (const auto& t : p.tables) {   // s325: a table's fills, grid, words
+                n += (t.header_fill == sw) + (t.band_fill == sw) + (t.rule_color == sw);
+                for (const auto& row : t.rows)
+                    for (const auto& c : row.cells) {
+                        n += c.fill == sw;
+                        for (const auto& cp : c.paras) in_runs(cp.runs);
+                    }
+            }
+        }
     return n;
 }
 

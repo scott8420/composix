@@ -141,6 +141,8 @@ json table_json(const Table& t) {
     if (!t.cell_style.empty()) j["cell_style"] = t.cell_style;
     if (!t.header_fill.empty()) { j["header_fill"] = t.header_fill; j["header_tint"] = t.header_tint; }
     if (t.align) j["align"] = t.align;   // s321
+    if (t.footer_rows > 0) j["footer"] = t.footer_rows;   // s326
+    if (!t.band_fill.empty()) { j["band_fill"] = t.band_fill; j["band_tint"] = t.band_tint; j["band_every"] = t.band_every; }   // s325
     return j;
 }
 Table table_of_json(const json& j) {
@@ -179,6 +181,10 @@ Table table_of_json(const json& j) {
     t.header_fill = val<std::string>(j, "header_fill", "");
     t.header_tint = val(j, "header_tint", 0.2);
     t.align = std::clamp(val(j, "align", 0), 0, 2);   // s321
+    t.footer_rows = std::max(0, val(j, "footer", 0));   // s326
+    t.band_fill = val<std::string>(j, "band_fill", "");   // s325
+    t.band_tint = val(j, "band_tint", 0.1);
+    t.band_every = std::clamp(val(j, "band_every", 1), 1, 99);
     return t;
 }
 

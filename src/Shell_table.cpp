@@ -106,6 +106,68 @@ void Shell::on_insert_table() {  // handler
     m_table_pop->popup();
 }
 
+// s324: the light header Insert Table gives -- the document's Black
+std::string Shell::table_header_black() const {  // helper
+    for (const auto& sw : m_doc.ids_of<core::Swatch>())
+        if (m_doc.as<core::Swatch>(sw)->name == "Black") return sw;
+    return {};
+}
+
+// s324: Type > Convert Text to Table -- the paragraphs the selection touches
+// (else the caret's), a row each, tabs between the cells; a first row
+// over others is the header.
+void Shell::on_text_to_table() {  // handler
+    auto& cv = m_canvas_view.canvas();
+    if (!cv.editing()) {
+        alert("Select some text first", "Convert Text to Table makes a row of each paragraph selected, a cell of each run of words between tabs.");
+        return;
+    }
+    const std::string story = cv.edit_story_id();
+    auto [a, b] = cv.edit_range();
+    if (b < a) std::swap(a, b);
+    int p1 = b.para;
+    if (b.byte == 0 && b.para > a.para) --p1;   // a selection ending at a paragraph's start leaves that one out
+    double width = 288;
+    if (const auto* f = m_doc.as<core::Frame>(cv.edit_frame_id())) width = core::column_width(*f, 0) - 1;
+    cv.end_edit();
+    const int p = core::doc::text_to_table(m_journal, m_doc, story, a.para, p1, width, p1 > a.para ? 1 : 0, table_header_black());
+    if (p == -2) {
+        alert("Can't make a table of these", "One of the paragraphs holds a footnote, cross-reference, anchor, index entry or table -- they can't go into a cell.");
+        return;
+    }
+    if (p < 0) return;
+    if (auto lg = log::get(log::Area::Shell)) lg->info("text to table: {} paras {}..{} -> para {}", story, a.para, p1, p);
+    cv.model_changed();
+    Glib::signal_idle().connect_once([this, story, p] { open_table_editor(story, p); });
+}
+
+// s324: Type > Convert Table to Text -- the table at (or after) the caret, or
+// the picked frame's first.
+void Shell::on_table_to_text() {  // handler
+    auto& cv = m_canvas_view.canvas();
+    std::string story;
+    int from = 0;
+    if (cv.editing()) { story = cv.edit_story_id(); from = cv.edit_range().first.para; }
+    else
+        for (const auto& id : cv.selection())
+            if (const auto* f = m_doc.as<core::Frame>(id); f && f->kind == core::FrameKind::Text && !f->story.empty()) { story = f->story; break; }
+    const auto* st = m_doc.as<core::Story>(story);
+    int para = -1;
+    if (st) {
+        for (int p = from; p < static_cast<int>(st->paras.size()) && para < 0; ++p) if (!st->paras[static_cast<std::size_t>(p)].tables.empty()) para = p;
+        for (int p = 0; p < from && para < 0; ++p) if (!st->paras[static_cast<std::size_t>(p)].tables.empty()) para = p;
+    }
+    if (para < 0) {
+        alert("No table here", "Pick a text frame holding a table (or click into its text), then Convert Table to Text.");
+        return;
+    }
+    if (m_table_win) m_table_win->hide();   // its table is going
+    if (cv.editing()) cv.end_edit();
+    const int rows = core::doc::table_to_text(m_journal, m_doc, story, para);
+    if (auto lg = log::get(log::Area::Shell)) lg->info("table to text: {} para {} -> {} paragraphs", story, para, rows);
+    cv.model_changed();
+}
+
 void Shell::on_edit_table() {  // handler
     auto& cv = m_canvas_view.canvas();
     std::string story;
@@ -163,13 +225,15 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
     };
     // s323: the cell the tools act on (the one last typed in / focused)
     auto cur = std::make_shared<std::pair<int, int>>(std::max(0, focus_row), std::max(0, focus_col));
+    const auto picked = std::make_shared<std::function<void()>>([] {});   // s325: the picked cell's rows follow it
     const auto fill = std::make_shared<std::function<void()>>();
-    *fill = [work, entries, grid, cur] {
+    *fill = [work, entries, grid, cur, picked] {
         while (auto* ch = grid->get_first_child()) grid->remove(*ch);
         entries->clear();
         const int R = static_cast<int>(work->rows.size()), C = core::doc::table_cols(*work);
         for (int r = 0; r < R; ++r) {
-            auto lab = Gtk::make_managed<Gtk::Label>(r < work->header_rows ? "H" : std::to_string(r + 1 - work->header_rows));
+            const bool foot = work->footer_rows > 0 && r >= R - work->footer_rows && r >= work->header_rows;   // s326
+            auto lab = Gtk::make_managed<Gtk::Label>(r < work->header_rows ? "H" : foot ? "F" : std::to_string(r + 1 - work->header_rows));
             lab->add_css_class("dim-label");
             lab->set_size_request(28, -1);
             grid->attach(*lab, 0, r + 1);
@@ -182,10 +246,10 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
                 e->set_hexpand(true);
                 e->set_width_chars(8);
                 e->set_text(shown(cell));
-                if (r < work->header_rows) e->add_css_class("cx-table-head");
+                if (r < work->header_rows || foot) e->add_css_class("cx-table-head");
                 if (cell.span_cols > 1 || cell.span_rows > 1) e->add_css_class("cx-table-merged");
                 auto focus = Gtk::EventControllerFocus::create();
-                focus->signal_enter().connect([cur, r, c] { *cur = {r, c}; });
+                focus->signal_enter().connect([cur, picked, r, c] { *cur = {r, c}; (*picked)(); });
                 e->add_controller(focus);
                 grid->attach(*e, c + 1, r + 1, std::max(1, cell.span_cols), std::max(1, cell.span_rows));
                 (*entries)[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)] = e;
@@ -210,8 +274,12 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
         b->signal_clicked().connect([keep, fill, f] { keep(); f(); (*fill)(); });
         bar->append(*b);
     };
-    act("+ Row", "add_row", [work] { core::doc::table_insert_row(*work, static_cast<int>(work->rows.size())); });
-    act("− Row", "del_row", [work] { core::doc::table_delete_row(*work, static_cast<int>(work->rows.size()) - 1); });
+    // s326: a row added / taken at the body's end (before the footer)
+    act("+ Row", "add_row", [work] { core::doc::table_insert_row(*work, static_cast<int>(work->rows.size()) - std::max(0, work->footer_rows)); });
+    act("− Row", "del_row", [work] {
+        const int R = static_cast<int>(work->rows.size()), body_last = R - 1 - std::max(0, work->footer_rows);
+        core::doc::table_delete_row(*work, body_last >= work->header_rows ? body_last : R - 1);
+    });
     act("+ Column", "add_col", [work] { core::doc::table_insert_col(*work, core::doc::table_cols(*work)); });
     act("− Column", "del_col", [work] { core::doc::table_delete_col(*work, core::doc::table_cols(*work) - 1); });
     auto hl = Gtk::make_managed<Gtk::Label>("Header rows");
@@ -225,6 +293,18 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
         (*fill)();
     });
     bar->append(*heads);
+    auto fl2 = Gtk::make_managed<Gtk::Label>("Footer rows");   // s326
+    fl2->set_margin_start(12);
+    bar->append(*fl2);
+    auto feet = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->footer_rows, 0, 20, 1, 1), 1, 0);
+    feet->set_name("table.feet");
+    feet->set_tooltip_text("The table's last rows, set again at the foot of each column it breaks across");
+    feet->signal_value_changed().connect([keep, fill, work, feet] {
+        keep();
+        work->footer_rows = std::clamp(static_cast<int>(feet->get_value()), 0, std::max(0, static_cast<int>(work->rows.size()) - work->header_rows));
+        (*fill)();
+    });
+    bar->append(*feet);
     auto gl = Gtk::make_managed<Gtk::Label>("Grid");
     gl->set_margin_start(12);
     bar->append(*gl);
@@ -234,30 +314,59 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
     weight->signal_value_changed().connect([work, weight] { work->rule_w = weight->get_value(); });
     bar->append(*weight);
     outer->append(*bar);
-    {   // the header's fill
+    // the swatches, "None" first (s325: the fills' dropdowns)
+    std::vector<Glib::ustring> sw_names{"None"};
+    std::vector<std::string> sw_ids{""};
+    for (const auto& sw : m_doc.ids_of<core::Swatch>()) {
+        sw_names.push_back(m_doc.as<core::Swatch>(sw)->name);
+        sw_ids.push_back(sw);
+    }
+    const auto sw_index = [sw_ids](const std::string& id) {
+        for (std::size_t k = 0; k < sw_ids.size(); ++k) if (sw_ids[k] == id) return static_cast<guint>(k);
+        return 0u;
+    };
+    {   // the header's fill; s325: the rows' bands
         auto fb = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
         auto fl = Gtk::make_managed<Gtk::Label>("Header fill");
         fb->append(*fl);
-        std::vector<Glib::ustring> names{"None"};
-        std::vector<std::string> ids{""};
-        guint now = 0;
-        for (const auto& sw : m_doc.ids_of<core::Swatch>()) {
-            names.push_back(m_doc.as<core::Swatch>(sw)->name);
-            ids.push_back(sw);
-            if (sw == work->header_fill) now = static_cast<guint>(ids.size() - 1);
-        }
-        auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(names));
+        auto dd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(sw_names));
         dd->set_name("table.header_fill");
-        dd->set_selected(now);
-        dd->property_selected().signal_changed().connect([work, dd, ids] {
+        dd->set_selected(sw_index(work->header_fill));
+        dd->property_selected().signal_changed().connect([work, dd, sw_ids] {
             const auto k = dd->get_selected();
-            if (k < ids.size()) work->header_fill = ids[k];
+            if (k < sw_ids.size()) work->header_fill = sw_ids[k];
         });
         fb->append(*dd);
+        auto bl = Gtk::make_managed<Gtk::Label>("Alternate rows");
+        bl->set_margin_start(12);
+        fb->append(*bl);
+        auto bd = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(sw_names));
+        bd->set_name("table.band_fill");
+        bd->set_tooltip_text("Every second run of body rows filled with this (a cell's own fill over it)");
+        bd->set_selected(sw_index(work->band_fill));
+        fb->append(*bd);
+        auto bt = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->band_tint * 100, 5, 100, 5, 10), 5, 0);
+        bt->set_name("table.band_tint");
+        bt->set_tooltip_text("The bands' tint, percent");
+        fb->append(*bt);
+        auto el = Gtk::make_managed<Gtk::Label>("% every");
+        fb->append(*el);
+        auto be = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->band_every, 1, 9, 1, 1), 1, 0);
+        be->set_name("table.band_every");
+        be->set_tooltip_text("Rows in a band (1: every other row)");
+        fb->append(*be);
+        auto rl = Gtk::make_managed<Gtk::Label>("rows");
+        fb->append(*rl);
         auto tip = Gtk::make_managed<Gtk::Label>("A cell's paragraphs: “a | b”");
         tip->add_css_class("dim-label");
         tip->set_margin_start(12);
         fb->append(*tip);
+        bd->property_selected().signal_changed().connect([work, bd, sw_ids] {
+            const auto k = bd->get_selected();
+            if (k < sw_ids.size()) work->band_fill = sw_ids[k];
+        });
+        bt->signal_value_changed().connect([work, bt] { work->band_tint = bt->get_value() / 100.0; });
+        be->signal_value_changed().connect([work, be] { work->band_every = static_cast<int>(be->get_value()); });
         outer->append(*fb);
     }
     {   // s323: the picked cell -- merged across / down, unmerged; its words top / middle / bottom; the table in its column
@@ -295,6 +404,43 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
             if (o.first >= 0) work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)].valign = static_cast<int>(va->get_selected());
         });
         cb->append(*va);
+        auto cl = Gtk::make_managed<Gtk::Label>("Cell fill");   // s325: the picked cell's own
+        cl->set_margin_start(12);
+        cb->append(*cl);
+        auto cf = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create(sw_names));
+        cf->set_name("table.cell_fill");
+        cf->set_tooltip_text("The picked cell's own fill (None: the header's or the rows')");
+        cb->append(*cf);
+        auto ct = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(100, 5, 100, 5, 10), 5, 0);
+        ct->set_name("table.cell_tint");
+        ct->set_tooltip_text("The cell fill's tint, percent");
+        cb->append(*ct);
+        auto syncing = std::make_shared<bool>(false);
+        cf->property_selected().signal_changed().connect([work, cur, cf, ct, sw_ids, syncing] {
+            if (*syncing) return;
+            const auto o = core::doc::owner_of(*work, cur->first, cur->second);
+            const auto k = cf->get_selected();
+            if (o.first < 0 || k >= sw_ids.size()) return;
+            auto& x = work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)];
+            x.fill = sw_ids[k];
+            x.fill_tint = ct->get_value() / 100.0;
+        });
+        ct->signal_value_changed().connect([work, cur, ct, syncing] {
+            if (*syncing) return;
+            const auto o = core::doc::owner_of(*work, cur->first, cur->second);
+            if (o.first >= 0) work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)].fill_tint = ct->get_value() / 100.0;
+        });
+        *picked = [work, cur, va, cf, ct, syncing, sw_index] {   // s325: the rows show the picked cell's settings
+            const auto o = core::doc::owner_of(*work, cur->first, cur->second);
+            if (o.first < 0) return;
+            const auto& x = work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)];
+            *syncing = true;
+            va->set_selected(static_cast<guint>(std::clamp(x.valign, 0, 2)));
+            cf->set_selected(sw_index(x.fill));
+            ct->set_value(x.fill.empty() ? 100 : x.fill_tint * 100);
+            *syncing = false;
+        };
+        (*picked)();
         auto al = Gtk::make_managed<Gtk::Label>("Table");
         al->set_margin_start(12);
         cb->append(*al);

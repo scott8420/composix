@@ -2996,6 +2996,24 @@ bool table_set_width(Table& t, int c, double w) {   // s320
     return true;
 }
 
+std::string table_cell_fill(const Table& t, int r, int c, double* tint) {   // s325
+    if (r < 0 || r >= static_cast<int>(t.rows.size())) return {};
+    const auto& row = t.rows[static_cast<std::size_t>(r)];
+    if (c >= 0 && c < static_cast<int>(row.cells.size()) && !row.cells[static_cast<std::size_t>(c)].fill.empty()) {
+        if (tint) *tint = row.cells[static_cast<std::size_t>(c)].fill_tint;
+        return row.cells[static_cast<std::size_t>(c)].fill;
+    }
+    if (r < t.header_rows) {
+        if (tint && !t.header_fill.empty()) *tint = t.header_tint;
+        return t.header_fill;
+    }
+    if (t.band_fill.empty() || r >= static_cast<int>(t.rows.size()) - std::max(0, t.footer_rows)) return {};   // s326: not the footer
+    const int k = (r - t.header_rows) / std::max(1, t.band_every);
+    if (k % 2 == 0) return {};
+    if (tint) *tint = t.band_tint;
+    return t.band_fill;
+}
+
 bool table_unmerge(Table& t, int r, int c) {   // s319
     if (r < 0 || c < 0 || r >= static_cast<int>(t.rows.size()) || c >= static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size())) return false;
     auto& x = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
@@ -3035,14 +3053,18 @@ void table_insert_row(Table& t, int at) {
     at = std::clamp(at, 0, static_cast<int>(t.rows.size()));
     TableRow r;
     r.cells.resize(t.widths.size());
+    const int R0 = static_cast<int>(t.rows.size());
     t.rows.insert(t.rows.begin() + at, r);
     if (at < t.header_rows) ++t.header_rows;
+    else if (t.footer_rows > 0 && at > R0 - t.footer_rows) ++t.footer_rows;   // s326: inside the footer
     clamp_spans(t);   // s319
 }
 void table_delete_row(Table& t, int at) {
     if (t.rows.size() <= 1 || at < 0 || at >= static_cast<int>(t.rows.size())) return;
+    const int R0 = static_cast<int>(t.rows.size());
     t.rows.erase(t.rows.begin() + at);
     if (at < t.header_rows) --t.header_rows;
+    else if (t.footer_rows > 0 && at >= R0 - t.footer_rows) --t.footer_rows;   // s326: a footer row
     clamp_spans(t);   // s319
 }
 void table_insert_col(Table& t, int at) {
@@ -3069,6 +3091,112 @@ void table_delete_col(Table& t, int at) {
     if (total > 0) for (auto& x : t.widths) x *= (total + gone) / total;   // as wide as before
     for (auto& r : t.rows) if (at < static_cast<int>(r.cells.size())) r.cells.erase(r.cells.begin() + at);
     clamp_spans(t);   // s319
+}
+
+// ── s324: text to a table, a table to text ──────────────────────────────────
+namespace {
+// [a, b) of `p`'s runs, from 0
+std::vector<Run> runs_between(const std::vector<Run>& runs, int a, int b) {
+    std::vector<Run> out;
+    for (const auto& r : runs) {
+        const int s = std::max(r.start, a), e = std::min(r.end, b);
+        if (e <= s) continue;
+        Run x = r;
+        x.start = s - a;
+        x.end = e - a;
+        out.push_back(std::move(x));
+    }
+    return out;
+}
+}  // namespace
+
+int text_to_table(DocJournal& j, Doc& d, const Doc::Id& story, int p0, int p1, double width, int header_rows, const std::string& header_fill) {
+    const auto* st = d.as<Story>(story);
+    if (!st || st->paras.empty()) return -1;
+    const int n = static_cast<int>(st->paras.size());
+    p0 = std::clamp(p0, 0, n - 1);
+    p1 = std::clamp(p1, p0, n - 1);
+    for (int p = p0; p <= p1; ++p) {
+        const auto& q = st->paras[static_cast<std::size_t>(p)];
+        if (!q.notes.empty() || !q.refs.empty() || !q.anchors.empty() || !q.index.empty() || !q.tables.empty()) return -2;
+    }
+    Story s = *st;
+    const auto& first = s.paras[static_cast<std::size_t>(p0)];
+    Table t;
+    for (int p = p0; p <= p1; ++p) {
+        const auto& q = s.paras[static_cast<std::size_t>(p)];
+        TableRow row;
+        int a = 0;
+        for (;;) {
+            const auto e = q.text.find('\t', static_cast<std::size_t>(a));
+            const int b = e == std::string::npos ? static_cast<int>(q.text.size()) : static_cast<int>(e);
+            TableCell c;
+            if (b > a) {
+                Para cp;
+                cp.style = q.style == first.style ? std::string() : q.style;
+                cp.text = q.text.substr(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a));
+                cp.runs = runs_between(q.runs, a, b);
+                cp.over = q.over;
+                c.paras.push_back(std::move(cp));
+            }
+            row.cells.push_back(std::move(c));
+            if (e == std::string::npos) break;
+            a = b + 1;
+        }
+        t.rows.push_back(std::move(row));
+    }
+    std::size_t cols = 1;
+    for (const auto& r : t.rows) cols = std::max(cols, r.cells.size());
+    for (auto& r : t.rows) r.cells.resize(cols);
+    t.widths.assign(cols, std::max(12.0 * static_cast<double>(cols), width) / static_cast<double>(cols));
+    t.header_rows = std::clamp(header_rows, 0, static_cast<int>(t.rows.size()) - 1);
+    if (t.header_rows > 0 && !header_fill.empty()) { t.header_fill = header_fill; t.header_tint = 0.12; }
+    Para tp;
+    tp.style = first.style;
+    tp.brk = first.brk;
+    tp.text = kMarkTable;
+    tp.tables = {std::move(t)};
+    s.paras.erase(s.paras.begin() + p0, s.paras.begin() + p1 + 1);
+    s.paras.insert(s.paras.begin() + p0, std::move(tp));
+    if (!j.run("Convert Text to Table", {story}, [&] { d.put(story, s); })) return -1;
+    return p0;
+}
+
+int table_to_text(DocJournal& j, Doc& d, const Doc::Id& story, int para) {
+    const auto* t = table_at(d, story, para);
+    if (!t) return 0;
+    Story s = *d.as<Story>(story);
+    const Para tp = s.paras[static_cast<std::size_t>(para)];
+    const std::string style = t->cell_style.empty() ? tp.style : t->cell_style;
+    std::vector<Para> out;
+    const int R = static_cast<int>(t->rows.size()), C = table_cols(*t);
+    for (int r = 0; r < R; ++r) {
+        Para p;
+        p.style = style;
+        const auto& row = t->rows[static_cast<std::size_t>(r)];
+        for (int c = 0; c < C; ++c) {
+            if (c > 0) p.text += '\t';
+            if (c >= static_cast<int>(row.cells.size()) || owner_of(*t, r, c) != std::pair<int, int>{r, c}) continue;
+            const auto& cell = row.cells[static_cast<std::size_t>(c)];
+            for (std::size_t k = 0; k < cell.paras.size(); ++k) {
+                if (k > 0) p.text += ' ';
+                const int at = static_cast<int>(p.text.size());
+                for (auto run : cell.paras[k].runs) {
+                    run.start += at;
+                    run.end += at;
+                    p.runs.push_back(std::move(run));
+                }
+                p.text += cell.paras[k].text;
+            }
+        }
+        out.push_back(std::move(p));
+    }
+    if (out.empty()) return 0;
+    out.front().brk = tp.brk;
+    s.paras.erase(s.paras.begin() + para);
+    s.paras.insert(s.paras.begin() + para, out.begin(), out.end());
+    if (!j.run("Convert Table to Text", {story}, [&] { d.put(story, s); })) return 0;
+    return static_cast<int>(out.size());
 }
 
 bool set_language(DocJournal& j, Doc& d, const std::string& lang) {   // s307
@@ -6519,6 +6647,7 @@ const std::vector<Verb>& verbs() {
         {"set_link", [](DocJournal& j, Doc& d) { set_link(j, d, "story.1", {1, 4}, {1, 12}, "www.example.com"); }},   // s303
         {"set_language", [](DocJournal& j, Doc& d) { set_language(j, d, "en_GB"); }},   // s307
         {"insert_table", [](DocJournal& j, Doc& d) { insert_table(j, d, "story.1", {1, 10}, make_table(3, 3, 288)); }},   // s314
+        {"text_to_table", [](DocJournal& j, Doc& d) { text_to_table(j, d, "story.1", 1, 1, 240); }},   // s324
         {"link_to_paragraph", [](DocJournal& j, Doc& d) { link_to_paragraph(j, d, "story.2", {0, 0}, {0, 4}, "story.1", 4); }},   // s311
         {"replace_word", [](DocJournal& j, Doc& d) { replace_word(j, d, "story.1", 1, 4, 10, "harbor", "harbour"); }},
         {"change_all_words", [](DocJournal& j, Doc& d) { change_all_words(j, d, "the", "thee"); }},

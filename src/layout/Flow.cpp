@@ -1273,6 +1273,13 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                 const TableGeo tg = table_geo(d, para, avail);
                 const int nrows = static_cast<int>(tg.row_h.size());
                 const int heads = std::clamp(tb.header_rows, 0, nrows);
+                // s326: the footer -- its last rows, set again at the foot of each piece (none when
+                // it would leave no body row, or a merge reaches into it from the body)
+                int feet = std::clamp(tb.footer_rows, 0, std::max(0, nrows - heads - 1));
+                if (feet > 0 && !tg.break_before[static_cast<std::size_t>(nrows - feet)]) feet = 0;
+                const int body_end = nrows - feet;
+                double fy = 0;
+                for (int k = body_end; k < nrows; ++k) fy += tg.row_h[static_cast<std::size_t>(k)];
                 const double tx = cx + tin.left + std::max(0.0, avail - tg.width) * std::clamp(tb.align, 0, 2) / 2.0;   // s321: left / centre / right
                 const int len3 = static_cast<int>(para.text.size());
                 double yy = y + ((c.row == 0 && (y > top || style.top_space)) ? style.space_before : 0);
@@ -1287,27 +1294,28 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                 double hy = 0;   // the header rows' height, set again on a continuation
                 if (r > 0 && r >= heads) for (int h = 0; h < heads; ++h) hy += tg.row_h[static_cast<std::size_t>(h)];
                 // what fits: rows from r (at least one body row with the headers; a fresh column takes one regardless)
-                double room = lim() - yy - hy;
+                double room = lim() - yy - hy - fy;
                 int last = r;
-                while (last < nrows) {   // s319: rows a merge holds together go together
+                while (last < body_end) {   // s319: rows a merge holds together go together
                     int e = last + 1;
-                    while (e < nrows && !tg.break_before[static_cast<std::size_t>(e)]) ++e;
+                    while (e < body_end && !tg.break_before[static_cast<std::size_t>(e)]) ++e;
                     double gh = 0;
                     for (int k = last; k < e; ++k) gh += tg.row_h[static_cast<std::size_t>(k)];
                     if (gh > room + 0.01) break;
                     room -= gh;
                     last = e;
                 }
-                if (last <= std::max(r, heads) && last < nrows) {   // not even one body row here
+                if (last <= std::max(r, heads) && last < body_end) {   // not even one body row here
                     if (!fresh) break;          // the next column
                     last = std::max(r, heads) + 1;   // a fresh column: one row anyway (it may hang over) -- with what a merge holds to it
-                    while (last < nrows && !tg.break_before[static_cast<std::size_t>(last)]) ++last;
-                    if (last > nrows) last = nrows;
+                    while (last < body_end && !tg.break_before[static_cast<std::size_t>(last)]) ++last;
+                    if (last > body_end) last = body_end;
                 }
                 if (r > 0 && r >= heads)
                     for (int h = 0; h < heads; ++h) { put(h, yy); yy += tg.row_h[static_cast<std::size_t>(h)]; }
                 for (int k = r; k < last; ++k) { put(k, yy); yy += tg.row_h[static_cast<std::size_t>(k)]; }
-                if (last >= nrows) {
+                for (int k = body_end; k < nrows; ++k) { put(k, yy); yy += tg.row_h[static_cast<std::size_t>(k)]; }   // s326: the footer, here too
+                if (last >= body_end) {
                     y = yy + style.space_after;
                     ++c.p;
                     c.start = 0;
@@ -2976,9 +2984,8 @@ void visit_tables(const core::Doc& d, const std::string& story, const StoryFlow&
         for (int c = 0; c < n && c < static_cast<int>(row.cells.size()); ++c) {
             if (own(r, c) != std::pair<int, int>{r, c}) continue;   // s319: covered by a merge
             const auto& cell = row.cells[static_cast<std::size_t>(c)];
-            std::string fill = cell.fill;
-            double tint = cell.fill_tint;
-            if (fill.empty() && r < t.header_rows && !t.header_fill.empty()) { fill = t.header_fill; tint = t.header_tint; }
+            double tint = 1;
+            const std::string fill = core::doc::table_cell_fill(t, r, c, &tint);   // s325: its own, the header's, the bands'
             if (fill.empty() || !d.as<core::Swatch>(fill)) continue;
             TablePiece p;
             p.kind = TablePiece::Fill;

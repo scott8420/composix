@@ -498,6 +498,15 @@ struct Table {
     std::string header_fill;             // the header rows' fill (a swatch id, "" none)
     double      header_tint = 0.2;
     int         align = 0;               // s321: in its column -- left 0, centre 1, right 2
+    // s325: alternating rows -- the body's rows (not the header's) in runs
+    // of `band_every`, every second run filled ("" none). A cell's own fill
+    // over it.
+    std::string band_fill;
+    double      band_tint = 0.1;
+    int         band_every = 1;
+    // s326: its last `footer_rows` rows set again at the foot of each column
+    // it breaks across (and once at its end). Not banded.
+    int         footer_rows = 0;
     bool operator==(const Table&) const = default;
 };
 
@@ -1589,7 +1598,7 @@ std::string cell_text(const TableCell& c);
 void set_cell_words(TableCell& c, const std::string& text);
 bool set_cell_text(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, const std::string& text);
 // Rows and columns: a fresh empty one at `at` (0..n), or one gone (not the
-// last). Widths: a new column takes the width of its neighbour, the table
+// last). s326: a row put inside the footer (or the header) joins it. Widths: a new column takes the width of its neighbour, the table
 // as wide as before (the others narrowed in proportion).
 void table_insert_row(Table& t, int at);
 void table_delete_row(Table& t, int at);
@@ -1608,6 +1617,24 @@ bool table_unmerge(Table& t, int r, int c);
 // gives (or takes) the difference so the table keeps its width -- the last
 // column: the table grows / shrinks. True when it changed.
 bool table_set_width(Table& t, int c, double w);
+// s325: the fill cell (r, c) is drawn with -- its own; else the header's (a
+// header row); else the bands' (a body row in a filled run). "" none;
+// `tint` set when one.
+std::string table_cell_fill(const Table& t, int r, int c, double* tint = nullptr);
+// s324: paragraphs [p0, p1] a table -- each paragraph a row, its tabs
+// between the cells (as many columns as the row with most); the words keep
+// their character formatting; `header_rows` (clamped) the header. The table
+// across `width` points, its paragraph p0's style. Refused (-2) when one of
+// them holds a note, reference, anchor, index entry or table; -1 nothing.
+// One step ("Convert Text to Table"); the table's paragraph.
+// `header_fill`: the header rows' fill (a swatch id, tint 0.12; "" none).
+int text_to_table(DocJournal& j, Doc& d, const Doc::Id& story, int p0, int p1, double width, int header_rows = 0,
+                  const std::string& header_fill = {});
+// s324: the table at `para` back to text -- a paragraph a row, a tab between
+// its cells (a cell's own paragraphs joined by a space; a merge's covered
+// cells empty), the cells' character formatting kept. One step ("Convert
+// Table to Text"); the rows' count (0 none).
+int table_to_text(DocJournal& j, Doc& d, const Doc::Id& story, int para);
 // s307: the document's language for spell check ("" the app's). One step.
 bool set_language(DocJournal& j, Doc& d, const std::string& lang);
 // s307: a misspelled word put right -- [from, to) of paragraph `para`, if it

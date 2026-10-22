@@ -175,6 +175,9 @@ private:
     void ensure_spell();
     void on_insert_table();                         // category: handler: s318 -- Type > Insert Table...
     void on_edit_table();                           // category: handler: s318 -- Type > Edit Table...
+    void on_text_to_table();                        // category: handler: s324 -- Type > Convert Text to Table
+    void on_table_to_text();                        // category: handler: s324 -- Type > Convert Table to Text
+    std::string table_header_black() const;         // category: helper: s324 -- the light header fill (the document's Black)
     void open_table_editor(const std::string& story, int para, int row = -1, int col = -1);   // category: helper: s318; s323: a cell focused
     std::unique_ptr<Gtk::Popover> m_table_pop;      // s318: Insert Table
     std::unique_ptr<Gtk::Window>  m_table_win;      // s318: the table editor

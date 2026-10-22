@@ -193,7 +193,7 @@ public:
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
-    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew, Zoom };
+    enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew, Zoom, TableCol };
     // s035: Alt+drag a picture inside its frame -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
@@ -287,6 +287,16 @@ private:
     // s012: a picked text frame's gutter under the pointer (screen): the
     // column to its left, or -1.
     int gutter_hit(double sx, double sy) const;
+    // s327: a picked text frame's table -- a column's right edge under the
+    // pointer (screen), what dragging it moves.
+    struct TableEdge {
+        std::string frame, story;
+        int para = -1, col = -1;
+        double ratio = 1;             // drawn width / the table's own (narrowed to fit)
+        std::vector<double> widths0;  // the table's widths when the drag began
+        bool ok() const { return para >= 0; }
+    };
+    TableEdge table_edge_hit(double sx, double sy) const;
     const core::Story* edit_story() const { return m_doc.as<core::Story>(m_edit_story); }
 
     core::Doc&        m_doc;
@@ -435,6 +445,8 @@ private:
     // s012: dragging a gutter changes the widths of the columns either side
     int                 m_gutter = -1;          // the column left of the gutter being dragged
     int                 m_hover_gutter = -1;
+    TableEdge           m_tedge;                // s327: the table column edge being dragged
+    bool                m_hover_tedge = false;
     std::vector<double> m_col0;                 // every column's width (points) at press
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool, m_sig_caret;
     sigc::signal<void(const ContextHit&)> m_sig_context;   // s074

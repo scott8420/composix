@@ -2705,5 +2705,227 @@ void part9() {
         j.undo();
         check("cells: Change All undone", D::cell_text(D::table_at(d, "story.1", p)->rows[1].cells[0]) == "per tonn\nand qwzx");
     }
+    // -- s324: text to a table, a table to text -----------------------------------
+    {
+        std::cout << "--- s324 text <-> table ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        // three paragraphs of tab-separated words after paragraph 1
+        const int at = static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size());
+        D::edit_text(j, d, "story.1", {1, at}, {1, at}, "\nPort\tFee\tDays\nDover\t12\nCalais\t9\t3");
+        const auto n0 = d.as<core::Story>("story.1")->paras.size();
+        {   // bold on "Fee"
+            core::Story s = *d.as<core::Story>("story.1");
+            core::Run r;
+            r.start = 5; r.end = 8; r.local.bold = 1;
+            s.paras[2].runs = {r};
+            j.run("bold", {"story.1"}, [&] { d.put("story.1", s); });
+        }
+        const auto before = core::to_json(d);
+        const int p = D::text_to_table(j, d, "story.1", 2, 4, 240, 1);
+        const auto* t = D::table_at(d, "story.1", p);
+        check("to table: three paragraphs one, in their place", p == 2 && t && d.as<core::Story>("story.1")->paras.size() == n0 - 2);
+        check("to table: a row each, the widest row's columns, the width shared", t && t->rows.size() == 3 && D::table_cols(*t) == 3 &&
+                                                                                    std::abs(t->widths[0] - 80) < 1e-9 && t->header_rows == 1);
+        check("to table: the tabs between cells; a short row's last cell empty", t && D::cell_text(t->rows[0].cells[1]) == "Fee" &&
+                                                                                     D::cell_text(t->rows[1].cells[0]) == "Dover" &&
+                                                                                     t->rows[1].cells[2].paras.empty() && D::cell_text(t->rows[2].cells[2]) == "3");
+        check("to table: the words' formatting kept", t && t->rows[0].cells[1].paras.size() == 1 && t->rows[0].cells[1].paras[0].runs.size() == 1 &&
+                                                          t->rows[0].cells[1].paras[0].runs[0].start == 0 && t->rows[0].cells[1].paras[0].runs[0].end == 3 &&
+                                                          t->rows[0].cells[1].paras[0].runs[0].local.bold == 1);
+        j.undo();
+        check("to table: one step", core::to_json(d) == before);
+        j.redo();
+        // and back
+        const auto as_table = core::to_json(d);
+        D::edit_table(j, d, "story.1", p, "merge", [](core::Table& x) { D::table_merge(x, 1, 1, 2, 1); });   // "12" across two
+        const int rows = D::table_to_text(j, d, "story.1", p);
+        const auto& st = *d.as<core::Story>("story.1");
+        check("to text: a paragraph a row, tabs between", rows == 3 && st.paras[2].text == "Port\tFee\tDays" && st.paras[3].text == "Dover\t12\t" &&
+                                                            st.paras[4].text == "Calais\t9\t3" && st.paras.size() == n0);
+        check("to text: the formatting kept", st.paras[2].runs.size() == 1 && st.paras[2].runs[0].start == 5 && st.paras[2].runs[0].end == 8);
+        check("to text: no table left", !D::table_at(d, "story.1", 2) && !D::table_at(d, "story.1", 3));
+        j.undo();
+        j.undo();
+        check("to text: one step", core::to_json(d) == as_table);
+        // refused: a paragraph holding a note
+        core::Doc e;
+        core::DocJournal je{e};
+        e.set_door([&je] { return je.open(); });
+        core::load_sample(e);
+        int with_mark = -1;
+        const auto& es = *e.as<core::Story>("story.1");
+        for (int k = 0; k < static_cast<int>(es.paras.size()) && with_mark < 0; ++k)
+            if (!es.paras[static_cast<std::size_t>(k)].notes.empty() || !es.paras[static_cast<std::size_t>(k)].anchors.empty() ||
+                !es.paras[static_cast<std::size_t>(k)].index.empty() || !es.paras[static_cast<std::size_t>(k)].refs.empty()) with_mark = k;
+        if (with_mark < 0) {   // none in the sample: give one a note
+            D::edit_text(je, e, "story.1", {1, 0}, {1, 0}, "x");
+            core::Story s = *e.as<core::Story>("story.1");
+            s.paras[1].text = std::string(core::kMarkNote) + s.paras[1].text;
+            s.paras[1].notes.resize(1);
+            je.run("note", {"story.1"}, [&] { e.put("story.1", s); });
+            with_mark = 1;
+        }
+        const auto je0 = je.size();
+        check("to table: refused over a note / reference / anchor / index entry", D::text_to_table(je, e, "story.1", with_mark, with_mark, 200) == -2 &&
+                                                                                    je.size() == je0);
+    }
+    // -- s325: alternating rows; a table's colours are in use ------------------------
+    {
+        std::cout << "--- s325 bands ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto t = D::make_table(7, 2, 200);
+        t.header_rows = 1;
+        t.header_fill = "swatch.1";
+        t.band_fill = "swatch.2";
+        t.band_tint = 0.25;
+        double k = 0;
+        check("bands: a header row takes the header's", D::table_cell_fill(t, 0, 0, &k) == "swatch.1");
+        check("bands: the body's first row plain, its second filled", D::table_cell_fill(t, 1, 0).empty() && D::table_cell_fill(t, 2, 1, &k) == "swatch.2" &&
+                                                                         k == 0.25 && D::table_cell_fill(t, 3, 0).empty() && D::table_cell_fill(t, 4, 0) == "swatch.2");
+        t.band_every = 2;
+        check("bands: two rows a band", D::table_cell_fill(t, 1, 0).empty() && D::table_cell_fill(t, 2, 0).empty() &&
+                                            D::table_cell_fill(t, 3, 0) == "swatch.2" && D::table_cell_fill(t, 4, 0) == "swatch.2" && D::table_cell_fill(t, 5, 0).empty());
+        t.rows[3].cells[1].fill = "swatch.3";
+        t.rows[3].cells[1].fill_tint = 0.5;
+        check("bands: a cell's own fill over them", D::table_cell_fill(t, 3, 1, &k) == "swatch.3" && k == 0.5 && D::table_cell_fill(t, 3, 0) == "swatch.2");
+        check("bands: off the table none", D::table_cell_fill(t, 9, 0).empty() && D::table_cell_fill(t, -1, 0).empty());
+        {
+            core::Doc e;
+            core::DocJournal je{e};
+            e.set_door([&je] { return je.open(); });
+            core::load_sample(e);
+            const int p = D::insert_table(je, e, "story.1", {1, static_cast<int>(e.as<core::Story>("story.1")->paras[1].text.size())}, t);
+            core::Doc f;
+            check("bands: saved", core::from_json(f, core::to_json(e)) && *D::table_at(f, "story.1", p) == *D::table_at(e, "story.1", p) &&
+                                      D::table_at(f, "story.1", p)->band_every == 2 && D::table_at(f, "story.1", p)->band_fill == "swatch.2");
+        }
+        // a swatch only a table uses is in use -- not "unused", not deleted
+        core::Swatch only;
+        only.name = "Table only";
+        const auto sw = D::add_swatch(j, d, only);
+        check("in use: a new swatch unused", D::swatch_uses(d, sw) == 0);
+        auto u = D::make_table(2, 2, 160);
+        u.band_fill = sw;
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, u);
+        check("in use: a table's bands", D::swatch_uses(d, sw) == 1);
+        D::edit_table(j, d, "story.1", p, "x", [&](core::Table& x) { x.band_fill.clear(); x.rows[1].cells[0].fill = sw; x.rule_color = sw; });
+        check("in use: a cell's fill, the grid", D::swatch_uses(d, sw) == 2);
+        D::edit_table(j, d, "story.1", p, "x", [&](core::Table& x) {
+            x.rows[1].cells[0].fill.clear();
+            x.rule_color.clear();
+            core::Run r;
+            r.start = 0; r.end = 1; r.local.color = sw;
+            D::set_cell_words(x.rows[0].cells[0], "Ab");
+            x.rows[0].cells[0].paras[0].runs = {r};
+        });
+        check("in use: a cell's coloured words", D::swatch_uses(d, sw) == 1);
+        const auto un = D::unused_swatches(d);
+        check("in use: not offered as unused, not deleted", std::find(un.begin(), un.end(), sw) == un.end() && !D::delete_swatch(j, d, sw));
+    }
+    // -- s326: footer rows -- at the foot of each piece ------------------------------
+    {
+        std::cout << "--- s326 footer rows ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto t = D::make_table(42, 3, 288);   // 1 header, 39 body, 2 footer
+        t.header_rows = 1;
+        t.footer_rows = 2;
+        t.band_fill = "swatch.3";
+        D::set_cell_words(t.rows[40].cells[0], "Carried");
+        D::set_cell_words(t.rows[41].cells[0], "Total");
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, t);
+        const auto fl = L::flow_story(d, "story.1");
+        std::map<std::string, std::vector<int>> by_frame;   // in order
+        std::vector<std::string> order;
+        for (const auto& ft : fl.frames)
+            for (const auto& l : ft.lines)
+                if (l.para == p) {
+                    if (!by_frame.count(ft.frame)) order.push_back(ft.frame);
+                    by_frame[ft.frame].push_back(l.row);
+                }
+        bool tails = !order.empty(), heads = true;
+        int body = 0;
+        for (const auto& fr : order) {
+            const auto& v = by_frame[fr];
+            tails = tails && v.size() >= 4 && v[v.size() - 2] == 40 && v.back() == 41;
+            heads = heads && v.front() == 0;
+            for (int r : v) body += r >= 1 && r <= 39;
+        }
+        check("footer: broken over frames", order.size() >= 2, std::to_string(order.size()) + " frames");
+        check("footer: each piece ends with the footer rows, starts with the header", tails && heads);
+        check("footer: each body row once", body == 39, std::to_string(body));
+        check("footer: not banded", D::table_cell_fill(*D::table_at(d, "story.1", p), 41, 0).empty() &&
+                                        D::table_cell_fill(*D::table_at(d, "story.1", p), 40, 0).empty() &&
+                                        !D::table_cell_fill(*D::table_at(d, "story.1", p), 39 - (39 % 2 == 0 ? 0 : 1), 0).empty());
+        // rows added and taken round the footer
+        auto u = *D::table_at(d, "story.1", p);
+        D::table_insert_row(u, 41);   // inside it
+        check("footer: a row put inside it joins it", u.footer_rows == 3 && u.rows.size() == 43);
+        D::table_insert_row(u, 40);   // at its start: the body's
+        check("footer: a row at its start is the body's", u.footer_rows == 3 && u.rows.size() == 44);
+        D::table_delete_row(u, 43);
+        check("footer: a footer row taken", u.footer_rows == 2);
+        {
+            core::Doc e;
+            check("footer: saved", core::from_json(e, core::to_json(d)) && D::table_at(e, "story.1", p)->footer_rows == 2);
+        }
+        // none when it would leave no body row
+        D::edit_table(j, d, "story.1", p, "x", [](core::Table& x) { x.rows.resize(3); x.header_rows = 1; x.footer_rows = 2; });
+        int n = 0;
+        for (const auto& ft : L::flow_story(d, "story.1").frames) for (const auto& l : ft.lines) n += l.para == p;
+        check("footer: a table all header and footer -- each row once", n == 3, std::to_string(n));
+    }
+    // -- s327: a column's edge dragged -- the gesture one step ---------------------
+    {
+        std::cout << "--- s327 column edge dragged ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(3, 3, 180));
+        const auto before = core::to_json(d);
+        const auto n0 = j.size();
+        const auto w0 = D::table_at(d, "story.1", p)->widths;
+        // as the canvas does: begin, the widths set again from the start at each move, commit
+        j.begin("Column width", {"story.1"});
+        for (double w : {70.0, 80.0, 90.0})
+            D::edit_table(j, d, "story.1", p, "Column width", [&](core::Table& t) { t.widths = w0; D::table_set_width(t, 0, w); });
+        check("drag: one step at the end", j.commit() && j.size() == n0 + 1 && d.strays() == 0);
+        const auto* t = D::table_at(d, "story.1", p);
+        check("drag: the column as dropped, its neighbour the difference, the width kept", t && t->widths[0] == 90 && t->widths[1] == 30 && t->widths[2] == 60);
+        j.undo();
+        check("drag: undone", core::to_json(d) == before);
+        j.begin("Column width", {"story.1"});
+        D::edit_table(j, d, "story.1", p, "Column width", [&](core::Table& x) { x.widths = w0; D::table_set_width(x, 2, 100); });
+        j.cancel();
+        check("drag: Esc -- back, no step", core::to_json(d) == before && j.size() == n0 + 1 && j.can_redo());   // the undone drag still to redo
+        // the edge found where it's drawn (the table narrowed to its column: the hit's at the drawn edge)
+        D::edit_table(j, d, "story.1", p, "wide", [](core::Table& x) { x.widths = {400, 400, 400}; });
+        const auto fl = L::flow_story(d, "story.1");
+        const L::Line* row0 = nullptr;
+        std::string fr;
+        for (const auto& ft : fl.frames)
+            for (const auto& l : ft.lines)
+                if (l.para == p && l.row == 0 && !row0) { row0 = &l; fr = ft.frame; }
+        if (row0) {
+            const double third = row0->w / 3;
+            const auto h = L::table_hit(d, "story.1", fl, fr, row0->x + third + 1, row0->y + row0->h / 2, 2);
+            check("drag: a narrowed table's edge at its drawn place", h.edge == 1 && row0->w < 1200, std::to_string(row0->w));
+        } else {
+            check("drag: a narrowed table's edge at its drawn place", false, "no row");
+        }
+    }
 }
 }  // namespace cxtest
