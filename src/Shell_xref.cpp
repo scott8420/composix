@@ -572,9 +572,11 @@ void Shell::on_check_spelling() {  // handler
             const auto h = m_spell_hit;
             const std::string with = m_spell_to->get_text();
             if (h.story.empty() || with.empty()) return;
-            core::doc::replace_word(m_journal, m_doc, h.story, h.para, h.from, h.to, h.word, with);
+            core::doc::replace_misspelling(m_journal, m_doc, h, with);   // s322: in a cell too
             m_canvas_view.canvas().model_changed();
-            spell_next(h.story, {h.para, h.from + static_cast<int>(with.size())});
+            auto past = h;   // on from just after the word as it now reads
+            past.from += static_cast<int>(with.size());
+            spell_next(h.story, {h.para, past.from}, &past);
         });
         m_spell_btns[1]->signal_clicked().connect([this] {   // Change All
             const auto h = m_spell_hit;
@@ -583,20 +585,24 @@ void Shell::on_check_spelling() {  // handler
             const int n = core::doc::change_all_words(m_journal, m_doc, h.word, with);
             if (auto lg = log::get(log::Area::Shell)) lg->info("spelling: '{}' -> '{}' x{}", h.word, with, n);
             m_canvas_view.canvas().model_changed();
-            spell_next(h.story, {h.para, h.from});
+            auto past = h;
+            past.from += static_cast<int>(with.size());
+            spell_next(h.story, {h.para, past.from}, &past);
         });
-        m_spell_btns[2]->signal_clicked().connect([this, here] { if (!m_spell_hit.story.empty()) spell_next(m_spell_hit.story, here()); });
+        m_spell_btns[2]->signal_clicked().connect([this, here] { const auto h = m_spell_hit; if (!h.story.empty()) spell_next(h.story, here(), &h); });
         m_spell_btns[3]->signal_clicked().connect([this, here] {   // Ignore All
             if (m_spell_hit.story.empty()) return;
             core::spell::ignore(m_spell_hit.word);
             m_canvas_view.canvas().marks_changed();
-            spell_next(m_spell_hit.story, here());
+            const auto h = m_spell_hit;
+            spell_next(h.story, here(), &h);
         });
         m_spell_btns[4]->signal_clicked().connect([this, here] {   // Add
             if (m_spell_hit.story.empty()) return;
             core::spell::add_word(m_spell_hit.word);
             m_canvas_view.canvas().marks_changed();
-            spell_next(m_spell_hit.story, here());
+            const auto h = m_spell_hit;
+            spell_next(h.story, here(), &h);
         });
         m_spell_btns[5]->signal_clicked().connect([this] {   // Start Again: the book's first story
             const auto order = core::doc::stories_in_order(m_doc);
@@ -613,8 +619,8 @@ void Shell::on_check_spelling() {  // handler
     m_spell_win->present();
 }
 
-void Shell::spell_next(const std::string& story, core::TextPos from) {  // helper
-    m_spell_hit = story.empty() ? core::doc::SpellHit{} : core::doc::next_misspelling(m_doc, story, from);
+void Shell::spell_next(const std::string& story, core::TextPos from, const core::doc::SpellHit* after) {  // helper
+    m_spell_hit = story.empty() ? core::doc::SpellHit{} : core::doc::next_misspelling(m_doc, story, from, after);
     spell_show();
 }
 
@@ -642,6 +648,22 @@ void Shell::spell_show() {  // helper
     const auto* st = m_doc.as<core::Story>(h.story);
     std::string where = st ? st->name : std::string();
     const auto flow = layout::flow_story(m_doc, h.story);
+    if (h.row >= 0) {   // s322: in a table's cell -- its row's page shown
+        where += " \u00b7 table, row " + std::to_string(h.row + 1) + ", column " + std::to_string(h.col + 1);
+        for (const auto& ft : flow.frames)
+            for (const auto& l : ft.lines)
+                if (l.para == h.para && l.row == h.row)
+                    if (const auto* f = m_doc.as<core::Frame>(ft.frame); f && m_doc.as<core::Page>(f->owner)) {
+                        where += " \u00b7 page " + m_doc.folio(f->owner);
+                        Gtk::Widget* had = m_spell_win ? m_spell_win->get_focus() : nullptr;
+                        m_nav.select_items({f->owner});
+                        if (had) had->grab_focus();
+                        m_spell_where->set_text(where);
+                        return;
+                    }
+        m_spell_where->set_text(where);
+        return;
+    }
     const auto c = layout::caret_at(m_doc, h.story, flow, {h.para, h.from});
     if (c.ok) {
         const auto* f = m_doc.as<core::Frame>(c.frame);

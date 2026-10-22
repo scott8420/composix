@@ -281,6 +281,7 @@ struct TableGeo {
     std::vector<double> col_x, col_w;   // from the table's left
     std::vector<double> row_h;
     double width = 0;
+    std::vector<bool> break_before;     // s319: [r] -- may it break before row r (no merge across)
 };
 TableGeo table_geo(const core::Doc& d, const core::Para& table_para, double avail);
 // s315: what the table rows set in a frame draw, in frame coordinates, in
@@ -298,6 +299,17 @@ struct TablePiece {
 };
 void visit_tables(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame,
                   const std::function<void(const TablePiece&)>& f, const core::Story* text = nullptr);
+// s320: what's at (x, y) in a frame (frame coordinates) when it's a table's:
+// its paragraph, the cell (a merge's own cell), and -- within `tol` of one --
+// the column edge (1..n-1 between columns, n its right; -1 none) a drag would move.
+struct TableHit {
+    int para = -1, row = -1, col = -1;
+    int edge = -1;
+    core::Rect cell;    // the cell, frame coordinates (a merge: all of it in this row's line)
+    bool ok() const { return para >= 0; }
+};
+TableHit table_hit(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, double x, double y,
+                   double tol = 0);
 // s261: a line's underlines and strikethroughs, for a writer that sets glyphs
 // itself (the print PDF) -- Pango's renderer draws its own. Each run that has
 // either: its byte offset in the layout, its left and right, and each

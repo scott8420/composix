@@ -251,6 +251,9 @@ void read_styles(const Node* group, Book& b, bool automatic, const std::string& 
                     b.column_widths[s.name] = length(cp->attr_or("style:column-width"), 0);
             if (s.family == "table-cell")   // s317
                 if (const auto* cp = k.child("style:table-cell-properties")) {
+                    const auto va = cp->attr_or("style:vertical-align");   // s321
+                    if (va == "middle") b.cell_valign[s.name] = 1;
+                    else if (va == "bottom") b.cell_valign[s.name] = 2;
                     const auto bg = cp->attr_or("fo:background-color");
                     if (bg.size() == 7 && bg[0] == '#') b.cell_backgrounds[s.name] = bg;
                 }
@@ -549,6 +552,9 @@ void read_block(const Node& n, Book& b, std::vector<Para>& out, ListAt list = {}
                         const int crep = std::clamp(std::atoi(c.attr_or("table:number-columns-repeated", "1").c_str()), 1, 64);
                         TableCell cell;
                         if (const auto it = b.cell_backgrounds.find(c.attr_or("table:style-name")); it != b.cell_backgrounds.end()) cell.bg = it->second;
+                        cell.span_cols = std::clamp(std::atoi(c.attr_or("table:number-columns-spanned", "1").c_str()), 1, 64);   // s319
+                        cell.span_rows = std::clamp(std::atoi(c.attr_or("table:number-rows-spanned", "1").c_str()), 1, 500);
+                        if (const auto it = b.cell_valign.find(c.attr_or("table:style-name")); it != b.cell_valign.end()) cell.valign = it->second;   // s321
                         if (c.name == "table:table-cell") read_block(c, b, cell.paras, {});
                         for (int i = 0; i < crep; ++i) cells.push_back(cell);
                     }

@@ -476,6 +476,10 @@ struct TableCell {
     std::vector<Para> paras;             // its words ("" style: the table's cell style); empty = one empty paragraph
     std::string fill;                    // a swatch id ("" none)
     double      fill_tint = 1;
+    // s319: merged -- this cell takes `span_cols` columns and `span_rows`
+    // rows (the cells it covers kept, empty, not drawn).
+    int         span_cols = 1, span_rows = 1;
+    int         valign = 0;              // s321: its words at the top 0, middle 1, bottom 2
     bool operator==(const TableCell&) const;
 };
 struct TableRow {
@@ -493,6 +497,7 @@ struct Table {
     std::string cell_style;              // the paragraph style its words take ("" the table paragraph's)
     std::string header_fill;             // the header rows' fill (a swatch id, "" none)
     double      header_tint = 0.2;
+    int         align = 0;               // s321: in its column -- left 0, centre 1, right 2
     bool operator==(const Table&) const = default;
 };
 
@@ -516,7 +521,9 @@ struct Para {
     std::vector<Table> tables;           // s314: one for each kMarkTable in text, in order
     bool operator==(const Para&) const = default;
 };
-inline bool TableCell::operator==(const TableCell& o) const { return paras == o.paras && fill == o.fill && fill_tint == o.fill_tint; }
+inline bool TableCell::operator==(const TableCell& o) const {
+    return paras == o.paras && fill == o.fill && fill_tint == o.fill_tint && span_cols == o.span_cols && span_rows == o.span_rows && valign == o.valign;
+}
 
 struct Story {
     std::string       name;
@@ -1589,6 +1596,18 @@ void table_delete_row(Table& t, int at);
 void table_insert_col(Table& t, int at);
 void table_delete_col(Table& t, int at);
 int  table_cols(const Table& t);
+// s319: merged cells. owner_of: the cell whose merge covers (r, c) -- itself
+// when it isn't covered ({-1,-1} off the table). Merge: the cell at (r, c)
+// takes `cols` x `rows` (clamped to the table; a merge it would cut into is
+// undone first; the covered cells' words joined into it). Unmerge: back to
+// one cell.
+std::pair<int, int> owner_of(const Table& t, int r, int c);
+bool table_merge(Table& t, int r, int c, int cols, int rows);
+bool table_unmerge(Table& t, int r, int c);
+// s320: column `c` made `w` points wide (at least 12); the column after it
+// gives (or takes) the difference so the table keeps its width -- the last
+// column: the table grows / shrinks. True when it changed.
+bool table_set_width(Table& t, int c, double w);
 // s307: the document's language for spell check ("" the app's). One step.
 bool set_language(DocJournal& j, Doc& d, const std::string& lang);
 // s307: a misspelled word put right -- [from, to) of paragraph `para`, if it
@@ -1909,9 +1928,14 @@ struct SpellHit {
     Doc::Id story;
     int para = -1, from = 0, to = 0;
     std::string word;
+    // s322: in a table's cell -- its row, column and the cell's paragraph
+    // (from / to in that paragraph's words); row -1: the story's own words.
+    int row = -1, col = -1, cpara = 0;
     bool operator==(const SpellHit&) const = default;
 };
-SpellHit next_misspelling(const Doc& d, const Doc::Id& story, TextPos from);
+SpellHit next_misspelling(const Doc& d, const Doc::Id& story, TextPos from, const SpellHit* after = nullptr);
+// s322: the word put right where it is (the story's words or a cell's). One step.
+bool replace_misspelling(DocJournal& j, Doc& d, const SpellHit& h, const std::string& with);
 // s310: how many misspelled words, and in how many stories.
 struct SpellCount { int words = 0, stories = 0; };
 SpellCount misspellings(const Doc& d);

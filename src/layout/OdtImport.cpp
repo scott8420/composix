@@ -430,6 +430,9 @@ struct Builder {
                         for (const auto& cp : orow[c].paras)
                             for (const auto& piece : split_lines(cp)) cell.paras.push_back(para_of(piece));
                         if (!orow[c].bg.empty() && orow[c].bg != "#ffffff" && orow[c].bg != "#FFFFFF") cell.fill = swatch_for(orow[c].bg);
+                        cell.span_cols = orow[c].span_cols;   // s319
+                        cell.span_rows = orow[c].span_rows;
+                        cell.valign = orow[c].valign;         // s321
                     }
                     if (cell.paras.size() == 1 && cell.paras[0].text.empty()) cell.paras.clear();
                     row.cells.push_back(std::move(cell));

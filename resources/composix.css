@@ -434,3 +434,4 @@ searchentry.cx-nav-filter { margin: 10px 10px 0; border-radius: 9px; }
 
 /* s318: the table editor -- the header rows' cells */
 .cx-table-head { font-weight: bold; }
+.cx-table-merged { background-color: alpha(@accent_bg_color, 0.08); }

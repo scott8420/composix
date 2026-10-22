@@ -103,6 +103,8 @@ struct Para;
 struct TableCell {
     std::vector<Para> paras;
     std::string       bg;               // fo:background-color ("#rrggbb"; "" none)
+    int               span_cols = 1, span_rows = 1;   // s319: table:number-columns- / rows-spanned
+    int               valign = 0;       // s321: style:vertical-align top / middle / bottom
 };
 struct Table {
     std::vector<double> widths;
@@ -195,6 +197,7 @@ struct Book {
     // s317: table column styles' widths, table cell styles' backgrounds.
     std::map<std::string, double>      column_widths;
     std::map<std::string, std::string> cell_backgrounds;
+    std::map<std::string, int>         cell_valign;   // s321
     int tables = 0, pictures = 0, contents = 0;   // what wasn't kept (s271: contents -- an index / bibliography)
     // A style's property, its chain followed (named parents; the family's default last).
     Props resolved(const std::string& style) const;

@@ -439,12 +439,42 @@ TableGeo table_geo(const core::Doc& d, const core::Para& tp, double avail) {
     }
     g.width = x;
     const double in = std::max(0.0, t.inset);
-    for (const auto& r : t.rows) {
+    const int R = static_cast<int>(t.rows.size());
+    const auto span_w = [&](int c, int sc) {
+        double w = 0;
+        for (int k = c; k < std::min(n, c + sc); ++k) w += g.col_w[static_cast<std::size_t>(k)];
+        return w;
+    };
+    // s319: a row's height from the cells in it alone (a cell over several rows: after)
+    for (int r = 0; r < R; ++r) {
+        const auto& row = t.rows[static_cast<std::size_t>(r)];
         double h = 0;
-        for (int c = 0; c < n && c < static_cast<int>(r.cells.size()); ++c)
-            h = std::max(h, cell_height(cell_lines(d, t, tp, r.cells[static_cast<std::size_t>(c)], g.col_w[static_cast<std::size_t>(c)] - 2 * in)));
-        g.row_h.push_back(std::max(r.min_h, h + 2 * in));
+        for (int c = 0; c < n && c < static_cast<int>(row.cells.size()); ++c) {
+            if (core::doc::owner_of(t, r, c) != std::pair<int, int>{r, c}) continue;   // covered
+            const auto& x = row.cells[static_cast<std::size_t>(c)];
+            if (x.span_rows > 1) continue;
+            h = std::max(h, cell_height(cell_lines(d, t, tp, x, span_w(c, x.span_cols) - 2 * in)));
+        }
+        g.row_h.push_back(std::max(row.min_h, h + 2 * in));
     }
+    for (int r = 0; r < R; ++r)   // a cell over several rows: their sum at least its words -- the last of them taller
+        for (int c = 0; c < n && c < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()); ++c) {
+            const auto& x = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+            if (x.span_rows <= 1 || core::doc::owner_of(t, r, c) != std::pair<int, int>{r, c}) continue;
+            const int last = std::min(R, r + x.span_rows) - 1;
+            double sum = 0;
+            for (int k = r; k <= last; ++k) sum += g.row_h[static_cast<std::size_t>(k)];
+            const double need = cell_height(cell_lines(d, t, tp, x, span_w(c, x.span_cols) - 2 * in)) + 2 * in;
+            if (need > sum) g.row_h[static_cast<std::size_t>(last)] += need - sum;
+        }
+    // s319: where the table may break -- before a row no merge reaches across
+    g.break_before.assign(static_cast<std::size_t>(R) + 1, true);
+    for (int r = 0; r < R; ++r)
+        for (int c = 0; c < n && c < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()); ++c) {
+            const auto& x = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+            if (core::doc::owner_of(t, r, c) != std::pair<int, int>{r, c}) continue;
+            for (int k = r + 1; k < std::min(R, r + x.span_rows); ++k) g.break_before[static_cast<std::size_t>(k)] = false;
+        }
     return g;
 }
 
@@ -1243,7 +1273,7 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                 const TableGeo tg = table_geo(d, para, avail);
                 const int nrows = static_cast<int>(tg.row_h.size());
                 const int heads = std::clamp(tb.header_rows, 0, nrows);
-                const double tx = cx + tin.left;
+                const double tx = cx + tin.left + std::max(0.0, avail - tg.width) * std::clamp(tb.align, 0, 2) / 2.0;   // s321: left / centre / right
                 const int len3 = static_cast<int>(para.text.size());
                 double yy = y + ((c.row == 0 && (y > top || style.top_space)) ? style.space_before : 0);
                 const bool fresh = y <= top + 0.01;   // nothing above it in this column
@@ -1259,10 +1289,19 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                 // what fits: rows from r (at least one body row with the headers; a fresh column takes one regardless)
                 double room = lim() - yy - hy;
                 int last = r;
-                while (last < nrows && tg.row_h[static_cast<std::size_t>(last)] <= room + 0.01) room -= tg.row_h[static_cast<std::size_t>(last++)];
+                while (last < nrows) {   // s319: rows a merge holds together go together
+                    int e = last + 1;
+                    while (e < nrows && !tg.break_before[static_cast<std::size_t>(e)]) ++e;
+                    double gh = 0;
+                    for (int k = last; k < e; ++k) gh += tg.row_h[static_cast<std::size_t>(k)];
+                    if (gh > room + 0.01) break;
+                    room -= gh;
+                    last = e;
+                }
                 if (last <= std::max(r, heads) && last < nrows) {   // not even one body row here
                     if (!fresh) break;          // the next column
-                    last = std::max(r, heads) + 1;   // a fresh column: one row anyway (it may hang over)
+                    last = std::max(r, heads) + 1;   // a fresh column: one row anyway (it may hang over) -- with what a merge holds to it
+                    while (last < nrows && !tg.break_before[static_cast<std::size_t>(last)]) ++last;
                     if (last > nrows) last = nrows;
                 }
                 if (r > 0 && r >= heads)
@@ -2917,34 +2956,51 @@ void visit_tables(const core::Doc& d, const std::string& story, const StoryFlow&
         if (gi == geos.end()) gi = geos.emplace(ln.para, table_geo(d, tp, ln.w)).first;
         const auto& g = gi->second;
         if (ln.row >= static_cast<int>(t.rows.size())) continue;
-        const auto& row = t.rows[static_cast<std::size_t>(ln.row)];
+        const int r = ln.row;
+        const auto& row = t.rows[static_cast<std::size_t>(r)];
         const int n = static_cast<int>(g.col_w.size());
+        const int R = static_cast<int>(t.rows.size());
         const double in = std::max(0.0, t.inset);
+        const auto own = [&](int rr, int cc) { return core::doc::owner_of(t, rr, cc); };
+        const auto span_w = [&](int c, int sc) {
+            double w = 0;
+            for (int k = c; k < std::min(n, c + sc); ++k) w += g.col_w[static_cast<std::size_t>(k)];
+            return w;
+        };
+        const auto span_h = [&](int sr) {
+            double h = 0;
+            for (int k = r; k < std::min(R, r + sr); ++k) h += g.row_h[static_cast<std::size_t>(k)];
+            return h;
+        };
         // fills
         for (int c = 0; c < n && c < static_cast<int>(row.cells.size()); ++c) {
+            if (own(r, c) != std::pair<int, int>{r, c}) continue;   // s319: covered by a merge
             const auto& cell = row.cells[static_cast<std::size_t>(c)];
             std::string fill = cell.fill;
             double tint = cell.fill_tint;
-            if (fill.empty() && ln.row < t.header_rows && !t.header_fill.empty()) { fill = t.header_fill; tint = t.header_tint; }
+            if (fill.empty() && r < t.header_rows && !t.header_fill.empty()) { fill = t.header_fill; tint = t.header_tint; }
             if (fill.empty() || !d.as<core::Swatch>(fill)) continue;
             TablePiece p;
             p.kind = TablePiece::Fill;
-            p.r = {ln.x + g.col_x[static_cast<std::size_t>(c)], ln.y, g.col_w[static_cast<std::size_t>(c)], ln.h};
+            p.r = {ln.x + g.col_x[static_cast<std::size_t>(c)], ln.y, span_w(c, cell.span_cols), span_h(cell.span_rows)};
             p.color = fill;
             p.tint = tint;
-            p.row = ln.row;
+            p.row = r;
             p.col = c;
             f(p);
         }
         // words
         for (int c = 0; c < n && c < static_cast<int>(row.cells.size()); ++c) {
-            const auto cw = g.col_w[static_cast<std::size_t>(c)];
-            for (const auto& cl : cell_lines(d, t, tp, row.cells[static_cast<std::size_t>(c)], cw - 2 * in)) {
+            if (own(r, c) != std::pair<int, int>{r, c}) continue;
+            const auto& cell = row.cells[static_cast<std::size_t>(c)];
+            const double cw = span_w(c, cell.span_cols);
+            const auto lines = cell_lines(d, t, tp, cell, cw - 2 * in);
+            const double room = span_h(cell.span_rows) - 2 * in;
+            const double drop = std::max(0.0, room - cell_height(lines)) * std::clamp(cell.valign, 0, 2) / 2.0;   // s321
+            for (const auto& cl : lines) {
                 if (cl.para->text.empty()) continue;
                 const LineBox box = line_box(cl.line);
                 const auto st2 = cell_style(d, t, tp, *cl.para);
-                PangoRectangle logical;
-                pango_layout_line_get_extents(cl.line, nullptr, &logical);
                 // the line's own place in its layout (its alignment)
                 PangoLayoutIter* it = pango_layout_get_iter(cl.lay.get());
                 double lx = 0;
@@ -2961,35 +3017,75 @@ void visit_tables(const core::Doc& d, const std::string& story, const StoryFlow&
                 p.kind = TablePiece::Text;
                 p.line = cl.line;
                 p.x = ln.x + g.col_x[static_cast<std::size_t>(c)] + in + lx;
-                p.baseline = ln.y + in + cl.top + (cl.h - box.h) / 2 + box.asc;
+                p.baseline = ln.y + in + drop + cl.top + (cl.h - box.h) / 2 + box.asc;
                 p.para = cl.para;
                 p.color = st2.color;
                 p.tint = st2.color_tint;
-                p.row = ln.row;
+                p.row = r;
                 p.col = c;
                 p.para_index = cl.pi;
                 f(p);
             }
         }
-        // the grid: each column's left (and the last's right), the row's top and bottom
+        // the grid: each column edge, the row's top and bottom -- not inside a merge
         if (t.rule_w > 0) {
             const double hw = t.rule_w / 2;
-            const auto rule = [&](core::Rect r) {
+            const auto rule = [&](core::Rect rr) {
                 TablePiece p;
                 p.kind = TablePiece::Rule;
-                p.r = r;
+                p.r = rr;
                 p.color = t.rule_color;
-                p.row = ln.row;
+                p.row = r;
                 f(p);
             };
             for (int c = 0; c <= n; ++c) {
+                if (c > 0 && c < n && own(r, c - 1) == own(r, c)) continue;   // s319: inside a merge across
                 const double x = ln.x + (c < n ? g.col_x[static_cast<std::size_t>(c)] : g.width);
                 rule({x - hw, ln.y - hw, t.rule_w, ln.h + t.rule_w});
             }
-            rule({ln.x - hw, ln.y - hw, g.width + t.rule_w, t.rule_w});
-            rule({ln.x - hw, ln.y + ln.h - hw, g.width + t.rule_w, t.rule_w});
+            for (int c = 0; c < n; ++c) {
+                const double x0 = ln.x + g.col_x[static_cast<std::size_t>(c)], w = g.col_w[static_cast<std::size_t>(c)];
+                if (!(r > 0 && own(r - 1, c) == own(r, c))) rule({x0 - hw, ln.y - hw, w + t.rule_w, t.rule_w});
+                if (!(r + 1 < R && own(r + 1, c) == own(r, c))) rule({x0 - hw, ln.y + ln.h - hw, w + t.rule_w, t.rule_w});
+            }
         }
     }
+}
+
+TableHit table_hit(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, double x, double y,
+                   double tol) {   // s320
+    TableHit h;
+    const auto* st = d.as<core::Story>(story);
+    const FrameText* ft = frame_text(flow, frame);
+    if (!st || !ft) return h;
+    for (const auto& ln : ft->lines) {
+        if (ln.row < 0 || ln.para >= static_cast<int>(st->paras.size())) continue;
+        if (y < ln.y || y > ln.y + ln.h || x < ln.x - tol || x > ln.x + ln.w + tol) continue;
+        const auto& tp = st->paras[static_cast<std::size_t>(ln.para)];
+        if (tp.tables.empty()) continue;
+        const auto& t = tp.tables.front();
+        const TableGeo g = table_geo(d, tp, ln.w);
+        const int n = static_cast<int>(g.col_w.size());
+        h.para = ln.para;
+        int c = n - 1;
+        for (int k = 0; k < n; ++k)
+            if (x < ln.x + g.col_x[static_cast<std::size_t>(k)] + g.col_w[static_cast<std::size_t>(k)]) { c = k; break; }
+        for (int k = 1; k <= n; ++k) {   // an edge near
+            const double ex = ln.x + (k < n ? g.col_x[static_cast<std::size_t>(k)] : g.width);
+            if (std::abs(x - ex) <= tol) { h.edge = k; break; }
+        }
+        const auto o = core::doc::owner_of(t, ln.row, std::clamp(c, 0, n - 1));
+        h.row = o.first;
+        h.col = o.second;
+        double w = 0;
+        if (h.row >= 0) {
+            const auto& cell = t.rows[static_cast<std::size_t>(h.row)].cells[static_cast<std::size_t>(h.col)];
+            for (int k = h.col; k < std::min(n, h.col + cell.span_cols); ++k) w += g.col_w[static_cast<std::size_t>(k)];
+            h.cell = {ln.x + g.col_x[static_cast<std::size_t>(h.col)], ln.y, w, ln.h};
+        }
+        return h;
+    }
+    return h;
 }
 
 // ── s023: markers filled in ─────────────────────────────────────────────────

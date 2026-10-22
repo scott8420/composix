@@ -2890,6 +2890,19 @@ Table make_table(int rows, int cols, double width) {
 
 int table_cols(const Table& t) { return static_cast<int>(t.widths.size()); }
 
+namespace {
+// s319: after rows / columns change -- every merge kept inside the table
+void clamp_spans(Table& t) {
+    const int R = static_cast<int>(t.rows.size()), C = table_cols(t);
+    for (int r = 0; r < R; ++r)
+        for (int c = 0; c < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()); ++c) {
+            auto& x = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+            x.span_cols = std::clamp(x.span_cols, 1, std::max(1, C - c));
+            x.span_rows = std::clamp(x.span_rows, 1, std::max(1, R - r));
+        }
+}
+}  // namespace
+
 const Table* table_at(const Doc& d, const Doc::Id& story, int para) {
     const auto* st = d.as<Story>(story);
     if (!st || para < 0 || para >= static_cast<int>(st->paras.size())) return nullptr;
@@ -2953,17 +2966,84 @@ bool set_cell_text(DocJournal& j, Doc& d, const Doc::Id& story, int para, int ro
     });
 }
 
+std::pair<int, int> owner_of(const Table& t, int r, int c) {   // s319
+    if (r < 0 || c < 0 || r >= static_cast<int>(t.rows.size()) || c >= table_cols(t)) return {-1, -1};
+    for (int r0 = r; r0 >= 0; --r0)
+        for (int c0 = c; c0 >= 0; --c0) {
+            const auto& row = t.rows[static_cast<std::size_t>(r0)];
+            if (c0 >= static_cast<int>(row.cells.size())) continue;
+            const auto& x = row.cells[static_cast<std::size_t>(c0)];
+            if ((r0 != r || c0 != c) && r0 + x.span_rows > r && c0 + x.span_cols > c) return {r0, c0};
+        }
+    return {r, c};
+}
+
+bool table_set_width(Table& t, int c, double w) {   // s320
+    const int n = table_cols(t);
+    if (c < 0 || c >= n) return false;
+    auto& W = t.widths;
+    const auto ci = static_cast<std::size_t>(c);
+    w = std::max(12.0, w);
+    if (c + 1 < n) {
+        const double pair = W[ci] + W[ci + 1];
+        w = std::min(w, pair - 12);
+        if (std::abs(w - W[ci]) < 1e-6) return false;
+        W[ci + 1] = pair - w;
+    } else if (std::abs(w - W[ci]) < 1e-6) {
+        return false;
+    }
+    W[ci] = w;
+    return true;
+}
+
+bool table_unmerge(Table& t, int r, int c) {   // s319
+    if (r < 0 || c < 0 || r >= static_cast<int>(t.rows.size()) || c >= static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size())) return false;
+    auto& x = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+    if (x.span_cols == 1 && x.span_rows == 1) return false;
+    x.span_cols = x.span_rows = 1;
+    return true;
+}
+
+bool table_merge(Table& t, int r, int c, int cols, int rows) {   // s319
+    const auto o = owner_of(t, r, c);
+    if (o.first < 0) return false;
+    r = o.first;
+    c = o.second;
+    cols = std::clamp(cols, 1, table_cols(t) - c);
+    rows = std::clamp(rows, 1, static_cast<int>(t.rows.size()) - r);
+    // merges cut into: undone; the covered cells' words joined into this one
+    for (int rr = r; rr < r + rows; ++rr)
+        for (int cc = c; cc < c + cols; ++cc) {
+            const auto oo = owner_of(t, rr, cc);
+            if (oo.first >= 0 && oo != std::pair<int, int>{r, c}) table_unmerge(t, oo.first, oo.second);
+        }
+    table_unmerge(t, r, c);
+    auto& x = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+    for (int rr = r; rr < r + rows; ++rr)
+        for (int cc = c; cc < c + cols; ++cc) {
+            if (rr == r && cc == c) continue;
+            auto& y = t.rows[static_cast<std::size_t>(rr)].cells[static_cast<std::size_t>(cc)];
+            for (auto& p : y.paras) if (!p.text.empty()) x.paras.push_back(std::move(p));
+            y.paras.clear();
+        }
+    x.span_cols = cols;
+    x.span_rows = rows;
+    return cols > 1 || rows > 1;
+}
+
 void table_insert_row(Table& t, int at) {
     at = std::clamp(at, 0, static_cast<int>(t.rows.size()));
     TableRow r;
     r.cells.resize(t.widths.size());
     t.rows.insert(t.rows.begin() + at, r);
     if (at < t.header_rows) ++t.header_rows;
+    clamp_spans(t);   // s319
 }
 void table_delete_row(Table& t, int at) {
     if (t.rows.size() <= 1 || at < 0 || at >= static_cast<int>(t.rows.size())) return;
     t.rows.erase(t.rows.begin() + at);
     if (at < t.header_rows) --t.header_rows;
+    clamp_spans(t);   // s319
 }
 void table_insert_col(Table& t, int at) {
     const int n = table_cols(t);
@@ -2977,6 +3057,7 @@ void table_insert_col(Table& t, int at) {
         for (auto& x : t.widths) x *= k;
     }
     for (auto& r : t.rows) r.cells.insert(r.cells.begin() + std::min(at, static_cast<int>(r.cells.size())), TableCell{});
+    clamp_spans(t);   // s319
 }
 void table_delete_col(Table& t, int at) {
     const int n = table_cols(t);
@@ -2987,6 +3068,7 @@ void table_delete_col(Table& t, int at) {
     for (double w : t.widths) total += w;
     if (total > 0) for (auto& x : t.widths) x *= (total + gone) / total;   // as wide as before
     for (auto& r : t.rows) if (at < static_cast<int>(r.cells.size())) r.cells.erase(r.cells.begin() + at);
+    clamp_spans(t);   // s319
 }
 
 bool set_language(DocJournal& j, Doc& d, const std::string& lang) {   // s307
@@ -3016,6 +3098,10 @@ int change_all_words(DocJournal& j, Doc& d, const std::string& was, const std::s
     for (const auto& sid : d.ids_of<Story>())
         for (const auto& p : d.as<Story>(sid)->paras)
             if (p.text.find(was) != std::string::npos) { ids.push_back(sid); break; }
+    for (const auto& sid : d.ids_of<Story>())   // s322: or in a table's cells
+        if (std::find(ids.begin(), ids.end(), sid) == ids.end())
+            for (const auto& p : d.as<Story>(sid)->paras)
+                if (!p.tables.empty()) { ids.push_back(sid); break; }
     if (ids.empty()) return 0;
     j.run("Change All \u201c" + was + "\u201d", ids, [&] {
         for (const auto& sid : ids)
@@ -3026,6 +3112,24 @@ int change_all_words(DocJournal& j, Doc& d, const std::string& was, const std::s
                         edit_text(j, d, sid, {p, it->from}, {p, it->to}, with, "Spelling");
                         ++n;
                     }
+                if (d.as<Story>(sid)->paras[static_cast<std::size_t>(p)].tables.empty()) continue;
+                Story s2 = *d.as<Story>(sid);   // s322: its table's cells
+                bool any = false;
+                for (auto& t : s2.paras[static_cast<std::size_t>(p)].tables)
+                    for (auto& row : t.rows)
+                        for (auto& cell : row.cells)
+                            for (auto& q : cell.paras) {
+                                const auto cw = spell::words_of(q.text);
+                                for (auto it = cw.rbegin(); it != cw.rend(); ++it)
+                                    if (it->text == was) {
+                                        q.text.replace(static_cast<std::size_t>(it->from), static_cast<std::size_t>(it->to - it->from), with);
+                                        const int delta = static_cast<int>(with.size()) - (it->to - it->from);
+                                        for (auto& r : q.runs) { if (r.start >= it->to) r.start += delta; if (r.end >= it->to) r.end += delta; }
+                                        ++n;
+                                        any = true;
+                                    }
+                            }
+                if (any) d.put(sid, s2);
             }
     });
     return n;

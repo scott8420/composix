@@ -1,5 +1,6 @@
 // core::doc::find_all / change_hits -- Find / Change (s022).
 #include "core/Doc.hpp"
+#include <array>
 #include "core/Spell.hpp"
 
 #include <algorithm>
@@ -643,37 +644,93 @@ std::string fold_text(const std::string& utf8) { return narrow(folded(widen(utf8
 
 std::vector<Doc::Id> stories_in_order(const Doc& d) { return reading_order(d); }   // s310
 
-SpellHit next_misspelling(const Doc& d, const Doc::Id& story, TextPos from) {   // s310
+namespace {
+// s322: a story's misspelled words in reading order -- its paragraphs' and,
+// at a table's paragraph, its cells' (row by row, each merge once).
+using SpellKey = std::array<int, 5>;   // para, row + 1 (0: the paragraph's own words), col, cell paragraph, byte
+SpellKey key_of(const SpellHit& h) { return {h.para, h.row + 1, std::max(0, h.col), h.cpara, h.from}; }
+std::vector<SpellHit> story_misses(const Doc& d, const Doc::Id& sid) {
+    std::vector<SpellHit> out;
+    const auto& st = *d.as<Story>(sid);
+    for (std::size_t p = 0; p < st.paras.size(); ++p) {
+        const auto& para = st.paras[p];
+        for (const auto& w : spell::para_misses(para.text, static_cast<int>(p))) out.push_back({sid, w.para, w.from, w.to, w.text});
+        for (const auto& t : para.tables)
+            for (int r = 0; r < static_cast<int>(t.rows.size()); ++r)
+                for (int c = 0; c < static_cast<int>(t.rows[static_cast<std::size_t>(r)].cells.size()); ++c) {
+                    if (owner_of(t, r, c) != std::pair<int, int>{r, c}) continue;
+                    const auto& cell = t.rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
+                    for (int q = 0; q < static_cast<int>(cell.paras.size()); ++q)
+                        for (const auto& w : spell::para_misses(cell.paras[static_cast<std::size_t>(q)].text, static_cast<int>(p))) {
+                            SpellHit h{sid, static_cast<int>(p), w.from, w.to, w.text};
+                            h.row = r;
+                            h.col = c;
+                            h.cpara = q;
+                            out.push_back(h);
+                        }
+                }
+    }
+    return out;
+}
+}  // namespace
+
+SpellHit next_misspelling(const Doc& d, const Doc::Id& story, TextPos from, const SpellHit* after) {   // s310; s322: in tables too
     if (!spell::loaded()) return {};
     const auto order = reading_order(d);
+    if (order.empty()) return {};
     const auto at = std::find(order.begin(), order.end(), story);
     const std::size_t k0 = at == order.end() ? 0 : static_cast<std::size_t>(at - order.begin());
-    const auto hit = [](const Doc::Id& sid, const spell::Word& w) { return SpellHit{sid, w.para, w.from, w.to, w.text}; };
+    // where it starts: past `after` (that word), else the caret (the word it's in skipped)
+    SpellKey start{from.para, 0, 0, 0, from.byte};
+    bool strict = false;
+    if (after && !after->story.empty() && after->story == story) { start = key_of(*after); strict = true; }
     for (std::size_t n = 0; n <= order.size(); ++n) {
         const auto& sid = order[(k0 + n) % order.size()];
-        const auto& st = *d.as<Story>(sid);
         const bool first = n == 0 && at != order.end(), last = n == order.size();
         if (last && at == order.end()) break;
-        for (std::size_t p = 0; p < st.paras.size(); ++p)
-            for (const auto& w : spell::para_misses(st.paras[p].text, static_cast<int>(p))) {
-                const TextPos wp{static_cast<int>(p), w.from};
-                if (first && (wp < from || (w.para == from.para && w.from < from.byte))) continue;   // before it, or the word it's in
-                if (last && !(wp < from)) return {};                                               // round to where it began
-                return hit(sid, w);
+        for (const auto& h : story_misses(d, sid)) {
+            const auto k = key_of(h);
+            if (first) {
+                if (strict ? !(start < k) : k < start) continue;
+                if (!strict && h.row < 0 && h.para == from.para && h.from < from.byte) continue;   // the word the caret is in
             }
+            if (last && !(k < start)) return {};   // round to where it began
+            return h;
+        }
     }
     return {};
 }
 
-SpellCount misspellings(const Doc& d) {   // s310
+SpellCount misspellings(const Doc& d) {   // s310; s322: tables' cells too
     SpellCount c;
     if (!spell::loaded()) return c;
     for (const auto& sid : d.ids_of<Story>()) {
-        const auto m = spell::misses(*d.as<Story>(sid));
+        const auto m = story_misses(d, sid);
         c.words += static_cast<int>(m.size());
         c.stories += m.empty() ? 0 : 1;
     }
     return c;
+}
+
+bool replace_misspelling(DocJournal& j, Doc& d, const SpellHit& h, const std::string& with) {   // s322
+    if (h.story.empty() || with.empty()) return false;
+    if (h.row < 0) return replace_word(j, d, h.story, h.para, h.from, h.to, h.word, with);
+    const auto* t = table_at(d, h.story, h.para);
+    if (!t || h.row >= static_cast<int>(t->rows.size()) || h.col >= static_cast<int>(t->rows[static_cast<std::size_t>(h.row)].cells.size())) return false;
+    const auto& cell = t->rows[static_cast<std::size_t>(h.row)].cells[static_cast<std::size_t>(h.col)];
+    if (h.cpara < 0 || h.cpara >= static_cast<int>(cell.paras.size())) return false;
+    const auto& txt = cell.paras[static_cast<std::size_t>(h.cpara)].text;
+    if (h.to > static_cast<int>(txt.size()) || txt.compare(static_cast<std::size_t>(h.from), static_cast<std::size_t>(h.to - h.from), h.word) != 0) return false;
+    return edit_table(j, d, h.story, h.para, "Spelling", [&](Table& x) {
+        auto& q = x.rows[static_cast<std::size_t>(h.row)].cells[static_cast<std::size_t>(h.col)].paras[static_cast<std::size_t>(h.cpara)];
+        q.text.replace(static_cast<std::size_t>(h.from), static_cast<std::size_t>(h.to - h.from), with);
+        // its runs: those after the word moved by the difference (the word's own run takes it)
+        const int delta = static_cast<int>(with.size()) - (h.to - h.from);
+        for (auto& r : q.runs) {
+            if (r.start >= h.to) r.start += delta;
+            if (r.end >= h.to) r.end += delta;
+        }
+    });
 }
 
 }  // namespace composix::core::doc

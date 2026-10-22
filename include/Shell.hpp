@@ -175,11 +175,11 @@ private:
     void ensure_spell();
     void on_insert_table();                         // category: handler: s318 -- Type > Insert Table...
     void on_edit_table();                           // category: handler: s318 -- Type > Edit Table...
-    void open_table_editor(const std::string& story, int para);   // category: helper: s318
+    void open_table_editor(const std::string& story, int para, int row = -1, int col = -1);   // category: helper: s318; s323: a cell focused
     std::unique_ptr<Gtk::Popover> m_table_pop;      // s318: Insert Table
     std::unique_ptr<Gtk::Window>  m_table_win;      // s318: the table editor
     void on_check_spelling();                       // category: handler: s313 -- Edit > Check Spelling... (F7)
-    void spell_next(const std::string& story, core::TextPos from);   // category: helper: s313
+    void spell_next(const std::string& story, core::TextPos from, const core::doc::SpellHit* after = nullptr);   // category: helper: s313; s322
     void spell_show();                              // category: helper: s313
     std::unique_ptr<Gtk::Window> m_spell_win;       // s313
     core::doc::SpellHit m_spell_hit;                // s313: the word on show ("" none)

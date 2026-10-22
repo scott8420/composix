@@ -188,6 +188,8 @@ public:
     // s241: the view fitted to a rectangle (doc / layout coordinates).
     void zoom_to_rect(const core::Rect& r);
     sigc::signal<void(const ContextHit&)>& signal_context() { return m_sig_context; }
+    // s323: a table double-clicked -- (story, its paragraph, the cell's row, column)
+    sigc::signal<void(const std::string&, int, int, int)>& signal_table() { return m_sig_table; }
     sigc::signal<void(int, int)>& signal_note() { return m_sig_note; }   // s114: a note at the foot double-clicked -- its paragraph, index (the caret after its mark)
 
 private:
@@ -436,6 +438,7 @@ private:
     std::vector<double> m_col0;                 // every column's width (points) at press
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool, m_sig_caret;
     sigc::signal<void(const ContextHit&)> m_sig_context;   // s074
+    sigc::signal<void(const std::string&, int, int, int)> m_sig_table;   // s323
     sigc::signal<void(int, int)> m_sig_note;   // s114
 
     // s104: the pages as images at the current zoom, drawn on a worker (last:

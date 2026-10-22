@@ -2566,5 +2566,144 @@ void part9() {
         for (const auto& ft : fl.frames) for (const auto& l : ft.lines) rows += l.row >= 0;
         check("import: its rows flowed", rows == 2);
     }
+    // -- s319: merged cells ------------------------------------------------------
+    {
+        namespace D = core::doc;
+        auto t = D::make_table(4, 3, 240);
+        D::set_cell_words(t.rows[1].cells[1], "kept");
+        D::set_cell_words(t.rows[1].cells[2], "joined");
+        check("merge: 2 across -- the covered cell's words joined in", D::table_merge(t, 1, 1, 2, 1) && t.rows[1].cells[1].span_cols == 2 &&
+                                                                       D::cell_text(t.rows[1].cells[1]) == "kept\njoined" && t.rows[1].cells[2].paras.empty());
+        check("owner: a covered cell's is the merge's", D::owner_of(t, 1, 2) == std::pair<int, int>{1, 1} && D::owner_of(t, 1, 0) == std::pair<int, int>{1, 0});
+        check("merge down over it: the old merge undone first", D::table_merge(t, 0, 2, 1, 3) && t.rows[1].cells[1].span_cols == 1 &&
+                                                                 D::owner_of(t, 2, 2) == std::pair<int, int>{0, 2});
+        check("unmerge", D::table_unmerge(t, 0, 2) && D::owner_of(t, 2, 2) == std::pair<int, int>{2, 2});
+        check("a merge kept inside the table when a column goes", D::table_merge(t, 0, 1, 2, 1) && [&] { D::table_delete_col(t, 2); return t.rows[0].cells[1].span_cols == 1; }());
+        // flowed and drawn: a cell over 3 rows with many words -- its last row taller, no break inside it
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto u = D::make_table(30, 3, 240);
+        D::set_cell_words(u.rows[2].cells[0], "Many words in a merged cell that runs down three rows and needs more room than they give it");
+        D::table_merge(u, 2, 0, 1, 3);
+        D::table_merge(u, 6, 1, 2, 1);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, u);
+        const auto geo = L::table_geo(d, d.as<core::Story>("story.1")->paras[static_cast<std::size_t>(p)], 240);
+        check("geo: the merged rows together as tall as its words; no break inside", geo.row_h[4] > geo.row_h[3] + 1 &&
+                                                                                    !geo.break_before[3] && !geo.break_before[4] && geo.break_before[5],
+              std::to_string(geo.row_h[3]) + " / " + std::to_string(geo.row_h[4]));
+        L::FlowCache flows;
+        const auto& fl = flows.get(d, "story.1");
+        std::string fr6;
+        bool split_merge = false;
+        std::map<int, std::string> at;
+        for (const auto& ft : fl.frames) for (const auto& l : ft.lines) if (l.para == p && l.row >= 0) at[l.row] = ft.frame;
+        split_merge = at[2] != at[3] || at[3] != at[4];
+        check("flow: the merged rows in one frame", !split_merge);
+        int verticals = 0, wide_fill = 0;
+        L::visit_tables(d, "story.1", fl, at[6], [&](const L::TablePiece& tp) {
+            if (tp.row == 6 && tp.kind == L::TablePiece::Rule && tp.r.w < 2) ++verticals;
+        });
+        (void)wide_fill;
+        check("draw: no grid line inside a merge across (row 6: 3 edges, not 4)", verticals == 3, std::to_string(verticals));
+        int words = 0;
+        double top = 1e9;
+        L::visit_tables(d, "story.1", fl, at[2], [&](const L::TablePiece& tp) {
+            if (tp.kind == L::TablePiece::Text && tp.row == 2 && tp.col == 0) { ++words; top = std::min(top, tp.baseline); }
+        });
+        check("draw: the merged cell's words over its rows", words >= 4, std::to_string(words));
+    }
+    // -- s320: a table's cell found by a point; column widths --------------------
+    {
+        namespace D = core::doc;
+        auto t = D::make_table(3, 3, 240);
+        check("width: the next column gives -- the table as wide", D::table_set_width(t, 0, 100) && t.widths[0] == 100 && std::abs(t.widths[1] - 60) < 1e-6 &&
+                                                                   std::abs(t.widths[0] + t.widths[1] + t.widths[2] - 240) < 1e-6);
+        check("width: at least 12, the neighbour too", D::table_set_width(t, 0, 500) && std::abs(t.widths[1] - 12) < 1e-6 && !D::table_set_width(t, 7, 50));
+        check("width: the last column -- the table grows", D::table_set_width(t, 2, 120) && t.widths[2] == 120);
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto u = D::make_table(3, 3, 240);
+        D::table_merge(u, 1, 1, 2, 1);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, u);
+        L::FlowCache flows;
+        const auto& fl = flows.get(d, "story.1");
+        const L::Line* row1 = nullptr;
+        std::string fr;
+        for (const auto& ft : fl.frames) for (const auto& l : ft.lines) if (l.para == p && l.row == 1) { row1 = &l; fr = ft.frame; }
+        const auto h = row1 ? L::table_hit(d, "story.1", fl, fr, row1->x + 200, row1->y + row1->h / 2, 2) : L::TableHit{};
+        check("hit: in the merge -- its own cell, its width", h.ok() && h.para == p && h.row == 1 && h.col == 1 && std::abs(h.cell.w - 160) < 0.5,
+              std::to_string(h.row) + "," + std::to_string(h.col) + " w " + std::to_string(h.cell.w));
+        const auto e = row1 ? L::table_hit(d, "story.1", fl, fr, row1->x + 80.5, row1->y + 2, 2) : L::TableHit{};
+        check("hit: an edge near", e.ok() && e.edge == 1);
+        check("hit: off the table -- none", row1 && !L::table_hit(d, "story.1", fl, fr, row1->x + 120, row1->y - 50, 2).ok());
+    }
+    // -- s321: a cell's words top / middle / bottom; the table left / centre / right
+    {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto u = D::make_table(2, 2, 160);
+        D::set_cell_words(u.rows[0].cells[0], "A tall cell of words that need several lines here");
+        D::set_cell_words(u.rows[0].cells[1], "Short");
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, u);
+        const auto base = [&](int valign) {
+            D::edit_table(j, d, "story.1", p, "Align", [&](core::Table& t) { t.rows[0].cells[1].valign = valign; });
+            L::FlowCache flows;
+            const auto& fl = flows.get(d, "story.1");
+            double b = -1;
+            for (const auto& ft : fl.frames)
+                L::visit_tables(d, "story.1", fl, ft.frame, [&](const L::TablePiece& tp) {
+                    if (tp.kind == L::TablePiece::Text && tp.row == 0 && tp.col == 1) b = tp.baseline;
+                });
+            return b;
+        };
+        const double top = base(0), mid = base(1), bot = base(2);
+        check("valign: top < middle < bottom", top > 0 && mid > top + 1 && bot > mid + 1,
+              std::to_string(top) + " / " + std::to_string(mid) + " / " + std::to_string(bot));
+        const auto left_of = [&](int align) {
+            D::edit_table(j, d, "story.1", p, "Align", [&](core::Table& t) { t.align = align; });
+            const auto fl = L::flow_story(d, "story.1");
+            for (const auto& ft : fl.frames) for (const auto& l : ft.lines) if (l.para == p && l.row == 0) return l.x;
+            return -1.0;
+        };
+        const double l0 = left_of(0), l1 = left_of(1), l2 = left_of(2);
+        check("align: the table centred, then right, in its column", l1 > l0 + 1 && l2 > l1 + 1 && std::abs((l2 - l0) - 2 * (l1 - l0)) < 0.5,
+              std::to_string(l0) + " / " + std::to_string(l1) + " / " + std::to_string(l2));
+        core::Doc e;
+        check("valign / align: saved", core::from_json(e, core::to_json(d)) && D::table_at(e, "story.1", p)->align == 2 &&
+                                           D::table_at(e, "story.1", p)->rows[0].cells[1].valign == 2);
+    }
+    // -- s322: spelling in a table's cells -----------------------------------------
+    if (core::spell::loaded()) {
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        auto u = D::make_table(2, 2, 160);
+        D::set_cell_words(u.rows[0].cells[1], "Harbr fees");
+        D::set_cell_words(u.rows[1].cells[0], "per tonn | and qwzx");
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, u);
+        D::set_cell_text(j, d, "story.1", p, 1, 0, "per tonn\nand qwzx");
+        const auto c = D::misspellings(d);
+        auto h = D::next_misspelling(d, "story.1", {p, 0});
+        check("cells: counted; the walk comes to the first cell's word", c.words >= 3 && h.row == 0 && h.col == 1 && h.word == "Harbr", h.word);
+        const auto h2 = D::next_misspelling(d, "story.1", {p, 0}, &h);
+        check("cells: on to the next cell's (its paragraph)", h2.row == 1 && h2.col == 0 && h2.word == "tonn", h2.word);
+        const auto h3 = D::next_misspelling(d, "story.1", {p, 0}, &h2);
+        check("cells: a cell's second paragraph", h3.row == 1 && h3.cpara == 1 && h3.word == "qwzx", h3.word);
+        check("cells: put right, one step", D::replace_misspelling(j, d, h, "Harbor") &&
+                                                D::cell_text(D::table_at(d, "story.1", p)->rows[0].cells[1]) == "Harbor fees");
+        check("cells: Change All reaches them", D::change_all_words(j, d, "tonn", "ton") == 1 &&
+                                                    D::cell_text(D::table_at(d, "story.1", p)->rows[1].cells[0]) == "per ton\nand qwzx");
+        j.undo();
+        check("cells: Change All undone", D::cell_text(D::table_at(d, "story.1", p)->rows[1].cells[0]) == "per tonn\nand qwzx");
+    }
 }
 }  // namespace cxtest

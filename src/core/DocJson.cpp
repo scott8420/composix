@@ -127,6 +127,9 @@ json table_json(const Table& t) {
             }
             json jc = {{"paras", ps}};
             if (!c.fill.empty()) { jc["fill"] = c.fill; jc["tint"] = c.fill_tint; }
+            if (c.span_cols > 1) jc["span_cols"] = c.span_cols;   // s319
+            if (c.span_rows > 1) jc["span_rows"] = c.span_rows;
+            if (c.valign) jc["valign"] = c.valign;                // s321
             cells.push_back(jc);
         }
         json jr = {{"cells", cells}};
@@ -137,6 +140,7 @@ json table_json(const Table& t) {
     if (!t.rule_color.empty()) j["rule_color"] = t.rule_color;
     if (!t.cell_style.empty()) j["cell_style"] = t.cell_style;
     if (!t.header_fill.empty()) { j["header_fill"] = t.header_fill; j["header_tint"] = t.header_tint; }
+    if (t.align) j["align"] = t.align;   // s321
     return j;
 }
 Table table_of_json(const json& j) {
@@ -152,6 +156,9 @@ Table table_of_json(const json& j) {
                     TableCell c;
                     c.fill = val<std::string>(jc, "fill", "");
                     c.fill_tint = val(jc, "tint", 1.0);
+                    c.span_cols = std::max(1, val(jc, "span_cols", 1));   // s319
+                    c.span_rows = std::max(1, val(jc, "span_rows", 1));
+                    c.valign = std::clamp(val(jc, "valign", 0), 0, 2);   // s321
                     if (jc.contains("paras") && jc.at("paras").is_array())
                         for (const auto& jp : jc.at("paras")) {
                             Para p;
@@ -171,6 +178,7 @@ Table table_of_json(const json& j) {
     t.cell_style = val<std::string>(j, "cell_style", "");
     t.header_fill = val<std::string>(j, "header_fill", "");
     t.header_tint = val(j, "header_tint", 0.2);
+    t.align = std::clamp(val(j, "align", 0), 0, 2);   // s321
     return t;
 }
 

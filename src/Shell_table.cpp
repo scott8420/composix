@@ -7,6 +7,7 @@
 #include <gtkmm/button.h>
 #include <gtkmm/dropdown.h>
 #include <gtkmm/entry.h>
+#include <gtkmm/eventcontrollerfocus.h>
 #include <gtkmm/eventcontrollerkey.h>
 #include <gtkmm/grid.h>
 #include <gtkmm/label.h>
@@ -126,7 +127,7 @@ void Shell::on_edit_table() {  // handler
     open_table_editor(story, para);
 }
 
-void Shell::open_table_editor(const std::string& story, int para) {  // helper
+void Shell::open_table_editor(const std::string& story, int para, int focus_row, int focus_col) {  // helper
     const auto* t0 = core::doc::table_at(m_doc, story, para);
     if (!t0) return;
     auto work = std::make_shared<core::Table>(*t0);
@@ -158,28 +159,49 @@ void Shell::open_table_editor(const std::string& story, int para) {  // helper
     const auto keep = [work, entries] {
         for (std::size_t r = 0; r < entries->size() && r < work->rows.size(); ++r)
             for (std::size_t c = 0; c < (*entries)[r].size() && c < work->rows[r].cells.size(); ++c)
-                core::doc::set_cell_words(work->rows[r].cells[c], typed((*entries)[r][c]->get_text()));
+                if ((*entries)[r][c]) core::doc::set_cell_words(work->rows[r].cells[c], typed((*entries)[r][c]->get_text()));
     };
+    // s323: the cell the tools act on (the one last typed in / focused)
+    auto cur = std::make_shared<std::pair<int, int>>(std::max(0, focus_row), std::max(0, focus_col));
     const auto fill = std::make_shared<std::function<void()>>();
-    *fill = [work, entries, grid] {
+    *fill = [work, entries, grid, cur] {
         while (auto* ch = grid->get_first_child()) grid->remove(*ch);
         entries->clear();
-        for (std::size_t r = 0; r < work->rows.size(); ++r) {
-            auto lab = Gtk::make_managed<Gtk::Label>(static_cast<int>(r) < work->header_rows ? "H" : std::to_string(r + 1 - work->header_rows));
+        const int R = static_cast<int>(work->rows.size()), C = core::doc::table_cols(*work);
+        for (int r = 0; r < R; ++r) {
+            auto lab = Gtk::make_managed<Gtk::Label>(r < work->header_rows ? "H" : std::to_string(r + 1 - work->header_rows));
             lab->add_css_class("dim-label");
             lab->set_size_request(28, -1);
-            grid->attach(*lab, 0, static_cast<int>(r));
-            entries->emplace_back();
-            for (std::size_t c = 0; c < work->widths.size(); ++c) {
+            grid->attach(*lab, 0, r + 1);
+            entries->emplace_back(static_cast<std::size_t>(C), nullptr);
+            for (int c = 0; c < C; ++c) {
+                if (core::doc::owner_of(*work, r, c) != std::pair<int, int>{r, c}) continue;   // s323: covered -- the merge's entry spans it
+                const auto& cell = work->rows[static_cast<std::size_t>(r)].cells[static_cast<std::size_t>(c)];
                 auto e = Gtk::make_managed<Gtk::Entry>();
                 e->set_name("table.cell." + std::to_string(r) + "." + std::to_string(c));
                 e->set_hexpand(true);
-                e->set_width_chars(10);
-                if (c < work->rows[r].cells.size()) e->set_text(shown(work->rows[r].cells[c]));
-                if (static_cast<int>(r) < work->header_rows) e->add_css_class("cx-table-head");
-                grid->attach(*e, static_cast<int>(c) + 1, static_cast<int>(r));
-                entries->back().push_back(e);
+                e->set_width_chars(8);
+                e->set_text(shown(cell));
+                if (r < work->header_rows) e->add_css_class("cx-table-head");
+                if (cell.span_cols > 1 || cell.span_rows > 1) e->add_css_class("cx-table-merged");
+                auto focus = Gtk::EventControllerFocus::create();
+                focus->signal_enter().connect([cur, r, c] { *cur = {r, c}; });
+                e->add_controller(focus);
+                grid->attach(*e, c + 1, r + 1, std::max(1, cell.span_cols), std::max(1, cell.span_rows));
+                (*entries)[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)] = e;
             }
+        }
+        // the columns' widths over them (points)
+        for (int c = 0; c < C; ++c) {
+            auto sb = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->widths[static_cast<std::size_t>(c)], 12, 2000, 1, 9), 1, 1);
+            sb->set_name("table.width." + std::to_string(c));
+            sb->set_tooltip_text("This column's width, points (the next column gives the difference)");
+            sb->signal_value_changed().connect([work, sb, c, grid] {
+                if (core::doc::table_set_width(*work, c, sb->get_value()))   // the neighbour's box follows
+                    if (auto* nb = dynamic_cast<Gtk::SpinButton*>(grid->get_child_at(c + 2, 0)); nb && c + 1 < core::doc::table_cols(*work))
+                        nb->set_value(work->widths[static_cast<std::size_t>(c) + 1]);
+            });
+            grid->attach(*sb, c + 1, 0);
         }
     };
     const auto act = [&](const char* label, const char* name, std::function<void()> f) {
@@ -238,6 +260,51 @@ void Shell::open_table_editor(const std::string& story, int para) {  // helper
         fb->append(*tip);
         outer->append(*fb);
     }
+    {   // s323: the picked cell -- merged across / down, unmerged; its words top / middle / bottom; the table in its column
+        auto cb = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
+        const auto tool = [&](const char* label, const char* name, std::function<void()> f) {
+            auto b = Gtk::make_managed<Gtk::Button>(label);
+            b->set_name(std::string("table.") + name);
+            b->signal_clicked().connect([keep, fill, f] { keep(); f(); (*fill)(); });
+            cb->append(*b);
+        };
+        tool("Merge \u2192", "merge_across", [work, cur] {
+            const auto o = core::doc::owner_of(*work, cur->first, cur->second);
+            if (o.first < 0) return;
+            const auto& x = work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)];
+            core::doc::table_merge(*work, o.first, o.second, x.span_cols + 1, x.span_rows);
+        });
+        tool("Merge \u2193", "merge_down", [work, cur] {
+            const auto o = core::doc::owner_of(*work, cur->first, cur->second);
+            if (o.first < 0) return;
+            const auto& x = work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)];
+            core::doc::table_merge(*work, o.first, o.second, x.span_cols, x.span_rows + 1);
+        });
+        tool("Unmerge", "unmerge", [work, cur] {
+            const auto o = core::doc::owner_of(*work, cur->first, cur->second);
+            if (o.first >= 0) core::doc::table_unmerge(*work, o.first, o.second);
+        });
+        auto vl = Gtk::make_managed<Gtk::Label>("Words");
+        vl->set_margin_start(12);
+        cb->append(*vl);
+        auto va = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Top", "Middle", "Bottom"}));
+        va->set_name("table.valign");
+        va->set_tooltip_text("The picked cell's words: at its top, middle or bottom");
+        va->property_selected().signal_changed().connect([work, cur, va] {
+            const auto o = core::doc::owner_of(*work, cur->first, cur->second);
+            if (o.first >= 0) work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)].valign = static_cast<int>(va->get_selected());
+        });
+        cb->append(*va);
+        auto al = Gtk::make_managed<Gtk::Label>("Table");
+        al->set_margin_start(12);
+        cb->append(*al);
+        auto ta = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Left", "Centre", "Right"}));
+        ta->set_name("table.align");
+        ta->set_selected(static_cast<guint>(std::clamp(work->align, 0, 2)));
+        ta->property_selected().signal_changed().connect([work, ta] { work->align = static_cast<int>(ta->get_selected()); });
+        cb->append(*ta);
+        outer->append(*cb);
+    }
     auto sc = Gtk::make_managed<Gtk::ScrolledWindow>();
     sc->set_vexpand(true);
     sc->set_child(*grid);
@@ -262,6 +329,8 @@ void Shell::open_table_editor(const std::string& story, int para) {  // helper
     (*fill)();
     m_table_win->set_child(*outer);
     m_table_win->present();
+    if (focus_row >= 0 && focus_col >= 0 && focus_row < static_cast<int>(entries->size()))   // s323: the cell double-clicked
+        if (auto* e = (*entries)[static_cast<std::size_t>(focus_row)][static_cast<std::size_t>(std::max(0, focus_col))]) e->grab_focus();
 }
 
 }  // namespace composix

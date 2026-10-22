@@ -1543,6 +1543,19 @@ void Canvas::on_drag_begin(double x, double y) {
                 return;
             }
         }
+        // s323: a double-click (or the Text tool) on a table -- its cell, in the table editor
+        if (m_thread_from.empty() && m_load.empty() && text_frame && !m_mods_alt && ((m_tool == Tool::Select && m_clicks >= 2) || m_tool == Tool::Text)) {
+            const auto* tf = m_doc.as<core::Frame>(under);
+            const Rect fl = core::frame_in_layout(m_doc, m_placed, under);
+            if (tf && !tf->story.empty() && tf->rot == 0) {
+                const auto th = layout::table_hit(m_doc, tf->story, flows().get(m_doc, tf->story), under, px0 - fl.x, py0 - fl.y);
+                if (th.ok()) {
+                    m_drag = Drag::None;
+                    m_sig_table.emit(tf->story, th.para, th.row, th.col);
+                    return;
+                }
+            }
+        }
         if (m_thread_from.empty() && m_load.empty() && text_frame && !m_mods_alt && out_port_hit(x, y).empty() &&
             ((m_tool == Tool::Select && m_clicks >= 2) || m_tool == Tool::Text)) {
             begin_edit(under, hit_story(under, px0, py0));
