@@ -170,6 +170,10 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& fram
 // "pstyle" / "cstyle"), Selection. Mixed where the selection differs.
 struct TextPos;
 std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a, TextPos b);
+// s336: typing in a table's cell -- which cell, its words' character style,
+// the selection, and the words' own formatting (the rows text_fields ends
+// with). No paragraph rows: a cell's paragraphs take the table's style.
+std::vector<Field> cell_text_fields(const Doc& d, const std::string& story, int para, int row, int col, TextPos a, TextPos b);
 // "Text frame", "3 frames".
 std::string frames_title(const std::vector<Item>& items);
 

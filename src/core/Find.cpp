@@ -650,9 +650,25 @@ int change_hits(DocJournal& j, Doc& d, std::vector<Hit> hits, const ChangeOpts& 
     // An unchanged run leaves no step (the journal drops it): 0 then.
     const bool did = j.run(label, stories, [&] {
         for (const auto& h : hits) {
-            if (h.table >= 0) {   // s335: in a cell's words -- the text (styles not yet)
-                if (!c.set_text) continue;
-                if (edit_cell(j, d, h.story, h.table, h.row, h.col, h.a, h.b, change_text(c, h), label).para >= 0) ++n;
+            if (h.table >= 0) {   // s335: in a cell's words -- the text; s336: a character style too (a paragraph style: not in cells)
+                if (!c.set_text && c.cstyle.empty()) continue;
+                TextPos a = h.a, b = h.b;
+                bool any = false;
+                if (c.set_text) {
+                    b = edit_cell(j, d, h.story, h.table, h.row, h.col, a, b, change_text(c, h), label);
+                    if (b.para < 0) continue;
+                    any = true;
+                }
+                if (!c.cstyle.empty() && a != b) {
+                    set_cell_char_style(j, d, h.story, h.table, h.row, h.col, a, b, c.cstyle);   // inside this step: just writes (no "changed" back)
+                    any = true;
+                    if (const auto* sty = d.as<Style>(c.cstyle); sty && c.fold_local)   // s051, as in the text
+                        set_cell_local(j, d, h.story, h.table, h.row, h.col, a, b, label, [&](Local& l) {
+                            if (l.bold >= 0 && (l.bold == 1) == sty->bold) l.bold = -1;
+                            if (l.italic >= 0 && (l.italic == 1) == sty->italic) l.italic = -1;
+                        });
+                }
+                if (any) ++n;
                 continue;
             }
             if (h.note >= 0) {   // s113: in a note's words -- the text and / or a character style

@@ -107,6 +107,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"lsize", 1, 0, 1296}, {"bounds", 72, -20000, 20000},
         {"track", 1, -1000, 10000}, {"bshift", 1, -1000, 1000}, {"ltrack", 1, -1000, 10000}, {"lshift", 1, -1000, 1000},   // s263
         {"lkern", 1, -1000, 10000},   // s267
+        {"cell_rowh", 1, 0, 2000}, {"cell_border", 1, 0, 72},   // s337
         {"list_hang", 1, 0, 144}, {"rule_a_w", 1, 0, 72}, {"rule_b_w", 1, 0, 72}, {"rule_a_o", 1, -500, 500}, {"rule_b_o", 1, -500, 500},
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
         {"dnote_rule_w", 1, 0.1, 6}, {"dnote_space", 1, 0, 36},   // s118
@@ -122,7 +123,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
     // s071: tints and opacity -- percentages typed, the presets beside.
     struct P { const char* key; double lo; };
     static const P pct[] = {{"fill_tint", 1}, {"stroke_tint", 1}, {"color_tint", 1}, {"col_rule_tint", 1},
-                            {"rule_a_t", 1}, {"rule_b_t", 1}, {"opacity", 0}};
+                            {"rule_a_t", 1}, {"rule_b_t", 1}, {"opacity", 0}, {"cell_tint", 5}};   // s337: a cell's fill
     for (auto& f : fields)
         for (const auto& p : pct)
             if (f.edit == p.key) { f.percent = true; f.lo = p.lo; f.hi = 100; }
@@ -242,6 +243,12 @@ Field sides_row(const std::string& label, const Sides& s, const std::string& key
     return f;
 }
 
+// s338: a layer's colour row -- the usual blue, then InDesign's list.
+std::vector<Choice> layer_color_choices() {
+    std::vector<Choice> v{{"", "Usual"}};
+    for (const auto& c : doc::layer_colors()) v.push_back({c.hex, c.name});
+    return v;
+}
 }  // namespace
 
 Outline project(const Doc& d, const std::string& dir, const std::vector<std::string>* overset,
@@ -854,6 +861,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                                       {"Visible", l.visible ? "Shown" : "Hidden", "lvis", {{"1", "Shown"}, {"0", "Hidden"}}},
                                       {"Locked", l.locked ? "Locked" : "No", "llock", {{"0", "No"}, {"1", "Locked"}}},
                                       {"Prints", l.print ? "Yes" : "No", "lprint", {{"1", "Yes"}, {"0", "No"}}},
+                                      {"Colour", doc::layer_color_name(l.color), "layer_color", layer_color_choices()},   // s338
                                       {"Frames", n == 1 ? "1 frame" : std::to_string(n) + " frames"}};
             Field act{"", "", "layer", {}};
             if (*it != active) act.choices.push_back({"active", "Make Active"});
@@ -1306,6 +1314,63 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
     return out;
 }
 
+namespace {
+// s030 (s336: shared with a cell's words): formatting on the words
+// themselves, over the styles -- [a, b) of `stv` (a story, or a cell's
+// paragraphs as one).
+void word_rows(std::vector<Field>& out, const Doc& d, const Story& stv, TextPos a, TextPos b) {
+    const Story* st = &stv;
+    // s030: formatting on the words themselves (over the styles).
+    {
+        const auto& para = st->paras[static_cast<std::size_t>(a.para)];
+        const Local l = local_at(para, a == b ? a.byte : a.byte + 1);
+        const auto pt = [](double v) { return pts(v) + " pt"; };
+        std::vector<Choice> sz{{"0", "Style's"}};
+        for (double v : {8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 18.0, 24.0, 36.0}) sz.push_back({pts(v), pt(v)});
+        std::vector<Choice> co{{"", "Style's"}};
+        for (const auto& id : d.ids_of<Swatch>()) co.push_back({id, d.as<Swatch>(id)->name});
+        const auto* sw = d.as<Swatch>(l.color);
+        out.push_back({"Size", l.size > 0 ? pt(l.size) : "Style's", "lsize", sz});
+        out.push_back({"Colour", sw ? sw->name : "Style's", "lcolor", co});
+        // s159: No break on the words themselves (a character style's before).
+        out.push_back({"No break", l.no_break < 0 ? "Style's" : l.no_break ? "On" : "Off", "lnobreak",
+                       {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
+        {   // s263: the words' own character attributes ("Style's": none of their own)
+            const auto num = [](double v) { return pts(v); };
+            std::vector<Choice> tr{{"style", "Style's"}, {"0", "0"}};
+            for (const double v : {-50.0, -25.0, -10.0, 10.0, 25.0, 50.0, 100.0, 200.0}) tr.push_back({num(v), num(v)});
+            out.push_back({"Tracking", l.tracking ? num(*l.tracking) + " /1000 em" : "Style's", "ltrack", tr});
+            std::vector<Choice> bs{{"style", "Style's"}, {"0", "0 pt"}};
+            for (const double v : {-3.0, -2.0, -1.0, 1.0, 2.0, 3.0}) bs.push_back({num(v), num(v) + " pt"});
+            out.push_back({"Baseline shift", l.shift ? num(*l.shift) + " pt" : "Style's", "lshift", bs});
+            static const char* pos[] = {"Normal", "Superscript", "Subscript"};
+            static const char* cas[] = {"As typed", "All caps", "Small caps"};
+            out.push_back({"Position", l.position < 0 ? "Style's" : pos[std::clamp(l.position, 0, 2)], "lpos",
+                           {{"-1", "Style's"}, {"0", pos[0]}, {"1", pos[1]}, {"2", pos[2]}}});
+            out.push_back({"Case", l.caps < 0 ? "Style's" : cas[std::clamp(l.caps, 0, 2)], "lcase",
+                           {{"-1", "Style's"}, {"0", cas[0]}, {"1", cas[1]}, {"2", cas[2]}}});
+            out.push_back({"Underline", l.underline < 0 ? "Style's" : l.underline ? "On" : "Off", "luline",
+                           {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
+            out.push_back({"Strikethrough", l.strike < 0 ? "Style's" : l.strike ? "On" : "Off", "lstrike",
+                           {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
+            // s267: the pair's kerning at a caret (on the character before it).
+            if (a == b && a.byte > 0) {
+                const Local kl = local_at(para, a.byte);
+                std::vector<Choice> kc{{"0", "0"}};
+                for (const double v : {-100.0, -50.0, -20.0, -10.0, 10.0, 20.0, 50.0, 100.0}) kc.push_back({num(v), num(v)});
+                Field kf{"Kerning (pair)", kl.kern ? num(*kl.kern) + " /1000 em" : "0", "lkern", kc};
+                out.push_back(kf);
+            }
+            ot_rows(out, l.ot ? *l.ot : OtFeatures{}, "lot_", "Default", true, l.ot.has_value());
+        }
+        mark_typed(out, unit_pt(d.settings().units));   // s041: Size typed
+        Field fx{"", "", "local", {{"bold", "Bold"}, {"italic", "Italic"}, {"clear", "Clear overrides"}}};
+        fx.buttons = true;
+        out.push_back(fx);
+    }
+}
+}  // namespace
+
 std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a, TextPos b) {
     std::vector<Field> out;
     const auto* st = d.as<Story>(story);
@@ -1421,54 +1486,89 @@ std::vector<Field> text_fields(const Doc& d, const std::string& story, TextPos a
     std::size_t chars = 0;
     for (unsigned char c : sel) chars += (c & 0xC0) != 0x80;
     out.push_back({"Selection", a == b ? "Caret" : std::to_string(chars) + (chars == 1 ? " character" : " characters")});
-    // s030: formatting on the words themselves (over the styles).
-    {
-        const auto& para = st->paras[static_cast<std::size_t>(a.para)];
-        const Local l = local_at(para, a == b ? a.byte : a.byte + 1);
-        const auto pt = [](double v) { return pts(v) + " pt"; };
-        std::vector<Choice> sz{{"0", "Style's"}};
-        for (double v : {8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 18.0, 24.0, 36.0}) sz.push_back({pts(v), pt(v)});
-        std::vector<Choice> co{{"", "Style's"}};
-        for (const auto& id : d.ids_of<Swatch>()) co.push_back({id, d.as<Swatch>(id)->name});
-        const auto* sw = d.as<Swatch>(l.color);
-        out.push_back({"Size", l.size > 0 ? pt(l.size) : "Style's", "lsize", sz});
-        out.push_back({"Colour", sw ? sw->name : "Style's", "lcolor", co});
-        // s159: No break on the words themselves (a character style's before).
-        out.push_back({"No break", l.no_break < 0 ? "Style's" : l.no_break ? "On" : "Off", "lnobreak",
-                       {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
-        {   // s263: the words' own character attributes ("Style's": none of their own)
-            const auto num = [](double v) { return pts(v); };
-            std::vector<Choice> tr{{"style", "Style's"}, {"0", "0"}};
-            for (const double v : {-50.0, -25.0, -10.0, 10.0, 25.0, 50.0, 100.0, 200.0}) tr.push_back({num(v), num(v)});
-            out.push_back({"Tracking", l.tracking ? num(*l.tracking) + " /1000 em" : "Style's", "ltrack", tr});
-            std::vector<Choice> bs{{"style", "Style's"}, {"0", "0 pt"}};
-            for (const double v : {-3.0, -2.0, -1.0, 1.0, 2.0, 3.0}) bs.push_back({num(v), num(v) + " pt"});
-            out.push_back({"Baseline shift", l.shift ? num(*l.shift) + " pt" : "Style's", "lshift", bs});
-            static const char* pos[] = {"Normal", "Superscript", "Subscript"};
-            static const char* cas[] = {"As typed", "All caps", "Small caps"};
-            out.push_back({"Position", l.position < 0 ? "Style's" : pos[std::clamp(l.position, 0, 2)], "lpos",
-                           {{"-1", "Style's"}, {"0", pos[0]}, {"1", pos[1]}, {"2", pos[2]}}});
-            out.push_back({"Case", l.caps < 0 ? "Style's" : cas[std::clamp(l.caps, 0, 2)], "lcase",
-                           {{"-1", "Style's"}, {"0", cas[0]}, {"1", cas[1]}, {"2", cas[2]}}});
-            out.push_back({"Underline", l.underline < 0 ? "Style's" : l.underline ? "On" : "Off", "luline",
-                           {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
-            out.push_back({"Strikethrough", l.strike < 0 ? "Style's" : l.strike ? "On" : "Off", "lstrike",
-                           {{"-1", "Style's"}, {"1", "On"}, {"0", "Off"}}});
-            // s267: the pair's kerning at a caret (on the character before it).
-            if (a == b && a.byte > 0) {
-                const Local kl = local_at(para, a.byte);
-                std::vector<Choice> kc{{"0", "0"}};
-                for (const double v : {-100.0, -50.0, -20.0, -10.0, 10.0, 20.0, 50.0, 100.0}) kc.push_back({num(v), num(v)});
-                Field kf{"Kerning (pair)", kl.kern ? num(*kl.kern) + " /1000 em" : "0", "lkern", kc};
-                out.push_back(kf);
+    word_rows(out, d, *st, a, b);
+    return out;
+}
+
+std::vector<Field> cell_text_fields(const Doc& d, const std::string& story, int para, int row, int col, TextPos a, TextPos b) {   // s336
+    std::vector<Field> out;
+    const auto* t = doc::table_at(d, story, para);
+    if (!t || doc::owner_of(*t, row, col) != std::pair<int, int>{row, col}) return out;
+    Story st;
+    st.paras = t->rows[static_cast<std::size_t>(row)].cells[static_cast<std::size_t>(col)].paras;
+    if (st.paras.empty()) st.paras.emplace_back();
+    a = clamp_pos(st, a);
+    b = clamp_pos(st, b);
+    if (b < a) std::swap(a, b);
+    std::vector<Choice> cc{{"", "None"}};
+    for (const auto& id : d.ids_of<Style>())
+        if (const auto* s = d.as<Style>(id); s->kind == StyleKind::Character) cc.push_back({id, s->name});
+    std::string cs;
+    bool first = true;
+    if (a == b) cs = char_style_at(st.paras[static_cast<std::size_t>(a.para)], a.byte);
+    else
+        for (int p = a.para; p <= b.para; ++p) {
+            const auto& pp = st.paras[static_cast<std::size_t>(p)];
+            const int from = p == a.para ? a.byte : 0, to = p == b.para ? b.byte : static_cast<int>(pp.text.size());
+            for (int k = from; k < to; ++k) {
+                const auto x = char_style_at(pp, k + 1);
+                if (first) { cs = x; first = false; }
+                else if (x != cs) { cs = "\x01"; break; }
             }
-            ot_rows(out, l.ot ? *l.ot : OtFeatures{}, "lot_", "Default", true, l.ot.has_value());
         }
-        mark_typed(out, unit_pt(d.settings().units));   // s041: Size typed
-        Field fx{"", "", "local", {{"bold", "Bold"}, {"italic", "Italic"}, {"clear", "Clear overrides"}}};
-        fx.buttons = true;
-        out.push_back(fx);
+    const auto* csty = d.as<Style>(cs);
+    {   // s337: the cell itself -- fill, words' place, its row's height, borders, rows / columns / merges
+        const auto& cell = t->rows[static_cast<std::size_t>(row)].cells[static_cast<std::size_t>(col)];
+        const auto pt = [](double v) { return pts(v) + " pt"; };
+        std::vector<Choice> sw{{"", "None"}};
+        for (const auto& id : d.ids_of<Swatch>()) sw.push_back({id, d.as<Swatch>(id)->name});
+        const auto name_of = [&](const std::string& id, const char* none) {
+            const auto* x = d.as<Swatch>(id);
+            return x ? x->name : std::string(none);
+        };
+        std::vector<Field> cf;
+        std::string where = "Row " + std::to_string(row + 1) + ", column " + std::to_string(col + 1);
+        if (cell.span_cols > 1 || cell.span_rows > 1)
+            where += " (" + std::to_string(cell.span_cols) + " \u00d7 " + std::to_string(cell.span_rows) + ")";
+        cf.push_back({"Cell", where});
+        cf.push_back({"Fill", name_of(cell.fill, "None"), "cell_fill", sw});
+        if (!cell.fill.empty())
+            cf.push_back({"Fill tint", std::to_string(static_cast<int>(std::lround(cell.fill_tint * 100))) + "%", "cell_tint",
+                          {{"100", "100%"}, {"75", "75%"}, {"50", "50%"}, {"25", "25%"}, {"10", "10%"}}});
+        static const char* va[] = {"Top", "Middle", "Bottom"};
+        cf.push_back({"Words", va[std::clamp(cell.valign, 0, 2)], "cell_valign", {{"0", va[0]}, {"1", va[1]}, {"2", va[2]}}});
+        const double mh = t->rows[static_cast<std::size_t>(row)].min_h;
+        cf.push_back({"Row at least", mh > 0 ? pt(mh) : "As its words", "cell_rowh",
+                      {{"0", "As its words"}, {"12", pt(12)}, {"18", pt(18)}, {"24", pt(24)}, {"36", pt(36)}, {"48", pt(48)}}});
+        // the four sides: one value when they agree
+        const auto& b0 = cell.borders[0];
+        bool same = true;
+        for (const auto& bx : cell.borders) same = same && bx == b0;
+        const std::string bw = !same ? std::string(kMixed) : b0.w < 0 ? "As the grid" : b0.w == 0 ? "None" : pt(b0.w);
+        cf.push_back({"Border", bw, "cell_border",
+                      {{"-1", "As the grid"}, {"0", "None"}, {"0.25", pt(0.25)}, {"0.5", pt(0.5)}, {"1", pt(1)}, {"2", pt(2)}, {"3", pt(3)}}});
+        std::vector<Choice> bc{{"", "The grid's"}};
+        for (std::size_t k = 1; k < sw.size(); ++k) bc.push_back(sw[k]);
+        cf.push_back({"Border colour", !same ? std::string(kMixed) : name_of(b0.color, "The grid's"), "cell_border_color", bc});
+        Field rows_f{"Rows", "", "cell_rows", {{"above", "Above"}, {"below", "Below"}, {"delete", "Delete"}}};
+        rows_f.buttons = true;
+        cf.push_back(rows_f);
+        Field cols_f{"Columns", "", "cell_cols", {{"left", "Left"}, {"right", "Right"}, {"delete", "Delete"}}};
+        cols_f.buttons = true;
+        cf.push_back(cols_f);
+        Field mg{"Merge", "", "cell_merge", {{"across", "Across \u2192"}, {"down", "Down \u2193"}, {"unmerge", "Unmerge"}}};
+        mg.buttons = true;
+        cf.push_back(mg);
+        mark_typed(cf, unit_pt(d.settings().units));
+        for (auto& f : cf) f.group = "Cell";
+        out.insert(out.end(), cf.begin(), cf.end());
     }
+    out.push_back({"Character style", cs == "\x01" ? kMixed : csty ? csty->name : "None", "cstyle", cc});
+    const std::string sel = text_between(st, a, b);
+    std::size_t chars = 0;
+    for (unsigned char c : sel) chars += (c & 0xC0) != 0x80;
+    out.push_back({"Selection", a == b ? "Caret" : std::to_string(chars) + (chars == 1 ? " character" : " characters")});
+    word_rows(out, d, st, a, b);
     return out;
 }
 

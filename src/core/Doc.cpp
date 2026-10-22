@@ -1747,6 +1747,39 @@ int frames_on_layer(const Doc& d, const Doc::Id& layer) {
     return n;
 }
 
+const std::vector<LayerColor>& layer_colors() {   // s338
+    static const std::vector<LayerColor> v{
+        {"#4f8fe6", "Light Blue"}, {"#e63c3c", "Red"},      {"#2fae4f", "Green"},     {"#2f4fe6", "Blue"},
+        {"#e0b520", "Yellow"},     {"#d63cd6", "Magenta"},  {"#22b8cc", "Cyan"},      {"#8c8c8c", "Gray"},
+        {"#2b2b2b", "Black"},      {"#f08a24", "Orange"},   {"#1f7a3a", "Dark Green"}, {"#2f8f8f", "Teal"},
+        {"#b48c5a", "Tan"},        {"#8a5a2b", "Brown"},    {"#8a4fd6", "Violet"},    {"#c9a227", "Gold"},
+        {"#1f3a8a", "Dark Blue"},  {"#f07aa8", "Pink"},     {"#a88ff0", "Lavender"},  {"#a83a2a", "Brick Red"},
+        {"#7a8a2a", "Olive Green"}};
+    return v;
+}
+
+std::string layer_color_name(const std::string& hex) {   // s338
+    if (hex.empty()) return "Usual";
+    for (const auto& c : layer_colors()) if (hex == c.hex) return c.name;
+    return "Custom";
+}
+
+bool layer_rgb(const Doc& d, const Frame& f, double rgb[3]) {   // s338
+    const auto* l = layer_of(d, f);
+    if (!l || l->color.size() != 7 || l->color[0] != '#') return false;
+    unsigned v = 0;
+    for (std::size_t i = 1; i < 7; ++i) {
+        const char c = l->color[i];
+        const int x = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (x < 0) return false;
+        v = v * 16 + static_cast<unsigned>(x);
+    }
+    rgb[0] = ((v >> 16) & 0xff) / 255.0;
+    rgb[1] = ((v >> 8) & 0xff) / 255.0;
+    rgb[2] = (v & 0xff) / 255.0;
+    return true;
+}
+
 Doc::Id add_layer(DocJournal& j, Doc& d, const std::string& name) {
     const auto ls = d.ids_of<Layer>();
     Doc::Id made, first;
@@ -1760,12 +1793,21 @@ Doc::Id add_layer(DocJournal& j, Doc& d, const std::string& name) {
     j.run("New Layer", ids, [&] {
         if (ls.empty()) {   // the document's frames were on a layer all along -- it gets a name
             first = d.fresh_id("layer");
-            d.put(first, Layer{"Layer 1", 1.0, true, false, true, {}});
+            d.put(first, Layer{"Layer 1", 1.0, true, false, true, layer_colors()[0].hex});
         }
         made = d.fresh_id("layer");
         Layer l;
         l.name = name.empty() ? (ls.empty() ? std::string("Layer 2") : fresh_name(0)) : name;
         l.pos = d.pos_after<Layer>({});
+        // s338: the next colour (one not yet taken, in order; all taken: by count)
+        {
+            std::set<std::string> used;
+            for (const auto& x : d.ids_of<Layer>()) used.insert(d.as<Layer>(x)->color);
+            const auto& cs = layer_colors();
+            l.color = cs[d.ids_of<Layer>().size() % cs.size()].hex;
+            for (const auto& c : cs)
+                if (!used.count(c.hex)) { l.color = c.hex; break; }
+        }
         d.put(made, l);
         return first.empty() ? std::vector<Doc::Id>{made} : std::vector<Doc::Id>{first, made};
     });
@@ -4520,44 +4562,12 @@ bool set_para_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, Text
     return j.run("Paragraph style: " + sty->name, {story}, [&] { d.put(story, s); });
 }
 
-bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style) {
-    const auto* st = d.as<Story>(story);
-    const auto* sty = style.empty() ? nullptr : d.as<Style>(style);
-    if (!st || st->paras.empty() || (!style.empty() && (!sty || sty->kind != StyleKind::Character))) return false;
-    a = clamp_pos(*st, a);
-    b = clamp_pos(*st, b);
-    if (b < a) std::swap(a, b);
-    if (a == b) return false;
-    Story s = *st;
-    for (int p = a.para; p <= b.para; ++p) {
-        auto& para = s.paras[static_cast<std::size_t>(p)];
-        const int n = static_cast<int>(para.text.size());
-        const int from = p == a.para ? a.byte : 0, to = p == b.para ? b.byte : n;
-        auto sp = spans_of(para, 0, from);
-        for (auto x : spans_of(para, from, to)) { x.style = style; sp.push_back(x); }
-        const auto rest = spans_of(para, to, n);
-        sp.insert(sp.end(), rest.begin(), rest.end());
-        Para was = std::move(para);
-        para = para_of(was.style, sp);
-        para.restart = was.restart;            // s047
-        para.brk = was.brk;                    // s055
-        para.over = was.over;                  // s113: its own settings (were dropped)
-        para.notes = std::move(was.notes);     // s113: and its footnotes (were dropped)
-        para.refs = std::move(was.refs);       // s128
-        para.anchors = std::move(was.anchors);
-        para.index = std::move(was.index);     // s134
-        para.tables = std::move(was.tables);   // s314
-    }
-    if (s == *st) return false;
-    return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
-                 [&] { d.put(story, s); });
-}
-
 namespace {
-// s333: [a, b) of `s` (clamped) -- each piece's Local changed by `f`, the
-// paragraphs' own settings and attachments kept. What set_local and
-// set_cell_local share. False when [a, b) is empty.
-bool local_over(Story& s, TextPos a, TextPos b, const std::function<void(Local&)>& f) {
+// s333: [a, b) of `s` (clamped) -- each piece changed by `f` (s336: its
+// Local, its character style), the paragraphs' own settings and attachments
+// kept. What set_local, set_char_style and their cell twins share. False
+// when [a, b) is empty.
+bool spans_over(Story& s, TextPos a, TextPos b, const std::function<void(Span&)>& f) {
     if (s.paras.empty()) return false;
     a = clamp_pos(s, a);
     b = clamp_pos(s, b);
@@ -4568,7 +4578,7 @@ bool local_over(Story& s, TextPos a, TextPos b, const std::function<void(Local&)
         const int n = static_cast<int>(para.text.size());
         const int from = p == a.para ? a.byte : 0, to = p == b.para ? b.byte : n;
         auto sp = spans_of(para, 0, from);
-        for (auto x : spans_of(para, from, to)) { f(x.local); sp.push_back(x); }
+        for (auto x : spans_of(para, from, to)) { f(x); sp.push_back(x); }
         const auto rest = spans_of(para, to, n);
         sp.insert(sp.end(), rest.begin(), rest.end());
         Para was = std::move(para);
@@ -4584,7 +4594,22 @@ bool local_over(Story& s, TextPos a, TextPos b, const std::function<void(Local&)
     }
     return true;
 }
+bool local_over(Story& s, TextPos a, TextPos b, const std::function<void(Local&)>& f) {
+    return spans_over(s, a, b, [&](Span& x) { f(x.local); });
+}
 }  // namespace
+
+bool set_char_style(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const Doc::Id& style) {
+    const auto* st = d.as<Story>(story);
+    const auto* sty = style.empty() ? nullptr : d.as<Style>(style);
+    if (!st || st->paras.empty() || (!style.empty() && (!sty || sty->kind != StyleKind::Character))) return false;
+    Story s = *st;
+    if (!spans_over(s, a, b, [&](Span& x) { x.style = style; })) return false;
+    if (s == *st) return false;
+    return j.run(sty ? "Character style: " + sty->name : std::string("No character style"), {story},
+                 [&] { d.put(story, s); });
+}
+
 
 bool set_local(DocJournal& j, Doc& d, const Doc::Id& story, TextPos a, TextPos b, const std::string& label,
                const std::function<void(Local&)>& f, const std::string& merge_key) {
@@ -4605,6 +4630,20 @@ bool set_cell_local(DocJournal& j, Doc& d, const Doc::Id& story, int para, int r
         s.paras = cell.paras;
         if (local_over(s, a, b, f)) cell.paras = std::move(s.paras);
     }, merge_key);
+}
+
+bool set_cell_char_style(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
+                         const Doc::Id& style) {   // s336
+    const auto* sty = style.empty() ? nullptr : d.as<Style>(style);
+    if (!style.empty() && (!sty || sty->kind != StyleKind::Character)) return false;
+    const auto* t = table_at(d, story, para);
+    if (!t || owner_of(*t, row, col) != std::pair<int, int>{row, col}) return false;
+    return edit_table(j, d, story, para, sty ? "Character style: " + sty->name : std::string("No character style"), [&](Table& x) {
+        auto& cell = x.rows[static_cast<std::size_t>(row)].cells[static_cast<std::size_t>(col)];
+        Story s;
+        s.paras = cell.paras;
+        if (spans_over(s, a, b, [&](Span& y) { y.style = style; })) cell.paras = std::move(s.paras);
+    });
 }
 
 std::string normal_link(const std::string& typed) {   // s303
@@ -6796,6 +6835,13 @@ const std::vector<Verb>& verbs() {
              const int p = insert_table(j, d, "story.1", {1, 10}, make_table(2, 2, 200));
              edit_cell(j, d, "story.1", p, 0, 0, {0, 0}, {0, 0}, "Dover Sole");
              set_cell_local(j, d, "story.1", p, 0, 0, {0, 0}, {0, 5}, "Bold", [](Local& l) { l.bold = 1; });
+             j.commit();
+         }},
+        {"set_cell_char_style", [](DocJournal& j, Doc& d) {   // s336
+             j.begin("Table", {"story.1"});
+             const int p = insert_table(j, d, "story.1", {1, 10}, make_table(2, 2, 200));
+             edit_cell(j, d, "story.1", p, 0, 0, {0, 0}, {0, 0}, "Dover Sole");
+             set_cell_char_style(j, d, "story.1", p, 0, 0, {0, 0}, {0, 5}, "style.5");
              j.commit();
          }},
         {"cell_border", [](DocJournal& j, Doc& d) {   // s334

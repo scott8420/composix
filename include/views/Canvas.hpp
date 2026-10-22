@@ -320,6 +320,8 @@ private:
         bool ok() const { return para >= 0; }
     };
     RowEdgeHit table_row_hit(double sx, double sy) const;
+    // s338: the selection's colour for `frame` -- its layer's, else the accent.
+    void set_acc(const Cairo::RefPtr<Cairo::Context>& cr, const std::string& frame, double alpha) const;
     const core::Story* edit_story() const { return m_doc.as<core::Story>(m_edit_story); }
     // s330: typing in a cell
     void begin_cell(const std::string& frame, const std::string& story, layout::CellRef c, core::TextPos at, bool select_all = false);

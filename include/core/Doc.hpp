@@ -1330,6 +1330,15 @@ bool frame_prints(const Doc& d, const Frame& f);
 Doc::Id add_layer(DocJournal& j, Doc& d, const std::string& name = {});
 // A layer's settings (`f` changes it; the label names the step). One step.
 bool edit_layer(DocJournal& j, Doc& d, const Doc::Id& layer, const std::string& label, const std::function<void(Layer&)>& f);
+// s338: the layer colours (InDesign's, in its order): "#rrggbb" and a name.
+// A new layer takes the next one; "" (a layer from before s338) is the
+// selection's usual blue.
+struct LayerColor { const char* hex; const char* name; };
+const std::vector<LayerColor>& layer_colors();
+std::string layer_color_name(const std::string& hex);   // "Custom" when it isn't one; "Usual" for ""
+// The colour a frame's selection is drawn in: its layer's (r, g, b in 0..1).
+// False: the usual (no layer colour, a bad one).
+bool layer_rgb(const Doc& d, const Frame& f, double rgb[3]);
 // A layer moved to place `index` (0 the bottom). One step.
 bool move_layer(DocJournal& j, Doc& d, const Doc::Id& layer, int index);
 // A layer gone, its frames deleted with it (InDesign) -- or, `keep`, moved to
@@ -1679,6 +1688,10 @@ TextPos cell_end(const TableCell& c);
 // step (a covered cell, an empty range, no change: false).
 bool set_cell_local(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
                     const std::string& label, const std::function<void(Local&)>& f, const std::string& merge_key = {});
+// s336: [a, b) of cell (row, col)'s words takes a character style ("" none),
+// as set_char_style does in a story. One step.
+bool set_cell_char_style(DocJournal& j, Doc& d, const Doc::Id& story, int para, int row, int col, TextPos a, TextPos b,
+                         const Doc::Id& style);
 // The next (dir +1) / previous (-1) cell in reading order -- across, then
 // down; a merge's covered cells passed over. {-1, -1} past either end.
 std::pair<int, int> next_cell(const Table& t, int r, int c, int dir);

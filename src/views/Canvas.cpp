@@ -988,14 +988,14 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
     // Hover: a quiet outline on the frame under the pointer.
     if (!m_hover.empty() && std::find(m_sel.begin(), m_sel.end(), m_hover) == m_sel.end()) {
         const Rect r = m_vp.to_screen(core::frame_in_layout(m_doc, m_placed, m_hover));
-        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 0.55);
+        set_acc(cr, m_hover, 0.55);   // s338: in its layer's colour
         cr->rectangle(std::round(r.x) + 0.5, std::round(r.y) + 0.5, std::round(r.w), std::round(r.h));
         cr->stroke();
     }
     // Each pick outlined; one box with 8 handles around them all.
     for (const auto& id : m_sel) {
         const Rect r = m_vp.to_screen(core::frame_in_layout(m_doc, m_placed, id));
-        cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+        set_acc(cr, id, 1);   // s338: in its layer's colour
         if (const auto* tf = m_doc.as<core::Frame>(id); tf && core::turned(*tf)) {   // s229: its turned box
             const Rect lr = core::frame_in_layout(m_doc, m_placed, id);
             const double cx[] = {tf->x, tf->x + tf->w, tf->x + tf->w, tf->x}, cy[] = {tf->y, tf->y, tf->y + tf->h, tf->y + tf->h};
@@ -1110,12 +1110,19 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
         }
         std::array<std::array<double, 2>, 8> hs;
         if (!turned_pick(hs)) hs = core::handle_points(box);   // s229: one turned frame -- on its own box
+        // s338: one frame, or all on one layer: that layer's colour
+        std::string by = m_sel.front();
+        for (const auto& id : m_sel) {
+            const auto* a = m_doc.as<core::Frame>(id);
+            const auto* b = m_doc.as<core::Frame>(by);
+            if (a && b && core::doc::layer_of(m_doc, *a) != core::doc::layer_of(m_doc, *b)) { by.clear(); break; }
+        }
         for (const auto& p : hs) {
             const double x = std::round(p[0]) - 3.5, y = std::round(p[1]) - 3.5;
             cr->set_source_rgb(1, 1, 1);
             cr->rectangle(x, y, 7, 7);
             cr->fill_preserve();
-            cr->set_source_rgba(kAcc[0], kAcc[1], kAcc[2], 1);
+            set_acc(cr, by, 1);
             cr->stroke();
         }
     }
@@ -2958,6 +2965,12 @@ Canvas::TableEdge Canvas::table_edge_hit(double sx, double sy) const {
     }
     if (te.ratio > 1) te.ratio = 1;
     return te;
+}
+
+void Canvas::set_acc(const Cairo::RefPtr<Cairo::Context>& cr, const std::string& frame, double alpha) const {   // s338
+    double c[3] = {kAcc[0], kAcc[1], kAcc[2]};
+    if (const auto* f = frame.empty() ? nullptr : m_doc.as<core::Frame>(frame)) core::doc::layer_rgb(m_doc, *f, c);
+    cr->set_source_rgba(c[0], c[1], c[2], alpha);
 }
 
 // s332: within 4 px of a table row's bottom edge in the one picked text

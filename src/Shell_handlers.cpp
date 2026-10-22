@@ -1457,7 +1457,7 @@ bool Shell::layer_edit(const std::string& key, const std::string& choice, const 
         if (auto lg = log::get(log::Area::Shell)) lg->info("layers: {} frame(s) to {}", n, choice);
         return true;
     }
-    if (key != "lname" && key != "lvis" && key != "llock" && key != "lprint" && key != "layer") return false;
+    if (key != "lname" && key != "lvis" && key != "llock" && key != "lprint" && key != "layer" && key != "layer_color") return false;
     std::vector<std::string> ls;
     for (const auto& id : ids) if (m_doc.as<core::Layer>(id)) ls.push_back(id);
     if (ls.empty()) return true;
@@ -1465,6 +1465,10 @@ bool Shell::layer_edit(const std::string& key, const std::string& choice, const 
         std::string t = choice;
         while (!t.empty() && t.back() == ' ') t.pop_back();
         if (!t.empty()) did = D::edit_layer(m_journal, m_doc, ls.front(), "Rename Layer", [&](core::Layer& l) { l.name = t; });
+    } else if (key == "layer_color") {   // s338
+        for (const auto& id : ls)
+            did = D::edit_layer(m_journal, m_doc, id, "Layer Colour", [&](core::Layer& l) { l.color = choice; }) || did;
+        if (did) m_canvas_view.canvas().queue_draw();
     } else if (key == "lvis" || key == "llock" || key == "lprint") {
         const bool on = choice == "1";
         const char* label = key == "lvis" ? (on ? "Show Layer" : "Hide Layer") : key == "llock" ? (on ? "Lock Layer" : "Unlock Layer")
@@ -1741,42 +1745,53 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         } else if (key == "starts") {
             did = core::doc::set_starts(m_journal, m_doc, m_inspected,
                                         static_cast<core::Side>(std::stoi(choice)));
+        } else if (key.rfind("cell_", 0) == 0) {   // s337: the inspector's Cell group, typing in a cell
+            did = cell_edit(key, choice);
         } else if (key == "local" || key == "lsize" || key == "lcolor" || key == "lnobreak" || key == "ltrack" || key == "lshift" ||
                    key == "lpos" || key == "lcase" || key == "luline" || key == "lstrike" || key == "lkern" || key.rfind("lot_", 0) == 0) {   // s030: formatting on the words (s263: and its character attributes)
             if (key == "local" && (choice == "bold" || choice == "italic")) { activate_action(choice == "bold" ? "win.bold" : "win.italic"); return; }
             auto& cv = m_canvas_view.canvas();
-            if (!cv.editing()) return;
-            auto [a, b] = cv.edit_range();
-            const auto story = cv.edit_story_id();
-            if (a == b) if (const auto* st = m_doc.as<core::Story>(story)) std::tie(a, b) = core::word_at(*st, a);
+            // s336: typing in a table's cell -- its words, through the cell's verb
+            const bool in_cell = !cv.editing() && cv.cell_editing();
+            if (!cv.editing() && !in_cell) return;
+            const core::Story cell_w = in_cell ? cv.typing_cell_words() : core::Story{};
+            const auto [c0, c1] = in_cell ? cv.cell_range() : cv.edit_range();
+            auto a = c0, b = c1;
+            const auto story = in_cell ? cv.cell_story() : cv.edit_story_id();
+            const core::Story* st_w = in_cell ? &cell_w : m_doc.as<core::Story>(story);
+            if (a == b && st_w) std::tie(a, b) = core::word_at(*st_w, a);
+            const auto set_local = [&](core::TextPos x, core::TextPos y, const std::string& label, const std::function<void(core::Local&)>& f) {
+                if (!in_cell) return core::doc::set_local(m_journal, m_doc, story, x, y, label, f);
+                const auto& c = cv.typing_cell();
+                return core::doc::set_cell_local(m_journal, m_doc, story, c.para, c.row, c.col, x, y, label, f);
+            };
             if (key == "local")
-                did = core::doc::set_local(m_journal, m_doc, story, a, b, "Clear overrides", [](core::Local& l) { l = {}; });
+                did = set_local(a, b, "Clear overrides", [](core::Local& l) { l = {}; });
             else if (key == "lsize")
-                did = core::doc::set_local(m_journal, m_doc, story, a, b, "Size", [&](core::Local& l) { l.size = std::stod(choice); });
+                did = set_local(a, b, "Size", [&](core::Local& l) { l.size = std::stod(choice); });
             else if (key == "lnobreak")   // s159
-                did = core::doc::set_local(m_journal, m_doc, story, a, b, "No break", [&](core::Local& l) { l.no_break = std::clamp(std::stoi(choice), -1, 1); });
+                did = set_local(a, b, "No break", [&](core::Local& l) { l.no_break = std::clamp(std::stoi(choice), -1, 1); });
             else if (key == "ltrack" || key == "lshift") {   // s263
                 std::optional<double> v;
                 if (choice != "style") v = std::clamp(std::stod(choice), key == "ltrack" ? -1000.0 : -1000.0, key == "ltrack" ? 10000.0 : 1000.0);
-                did = core::doc::set_local(m_journal, m_doc, story, a, b, key == "ltrack" ? "Tracking" : "Baseline shift",
+                did = set_local(a, b, key == "ltrack" ? "Tracking" : "Baseline shift",
                                            [&](core::Local& l) { (key == "ltrack" ? l.tracking : l.shift) = v; });
             } else if (key == "lkern") {   // s267: the pair at the caret (as Alt+arrows)
-                const auto [c0, c1] = cv.edit_range();
-                if (const auto* st = m_doc.as<core::Story>(story); st && c0 == c1) {
+                if (const auto* st = st_w; st && c0 == c1) {
                     const auto p = core::prev_char(*st, c0);
                     const double v = std::clamp(std::stod(choice), -1000.0, 10000.0);
                     if (p.para == c0.para && p < c0)
-                        did = core::doc::set_local(m_journal, m_doc, story, p, c0, "Kerning",
+                        did = set_local(p, c0, "Kerning",
                                                    [&](core::Local& l) { if (std::abs(v) < 0.5) l.kern.reset(); else l.kern = v; });
                 }
             } else if (key.rfind("lot_", 0) == 0) {   // s267: the words' OpenType features -- from what they show now
-                const auto* st = m_doc.as<core::Story>(story);
+                const auto* st = st_w;
                 if (st) {
                     const auto& para = st->paras[static_cast<std::size_t>(a.para)];
                     const auto here = core::local_at(para, a.byte + 1);
                     const auto now = core::char_look(core::doc::para_style(m_doc, para),
                                                      m_doc.as<core::Style>(core::char_style_at(para, a.byte + 1)), &here).ot;
-                    did = core::doc::set_local(m_journal, m_doc, story, a, b, core::doc::style_edit_label("ot_" + key.substr(4)),
+                    did = set_local(a, b, core::doc::style_edit_label("ot_" + key.substr(4)),
                                                [&](core::Local& l) {
                                                    if (choice == "-1") { l.ot.reset(); return; }
                                                    auto o = l.ot ? *l.ot : now;
@@ -1786,12 +1801,19 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
                 }
             } else if (key == "lpos" || key == "lcase" || key == "luline" || key == "lstrike") {
                 const int v = std::clamp(std::stoi(choice), -1, key == "lpos" || key == "lcase" ? 2 : 1);
-                did = core::doc::set_local(m_journal, m_doc, story, a, b,
+                did = set_local(a, b,
                                            key == "lpos" ? "Position" : key == "lcase" ? "Case" : key == "luline" ? "Underline" : "Strikethrough",
                                            [&](core::Local& l) { (key == "lpos" ? l.position : key == "lcase" ? l.caps : key == "luline" ? l.underline : l.strike) = v; });
             }
             else
-                did = core::doc::set_local(m_journal, m_doc, story, a, b, "Colour", [&](core::Local& l) { l.color = choice; });
+                did = set_local(a, b, "Colour", [&](core::Local& l) { l.color = choice; });
+            cv.grab_focus();
+        } else if (key == "cstyle" && !m_canvas_view.canvas().editing() && m_canvas_view.canvas().cell_editing()) {   // s336: a cell's words
+            auto& cv = m_canvas_view.canvas();
+            auto [a, b] = cv.cell_range();
+            if (a == b) std::tie(a, b) = core::word_at(cv.typing_cell_words(), a);
+            const auto& c = cv.typing_cell();
+            did = core::doc::set_cell_char_style(m_journal, m_doc, cv.cell_story(), c.para, c.row, c.col, a, b, choice);
             cv.grab_focus();
         } else if (key == "pstyle" || key == "cstyle") {   // s011: the text being edited
             auto& cv = m_canvas_view.canvas();
@@ -2171,6 +2193,14 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
 // several); nothing picked: back to the opened pages.
 void Shell::on_canvas_selection() {  // handler
     auto& cv = m_canvas_view.canvas();
+    // s336: typing in a table's cell -- the inspector is about its words.
+    if (!cv.editing() && cv.cell_editing()) {
+        const auto& c = cv.typing_cell();
+        const auto [a, b] = cv.cell_range();
+        m_inspected = {cv.cell_story()};
+        m_inspector.show("Text \u2014 a table's cell", "Editing", core::cell_text_fields(m_doc, cv.cell_story(), c.para, c.row, c.col, a, b));
+        return;
+    }
     // s011: typing in a frame -- the inspector is about the text.
     if (cv.editing()) {
         const auto* st = m_doc.as<core::Story>(cv.edit_story_id());

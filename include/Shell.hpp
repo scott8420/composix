@@ -180,6 +180,10 @@ private:
     // character already so; `set` turns it on / off. One step.
     void cell_local(const std::string& label, const std::function<bool(const core::Story&, core::TextPos, core::TextPos)>& all_on,
                     const std::function<void(core::Local&, bool)>& set);
+    // s337: the inspector's Cell group while typing in a cell -- fill, tint,
+    // the words' place, the row's height, borders, rows / columns / merges.
+    // One step each; the typing follows the cell when rows / columns move it.
+    bool cell_edit(const std::string& key, const std::string& choice);
     void on_text_to_table();                        // category: handler: s324 -- Type > Convert Text to Table
     void on_table_to_text();                        // category: handler: s324 -- Type > Convert Table to Text
     std::string table_header_black() const;         // category: helper: s324 -- the light header fill (the document's Black)

@@ -590,4 +590,80 @@ void Shell::cell_local(const std::string& label, const std::function<bool(const 
     cv.grab_focus();
 }
 
+// s337: the Cell group's rows.
+bool Shell::cell_edit(const std::string& key, const std::string& choice) {
+    auto& cv = m_canvas_view.canvas();
+    if (!cv.cell_editing()) return false;
+    const auto ref = cv.typing_cell();
+    const auto story = cv.cell_story();
+    const auto* t0 = core::doc::table_at(m_doc, story, ref.para);
+    if (!t0) return false;
+    const int R = static_cast<int>(t0->rows.size()), C = core::doc::table_cols(*t0);
+    const auto& here = t0->rows[static_cast<std::size_t>(ref.row)].cells[static_cast<std::size_t>(ref.col)];
+    const int span_c = here.span_cols, span_r = here.span_rows;
+    const double grid_w = t0->rule_w;
+    const auto num = [&] { try { return std::stod(choice); } catch (...) { return 0.0; } };
+    const auto edit = [&](const std::string& label, const std::function<void(core::Table&)>& f) {
+        return core::doc::edit_table(m_journal, m_doc, story, ref.para, label, f);
+    };
+    const auto cell = [&](core::Table& t) -> core::TableCell& { return t.rows[static_cast<std::size_t>(ref.row)].cells[static_cast<std::size_t>(ref.col)]; };
+    // where the typing goes after rows / columns move: (row, col), or {-1, -1} out
+    std::pair<int, int> go{ref.row, ref.col};
+    bool did = false;
+    if (key == "cell_fill")
+        did = edit("Cell fill", [&](core::Table& t) { cell(t).fill = choice; });
+    else if (key == "cell_tint")
+        did = edit("Cell fill tint", [&](core::Table& t) { cell(t).fill_tint = std::clamp(num() / 100, 0.05, 1.0); });
+    else if (key == "cell_valign")
+        did = edit("Cell words", [&](core::Table& t) { cell(t).valign = std::clamp(static_cast<int>(num()), 0, 2); });
+    else if (key == "cell_rowh")
+        did = edit("Row height", [&](core::Table& t) { core::doc::table_set_row_height(t, ref.row + span_r - 1, num()); });
+    else if (key == "cell_border") {
+        core::CellBorder b;
+        b.w = num();
+        const auto& b0 = here.borders[0];
+        if (b.w >= 0 && b0.w >= 0) { b.color = b0.color; b.tint = b0.tint; }   // keep its colour
+        did = edit("Cell border", [&](core::Table& t) { core::doc::table_set_border(t, ref.row, ref.col, 15, b); });
+    } else if (key == "cell_border_color") {
+        did = edit("Cell border colour", [&](core::Table& t) {
+            for (int side = 0; side < 4; ++side) {   // each side keeps its weight (the grid's where it had none of its own)
+                core::CellBorder b = cell(t).borders[static_cast<std::size_t>(side)];
+                if (b.w < 0) b.w = grid_w;
+                b.color = choice;
+                core::doc::table_set_border(t, ref.row, ref.col, 1 << side, b);
+            }
+        });
+    } else if (key == "cell_rows") {
+        if (choice == "above") { did = edit("Insert row", [&](core::Table& t) { core::doc::table_insert_row(t, ref.row); }); go.first += 1; }
+        else if (choice == "below") did = edit("Insert row", [&](core::Table& t) { core::doc::table_insert_row(t, ref.row + span_r); });
+        else if (choice == "delete" && R > 1) { did = edit("Delete row", [&](core::Table& t) { core::doc::table_delete_row(t, ref.row); }); go = {std::min(ref.row, R - 2), ref.col}; }
+    } else if (key == "cell_cols") {
+        if (choice == "left") { did = edit("Insert column", [&](core::Table& t) { core::doc::table_insert_col(t, ref.col); }); go.second += 1; }
+        else if (choice == "right") did = edit("Insert column", [&](core::Table& t) { core::doc::table_insert_col(t, ref.col + span_c); });
+        else if (choice == "delete" && C > 1) { did = edit("Delete column", [&](core::Table& t) { core::doc::table_delete_col(t, ref.col); }); go = {ref.row, std::min(ref.col, C - 2)}; }
+    } else if (key == "cell_merge") {
+        if (choice == "across" && ref.col + span_c < C) did = edit("Merge cells", [&](core::Table& t) { core::doc::table_merge(t, ref.row, ref.col, span_c + 1, span_r); });
+        else if (choice == "down" && ref.row + span_r < R) did = edit("Merge cells", [&](core::Table& t) { core::doc::table_merge(t, ref.row, ref.col, span_c, span_r + 1); });
+        else if (choice == "unmerge") did = edit("Unmerge cells", [&](core::Table& t) { core::doc::table_unmerge(t, ref.row, ref.col); });
+    }
+    // typing stays in the cell (moved, or the one now there) -- at its start when it moved
+    const auto still = [&] {
+        const auto* t = core::doc::table_at(m_doc, story, ref.para);
+        return t && core::doc::owner_of(*t, ref.row, ref.col) == std::pair<int, int>{ref.row, ref.col};
+    };
+    if (did && (go.first != ref.row || go.second != ref.col || !still())) {
+        cv.end_cell();
+        if (const auto* t = core::doc::table_at(m_doc, story, ref.para)) {
+            const auto o = core::doc::owner_of(*t, go.first, go.second);
+            if (o.first >= 0) {
+                const layout::CellRef to{ref.para, o.first, o.second};
+                const std::string fr = layout::cell_frame(layout::flow_story(m_doc, story), to);
+                if (!fr.empty()) cv.select_cell_text(fr, story, to, {0, 0}, {0, 0});
+            }
+        }
+    }
+    cv.grab_focus();
+    return did;
+}
+
 }  // namespace composix

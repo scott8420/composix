@@ -3302,5 +3302,146 @@ void part9() {
         check("change all: text and cells together", nc == 1 && D::cell_text(D::table_at(d, "story.1", p)->rows[1].cells[0]) == "THE end");
         check("change all: nothing left in either", D::find_all(d, [] { D::FindOpts o; o.what = "the"; o.match_case = true; return o; }()).empty());
     }
+    // -- s336: the inspector while typing in a cell; a character style in cells --------
+    {
+        std::cout << "--- s336 cell inspector ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(2, 2, 160));
+        D::edit_cell(j, d, "story.1", p, 1, 0, {0, 0}, {0, 0}, "Dover Sole\nCrab");
+        const auto* cs = d.as<core::Style>("style.5");
+        check("fixture: style.5 a character style", cs && cs->kind == core::StyleKind::Character);
+        auto row = [](const std::vector<core::Field>& fs, const std::string& edit) -> const core::Field* {
+            for (const auto& f : fs) if (f.edit == edit) return &f;
+            return nullptr;
+        };
+        auto fs = core::cell_text_fields(d, "story.1", p, 1, 0, {0, 0}, {0, 5});
+        check("cell fields: the word rows, no paragraph rows",
+              row(fs, "lsize") && row(fs, "lcolor") && row(fs, "luline") && row(fs, "local") && row(fs, "cstyle") && !row(fs, "pstyle"));
+        bool sel5 = false;
+        for (const auto& f : fs) sel5 = sel5 || (f.label == "Selection" && f.value == "5 characters");
+        check("cell fields: the selection counted in the cell's words", sel5);
+        check("cell fields: a covered / missing cell -- none", core::cell_text_fields(d, "story.1", p, 7, 0, {0, 0}, {0, 0}).empty());
+        D::set_cell_local(j, d, "story.1", p, 1, 0, {0, 0}, {0, 5}, "Size", [](core::Local& l) { l.size = 14; });
+        fs = core::cell_text_fields(d, "story.1", p, 1, 0, {0, 0}, {0, 5});
+        check("cell fields: its own size shown", row(fs, "lsize") && row(fs, "lsize")->value.find("14") != std::string::npos, row(fs, "lsize") ? row(fs, "lsize")->value : "");
+        const auto n0 = j.size();
+        check("cell char style: one step", D::set_cell_char_style(j, d, "story.1", p, 1, 0, {0, 6}, {1, 2}, "style.5") && j.size() == n0 + 1);
+        fs = core::cell_text_fields(d, "story.1", p, 1, 0, {0, 6}, {1, 2});
+        check("cell char style: shown", row(fs, "cstyle") && row(fs, "cstyle")->value == cs->name, row(fs, "cstyle") ? row(fs, "cstyle")->value : "");
+        check("cell char style: a paragraph style refused", !D::set_cell_char_style(j, d, "story.1", p, 1, 0, {0, 0}, {0, 2}, "style.3"));
+        check("cell char style: its size kept", row(core::cell_text_fields(d, "story.1", p, 1, 0, {0, 0}, {0, 5}), "lsize")->value.find("14") != std::string::npos);
+        // Change: a character style onto hits in cells
+        D::FindOpts f;
+        f.what = "Crab";
+        D::ChangeOpts c;
+        c.set_text = false;
+        c.cstyle = "style.5";
+        const auto before = core::to_json(d);
+        f.match_case = true;
+        {
+            const auto hs = D::find_all(d, f);
+            int nc = 0;
+            for (const auto& h : hs) nc += h.table == p;
+            const int n = D::change_hits(j, d, hs, c, "Change All");
+            check("change: a character style in a cell", nc == 1 && n == static_cast<int>(hs.size()), std::to_string(nc) + "/" + std::to_string(n) + "/" + std::to_string(hs.size()));
+        }
+        f.match_case = false;
+        f.what = "";
+        f.cstyle = "style.5";
+        int in_cell = 0;
+        for (const auto& h : D::find_all(d, f)) in_cell += h.table == p;
+        check("change: found again by the style", in_cell >= 2, std::to_string(in_cell));
+        j.undo();
+        check("change: undone", core::to_json(d) == before);
+    }
+    // -- s337: the inspector's Cell group while typing in a cell ---------------------
+    {
+        std::cout << "--- s337 cell group ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(3, 3, 180));
+        auto row = [](const std::vector<core::Field>& fs, const std::string& edit) -> const core::Field* {
+            for (const auto& f : fs) if (f.edit == edit) return &f;
+            return nullptr;
+        };
+        auto fs = core::cell_text_fields(d, "story.1", p, 1, 1, {0, 0}, {0, 0});
+        bool grouped = true;
+        for (const auto& f : fs) if (f.edit.rfind("cell_", 0) == 0) grouped = grouped && f.group == "Cell";
+        check("cell group: its rows, under Cell", row(fs, "cell_fill") && row(fs, "cell_valign") && row(fs, "cell_rowh") && row(fs, "cell_border") &&
+                                                  row(fs, "cell_border_color") && grouped);
+        check("cell group: rows / columns / merge as buttons", row(fs, "cell_rows") && row(fs, "cell_rows")->buttons && row(fs, "cell_cols") &&
+                                                               row(fs, "cell_merge") && row(fs, "cell_merge")->choices.size() == 3);
+        check("cell group: no fill -- no tint row; as the grid; as its words",
+              !row(fs, "cell_tint") && row(fs, "cell_border")->value == "As the grid" && row(fs, "cell_rowh")->value == "As its words");
+        check("cell group: the row height typed in points", row(fs, "cell_rowh")->unit == 1 && row(fs, "cell_rowh")->hi >= 2000 &&
+                                                            row(fs, "cell_border")->unit == 1);
+        const std::string sw = d.ids_of<core::Swatch>().back();
+        core::CellBorder b;
+        b.w = 2;
+        D::edit_table(j, d, "story.1", p, "x", [&](core::Table& t) {
+            t.rows[1].cells[1].fill = sw;
+            t.rows[1].cells[1].fill_tint = 0.5;
+            t.rows[1].cells[1].valign = 2;
+            D::table_set_row_height(t, 1, 40);
+            D::table_set_border(t, 1, 1, 1, b);
+        });
+        fs = core::cell_text_fields(d, "story.1", p, 1, 1, {0, 0}, {0, 0});
+        check("cell group: the fill, its tint, the words' place, the row",
+              row(fs, "cell_fill")->value == d.as<core::Swatch>(sw)->name && row(fs, "cell_tint") && row(fs, "cell_tint")->value == "50%" &&
+              row(fs, "cell_tint")->percent && row(fs, "cell_valign")->value == "Bottom" && row(fs, "cell_rowh")->value.find("40") != std::string::npos);
+        check("cell group: sides that differ -- Mixed", row(fs, "cell_border")->value == core::kMixed && row(fs, "cell_border_color")->value == core::kMixed);
+        D::edit_table(j, d, "story.1", p, "x", [&](core::Table& t) { D::table_set_border(t, 1, 1, 15, b); D::table_merge(t, 1, 1, 2, 2); });
+        fs = core::cell_text_fields(d, "story.1", p, 1, 1, {0, 0}, {0, 0});
+        bool says = false;
+        for (const auto& f : fs) says = says || (f.label == "Cell" && f.value.find("2 × 2") != std::string::npos);
+        check("cell group: all four agree -- the weight; a merge says its size", row(fs, "cell_border")->value.find("2") != std::string::npos && says);
+    }
+    // -- s338: a layer's colour on its frames ----------------------------------------
+    {
+        std::cout << "--- s338 layer colours ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        check("layer colours: InDesign's list, distinct", D::layer_colors().size() >= 20 &&
+              std::set<std::string>([] { std::set<std::string> x; for (const auto& c : D::layer_colors()) x.insert(c.hex); return x; }()).size() ==
+                  D::layer_colors().size());
+        const auto l2 = D::add_layer(j, d);
+        const auto ls = D::layers(d);
+        check("new layer: the first gets Light Blue, the new one the next", ls.size() == 2 && d.as<core::Layer>(ls[0])->color == D::layer_colors()[0].hex &&
+                                                                            d.as<core::Layer>(l2)->color == D::layer_colors()[1].hex);
+        const auto l3 = D::add_layer(j, d);
+        D::edit_layer(j, d, l2, "Layer Colour", [](core::Layer& l) { l.color = "#2fae4f"; });
+        const auto l4 = D::add_layer(j, d);
+        check("new layer: a colour not yet taken", d.as<core::Layer>(l3)->color == D::layer_colors()[2].hex &&
+                                                   d.as<core::Layer>(l4)->color == D::layer_colors()[1].hex, d.as<core::Layer>(l4)->color);
+        check("layer colour: named", D::layer_color_name("#e63c3c") == "Red" && D::layer_color_name("") == "Usual" && D::layer_color_name("#123456") == "Custom");
+        core::Frame f;
+        f.layer = l2;
+        double c[3] = {0, 0, 0};
+        check("layer rgb: its frames'", D::layer_rgb(d, f, c) && std::abs(c[0] - 0x2f / 255.0) < 1e-9 && std::abs(c[1] - 0xae / 255.0) < 1e-9);
+        D::edit_layer(j, d, l2, "Layer Colour", [](core::Layer& l) { l.color = ""; });
+        check("layer rgb: none -- the usual", !D::layer_rgb(d, f, c));
+        D::edit_layer(j, d, l2, "Layer Colour", [](core::Layer& l) { l.color = "#zz0000"; });
+        check("layer rgb: a bad one -- the usual", !D::layer_rgb(d, f, c));
+        {
+            core::Doc e;
+            check("layer colour: saved", core::from_json(e, core::to_json(d)) && e.as<core::Layer>(l3)->color == D::layer_colors()[2].hex);
+        }
+        const auto o = core::project(d, "");
+        bool row = false;
+        for (const auto& it : o.items())
+            if (it.id == l3)
+                for (const auto& fl : it.fields) row = row || (fl.edit == "layer_color" && fl.value == D::layer_colors()[2].name);
+        check("layers card: its Colour row", row);
+    }
 }
 }  // namespace cxtest
