@@ -138,7 +138,11 @@ template std::vector<Doc::Id> Doc::ids_of<Asset>() const;
 template std::vector<Doc::Id> Doc::ids_of<GenList>() const;
 template std::vector<Doc::Id> Doc::ids_of<Guide>() const;
 template std::vector<Doc::Id> Doc::ids_of<Layer>() const;   // s305
+template std::vector<Doc::Id> Doc::ids_of<CellStyle>() const;   // s342
+template std::vector<Doc::Id> Doc::ids_of<TableStyle>() const;
 template double Doc::pos_after<Layer>(const Id&) const;
+template double Doc::pos_after<CellStyle>(const Id&) const;   // s342
+template double Doc::pos_after<TableStyle>(const Id&) const;
 template double Doc::pos_after<Page>(const Id&) const;
 template double Doc::pos_after<Master>(const Id&) const;
 template double Doc::pos_after<Style>(const Id&) const;
@@ -6972,6 +6976,8 @@ const std::vector<Verb>& verbs() {
              set_cell_link(j, d, "story.1", p, 0, 0, {0, 4}, {0, 8}, "example.com");
              j.commit();
          }},
+        {"add_table_style", [](DocJournal& j, Doc& d) { add_table_style(j, d, "Grid"); }},   // s342
+        {"add_cell_style", [](DocJournal& j, Doc& d) { add_cell_style(j, d, "Head"); }},
         {"cell_border", [](DocJournal& j, Doc& d) {   // s334
              j.begin("Table", {"story.1"});
              const int p = insert_table(j, d, "story.1", {1, 10}, make_table(2, 2, 200));

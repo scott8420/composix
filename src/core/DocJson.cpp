@@ -130,6 +130,7 @@ json table_json(const Table& t) {
             if (c.span_cols > 1) jc["span_cols"] = c.span_cols;   // s319
             if (c.span_rows > 1) jc["span_rows"] = c.span_rows;
             if (c.valign) jc["valign"] = c.valign;                // s321
+            if (!c.style.empty()) jc["style"] = c.style;          // s342
             {   // s334: its own borders (top, right, bottom, left), only those set
                 json jb = json::array();
                 bool any = false;
@@ -155,6 +156,7 @@ json table_json(const Table& t) {
     if (!t.header_fill.empty()) { j["header_fill"] = t.header_fill; j["header_tint"] = t.header_tint; }
     if (t.align) j["align"] = t.align;   // s321
     if (t.footer_rows > 0) j["footer"] = t.footer_rows;   // s326
+    if (!t.style.empty()) j["style"] = t.style;   // s342
     if (!t.band_fill.empty()) { j["band_fill"] = t.band_fill; j["band_tint"] = t.band_tint; j["band_every"] = t.band_every; }   // s325
     return j;
 }
@@ -174,6 +176,7 @@ Table table_of_json(const json& j) {
                     c.span_cols = std::max(1, val(jc, "span_cols", 1));   // s319
                     c.span_rows = std::max(1, val(jc, "span_rows", 1));
                     c.valign = std::clamp(val(jc, "valign", 0), 0, 2);   // s321
+                    c.style = val<std::string>(jc, "style", "");   // s342
                     if (jc.contains("borders") && jc.at("borders").is_array())   // s334
                         for (std::size_t k = 0; k < 4 && k < jc.at("borders").size(); ++k) {
                             const auto& x = jc.at("borders")[k];
@@ -198,6 +201,7 @@ Table table_of_json(const json& j) {
     t.inset = val(j, "inset", 4.0);
     t.rule_w = val(j, "rule_w", 0.5);
     t.rule_color = val<std::string>(j, "rule_color", "");
+    t.style = val<std::string>(j, "style", "");   // s342
     t.cell_style = val<std::string>(j, "cell_style", "");
     t.header_fill = val<std::string>(j, "header_fill", "");
     t.header_tint = val(j, "header_tint", 0.2);
@@ -466,6 +470,31 @@ json to(const Record& r) {
                 }
                 j["paths"] = ps;
             }
+        } else if constexpr (std::is_same_v<T, CellStyle>) {   // s342
+            j = {{"kind", "cellstyle"}, {"name", v.name}, {"pos", v.pos}};
+            if (v.fill) { j["fill"] = *v.fill; j["tint"] = v.fill_tint; }
+            if (v.valign) j["valign"] = *v.valign;
+            json jb = json::array();
+            bool any = false;
+            for (const auto& b : v.borders) {
+                if (b.w < 0) { jb.push_back(nullptr); continue; }
+                json x = {{"w", b.w}};
+                if (!b.color.empty()) x["color"] = b.color;
+                if (b.tint < 1) x["tint"] = b.tint;
+                jb.push_back(x);
+                any = true;
+            }
+            if (any) j["borders"] = jb;
+            if (!v.para_style.empty()) j["para_style"] = v.para_style;
+        } else if constexpr (std::is_same_v<T, TableStyle>) {   // s342
+            j = {{"kind", "tablestyle"}, {"name", v.name}, {"pos", v.pos}, {"rule_w", v.rule_w}, {"inset", v.inset},
+                 {"header_tint", v.header_tint}, {"band_tint", v.band_tint}, {"band_every", v.band_every}};
+            if (!v.rule_color.empty()) j["rule_color"] = v.rule_color;
+            if (!v.header_fill.empty()) j["header_fill"] = v.header_fill;
+            if (!v.band_fill.empty()) j["band_fill"] = v.band_fill;
+            if (!v.header_cell.empty()) j["header_cell"] = v.header_cell;
+            if (!v.body_cell.empty()) j["body_cell"] = v.body_cell;
+            if (!v.footer_cell.empty()) j["footer_cell"] = v.footer_cell;
         } else if constexpr (std::is_same_v<T, Layer>) {   // s305
             j = {{"kind", "layer"}, {"name", v.name}, {"pos", v.pos}, {"visible", v.visible}, {"locked", v.locked}, {"print", v.print}};
             if (!v.color.empty()) j["color"] = v.color;
@@ -829,6 +858,40 @@ std::optional<Record> from(const json& j) {
                 if (p.contains("clip") && p["clip"].is_array()) for (const auto& e : p["clip"]) if (e.is_number()) c.push_back(e.get<float>());
                 if (p.contains("shape") && p["shape"].is_array()) for (const auto& e : p["shape"]) if (e.is_number()) s.push_back(e.get<float>());
             }
+        return v;
+    }
+    if (k == "cellstyle") {   // s342
+        CellStyle v;
+        v.name = val<std::string>(j, "name", "Cell Style");
+        v.pos = val(j, "pos", 0.0);
+        if (j.contains("fill") && j["fill"].is_string()) { v.fill = j["fill"].get<std::string>(); v.fill_tint = std::clamp(val(j, "tint", 1.0), 0.0, 1.0); }
+        if (j.contains("valign") && j["valign"].is_number()) v.valign = std::clamp(j["valign"].get<int>(), 0, 2);
+        if (j.contains("borders") && j["borders"].is_array())
+            for (std::size_t k2 = 0; k2 < 4 && k2 < j["borders"].size(); ++k2) {
+                const auto& x = j["borders"][k2];
+                if (!x.is_object()) continue;
+                v.borders[k2].w = std::clamp(val(x, "w", 0.0), 0.0, 72.0);
+                v.borders[k2].color = val<std::string>(x, "color", "");
+                v.borders[k2].tint = std::clamp(val(x, "tint", 1.0), 0.0, 1.0);
+            }
+        v.para_style = val<std::string>(j, "para_style", "");
+        return v;
+    }
+    if (k == "tablestyle") {   // s342
+        TableStyle v;
+        v.name = val<std::string>(j, "name", "Table Style");
+        v.pos = val(j, "pos", 0.0);
+        v.rule_w = std::clamp(val(j, "rule_w", 0.5), 0.0, 72.0);
+        v.rule_color = val<std::string>(j, "rule_color", "");
+        v.inset = std::clamp(val(j, "inset", 4.0), 0.0, 500.0);
+        v.header_fill = val<std::string>(j, "header_fill", "");
+        v.header_tint = val(j, "header_tint", 0.2);
+        v.band_fill = val<std::string>(j, "band_fill", "");
+        v.band_tint = val(j, "band_tint", 0.1);
+        v.band_every = std::max(1, val(j, "band_every", 1));
+        v.header_cell = val<std::string>(j, "header_cell", "");
+        v.body_cell = val<std::string>(j, "body_cell", "");
+        v.footer_cell = val<std::string>(j, "footer_cell", "");
         return v;
     }
     if (k == "layer") {   // s305

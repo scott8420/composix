@@ -489,6 +489,7 @@ struct TableCell {
     int         span_cols = 1, span_rows = 1;
     int         valign = 0;              // s321: its words at the top 0, middle 1, bottom 2
     std::array<CellBorder, 4> borders;   // s334: its own -- top, right, bottom, left (CellSide)
+    std::string style;                   // s342: its cell style ("" none)
     bool operator==(const TableCell&) const;
 };
 struct TableRow {
@@ -516,6 +517,7 @@ struct Table {
     // s326: its last `footer_rows` rows set again at the foot of each column
     // it breaks across (and once at its end). Not banded.
     int         footer_rows = 0;
+    std::string style;                   // s342: its table style ("" none)
     bool operator==(const Table&) const = default;
 };
 
@@ -540,7 +542,7 @@ struct Para {
     bool operator==(const Para&) const = default;
 };
 inline bool TableCell::operator==(const TableCell& o) const {
-    return paras == o.paras && fill == o.fill && fill_tint == o.fill_tint && span_cols == o.span_cols && span_rows == o.span_rows && valign == o.valign && borders == o.borders;
+    return paras == o.paras && fill == o.fill && fill_tint == o.fill_tint && span_cols == o.span_cols && span_rows == o.span_rows && valign == o.valign && borders == o.borders && style == o.style;
 }
 
 struct Story {
@@ -749,7 +751,38 @@ struct Layer {
     bool operator==(const Layer&) const = default;
 };
 
-using Record = std::variant<Settings, Section, Page, Master, Frame, Story, Style, Swatch, Asset, GenList, Guide, Layer>;
+// s342 (TB2, as InDesign): a cell style -- what it sets of a cell's look;
+// a setting it leaves unset is the cell's own. Its words' paragraph style
+// too ("" leaves them).
+struct CellStyle {
+    std::string name;
+    double      pos = 0;
+    std::optional<std::string> fill;     // a swatch id ("" none) when set
+    double      fill_tint = 1;
+    std::optional<int> valign;           // 0 top, 1 middle, 2 bottom
+    std::array<CellBorder, 4> borders;   // w < 0: not set
+    std::string para_style;
+    bool operator==(const CellStyle&) const = default;
+};
+// s342: a table style -- the grid, the insets, the header's and bands'
+// fills, and the cell style each region's cells take (header rows, body,
+// footer rows; "" none).
+struct TableStyle {
+    std::string name;
+    double      pos = 0;
+    double      rule_w = 0.5;
+    std::string rule_color;
+    double      inset = 4;
+    std::string header_fill;
+    double      header_tint = 0.2;
+    std::string band_fill;
+    double      band_tint = 0.1;
+    int         band_every = 1;
+    std::string header_cell, body_cell, footer_cell;
+    bool operator==(const TableStyle&) const = default;
+};
+
+using Record = std::variant<Settings, Section, Page, Master, Frame, Story, Style, Swatch, Asset, GenList, Guide, Layer, CellStyle, TableStyle>;
 
 class Doc {
 public:
@@ -1646,6 +1679,29 @@ bool table_set_row_height(Table& t, int r, double h);
 // header row); else the bands' (a body row in a filled run). "" none;
 // `tint` set when one.
 std::string table_cell_fill(const Table& t, int r, int c, double* tint = nullptr);
+// s342 (TB2): table and cell styles. New ones (from a table / a cell when
+// given: its look taken), edited (every table / cell using one follows,
+// except a setting it has changed itself -- one that no longer matches the
+// style's old value), applied (a table's own settings and each region's
+// cells' style; a cell's set settings), deleted (the tables / cells keep
+// their looks, the style cleared). Each one step.
+Doc::Id add_table_style(DocJournal& j, Doc& d, const std::string& name, const Table* from = nullptr);
+Doc::Id add_cell_style(DocJournal& j, Doc& d, const std::string& name, const TableCell* from = nullptr);
+bool edit_table_style(DocJournal& j, Doc& d, const Doc::Id& id, const std::string& label, const std::function<void(TableStyle&)>& f);
+bool edit_cell_style(DocJournal& j, Doc& d, const Doc::Id& id, const std::string& label, const std::function<void(CellStyle&)>& f);
+bool delete_table_style(DocJournal& j, Doc& d, const Doc::Id& id);
+bool delete_cell_style(DocJournal& j, Doc& d, const Doc::Id& id);
+// Pure: a table takes a table style ("" none: just cleared) -- its settings,
+// and each region's cells the region's cell style (a cell given another
+// style of its own keeps it); a cell takes a cell style's set settings.
+void apply_table_style(const Doc& d, Table& t, const Doc::Id& id);
+void apply_cell_style(const Doc& d, TableCell& c, const Doc::Id& id);
+// The region cell style row `r` of `t` takes under table style `ts`.
+std::string region_cell_style(const TableStyle& ts, const Table& t, int r);
+// How many tables / cells use a style.
+int table_style_uses(const Doc& d, const Doc::Id& id);
+int cell_style_uses(const Doc& d, const Doc::Id& id);
+
 // s334: a shared edge's line -- between owner cells `a` (its side `sa`) and
 // `b` (its side `sb`; {-1, -1} at the table's outside): a cell's own border
 // where one is set (both set: the wider; a tie: a's), else the grid's.

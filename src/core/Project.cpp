@@ -766,6 +766,103 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         }
     }
 
+    // ── s343: table and cell styles, after the text styles ──────────────────
+    {
+        const auto pt = [](double v) { return pts(v) + " pt"; };
+        std::vector<Choice> sw{{"", "None"}};
+        for (const auto& id : d.ids_of<Swatch>()) sw.push_back({id, d.as<Swatch>(id)->name});
+        const auto sw_name = [&](const std::string& id, const char* none) {
+            const auto* x = d.as<Swatch>(id);
+            return x ? x->name : std::string(none);
+        };
+        std::vector<Choice> wc{{"0", "None"}};
+        for (double w : {0.25, 0.5, 1.0, 2.0, 3.0}) wc.push_back({pts(w), pt(w)});
+        std::vector<Choice> ic;
+        for (double w : {0.0, 2.0, 4.0, 6.0, 9.0}) ic.push_back({pts(w), pt(w)});
+        std::vector<Choice> cells{{"", "None"}};
+        for (const auto& id : d.ids_of<CellStyle>()) cells.push_back({id, d.as<CellStyle>(id)->name});
+        const auto cell_name = [&](const std::string& id) {
+            const auto* x = d.as<CellStyle>(id);
+            return x ? x->name : std::string("None");
+        };
+        for (const auto& id : d.ids_of<TableStyle>()) {
+            const auto& t = *d.as<TableStyle>(id);
+            const int uses = doc::table_style_uses(d, id);
+            std::vector<Field> f;
+            Field name{"Name", t.name, "ts_name"};
+            name.text = true;
+            f.push_back(name);
+            f.push_back({"Kind", "Table style"});
+            f.push_back({"Grid", t.rule_w > 0 ? pt(t.rule_w) : "None", "ts_rule_w", wc});
+            f.push_back({"Grid colour", sw_name(t.rule_color, "Black"), "ts_rule_color", [&] { auto c = sw; c[0] = {"", "Black"}; return c; }()});
+            f.push_back({"Inset", pt(t.inset), "ts_inset", ic});
+            f.push_back({"Header fill", sw_name(t.header_fill, "None"), "ts_header_fill", sw});
+            if (!t.header_fill.empty()) f.push_back({"Header tint", tint_text(t.header_tint), "ts_header_tint", tint_choices()});
+            f.push_back({"Alternate rows", sw_name(t.band_fill, "None"), "ts_band_fill", sw});
+            if (!t.band_fill.empty()) {
+                f.push_back({"Rows tint", tint_text(t.band_tint), "ts_band_tint", tint_choices()});
+                f.push_back({"Every", std::to_string(t.band_every) + (t.band_every == 1 ? " row" : " rows"), "ts_band_every",
+                             {{"1", "1 row"}, {"2", "2 rows"}, {"3", "3 rows"}}});
+            }
+            f.push_back({"Header cells", cell_name(t.header_cell), "ts_header_cell", cells});
+            f.push_back({"Body cells", cell_name(t.body_cell), "ts_body_cell", cells});
+            f.push_back({"Footer cells", cell_name(t.footer_cell), "ts_footer_cell", cells});
+            f.push_back({"Used", uses ? std::to_string(uses) + (uses == 1 ? " table" : " tables") : "Not used"});
+            Field act{"", "", "ts_act", {{"duplicate", "Duplicate"}, {"delete", "Delete"}}};
+            act.buttons = true;
+            f.push_back(act);
+            for (auto& fl : f) {
+                if (fl.edit == "ts_inset") { fl.unit = 1; fl.lo = 0; fl.hi = 500; }
+                if (fl.edit == "ts_rule_w") { fl.unit = 1; fl.lo = 0; fl.hi = 72; }
+                if (fl.edit == "ts_header_tint" || fl.edit == "ts_band_tint") { fl.percent = true; fl.lo = 1; fl.hi = 100; }
+                fl.group = "Table style";
+            }
+            Thumb th{K::Section, 6, 9, 0x5b7fa6};
+            o.add({id, G::Styles, t.name, uses ? "Table" : "Table \u00b7 Unused", th, f});
+        }
+        for (const auto& id : d.ids_of<CellStyle>()) {
+            const auto& c = *d.as<CellStyle>(id);
+            const int uses = doc::cell_style_uses(d, id);
+            std::vector<Field> f;
+            Field name{"Name", c.name, "cs_name"};
+            name.text = true;
+            f.push_back(name);
+            f.push_back({"Kind", "Cell style"});
+            auto fc = sw;
+            fc.insert(fc.begin(), Choice{"-", "Not set"});
+            f.push_back({"Fill", c.fill ? sw_name(*c.fill, "None") : "Not set", "cs_fill", fc});
+            if (c.fill && !c.fill->empty()) f.push_back({"Fill tint", tint_text(c.fill_tint), "cs_tint", tint_choices()});
+            static const char* va[] = {"Top", "Middle", "Bottom"};
+            f.push_back({"Words", c.valign ? va[std::clamp(*c.valign, 0, 2)] : "Not set", "cs_valign",
+                         {{"-1", "Not set"}, {"0", va[0]}, {"1", va[1]}, {"2", va[2]}}});
+            const auto& b0 = c.borders[0];
+            bool same = true;
+            for (const auto& bx : c.borders) same = same && bx == b0;
+            std::vector<Choice> bw{{"-1", "Not set"}, {"0", "None"}};
+            for (double w : {0.25, 0.5, 1.0, 2.0, 3.0}) bw.push_back({pts(w), pt(w)});
+            f.push_back({"Border", !same ? std::string(kMixed) : b0.w < 0 ? "Not set" : b0.w == 0 ? "None" : pt(b0.w), "cs_border", bw});
+            auto bc = sw;
+            bc[0] = {"", "The grid's"};
+            if (same && b0.w > 0) f.push_back({"Border colour", sw_name(b0.color, "The grid's"), "cs_border_color", bc});
+            std::vector<Choice> ps{{"", "Not set"}};
+            for (const auto& sid : d.ids_of<Style>())
+                if (const auto* st = d.as<Style>(sid); st->kind == StyleKind::Paragraph) ps.push_back({sid, st->name});
+            const auto* pst = d.as<Style>(c.para_style);
+            f.push_back({"Paragraph style", pst ? pst->name : "Not set", "cs_para", ps});
+            f.push_back({"Used", uses ? std::to_string(uses) + (uses == 1 ? " cell" : " cells") : "Not used"});
+            Field act{"", "", "cs_act", {{"duplicate", "Duplicate"}, {"delete", "Delete"}}};
+            act.buttons = true;
+            f.push_back(act);
+            for (auto& fl : f) {
+                if (fl.edit == "cs_border") { fl.unit = 1; fl.lo = 0; fl.hi = 72; }
+                if (fl.edit == "cs_tint") { fl.percent = true; fl.lo = 1; fl.hi = 100; }
+                fl.group = "Cell style";
+            }
+            Thumb th{K::Section, 6, 9, 0x8fa37a};
+            o.add({id, G::Styles, c.name, uses ? "Cell" : "Cell \u00b7 Unused", th, f});
+        }
+    }
+
     // ── Links & assets ──────────────────────────────────────────────────────
     {
         std::size_t i = 0;
@@ -1296,7 +1393,7 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 title += " \u2014 " + a->name;
                 static const std::vector<Choice> fits{{"0", "Fill frame"}, {"1", "Fit in frame"}};
                 fields.push_back({"Fit", f->fit == ImageFit::Custom ? "By hand" : fits[static_cast<int>(f->fit)].label, "fit", fits});
-                // s035: its scale (of its own size at 300 ppi); Alt+drag moves it in the frame.
+                // s035: its scale (of its own size at 300 ppi); the Direct tool moves it in the frame (s186; Alt+drag copies since s344).
                 std::vector<Choice> sc;
                 for (int v : {10, 25, 50, 75, 100, 125, 150, 200, 300, 400}) sc.push_back({std::to_string(v), std::to_string(v) + "%"});
                 fields.push_back({"Scale", std::to_string(static_cast<int>(std::lround(picture_scale(*f, *a)))) + "%", "pic_scale", sc});
@@ -1583,6 +1680,18 @@ std::vector<Field> cell_text_fields(const Doc& d, const std::string& story, int 
         std::vector<Choice> bc{{"", "The grid's"}};
         for (std::size_t k = 1; k < sw.size(); ++k) bc.push_back(sw[k]);
         cf.push_back({"Border colour", !same ? std::string(kMixed) : name_of(b0.color, "The grid's"), "cell_border_color", bc});
+        {   // s343: its styles -- the table's, the cell's; new ones from these
+            std::vector<Choice> tsc{{"", "None"}}, csc{{"", "None"}};
+            for (const auto& id : d.ids_of<TableStyle>()) tsc.push_back({id, d.as<TableStyle>(id)->name});
+            for (const auto& id : d.ids_of<CellStyle>()) csc.push_back({id, d.as<CellStyle>(id)->name});
+            const auto* ts = d.as<TableStyle>(t->style);
+            const auto* cs = d.as<CellStyle>(cell.style);
+            cf.push_back({"Table style", ts ? ts->name : "None", "cell_tstyle", tsc});
+            cf.push_back({"Cell style", cs ? cs->name : "None", "cell_cstyle", csc});
+            Field ns{"New style", "", "cell_newstyle", {{"table", "Table Style from This"}, {"cell", "Cell Style from This"}}};
+            ns.buttons = true;
+            cf.push_back(ns);
+        }
         Field rows_f{"Rows", "", "cell_rows", {{"above", "Above"}, {"below", "Below"}, {"delete", "Delete"}}};
         rows_f.buttons = true;
         cf.push_back(rows_f);

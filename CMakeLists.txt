@@ -124,6 +124,7 @@ add_library(composix_core STATIC
     src/core/Xml.cpp          # s235: an XML tree (ODT import)
     src/core/Odt.cpp          # s235: an OpenDocument text file, read
     src/core/Spell.cpp        # s306: spell check (Hunspell when it's there)
+    src/core/TableStyles.cpp  # s342: table and cell styles
     ${CMAKE_CURRENT_BINARY_DIR}/HyphenData.cpp
 )
 target_include_directories(composix_core PUBLIC include)
@@ -278,7 +279,7 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s341")
+set(COMPOSIX_BUILD "s344")
 # s194: on the About window's file alone -- on the whole target, each bump
 # rebuilt every app file and missed ccache.
 set_source_files_properties(src/AboutWindow.cpp PROPERTIES

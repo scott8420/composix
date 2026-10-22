@@ -165,6 +165,7 @@ const std::vector<ShortcutSpec>& shortcut_registry() {
         {"Mouse", "", {}, "Delete", "Delete the picked frames (a thread heals around them)"},
         {"Mouse", "", {}, "Click an out-port, then a frame", "Thread the text on into that frame"},
         {"Mouse", "", {}, "Alt+click an out-port", "Break the thread after that frame"},
+        {"Mouse", "", {}, "Alt+drag a frame", "A copy of the picked frames where they're dropped (as InDesign; s344)"},
         {"Mouse", "", {}, "Double-click a text frame  /  T + click", "Edit its text (a new text frame starts editing)"},
         {"Mouse", "", {}, "Drag  /  double-click in text", "Select text  /  a word"},
         {"Mouse", "", {}, "Ctrl+Left / Right, Home / End", "Text: by word, to the line's ends (Ctrl: the story's)"},

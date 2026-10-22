@@ -1894,23 +1894,8 @@ void Canvas::on_drag_begin(double x, double y) {
             return;
         }
     }
-    // s035: Alt+drag on a picture moves it inside its frame (a crop).
-    if (m_mods_alt && !m_mods_ctrl && m_tool == Tool::Select) {
-        const auto hit = core::hit_frame(m_doc, m_placed, dx, dy, 0);
-        const auto* f = m_doc.as<core::Frame>(hit);
-        const auto* a = f ? m_doc.as<core::Asset>(f->asset) : nullptr;
-        if (f && a && f->kind == core::FrameKind::Image) {
-            const auto nat = core::picture_natural(*a);
-            const double iw = a->px_w > 0 ? a->px_w : nat.w, ih = a->px_h > 0 ? a->px_h : nat.h;
-            m_pic0 = core::picture_rect({0, 0, f->w, f->h}, *f, iw, ih);
-            m_pic_frame = hit;
-            pick({hit});
-            core::doc::frames_begin(m_journal, m_doc, {hit}, "Move picture");
-            m_begun = true;
-            m_drag = Drag::Picture;
-            return;
-        }
-    }
+    // s035's Alt+drag on a picture (a crop) is the Direct tool's since s186;
+    // s344 (X1b, as InDesign): Alt+drag now copies -- below.
     // s025: Ctrl+Shift+click a master's item on a page: override it there --
     // the page's own copy, picked (InDesign's gesture).
     if (m_mods_ctrl && m_mods_shift) {
@@ -1947,6 +1932,7 @@ void Canvas::on_drag_begin(double x, double y) {
         }
         if (std::find(m_sel.begin(), m_sel.end(), hit) == m_sel.end()) pick(unit);
         m_drag = Drag::Move;
+        m_alt_copy = m_mods_alt && !m_mods_ctrl && m_tool == Tool::Select;   // s344: Alt+drag -- a copy goes there
         m_own0.clear();
         for (const auto& id : m_sel) m_own0[id] = core::frame_rect(*m_doc.as<core::Frame>(id));
         m_box0 = selection_box();
@@ -2571,6 +2557,24 @@ void Canvas::on_drag_end(double, double) {
     }
     if (was == Drag::Guide && m_begun && m_guide_off)
         core::doc::guide_remove_in_gesture(m_journal, m_doc, m_guide);
+    // s344 (X1b, as InDesign): Alt+drag -- the frames back where they were, a
+    // copy where they were dropped (one step: Duplicate's).
+    if (was == Drag::Move && m_begun && m_alt_copy && !m_sel.empty()) {
+        m_begun = false;
+        m_alt_copy = false;
+        double dx = 0, dy = 0;
+        if (const auto it = m_own0.find(m_sel.front()); it != m_own0.end())
+            if (const auto* f = m_doc.as<core::Frame>(m_sel.front())) { dx = f->x - it->second.x; dy = f->y - it->second.y; }
+        core::doc::frames_cancel(m_journal);
+        const auto made = std::abs(dx) + std::abs(dy) > 1e-9 ? core::doc::duplicate_frames(m_journal, m_doc, m_sel, dx, dy) : std::vector<std::string>{};
+        if (!made.empty()) {
+            relayout();
+            pick(made);
+            if (auto lg = log::get(log::Area::View)) lg->info("alt+drag: {} copied by ({:.1f}, {:.1f})", made.size(), dx, dy);
+        }
+        m_sig_edited.emit();
+    }
+    m_alt_copy = false;
     if ((was == Drag::Move || was == Drag::Resize || was == Drag::Guide || was == Drag::Gutter || was == Drag::TableCol || was == Drag::TableRow) && m_begun) {
         m_begun = false;
         // s027: dragged across the spine (onto another shown page): that
@@ -4008,6 +4012,7 @@ void Canvas::update_cursor() {
     }
     if (m_hover_gutter >= 0 || m_drag == Drag::Gutter || m_hover_tedge || m_drag == Drag::TableCol) { set_cursor(Gdk::Cursor::create("col-resize")); return; }   // s327: a table's column edge too
     if (m_hover_redge || m_drag == Drag::TableRow) { set_cursor(Gdk::Cursor::create("row-resize")); return; }   // s332: a row's bottom edge
+    if (m_drag == Drag::Move && m_alt_copy) { set_cursor(Gdk::Cursor::create("copy")); return; }   // s344
     if (!m_hover_guide.empty()) {
         const auto* g = m_doc.as<core::Guide>(m_hover_guide);
         set_cursor(Gdk::Cursor::create(g && g->vertical ? "col-resize" : "row-resize"));

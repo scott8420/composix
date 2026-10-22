@@ -3575,5 +3575,128 @@ void part9() {
             if (it.id == b) rgb = it.thumb.rgb == 0xe63c3c;   // the second layer: Red
         check("layers card: a row carries its colour", rgb);
     }
+    // -- s342: table and cell styles (TB2, as InDesign) ---------------------------------
+    {
+        std::cout << "--- s342 table / cell styles ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const std::string sw = d.ids_of<core::Swatch>().back();
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(4, 2, 160));
+        D::edit_table(j, d, "story.1", p, "x", [](core::Table& t) { t.header_rows = 1; t.footer_rows = 1; });
+        auto T = [&] { return *D::table_at(d, "story.1", p); };
+        // a cell style from a look
+        core::TableCell look;
+        look.fill = sw;
+        look.fill_tint = 0.5;
+        look.valign = 1;
+        const auto head = D::add_cell_style(j, d, "Head", &look);
+        const auto* hs = d.as<core::CellStyle>(head);
+        check("cell style: made from a cell's look", hs && hs->name == "Head" && hs->fill && *hs->fill == sw && hs->valign && *hs->valign == 1);
+        check("cell style: a second of the name numbered", d.as<core::CellStyle>(D::add_cell_style(j, d, "Head"))->name == "Head 2");
+        const auto body = D::add_cell_style(j, d, "Body");
+        D::edit_cell_style(j, d, body, "x", [](core::CellStyle& c) { c.valign = 2; });
+        const auto ts = D::add_table_style(j, d, "Grid");
+        D::edit_table_style(j, d, ts, "x", [&](core::TableStyle& t) { t.rule_w = 1; t.header_cell = head; t.body_cell = body; });
+        // applied
+        const auto n0 = j.size();
+        check("apply table style: one step", D::edit_table(j, d, "story.1", p, "Table Style", [&](core::Table& t) { D::apply_table_style(d, t, ts); }) && j.size() == n0 + 1);
+        auto t = T();
+        check("apply: the table's settings, its style named", t.style == ts && t.rule_w == 1);
+        check("apply: each region's cells its cell style (the footer none)", t.rows[0].cells[0].style == head && t.rows[0].cells[0].fill == sw &&
+                                                                             t.rows[1].cells[1].style == body && t.rows[1].cells[1].valign == 2 &&
+                                                                             t.rows[3].cells[0].style.empty());
+        // a cell given its own style keeps it; a cell's own change kept through an edit
+        D::edit_table(j, d, "story.1", p, "x", [&](core::Table& x) { D::apply_cell_style(d, x.rows[2].cells[0], head); x.rows[1].cells[0].valign = 0; });
+        D::edit_cell_style(j, d, body, "Body", [](core::CellStyle& c) { c.valign = 1; c.fill = ""; });
+        t = T();
+        check("edit cell style: its cells follow", t.rows[1].cells[1].valign == 1 && t.rows[2].cells[1].valign == 1);
+        check("edit cell style: a cell's own change kept", t.rows[1].cells[0].valign == 0);
+        check("edit cell style: another style's cell untouched", t.rows[2].cells[0].style == head && t.rows[2].cells[0].fill == sw);
+        D::edit_table(j, d, "story.1", p, "x", [](core::Table& x) { x.inset = 9; });
+        D::edit_table_style(j, d, ts, "Grid", [](core::TableStyle& x) { x.rule_w = 2; x.inset = 6; x.footer_cell = ""; x.body_cell = ""; });
+        t = T();
+        check("edit table style: the table follows, its own inset kept", t.rule_w == 2 && t.inset == 9);
+        check("edit table style: the body's cells lose the region's style, the own one kept",
+              t.rows[1].cells[1].style.empty() && t.rows[2].cells[0].style == head);
+        check("uses counted", D::table_style_uses(d, ts) == 1 && D::cell_style_uses(d, head) >= 3, std::to_string(D::cell_style_uses(d, head)));
+        check("swatch: a style's colour in use", D::swatch_uses(d, sw) > 0);
+        {
+            core::Doc e;
+            check("styles: saved", core::from_json(e, core::to_json(d)) && core::to_json(e) == core::to_json(d) && e.as<core::TableStyle>(ts) &&
+                                   e.as<core::CellStyle>(head) && D::table_at(e, "story.1", p)->style == ts);
+        }
+        const auto before = core::to_json(d);
+        check("delete cell style: its cells keep the look, the style cleared", D::delete_cell_style(j, d, head) && !d.as<core::CellStyle>(head) &&
+                                                                               T().rows[0].cells[0].style.empty() && T().rows[0].cells[0].fill == sw &&
+                                                                               d.as<core::TableStyle>(ts)->header_cell.empty());
+        check("delete table style: the table keeps its look", D::delete_table_style(j, d, ts) && T().style.empty() && T().rule_w == 2);
+        j.undo();
+        j.undo();
+        check("deletes undone", core::to_json(d) == before);
+    }
+    // -- s343: table / cell styles in the Styles section; the Cell group's style rows -----
+    {
+        std::cout << "--- s343 styles in the inspector ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto cs = D::add_cell_style(j, d, "Head");
+        const auto ts = D::add_table_style(j, d, "Grid");
+        D::edit_table_style(j, d, ts, "x", [&](core::TableStyle& t) { t.header_cell = cs; t.band_fill = d.ids_of<core::Swatch>().back(); });
+        auto field = [](const core::Item& it, const std::string& edit) -> const core::Field* {
+            for (const auto& f : it.fields) if (f.edit == edit) return &f;
+            return nullptr;
+        };
+        const auto o = core::project(d, "");
+        const core::Item *ti = nullptr, *ci = nullptr;
+        for (const auto& it : o.items()) {
+            if (it.id == ts) ti = &it;
+            if (it.id == cs) ci = &it;
+        }
+        check("styles section: a table style and a cell style listed", ti && ci && ti->segment == core::Segment::Styles && ci->segment == core::Segment::Styles);
+        check("table style item: its rows, grouped", ti && field(*ti, "ts_rule_w") && field(*ti, "ts_header_cell") && field(*ti, "ts_header_cell")->value == "Head" &&
+                                                     field(*ti, "ts_band_tint") && field(*ti, "ts_act") && field(*ti, "ts_rule_w")->group == "Table style");
+        check("cell style item: unset shown as Not set", ci && field(*ci, "cs_fill")->value == "Not set" && field(*ci, "cs_valign")->value == "Not set" &&
+                                                         field(*ci, "cs_border")->value == "Not set" && !field(*ci, "cs_tint"));
+        check("unused badged", ti && ti->badge.find("Unused") != std::string::npos);
+        const int p = D::insert_table(j, d, "story.1", {1, static_cast<int>(d.as<core::Story>("story.1")->paras[1].text.size())}, D::make_table(2, 2, 160));
+        auto fs = core::cell_text_fields(d, "story.1", p, 0, 0, {0, 0}, {0, 0});
+        const core::Field* tr = nullptr;
+        for (const auto& f : fs) if (f.edit == "cell_tstyle") tr = &f;
+        check("cell group: table style / cell style rows, New style buttons", tr && tr->choices.size() == 2 && tr->value == "None");
+        D::edit_table(j, d, "story.1", p, "x", [&](core::Table& t) { t.header_rows = 1; D::apply_table_style(d, t, ts); });
+        fs = core::cell_text_fields(d, "story.1", p, 0, 0, {0, 0}, {0, 0});
+        std::string tv, cv;
+        for (const auto& f : fs) { if (f.edit == "cell_tstyle") tv = f.value; if (f.edit == "cell_cstyle") cv = f.value; }
+        check("cell group: shows the styles in use", tv == "Grid" && cv == "Head");
+    }
+    // -- s344: Alt+drag copies (as the canvas does it: the move put back, a copy made) --
+    {
+        std::cout << "--- s344 alt+drag copies ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto before = core::to_json(d);
+        const auto f0 = *d.as<core::Frame>("frame.2");
+        const auto n0 = j.size();
+        D::frames_begin(j, d, {"frame.2"}, "Move frame");
+        D::frames_set(j, d, "frame.2", {f0.x + 30, f0.y + 20, f0.w, f0.h});
+        const auto* f1 = d.as<core::Frame>("frame.2");
+        const double dx = f1->x - f0.x, dy = f1->y - f0.y;
+        D::frames_cancel(j);
+        const auto made = D::duplicate_frames(j, d, {"frame.2"}, dx, dy);
+        check("alt+drag: one step, the original where it was", j.size() == n0 + 1 && made.size() == 1 && *d.as<core::Frame>("frame.2") == f0);
+        const auto* c = made.empty() ? nullptr : d.as<core::Frame>(made.front());
+        check("alt+drag: the copy where it was dropped", c && std::abs(c->x - (f0.x + 30)) < 1e-9 && std::abs(c->y - (f0.y + 20)) < 1e-9 && c->owner == f0.owner);
+        j.undo();
+        check("alt+drag: undone in one", core::to_json(d) == before);
+    }
 }
 }  // namespace cxtest

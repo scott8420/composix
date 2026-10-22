@@ -1516,6 +1516,12 @@ std::vector<core::Field> Shell::section_fields(core::Segment s) const {  // help
         out.push_back(act);
         return out;
     }
+    if (s == core::Segment::Styles) {   // s343: table and cell styles are made here (or from a cell: its Cell group)
+        core::Field act{"", "", "tstyles_new", {{"table", "New Table Style"}, {"cell", "New Cell Style"}}};
+        act.buttons = true;
+        out.push_back(act);
+        return out;
+    }
     if (s == core::Segment::Links) {   // s339: how many, how many broken; how to make one
         const auto us = core::doc::link_uses(m_doc);
         int broken = 0, uses = 0;
@@ -1638,7 +1644,9 @@ void Shell::on_inspector_edit(const std::string& key, const std::string& choice)
         }
         return;
     }
+    if (key == "tstyles_new") { table_style_edit(key, choice); return; }   // s343: nothing picked needed
     if (m_inspected.empty()) return;
+    if (key.rfind("ts_", 0) == 0 || key.rfind("cs_", 0) == 0) { table_style_edit(key, choice); return; }   // s343: table / cell styles
     if (key == "link_to" || key == "link_act") {   // s339: a link picked in Hyperlinks
         const std::string id = m_inspected.front();
         if (id.rfind("link:", 0) != 0) return;

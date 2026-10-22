@@ -633,6 +633,23 @@ bool Shell::cell_edit(const std::string& key, const std::string& choice) {
                 core::doc::table_set_border(t, ref.row, ref.col, 1 << side, b);
             }
         });
+    } else if (key == "cell_tstyle") {   // s343
+        did = edit("Table Style", [&](core::Table& t) { core::doc::apply_table_style(m_doc, t, choice); });
+    } else if (key == "cell_cstyle") {
+        did = edit("Cell Style", [&](core::Table& t) {
+            if (choice.empty()) cell(t).style.clear();
+            else core::doc::apply_cell_style(m_doc, cell(t), choice);
+        });
+    } else if (key == "cell_newstyle") {   // a style from this table / cell, the table / cell then using it
+        const core::Table tnow = *t0;   // copies: adding a style changes the document
+        const core::TableCell cnow = here;
+        if (choice == "table") {
+            const auto id = core::doc::add_table_style(m_journal, m_doc, "Table Style", &tnow);
+            did = !id.empty() && edit("Table Style", [&](core::Table& t) { t.style = id; });
+        } else {
+            const auto id = core::doc::add_cell_style(m_journal, m_doc, "Cell Style", &cnow);
+            did = !id.empty() && edit("Cell Style", [&](core::Table& t) { cell(t).style = id; });
+        }
     } else if (key == "cell_rows") {
         if (choice == "above") { did = edit("Insert row", [&](core::Table& t) { core::doc::table_insert_row(t, ref.row); }); go.first += 1; }
         else if (choice == "below") did = edit("Insert row", [&](core::Table& t) { core::doc::table_insert_row(t, ref.row + span_r); });
@@ -663,6 +680,92 @@ bool Shell::cell_edit(const std::string& key, const std::string& choice) {
         }
     }
     cv.grab_focus();
+    return did;
+}
+
+// s343: table and cell styles -- their rows in the inspector, New.
+bool Shell::table_style_edit(const std::string& key, const std::string& choice) {
+    namespace D = core::doc;
+    const auto num = [&] { try { return std::stod(choice); } catch (...) { return 0.0; } };
+    const auto show = [this](const std::string& id) {
+        Glib::signal_idle().connect_once([this, id] {
+            m_tiles.show_section(m_outline, core::Segment::Styles, {id});
+            on_tiles_selection({id});
+        });
+    };
+    if (key == "tstyles_new") {
+        const auto id = choice == "cell" ? D::add_cell_style(m_journal, m_doc, "Cell Style") : D::add_table_style(m_journal, m_doc, "Table Style");
+        if (!id.empty()) show(id);
+        return !id.empty();
+    }
+    bool did = false;
+    for (const auto& id : m_inspected) {
+        if (key.rfind("ts_", 0) == 0 && m_doc.as<core::TableStyle>(id)) {
+            if (key == "ts_act") {
+                if (choice == "delete") did = D::delete_table_style(m_journal, m_doc, id) || did;
+                else if (choice == "duplicate") {
+                    const auto src = *m_doc.as<core::TableStyle>(id);
+                    const auto made = D::add_table_style(m_journal, m_doc, src.name + " copy");
+                    D::edit_table_style(m_journal, m_doc, made, "Duplicate Table Style", [&](core::TableStyle& t) {
+                        const auto nm = t.name;
+                        t = src;
+                        t.name = nm;
+                    });
+                    show(made);
+                    did = true;
+                }
+                continue;
+            }
+            const std::string k = key.substr(3);
+            did = D::edit_table_style(m_journal, m_doc, id, "Table Style", [&](core::TableStyle& t) {
+                if (k == "name") { if (!choice.empty()) t.name = choice; }
+                else if (k == "rule_w") t.rule_w = std::clamp(num(), 0.0, 72.0);
+                else if (k == "rule_color") t.rule_color = choice;
+                else if (k == "inset") t.inset = std::clamp(num(), 0.0, 500.0);
+                else if (k == "header_fill") t.header_fill = choice;
+                else if (k == "header_tint") t.header_tint = std::clamp(num() / 100, 0.01, 1.0);
+                else if (k == "band_fill") t.band_fill = choice;
+                else if (k == "band_tint") t.band_tint = std::clamp(num() / 100, 0.01, 1.0);
+                else if (k == "band_every") t.band_every = std::clamp(static_cast<int>(num()), 1, 9);
+                else if (k == "header_cell") t.header_cell = choice;
+                else if (k == "body_cell") t.body_cell = choice;
+                else if (k == "footer_cell") t.footer_cell = choice;
+            }) || did;
+        } else if (key.rfind("cs_", 0) == 0 && m_doc.as<core::CellStyle>(id)) {
+            if (key == "cs_act") {
+                if (choice == "delete") did = D::delete_cell_style(m_journal, m_doc, id) || did;
+                else if (choice == "duplicate") {
+                    const auto src = *m_doc.as<core::CellStyle>(id);
+                    const auto made = D::add_cell_style(m_journal, m_doc, src.name + " copy");
+                    D::edit_cell_style(m_journal, m_doc, made, "Duplicate Cell Style", [&](core::CellStyle& c) {
+                        const auto nm = c.name;
+                        c = src;
+                        c.name = nm;
+                    });
+                    show(made);
+                    did = true;
+                }
+                continue;
+            }
+            const std::string k = key.substr(3);
+            did = D::edit_cell_style(m_journal, m_doc, id, "Cell Style", [&](core::CellStyle& c) {
+                if (k == "name") { if (!choice.empty()) c.name = choice; }
+                else if (k == "fill") { if (choice == "-") c.fill.reset(); else c.fill = choice; }
+                else if (k == "tint") c.fill_tint = std::clamp(num() / 100, 0.01, 1.0);
+                else if (k == "valign") { const int v = static_cast<int>(num()); if (v < 0) c.valign.reset(); else c.valign = std::clamp(v, 0, 2); }
+                else if (k == "border") {
+                    const double w = num();
+                    for (auto& b : c.borders) {
+                        if (w < 0) { b = core::CellBorder{}; continue; }
+                        b.w = std::clamp(std::round(w * 4) / 4, 0.0, 72.0);
+                    }
+                } else if (k == "border_color") {
+                    for (auto& b : c.borders) if (b.w >= 0) b.color = choice;
+                } else if (k == "para") c.para_style = choice;
+            }) || did;
+        }
+    }
+    if (did) m_canvas_view.canvas().model_changed();
     return did;
 }
 

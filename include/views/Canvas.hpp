@@ -208,7 +208,7 @@ public:
 
 private:
     enum class Drag { None, Pan, Move, Resize, Marquee, Guide, Draw, Text, Gutter, Tab, Picture, PicScale, PenHandle, PathPoint, PointMarquee, PathStart, PathEnd, Rotate, Skew, Zoom, TableCol, CellText, TableRow };
-    // s035: Alt+drag a picture inside its frame -- where it started.
+    // s035: a picture dragged inside its frame (the Direct tool since s186) -- where it started.
     std::string m_pic_frame;
     core::Rect  m_pic0;
     // s186: the Direct tool -- the frame whose picture is on show, the
@@ -490,6 +490,7 @@ private:
     bool                m_hover_tedge = false;
     RowEdgeHit          m_redge;                // s332: the table row edge being dragged
     bool                m_hover_redge = false;
+    bool                m_alt_copy = false;     // s344: this Move drag copies (Alt at the press)
     std::vector<double> m_col0;                 // every column's width (points) at press
     sigc::signal<void()> m_sig_sel, m_sig_zoom, m_sig_edited, m_sig_view, m_sig_tool, m_sig_caret;
     sigc::signal<void(const ContextHit&)> m_sig_context;   // s074
