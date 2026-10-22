@@ -1618,6 +1618,9 @@ bool table_unmerge(Table& t, int r, int c);
 // gives (or takes) the difference so the table keeps its width -- the last
 // column: the table grows / shrinks. True when it changed.
 bool table_set_width(Table& t, int c, double w);
+// s331: row `r` at least `h` points tall (0: as its words need; its words
+// never cut -- a row is as tall as they need at least). True when it changed.
+bool table_set_row_height(Table& t, int r, double h);
 // s325: the fill cell (r, c) is drawn with -- its own; else the header's (a
 // header row); else the bands' (a body row in a filled run). "" none;
 // `tint` set when one.

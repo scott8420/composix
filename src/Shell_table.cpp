@@ -411,6 +411,13 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
             if (o.first >= 0) work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)].valign = static_cast<int>(va->get_selected());
         });
         cb->append(*va);
+        auto rl = Gtk::make_managed<Gtk::Label>("Row at least");   // s331: the picked cell's row
+        rl->set_margin_start(12);
+        cb->append(*rl);
+        auto rh = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(0, 0, 2000, 1, 12), 1, 1);
+        rh->set_name("table.row_h");
+        rh->set_tooltip_text("The picked cell's row at least this tall, points (0: as its words need)");
+        cb->append(*rh);
         auto cl = Gtk::make_managed<Gtk::Label>("Cell fill");   // s325: the picked cell's own
         cl->set_margin_start(12);
         cb->append(*cl);
@@ -432,12 +439,17 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
             x.fill = sw_ids[k];
             x.fill_tint = ct->get_value() / 100.0;
         });
+        rh->signal_value_changed().connect([work, cur, rh, syncing] {   // s331
+            if (*syncing) return;
+            const auto o = core::doc::owner_of(*work, cur->first, cur->second);
+            if (o.first >= 0) core::doc::table_set_row_height(*work, o.first, rh->get_value());
+        });
         ct->signal_value_changed().connect([work, cur, ct, syncing] {
             if (*syncing) return;
             const auto o = core::doc::owner_of(*work, cur->first, cur->second);
             if (o.first >= 0) work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)].fill_tint = ct->get_value() / 100.0;
         });
-        *picked = [work, cur, va, cf, ct, syncing, sw_index] {   // s325: the rows show the picked cell's settings
+        *picked = [work, cur, va, cf, ct, rh, syncing, sw_index] {   // s325: the rows show the picked cell's settings
             const auto o = core::doc::owner_of(*work, cur->first, cur->second);
             if (o.first < 0) return;
             const auto& x = work->rows[static_cast<std::size_t>(o.first)].cells[static_cast<std::size_t>(o.second)];
@@ -445,6 +457,7 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
             va->set_selected(static_cast<guint>(std::clamp(x.valign, 0, 2)));
             cf->set_selected(sw_index(x.fill));
             ct->set_value(x.fill.empty() ? 100 : x.fill_tint * 100);
+            rh->set_value(work->rows[static_cast<std::size_t>(o.first)].min_h);
             *syncing = false;
         };
         (*picked)();

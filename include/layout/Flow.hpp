@@ -308,6 +308,17 @@ struct TableHit {
     core::Rect cell;    // the cell, frame coordinates (a merge: all of it in this row's line)
     bool ok() const { return para >= 0; }
 };
+// s331: a row's bottom edge within `tol` of (x, y) in a frame (frame
+// coordinates) -- the table's paragraph, the row whose height a drag sets
+// (a merge's last row when the edge is a merge's foot), and that row's height
+// as drawn and its top (frame). para -1: none.
+struct RowEdge {
+    int para = -1, row = -1;
+    double height = 0, top = 0;
+    bool ok() const { return para >= 0; }
+};
+RowEdge table_row_edge(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, double x, double y,
+                       double tol);
 TableHit table_hit(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, double x, double y,
                    double tol = 0);
 // s261: a line's underlines and strikethroughs, for a writer that sets glyphs

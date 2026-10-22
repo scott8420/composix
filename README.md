@@ -65,6 +65,24 @@ Deps (Fedora): `gtkmm4.0-devel spdlog-devel cmake gcc-c++` (pangocairo comes wit
 bundle is compiled by `glib-compile-resources`, which ships with the GLib dev
 tools that `libgtkmm-4.0-dev` already pulls in.
 
+## Install & uninstall (s331)
+
+```
+./install.sh                # after ./build.sh: into ~/.local, for you (no sudo)
+./install.sh --build        # build, then install
+./install.sh --system       # into /usr/local, for everyone (sudo)
+./install.sh --prefix DIR   # anywhere else
+./uninstall.sh              # takes out what install.sh put in (same options)
+./uninstall.sh --purge      # ... and your Composix settings, recents, cache
+```
+
+It installs the binary, a launcher (`io.github.scott8420.Composix.desktop`,
+so Composix shows in the desktop's applications) and its icon (`data/`) --
+the app's own icons and stylesheet are inside the binary. A manifest in
+`PREFIX/share/composix/` records what went in; uninstall removes exactly that.
+Never touched: your documents, the swatch library and the pictures ODT import
+saved (`~/.local/share/composix/swatches`, `imported/`), even with `--purge`.
+
 ## Handing the tree to a session
 
 ```

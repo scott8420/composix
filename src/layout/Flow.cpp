@@ -3059,6 +3059,25 @@ void visit_tables(const core::Doc& d, const std::string& story, const StoryFlow&
     }
 }
 
+RowEdge table_row_edge(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, double x, double y,
+                       double tol) {   // s331
+    RowEdge e;
+    const auto* st = d.as<core::Story>(story);
+    const FrameText* ft = frame_text(flow, frame);
+    if (!st || !ft) return e;
+    for (const auto& ln : ft->lines) {
+        if (ln.row < 0 || ln.para >= static_cast<int>(st->paras.size())) continue;
+        if (x < ln.x - tol || x > ln.x + ln.w + tol) continue;
+        if (std::abs(y - (ln.y + ln.h)) > tol) continue;
+        e.para = ln.para;
+        e.row = ln.row;
+        e.height = ln.h;
+        e.top = ln.y;
+        return e;
+    }
+    return e;
+}
+
 TableHit table_hit(const core::Doc& d, const std::string& story, const StoryFlow& flow, const std::string& frame, double x, double y,
                    double tol) {   // s320
     TableHit h;

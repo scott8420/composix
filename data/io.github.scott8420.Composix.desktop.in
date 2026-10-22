@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Composix
+GenericName=Desktop Publishing
+Comment=Lay out books, magazines and print pieces
+Exec=@BINDIR@/composix
+Icon=io.github.scott8420.Composix
+Terminal=false
+Categories=Graphics;Publishing;
+Keywords=layout;publishing;dtp;book;typesetting;print;
+StartupNotify=true
+StartupWMClass=io.github.scott8420.Composix

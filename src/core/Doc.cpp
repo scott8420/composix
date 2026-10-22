@@ -2997,6 +2997,15 @@ bool table_set_width(Table& t, int c, double w) {   // s320
     return true;
 }
 
+bool table_set_row_height(Table& t, int r, double h) {   // s331
+    if (r < 0 || r >= static_cast<int>(t.rows.size())) return false;
+    h = std::clamp(std::round(h * 2) / 2, 0.0, 2000.0);
+    auto& row = t.rows[static_cast<std::size_t>(r)];
+    if (std::abs(row.min_h - h) < 1e-9) return false;
+    row.min_h = h;
+    return true;
+}
+
 std::string table_cell_fill(const Table& t, int r, int c, double* tint) {   // s325
     if (r < 0 || r >= static_cast<int>(t.rows.size())) return {};
     const auto& row = t.rows[static_cast<std::size_t>(r)];
