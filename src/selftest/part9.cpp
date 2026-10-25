@@ -4232,5 +4232,73 @@ void part9() {
         j.undo();
         check("trim: undone in one", d.pages().size() == n1);
     }
+    // -- s356: a long story's whole flow on the worker; a stand-in meanwhile --
+    {
+        std::cout << "--- s356 a master change: a stand-in, the whole from the worker ---\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        long_doc(d, j, 400);
+        const auto chain = L::thread_frames(d, "story.1");
+        check("long: more frames than the budget", chain.size() > 6, std::to_string(chain.size()));
+        L::FlowCache fc;
+        fc.set_reflow_budget(4);
+        const auto before = fc.get(d, "story.1");
+        check("first flow whole (nothing to stand in)", !before.provisional);
+        const auto narrow = [&](core::Doc& dd, core::DocJournal& jj, double by) {   // every frame of the story (as a body frame's change does)
+            core::doc::edit_frames(jj, dd, L::thread_frames(dd, "story.1"), "Width", [by](core::Frame& f) { f.w -= by; });
+        };
+        narrow(d, j, 18);
+        const auto& si = fc.get(d, "story.1");
+        check("a margin changed: the last flow stands in, provisional", si.provisional && si.frames.size() == L::thread_frames(d, "story.1").size());
+        const auto un = fc.unfinished();
+        check("unfinished: the story, whole", un.size() == 1 && un[0].whole && un[0].story == "story.1");
+        L::FlowCache plain;   // no budget: whole here and now, as before
+        const auto want = plain.get(d, "story.1");
+        check("no budget: no stand-in", !want.provisional);
+        fc.complete(d, "story.1", d.revision(), L::flow_story(d, "story.1"), *d.as<core::Story>("story.1"));
+        const auto& got = fc.get(d, "story.1");
+        bool same = !got.provisional && got.frames.size() == want.frames.size() && got.overset == want.overset;
+        for (std::size_t i = 0; same && i < got.frames.size(); ++i) same = got.frames[i].lines.size() == want.frames[i].lines.size();
+        check("handed in: the whole, as flowed here", same);
+        // typed on while a stand-in shows: flowed whole (never re-flowed from the stand-in)
+        narrow(d, j, -18);
+        check("stand-in again", fc.get(d, "story.1").provisional);
+        core::doc::edit_text(j, d, "story.1", {0, 3}, {0, 3}, "x");
+        const auto& typed = fc.get(d, "story.1");
+        L::FlowCache p2;
+        check("typed over a stand-in: whole, not provisional", !typed.provisional && typed.frames.size() == p2.get(d, "story.1").frames.size());
+        // a short story: whole here, no stand-in
+        core::Doc e;
+        core::DocJournal je{e};
+        e.set_door([&je] { return je.open(); });
+        long_doc(e, je, 10);
+        L::FlowCache fe;
+        fe.set_reflow_budget(4);
+        (void)fe.get(e, "story.1");
+        narrow(e, je, 6);
+        check("a short story: flowed whole here", !fe.get(e, "story.1").provisional);
+    }
+    {
+        std::cout << "--- s356 the pages reflow adds, worked out on a copy ---\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        long_doc(d, j, 300);
+        {
+            std::string more;
+            for (int k = 0; k < 600; ++k) more += "The routes ran east along the coast, and the ships came in with the morning. ";
+            set_text(d, j, more);
+        }
+        check("more text: overset", L::flow_story(d, "story.1").overset);
+        const auto n0 = d.pages().size();
+        const int need = L::reflow_pages_needed(d, "story.1");
+        check("needed, the doc untouched", need > 0 && d.pages().size() == n0, std::to_string(need));
+        const int added = L::add_reflow_pages(j, d, "story.1", need);
+        check("added in one step: not overset", added == need && !L::flow_story(d, "story.1").overset &&
+                                                    d.pages().size() == n0 + static_cast<std::size_t>(need));
+        j.undo();
+        check("undone in one", d.pages().size() == n0);
+    }
 }
 }  // namespace cxtest

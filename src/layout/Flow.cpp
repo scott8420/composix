@@ -2078,6 +2078,38 @@ bool reflows(const core::Doc& d, const std::string& story) {   // s255
     return std::abs(f->x - m.x) < 1 && std::abs(f->y - m.y) < 1 && std::abs(f->w - m.w) < 1 && std::abs(f->h - m.h) < 1;
 }
 
+namespace {
+// s356: `n` pages after the page of frame `last`, each its frame threaded on
+// (as the last, at the new page's margins) -- inside a step. The new last frame.
+std::string add_after(core::Doc& d, std::string last, int n, std::vector<core::Doc::Id>& made) {
+    for (int i = 0; i < n; ++i) {
+        const auto* lf = d.as<core::Frame>(last);
+        const auto* lp = d.as<core::Page>(lf->owner);
+        core::Page pg = *lp;
+        pg.pos = d.pos_after<core::Page>(lf->owner);
+        const auto pid = d.fresh_id("page");
+        d.put(pid, pg);
+        core::Frame nf = *lf;
+        nf.owner = pid;
+        nf.next.clear();
+        const core::Rect m = core::margin_rect(d, pid);
+        nf.x = m.x;
+        nf.y = m.y;
+        nf.w = m.w;
+        nf.h = m.h;
+        const auto fid = d.fresh_id("frame");
+        d.put(fid, nf);
+        core::Frame link = *lf;
+        link.next = fid;
+        d.put(last, link);
+        made.push_back(pid);
+        made.push_back(fid);
+        last = fid;
+    }
+    return last;
+}
+}  // namespace
+
 int reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story) {   // s255
     if (!reflows(d, story)) return 0;
     if (!flow_story(d, story).overset) return 0;
@@ -2102,35 +2134,34 @@ int reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story) { 
             }
             const double per = frames_used > 0 ? std::max(1.0, static_cast<double>(placed) / frames_used) : 2000.0;
             const int more = std::clamp(static_cast<int>(std::ceil(static_cast<double>(bytes > placed ? bytes - placed : 1) / per)), 1, 50);
-            for (int i = 0; i < more; ++i) {
-                const auto* lf = d.as<core::Frame>(last);
-                const auto* lp = d.as<core::Page>(lf->owner);
-                core::Page pg = *lp;
-                pg.pos = d.pos_after<core::Page>(lf->owner);
-                const auto pid = d.fresh_id("page");
-                d.put(pid, pg);
-                core::Frame nf = *lf;
-                nf.owner = pid;
-                nf.next.clear();
-                const core::Rect m = core::margin_rect(d, pid);
-                nf.x = m.x;
-                nf.y = m.y;
-                nf.w = m.w;
-                nf.h = m.h;
-                const auto fid = d.fresh_id("frame");
-                d.put(fid, nf);
-                core::Frame link = *lf;
-                link.next = fid;
-                d.put(last, link);
-                made.push_back(pid);
-                made.push_back(fid);
-                last = fid;
-                ++added;
-            }
+            last = add_after(d, last, more, made);
+            added += more;
         }
         return made;
     });
     return added;
+}
+
+int reflow_pages_needed(const core::Doc& d, const std::string& story) {   // s356
+    core::Doc c;
+    {
+        core::Doc::Loading load(c);
+        for (const auto& [id, r] : d.records()) c.put(id, r);
+    }
+    core::DocJournal jc{c};
+    return reflow_pages(jc, c, story);
+}
+
+int add_reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story, int count) {   // s356
+    if (count <= 0 || !reflows(d, story)) return 0;
+    const auto chain = thread_frames(d, story);
+    if (chain.empty()) return 0;
+    const bool did = j.run("Text reflow", {chain.back()}, [&] {
+        std::vector<core::Doc::Id> made;
+        add_after(d, chain.back(), count, made);
+        return made;
+    });
+    return did ? count : 0;
 }
 
 // s256: InDesign's "Delete Empty Pages" -- from the thread's end back, the
@@ -2151,8 +2182,9 @@ std::vector<std::string> empty_reflow_pages(const core::Doc& d, const std::strin
     return out;
 }
 
-int trim_reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story) {   // s256
-    const auto pages = empty_reflow_pages(d, story, flow_story(d, story));
+int trim_reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story, const StoryFlow* flow) {   // s256
+    // s356: `flow` -- the story's whole flow as it stands (the shell's, fresh), else worked out
+    const auto pages = empty_reflow_pages(d, story, flow ? *flow : flow_story(d, story));
     if (pages.empty() || pages.size() >= d.pages().size()) return 0;
     const auto chain = thread_frames(d, story);
     const auto keep_last = chain[chain.size() - 1 - pages.size()];
@@ -4008,11 +4040,16 @@ bool FlowCache::check_by_env(const core::Doc& d, const std::vector<core::Doc::Id
         if (!it->second.env.known || !(story_env(d, it->first) == it->second.env)) it = m_prev.erase(it); else ++it;
     for (auto it = m_flows.begin(); it != m_flows.end();) {
         const bool same_env = it->second.env.known && story_env(d, it->first) == it->second.env;
-        if (!same_env || !d.as<core::Story>(it->first)) { it = m_flows.erase(it); continue; }
+        if (!same_env || !d.as<core::Story>(it->first)) {
+            if (d.as<core::Story>(it->first)) m_stale[it->first] = std::move(it->second);   // s356: it stands in
+            else m_stale.erase(it->first);
+            it = m_flows.erase(it);
+            continue;
+        }
         if (edited.count(it->first)) {   // its own text: re-flowed from this flow (s105)
             if (it->second.flow.provisional && it->second.basis && it->second.basis_text)
                 m_prev[it->first] = Entry{*it->second.basis, *it->second.basis_text, nullptr, nullptr, it->second.env};
-            else
+            else if (!it->second.whole)   // s356: a stand-in is no basis (flowed whole next)
                 m_prev[it->first] = std::move(it->second);
             it = m_flows.erase(it);
             continue;
@@ -4045,6 +4082,7 @@ void FlowCache::check(const core::Doc& d) {
         return;
     }
     if (!text_only) {
+        for (auto& [id, e] : m_flows) m_stale[id] = std::move(e);   // s356: each stands in till flowed whole
         m_flows.clear();
         m_prev.clear();
         m_resolved_prev.clear();   // s348
@@ -4065,7 +4103,7 @@ void FlowCache::check(const core::Doc& d) {
                 // s106: a provisional flow isn't -- its basis is.
                 if (it->second.flow.provisional && it->second.basis && it->second.basis_text)
                     m_prev[id] = Entry{*it->second.basis, *it->second.basis_text, nullptr, nullptr};
-                else
+                else if (!it->second.whole)   // s356: a stand-in is no basis (flowed whole next)
                     m_prev[id] = std::move(it->second);
                 m_flows.erase(it);
             }
@@ -4105,12 +4143,14 @@ void FlowCache::put(const core::Doc& d, const std::string& story, StoryFlow f) {
     const auto* st = d.as<core::Story>(story);
     m_flows[story] = Entry{std::move(f), st ? *st : core::Story{}, nullptr, nullptr, story_env(d, story)};   // s348: its key
     m_prev.erase(story);
+    m_stale.erase(story);
 }
 
 std::vector<FlowCache::Unfinished> FlowCache::unfinished() const {   // s106
     std::vector<Unfinished> out;
     for (const auto& [id, e] : m_flows)
         if (e.flow.provisional && e.basis && e.basis_text) out.push_back({id, *e.basis, *e.basis_text});
+        else if (e.flow.provisional && e.whole) out.push_back({id, {}, {}, true});   // s356
     return out;
 }
 
@@ -4126,6 +4166,7 @@ void FlowCache::complete(const core::Doc& d, const std::string& story, std::uint
     if (rev == d.revision() && m_rev == rev) {
         m_flows[story] = Entry{std::move(flow), std::move(text), nullptr, nullptr, story_env(d, story)};   // s348: its key
         m_prev.erase(story);
+        m_stale.erase(story);   // s356
         m_resolved.clear();
         m_heads.reset();   // s240
         return;
@@ -4154,7 +4195,7 @@ void FlowCache::finish_now(const core::Doc& d) {   // s106
     for (auto& u : unfinished()) {
         const auto* st = d.as<core::Story>(u.story);
         if (!st) continue;
-        complete(d, u.story, d.revision(), reflow_story(d, u.story, u.basis_text, u.basis), *st);
+        complete(d, u.story, d.revision(), u.whole ? flow_story(d, u.story) : reflow_story(d, u.story, u.basis_text, u.basis), *st);
     }
 }
 
@@ -4192,12 +4233,46 @@ const StoryFlow& FlowCache::get(const core::Doc& d, const std::string& story) {
         }
         m_prev.erase(pv);
         m_how = How::Reflowed;
+    } else if (stand_in(d, story, e)) {   // s356: the whole follows on a worker
+        m_how = How::Reflowed;
     } else {
         e.flow = flow_story(d, story);
         m_how = How::Whole;
+        m_stale.erase(story);
     }
     if (!e.env.known) e.env = story_env(d, story);   // s348
     return m_flows.emplace(story, std::move(e)).first->second.flow;
+}
+
+// s356: a long story's last flow standing in for its whole flow -- its lines
+// on the frames the thread still has (a frame's lines are in its own
+// coordinates, so they move with it), new frames empty; only when its text
+// is as it was (the lines' paragraphs and bytes still point at it).
+bool FlowCache::stand_in(const core::Doc& d, const std::string& story, Entry& e) {
+    if (m_budget <= 0) return false;
+    const auto sv = m_stale.find(story);
+    const auto* st = d.as<core::Story>(story);
+    if (sv == m_stale.end() || !st) return false;
+    if (sv->second.text.paras.size() != st->paras.size()) return false;
+    for (std::size_t i = 0; i < st->paras.size(); ++i)
+        if (sv->second.text.paras[i].text != st->paras[i].text) return false;
+    const auto chain = thread_frames(d, story);
+    if (static_cast<int>(chain.size()) <= m_budget) return false;   // short: flowed whole here
+    std::map<std::string, const FrameText*> had;
+    for (const auto& ft : sv->second.flow.frames) had[ft.frame] = &ft;
+    StoryFlow f;
+    for (const auto& fid : chain) {
+        const auto h = had.find(fid);
+        if (h != had.end()) f.frames.push_back(*h->second);
+        else { FrameText ft; ft.frame = fid; f.frames.push_back(std::move(ft)); }
+    }
+    for (const auto& ft : f.frames) f.lines += static_cast<int>(ft.lines.size());
+    f.overset = sv->second.flow.overset;
+    f.provisional = true;
+    f.tail_from = 0;
+    e.flow = std::move(f);
+    e.whole = true;
+    return true;
 }
 
 void set_line_slicing(bool on) { slicing() = on; }   // s348

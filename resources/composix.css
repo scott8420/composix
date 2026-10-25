@@ -249,6 +249,17 @@ button.cx-note-chip {
   border-radius: 999px;
   padding: 2px 10px 2px 6px;
 }
+.cx-layout-card {   /* s356: the book laid out in the background -- below the canvas's head */
+  margin-top: 96px;
+  padding: 10px 16px 12px;
+  border-radius: 10px;
+  background: alpha(@cx_accent, 0.92);
+  color: white;
+  box-shadow: 0 2px 10px alpha(black, 0.25);
+}
+.cx-layout-card .cx-layout-label { font-weight: bold; }
+.cx-layout-card progressbar trough { min-height: 6px; background: alpha(white, 0.3); }
+.cx-layout-card progressbar progress { min-height: 6px; background: white; }
 .cx-proof-pill { background: alpha(@cx_warn, 0.18); color: @cx_fg; }
 /* s096: four-across typed values share the row; their minimum doesn't widen the panel */
 entry.cx-insp-col-entry { min-width: 0; padding-left: 5px; padding-right: 3px; }

@@ -157,7 +157,11 @@ bool reflows(const core::Doc& d, const std::string& story);
 std::vector<std::string> empty_reflow_pages(const core::Doc& d, const std::string& story, const StoryFlow& f);
 // s256: those pages removed (the frame before threads on to nothing), one
 // step "Text reflow"; the pages taken away (0: none).
-int trim_reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story);
+int trim_reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story, const StoryFlow* flow = nullptr);
+// s356: how many pages reflow_pages would add to `story` (worked out on a
+// copy -- a worker's), and the adding of them, without a flow (one step).
+int reflow_pages_needed(const core::Doc& d, const std::string& story);
+int add_reflow_pages(core::DocJournal& j, core::Doc& d, const std::string& story, int count);
 // s023: flow `text` (a version of the story's words -- markers filled in)
 // through that story's thread.
 StoryFlow flow_text(const core::Doc& d, const std::string& story, const core::Story& text);
@@ -453,6 +457,7 @@ public:
         std::string story;
         StoryFlow   basis;
         core::Story basis_text;
+        bool        whole = false;   // s356: no basis -- the story flowed whole (a stand-in shows meanwhile)
     };
     std::vector<Unfinished> unfinished() const;
     bool any_unfinished() const;
@@ -463,6 +468,11 @@ public:
     // Work out every provisional flow here and now (before anything that
     // must not read a stand-in: rebuilding a contents list, the export sheet).
     void finish_now(const core::Doc& d);
+    // s356: a long story (more frames than the budget) whose surroundings
+    // changed -- a master's margins, a style -- isn't flowed whole on the
+    // spot: its last flow stands in, on the frames it still has, marked
+    // provisional (whole) until complete() hands in the whole from a worker.
+    // Off with no budget (the selftest's caches, the bench, a worker's own).
 
 private:
     void check(const core::Doc& d);
@@ -474,7 +484,10 @@ private:
         std::shared_ptr<const StoryFlow>   basis;
         std::shared_ptr<const core::Story> basis_text;
         StoryEnv env = {};   // s348: what it was flowed among (its frames, their wraps, grids, margins, pages)
+        bool whole = false;  // s356: a stand-in for a whole flow (provisional, no basis)
     };
+    std::map<std::string, Entry>     m_stale;      // s356: the last flow of each story whose surroundings changed -- a stand-in
+    bool stand_in(const core::Doc& d, const std::string& story, Entry& e);
     std::uint64_t                    m_rev = ~0ull;
     std::map<std::string, Entry>     m_flows;
     std::map<std::string, Entry>     m_prev;       // s105: flows of stories edited since -- re-flowed from

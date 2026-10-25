@@ -40,8 +40,10 @@
 #include <functional>
 #include <memory>
 #include <chrono>
+#include <gtkmm/progressbar.h>
 #include <gtkmm/spinner.h>
 #include <glibmm/dispatcher.h>
+#include <set>
 #include <thread>
 #include <string>
 #include <vector>
@@ -389,6 +391,11 @@ private:
     std::thread                      m_flow_thread;
     Glib::Dispatcher                 m_flow_disp;
     bool                             m_flow_disp_bound = false;
+    std::set<std::string>            m_reflow_plans;   // s356: long stories whose added pages are worked out on the worker
+    // s356: the book laid out in the background -- a card over the canvas, its bar
+    Gtk::Box*                        m_layout_card = nullptr;
+    Gtk::Label*                      m_layout_label = nullptr;
+    Gtk::ProgressBar*                m_layout_bar = nullptr;
     mutable std::map<std::string, std::string> m_stale_last;   // the contents check while a flow is provisional
 
     // s020: the page / master tiles drawn for real, kept per page.

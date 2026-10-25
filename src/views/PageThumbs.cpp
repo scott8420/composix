@@ -52,6 +52,7 @@ void PageThumbs::on_worker() {
 
 void PageThumbs::forget() {
     m_store.forget();
+    m_last.clear();
     *m_flowp = {};
 }
 
@@ -70,7 +71,13 @@ bool PageThumbs::paint(const Cairo::RefPtr<Cairo::Context>& cr, const std::strin
     cairo_surface_get_device_scale(cairo_get_target(cr->cobj()), &sx, &sy);
     const int pw = std::max(1, static_cast<int>(std::lround(w * sx)));
     const int ph = std::max(1, static_cast<int>(std::lround(h * sy)));
-    const auto look = m_store.look(m_doc, *m_flowp, images(), large ? id + "|L" : id, id, pw, ph, large);
+    // s356: a slot per size -- the navigator and the tiles at their own sizes
+    // shared one before, each draw taking the other's picture away, and the
+    // pages were drawn over and over ("Drawing pages" never ending).
+    const std::string base = large ? id + "|L" : id;
+    auto look = m_store.look(m_doc, *m_flowp, images(), base + "|" + std::to_string(pw) + "x" + std::to_string(ph), id, pw, ph, large);
+    if (look.surf) m_last[base] = look.surf;
+    else if (auto l = m_last.find(base); l != m_last.end()) look.surf = l->second;
     if (m_store.asking() && !m_flush_conn.connected()) {
         // After this draw pass has asked for all it shows: one snapshot.
         m_flush_conn = Glib::signal_idle().connect([this] {

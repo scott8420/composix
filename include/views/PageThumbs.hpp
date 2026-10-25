@@ -18,6 +18,7 @@
 #include "layout/Flow.hpp"
 #include "layout/ThumbStore.hpp"
 
+#include <map>
 #include <cairomm/context.h>
 #include <cairomm/surface.h>
 #include <glibmm/dispatcher.h>
@@ -67,6 +68,8 @@ private:
     bool                         m_running = false;
     sigc::connection             m_flush_conn, m_collect_conn;
     layout::ThumbStore           m_store;
+    // s356: a page's last picture at any size -- shown, scaled, while a new size is drawn
+    std::map<std::string, layout::Surface> m_last;
 };
 
 }  // namespace composix::views

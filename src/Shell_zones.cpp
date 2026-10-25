@@ -1,6 +1,7 @@
 #include "Shell.hpp"
 #include "Log.hpp"
 
+#include <gtkmm/progressbar.h>
 #include <gtkmm/headerbar.h>
 #include <gtkmm/image.h>
 #include <gtkmm/label.h>
@@ -126,6 +127,22 @@ void Shell::build_shell() {  // zone: header + panes
     m_main_over.set_child(m_main);
     m_main_over.add_overlay(m_insp_tab);
     build_find_bar();   // s022
+    {   // s356 (Scott: "a progress bar in a conspicuous place"): the book laid out in the background
+        m_layout_card = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+        m_layout_card->set_name("shell.layout_card");
+        m_layout_card->add_css_class("cx-layout-card");
+        m_layout_card->set_halign(Gtk::Align::CENTER);
+        m_layout_card->set_valign(Gtk::Align::START);
+        m_layout_card->set_can_target(false);   // the canvas under it still takes the mouse
+        m_layout_label = Gtk::make_managed<Gtk::Label>();
+        m_layout_label->add_css_class("cx-layout-label");
+        m_layout_bar = Gtk::make_managed<Gtk::ProgressBar>();
+        m_layout_bar->set_size_request(260, -1);
+        m_layout_card->append(*m_layout_label);
+        m_layout_card->append(*m_layout_bar);
+        m_layout_card->set_visible(false);
+        m_main_over.add_overlay(*m_layout_card);
+    }
     m_main_over.set_hexpand(true);
     m_main_over.set_vexpand(true);
     m_right.append(m_main_over);

@@ -1419,16 +1419,28 @@ void Shell::update_screen_colours() {  // helper
 void Shell::check_reflow() {  // helper
     if (!m_doc.settings().reflow || m_journal.can_redo() || m_journal.in_gesture()) return;
     int added = 0, removed = 0;
+    bool planned = false;
     for (const auto& sid : m_doc.ids_of<core::Story>()) {
-        if (layout::reflows(m_doc, sid) && m_pf_flows.get(m_doc, sid).overset) {
-            added += layout::reflow_pages(m_journal, m_doc, sid);
+        // s356: a stand-in (the whole on its way from the worker) says nothing yet --
+        // the worker's hand-in checks again
+        const auto& fl = m_pf_flows.get(m_doc, sid);
+        if (fl.provisional) continue;
+        const bool fresh = m_pf_flows.fresh_for(m_doc);
+        if (layout::reflows(m_doc, sid) && fl.overset) {
+            // s356: a long story's pages worked out on the worker (flowing it whole,
+            // again and again, here was the window standing still)
+            if (static_cast<int>(fl.frames.size()) > reflow_budget()) { m_reflow_plans.insert(sid); planned = true; }
+            else added += layout::reflow_pages(m_journal, m_doc, sid);
             continue;
         }
         // s256: and the pages the text no longer reaches -- the cached flow
-        // says whether any; trim_reflow_pages sets it whole before it takes them.
-        if (m_doc.settings().reflow_trim && !layout::empty_reflow_pages(m_doc, sid, m_pf_flows.get(m_doc, sid)).empty())
-            removed += layout::trim_reflow_pages(m_journal, m_doc, sid);
+        // says whether any (s356: and is used, when it's whole and this revision's).
+        if (m_doc.settings().reflow_trim && !layout::empty_reflow_pages(m_doc, sid, fl).empty()) {
+            const layout::StoryFlow keep = fl;
+            removed += layout::trim_reflow_pages(m_journal, m_doc, sid, fresh ? &keep : nullptr);
+        }
     }
+    if (planned) finish_flows();
     if (added > 0 || removed > 0) {
         if (auto lg = log::get(log::Area::Shell)) lg->info("text reflow: {} page(s) added, {} removed", added, removed);
         queue_refresh();
