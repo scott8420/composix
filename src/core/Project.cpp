@@ -112,7 +112,7 @@ void mark_typed(std::vector<Field>& fields, double doc_unit = kPt) {
         {"col_rule", 1, 0, 36}, {"col_rule_inset", 1, 0, 500},   // s055
         {"dnote_rule_w", 1, 0.1, 6}, {"dnote_space", 1, 0, 36},   // s118
         {"dtrim", 72, 36, 5000}, {"dbleed", 72, 0, 72},   // s066
-        {"msize", 72, 36, 5000}, {"mbleed", 72, 0, 72},   // s148
+        {"msize", 72, 36, 5000}, {"mbleed", 72, 0, 72}, {"dpsize", 72, 36, 5000},   // s148; s354
         {"mgrid", 1, 0, 144}, {"split_gutter", 1, 0, 500}, {"autosize_min", 1, 0, 20000},   // s254   // s183   // s150 (Scott): a baseline grid of any measure, the presets beside
         {"pic_off", 72, -20000, 20000},   // s076
         {"plindent", 1, 0, 1000}, {"prindent", 1, 0, 1000}, {"pfindent", 1, -1000, 1000}, {"pbefore", 1, 0, 1000}, {"pafter", 1, 0, 1000},   // s093
@@ -201,6 +201,41 @@ std::string style_group(const Field& f) {
     return "";   // Kind: above the groups
 }
 
+// s036 / s350 / s353: a master's baseline grid rows -- its step, then (with
+// one) where it starts, its colour, and what snaps to it. Shown on the
+// master, and (s353, G1: Scott couldn't find them) on its pages and their
+// text frames too; the edits go to the master either way.
+std::vector<Field> grid_fields(const Doc& d, const Doc::Id& mid) {
+    std::vector<Field> f;
+    const auto* m = d.as<Master>(mid);
+    if (!m) return f;
+    std::vector<Choice> grc{{"0", "None"}};
+    for (double g : {9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 18.0, 24.0}) grc.push_back({pts(g), pts(g) + " pt"});
+    Field step{"Baseline grid", m->grid >= 1 ? pts(m->grid) + " pt" : "None", "mgrid", grc};
+    step.unit = 1;   // typed: any measure (s150), sums (s349)
+    step.lo = 0;
+    step.hi = 144;
+    f.push_back(step);
+    if (m->grid >= 1) {   // s350: where its first line falls
+        std::vector<Choice> sc;
+        for (double v : {0.0, 6.0, 9.0, 12.0, 18.0, 24.0, 36.0}) sc.push_back({pts(v), pts(v) + " pt"});
+        Field st{"Grid start", pts(m->grid_start) + " pt", "mgrid_start", sc};
+        st.unit = 1;
+        st.lo = -1000;
+        st.hi = 5000;
+        f.push_back(st);
+        f.push_back({"Grid from", m->grid_from_page ? "Top of page" : "Top margin", "mgrid_from", {{"0", "Top margin"}, {"1", "Top of page"}}});
+        std::vector<Choice> cc;   // s353 (G4)
+        for (const auto& c : grid_colours()) cc.push_back({c.key.empty() ? "default" : c.key, c.label});
+        f.push_back({"Grid colour", grid_colour(m->grid_color).label, "mgrid_color", cc});
+        int snapping = 0;   // s353: what snaps -- the styles set to
+        for (const auto& sid : d.ids_of<Style>()) snapping += d.as<Style>(sid)->kind == StyleKind::Paragraph && d.as<Style>(sid)->align_grid;
+        f.push_back({"Snaps", snapping == 0 ? "No style yet -- a style's Flow: Align to grid"
+                              : std::to_string(snapping) + (snapping == 1 ? " style" : " styles") + " set to Align to grid"});
+    }
+    return f;
+}
+
 // s280: a frame's rows under headings (as a style's, s161) -- what it is and
 // where stays on top (Kind, On, Content, Shape, Bounds); the rest folds.
 std::string frame_group(const Field& f) {
@@ -221,6 +256,7 @@ std::string frame_group(const Field& f) {
     if (f.edit.rfind("col_rule", 0) == 0) return "Columns";
     if (f.edit.rfind("poly", 0) == 0 || f.edit.rfind("star", 0) == 0) return "Fill & Stroke";
     if (f.label == "Story" || f.label == "Thread") return "Text Frame";
+    if (f.edit.rfind("mgrid", 0) == 0 || f.label == "Snaps") return "Baseline Grid";   // s353 (G1)
     if (f.label == "Image" || f.label == "Effective ppi" || f.label == "Status") return "Picture";
     return "";   // Kind, On, Content, Shape, Bounds, Shows on, Overrides: not folded
 }
@@ -296,9 +332,24 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
         std::vector<Choice> langs{{"", "The app's"}};
         for (const auto& l : spell::languages()) langs.push_back({l, l});
         const Field language{"Language", st.language.empty() ? "The app's" : st.language, "dlang", langs};
-        std::vector<Field> f{title, author, language, run_row(0), run_row(1),
+        // s354 (N2): the book's page size, in one place -- every master at it follows
+        const auto [bw, bh] = doc::book_page_size(d);
+        Field psize{"Page size (" + unit_name(U) + ")", length_in(bw, U) + "\t" + length_in(bh, U)};
+        psize.cols = {"W", "H"};
+        psize.edit = "dpsize";
+        std::vector<Choice> trims;
+        std::string trim_now = "Custom";
+        for (std::size_t i = 0; i < doc::book_trims().size(); ++i) {
+            const auto& t = doc::book_trims()[i];
+            trims.push_back({std::to_string(i), t.label});
+            if (std::abs(t.w - bw) < 0.05 && std::abs(t.h - bh) < 0.05) trim_now = t.label;
+        }
+        const Field preset{"Book size", trim_now, "dpsize_preset", trims};
+        std::vector<Field> f{title, author, psize, preset, language, run_row(0), run_row(1),
                              {"Text reflow", !st.reflow ? "Off" : st.reflow_trim ? "Adds and removes pages" : "Adds pages", "dreflow",   // s255
                               {{"1", "Adds pages"}, {"2", "Adds and removes pages"}, {"0", "Off"}}},   // s256
+                             {"Grid shows", st.grid_view <= 0 ? "At any zoom" : "From " + std::to_string(st.grid_view) + "%", "dgrid_view",   // s353 (G4)
+                              {{"0", "At any zoom"}, {"50", "From 50%"}, {"75", "From 75%"}, {"100", "From 100%"}, {"150", "From 150%"}}},
                              {"Units", unit_label(U), "dunits",   // s073
                               {{"0", unit_label(Units::Inches)}, {"1", unit_label(Units::Millimetres)},
                                {"2", unit_label(Units::Picas)}, {"3", unit_label(Units::Points)}}},
@@ -453,6 +504,10 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                 pf.push_back(mi);
             }
         }
+        for (auto g : grid_fields(d, p.master)) {   // s353 (G1): its master's grid, here too
+            g.group = "Baseline Grid";
+            pf.push_back(std::move(g));
+        }
         pf.push_back(acts);
         mark_typed(pf, unit_pt(d.settings().units));
         o.add({pid, G::Pages, "Page " + d.folio(pid), p.folds.empty() ? "" : "Foldout", th, pf});
@@ -489,11 +544,7 @@ Outline project(const Doc& d, const std::string& dir, const std::vector<std::str
                              {"Pages", m.facing ? "Facing" : "Single", "mfacing", {{"1", "Facing"}, {"0", "Single"}}},
                              {"Columns", std::to_string(m.columns), "mcolumns", cc}};
         if (m.columns > 1) f.push_back({"Gutter", pts(m.gutter) + " pt", "mgutter", gc});
-        {   // s036: the baseline grid, from the top margin.
-            std::vector<Choice> grc{{"0", "None"}};
-            for (double g : {9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 18.0, 24.0}) grc.push_back({pts(g), pts(g) + " pt"});
-            f.push_back({"Baseline grid", m.grid >= 1 ? pts(m.grid) + " pt" : "None", "mgrid", grc});
-        }
+        for (auto& g : grid_fields(d, mid)) f.push_back(std::move(g));   // s036 / s350 / s353
         f.push_back({"Top", in(m.margins.top), "mtop", mc});
         f.push_back({"Bottom", in(m.margins.bottom), "mbottom", mc});
         f.push_back({"Inside", in(m.margins.inside), "minside", mc});
@@ -1402,6 +1453,20 @@ std::vector<Item> frame_items(const Doc& d, const std::vector<std::string>& ids,
                 static const std::vector<Choice> va{{"0", "Top"}, {"1", "Centre"}, {"2", "Bottom"}, {"3", "Justify"}};
                 fields.push_back({"Vertical", va[static_cast<std::size_t>(f->valign)].label, "valign", va});
             }
+            if (d.as<Master>(f->owner)) {   // s351: a master's text frame -- its side's body frame?
+                fields.push_back({"Body frame", f->body ? "Yes -- pages follow it" : "No", "fbody", {{"1", "Yes"}, {"0", "No"}}});
+                if (f->body)   // s352: and its margins
+                    fields.push_back({"Keeps to", f->fit_margins ? "The margins" : "Its own place", "fbody_fit", {{"1", "The margins"}, {"0", "Its own place"}}});
+            } else if (d.as<Page>(f->owner) && !f->story.empty()) {   // a page's: following its master's?
+                const bool has = !doc::body_frame_for(d, f->owner).empty();
+                fields.push_back({"Follows", f->follow_body ? (has ? "The master's body frame" : "The body frame (none on this master)") : "Its own place",
+                                  "ffollow", {{"1", "The master's body frame"}, {"0", "Its own place"}}});
+                Field mk{"", "", "fbody_make", {{"story", "Make Body Frames from This Story"}}};
+                mk.buttons = true;
+                fields.push_back(mk);
+            }
+            if (const auto mid = master_id_of(d, f->owner); !mid.empty())   // s353 (G1): the grid its text lines up to
+                for (auto& g : grid_fields(d, mid)) fields.push_back(std::move(g));
             {   // s040: the text held in from the frame's edges.
                 std::vector<Choice> ic;
                 for (double v : {0.0, 3.0, 4.0, 6.0, 9.0, 12.0, 18.0, 24.0}) ic.push_back({pts(v), pts(v) + " pt"});

@@ -374,7 +374,7 @@ private:
 
     // s006
     bool              m_in = false;                // the pointer is over the canvas
-    bool              m_snap = true, m_show_guides = true, m_show_grid = false;
+    bool              m_snap = true, m_show_guides = true, m_show_grid = true;   // s353: the grid shows, as guides do
     bool              m_guides_locked = false;   // s153
     bool              m_show_hidden = false;   // s059
     bool              m_mark_spell = true, m_mark_links = true;   // s309

@@ -181,7 +181,12 @@ struct Resolved {
 struct RunningHeads { std::map<std::string, std::array<std::string, 2>> by_page; };
 class FlowCache;
 RunningHeads running_heads(const core::Doc& d, FlowCache& flows);
-Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page, const RunningHeads* heads = nullptr);
+// s348: `plain` -- the story's own flow when the caller has it (else made
+// here, and only when a marker needs to know its page); `before` -- an
+// earlier resolve of it (text-only edits since): re-flowed from it, as a
+// story's own flow is (s105), not whole.
+Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page, const RunningHeads* heads = nullptr,
+                       const StoryFlow* plain = nullptr, const Resolved* before = nullptr);
 // s128: what a cross-reference shows -- its anchor's page number, its
 // paragraph's words, or both ("\u201cwords\u201d on page n"); "??" when the
 // anchor is gone or not set. `flows`: stories' flows, made as needed.
@@ -402,6 +407,24 @@ class FlowCache;
 // their frames (done, of total) -- a long book's layout with a progress bar.
 void flow_all(const core::Doc& d, FlowCache& cache, const std::function<void(int done, int total)>& tick);
 
+// s348: lines set one at a time (hyphenation, wraps, drop caps, no-break)
+// laid out from a slice of the paragraph, not all its rest. Off only for the
+// selftest's comparison (the same lines either way).
+void set_line_slicing(bool on);
+// s348: what a story's flow depends on outside its own text, as a key --
+// its thread's frames (as records), what wraps each (wrap_rects), each
+// frame's page / master: its record, baseline grid and the other frames on
+// it, and its margins when any story there has footnotes (they decide a
+// note's foot). Equal keys: the flow holds (styles and settings aside --
+// any change to those lays out again).
+struct StoryEnv {
+    std::vector<std::pair<std::string, core::Record>> records;
+    std::vector<double> numbers;
+    bool known = false;
+    bool operator==(const StoryEnv&) const = default;
+};
+StoryEnv story_env(const core::Doc& d, const std::string& story);
+
 class FlowCache {
 public:
     const StoryFlow& get(const core::Doc& d, const std::string& story);
@@ -443,17 +466,20 @@ public:
 
 private:
     void check(const core::Doc& d);
+    bool check_by_env(const core::Doc& d, const std::vector<core::Doc::Id>& ids);   // s348
     struct Entry {
         StoryFlow   flow;
         core::Story text;   // s105: what it was flowed from -- an edit re-flows from it
         // s106: a provisional flow's basis -- the last whole flow and its text.
         std::shared_ptr<const StoryFlow>   basis;
         std::shared_ptr<const core::Story> basis_text;
+        StoryEnv env = {};   // s348: what it was flowed among (its frames, their wraps, grids, margins, pages)
     };
     std::uint64_t                    m_rev = ~0ull;
     std::map<std::string, Entry>     m_flows;
     std::map<std::string, Entry>     m_prev;       // s105: flows of stories edited since -- re-flowed from
     std::map<std::string, Resolved>  m_resolved;   // story "|" page
+    std::map<std::string, Resolved>  m_resolved_prev;   // s348: resolves of before a text edit -- re-flowed from
     std::shared_ptr<RunningHeads>    m_heads;      // s240: worked out as a story needs them, per revision
     How                              m_how = How::Whole;
     int                              m_budget = 0;

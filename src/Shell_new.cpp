@@ -1,4 +1,5 @@
 #include <filesystem>
+#include "views/Math.hpp"
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "layout/BigBook.hpp"
@@ -390,6 +391,7 @@ struct NewForm {
 
 Gtk::SpinButton* spin(const std::string& name, double lo, double hi, double step, int digits, double v) {
     auto s = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(v, lo, hi, step, step * 4), step, digits);
+    views::allow_math(*s);   // s349: math in the field
     s->set_name(name);
     s->set_numeric(true);
     s->set_width_chars(6);

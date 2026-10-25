@@ -1,4 +1,5 @@
 #include <sstream>
+#include "views/Math.hpp"
 #include "views/Canvas.hpp"
 #include "core/Spell.hpp"
 #include "views/BackButton.hpp"
@@ -568,18 +569,23 @@ void Canvas::draw_guides(const Cairo::RefPtr<Cairo::Context>& cr, const core::Pl
     }
 }
 
-// s036: the baseline grid -- light blue rules across the margins, every
-// step from the top margin to the bottom one (none when too dense to read).
+// s036: the baseline grid -- rules across the margins, every step from its
+// start to the bottom margin (none when too dense to read). s353 (G4): in
+// the master's colour, and hidden below the document's view threshold.
 void Canvas::draw_grid(const Cairo::RefPtr<Cairo::Context>& cr, const core::Placed& p) {
     const auto g = core::baseline_grid(m_doc, p.id);
     const Rect mr = core::margin_rect(m_doc, p.id, p.side);
     const double s = m_vp.scale();
     if (g.step <= 0 || mr.w <= 0 || g.step * s < 4) return;
+    if (const int th = m_doc.settings().grid_view; th > 0 && m_vp.percent() + 0.5 < th) return;
+    const auto mid = core::master_id_of(m_doc, p.id);
+    const auto& c = core::grid_colour(mid.empty() ? std::string{} : m_doc.as<core::Master>(mid)->grid_color);
     const Rect sr = m_vp.to_screen(p.r);
     cr->set_line_width(1);
-    cr->set_source_rgba(0.35, 0.6, 0.95, 0.45);
+    cr->set_source_rgba(c.r, c.g, c.b, 0.5);
     const double x0 = std::round(sr.x + mr.x * s), x1 = std::round(sr.x + mr.r() * s);
     for (double y = g.start; y <= mr.b() + 0.01; y += g.step) {
+        if (y < -0.01) continue;
         const double sy = std::round(sr.y + y * s) + 0.5;
         cr->move_to(x0, sy);
         cr->line_to(x1, sy);
@@ -4180,8 +4186,10 @@ CanvasView::CanvasView(core::Doc& d, core::DocJournal& j)
                 return l;
             };
             auto sides = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(m_canvas.polygon_sides(), 3, 64, 1, 5), 1, 0);
+            allow_math(*sides);   // s349: math in the field
             sides->set_name("canvas_view.tool.polygon.sides");
             auto star = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(m_canvas.polygon_inner() * 100, 1, 100, 1, 10), 1, 0);
+            allow_math(*star);   // s349: math in the field
             star->set_name("canvas_view.tool.polygon.star");
             star->set_tooltip_text("Star depth: 100% a plain polygon; lower, the inner points come in (a five-point star snaps to straight sides near 38%)");
             const auto apply = [this, sides, star] { m_canvas.set_polygon(sides->get_value_as_int(), star->get_value() / 100); };

@@ -182,7 +182,17 @@ void Shell::bind_actions() {  // bindings: actions + recents group
             core::save_settings(m_settings_file, m_settings);
         }, on);
     }
-    toggle("toggle-grid",   [this](bool on) { m_canvas_view.canvas().set_show_grid(on); }, false);   // s036
+    toggle("toggle-grid",   [this](bool on) {   // s036; s353: on from the start, like guides
+        m_canvas_view.canvas().set_show_grid(on);
+        if (!on) return;
+        bool any = false;   // s353 (G2): nothing to show -- say where it's set
+        for (const auto& mid : m_doc.ids_of<core::Master>()) any = any || m_doc.as<core::Master>(mid)->grid >= 1;
+        if (!any)
+            alert("No master has a baseline grid yet",
+                  "A master's grid is set in its rows: pick the master (Masters), or a page or a text frame on it, "
+                  "and choose Baseline grid -- your body text's leading is the usual one. Then set Align to grid in "
+                  "the paragraph styles that should lock to it (the style's Flow).");
+    }, true);
     {   // s309: misspelled words and links marked in the words -- kept between runs
         const bool sp = core::setting_int(m_settings, "view.spelling", 1, 0, 1) == 1, ln = core::setting_int(m_settings, "view.links", 1, 0, 1) == 1;
         m_canvas_view.canvas().set_marks(sp, ln);
@@ -329,7 +339,12 @@ void Shell::bind_actions() {  // bindings: actions + recents group
     m_doc.set_door([this] { return m_journal.open(); });
     m_doc.set_on_change([this] { queue_refresh(); });
     // s048: every step settles what follows from it -- auto-size frames fit their text.
-    m_journal.set_settle([this] { return layout::fit_frames(m_doc); });
+    m_journal.set_settle([this] {   // s351: page frames follow their master's body frame, then auto-size
+        auto out = core::doc::follow_body_frames(m_doc);
+        auto fit = layout::fit_frames(m_doc);
+        out.insert(out.end(), fit.begin(), fit.end());
+        return out;
+    });
     m_journal.set_selection_source([this] { return m_inspected; });
     // s057: unsaved = not where it was saved (undo back there and it's clean).
     m_journal.set_on_change([this] {

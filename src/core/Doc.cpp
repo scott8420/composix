@@ -2,6 +2,7 @@
 #include "core/Swatches.hpp"
 #include "core/Spell.hpp"
 
+#include <cstring>
 #include <map>
 #include <tuple>
 #include <algorithm>
@@ -381,60 +382,134 @@ int keep_together(const std::string& text, const std::vector<ByteSpan>& spans, i
     return took;
 }
 
-std::optional<double> parse_percent(std::string_view text) {   // s071
-    std::string t;
-    for (char c : text) if (!std::isspace(static_cast<unsigned char>(c))) t += c;
-    if (!t.empty() && t.back() == '%') t.pop_back();
-    if (t.empty()) return std::nullopt;
-    std::size_t i = 0;
-    if (t[i] == '+') ++i;
-    bool digits = false, dot = false;
-    for (std::size_t k = i; k < t.size(); ++k) {
-        if (std::isdigit(static_cast<unsigned char>(t[k]))) digits = true;
-        else if (t[k] == '.' && !dot) dot = true;
-        else return std::nullopt;
-    }
-    if (!digits) return std::nullopt;
-    return std::stod(t.substr(i));
+std::optional<double> parse_percent(std::string_view text) {   // s071; s349: arithmetic too
+    return parse_percent(text, std::nullopt);
 }
 
-std::optional<double> parse_length(std::string_view text, double unit) {
+std::optional<double> parse_length(std::string_view text, double unit) {   // s349: arithmetic too
+    return parse_length(text, unit, std::nullopt);
+}
+
+namespace {
+// s349: a sum of lengths. Each value knows whether it is a length (a unit
+// was written) or a plain number.
+struct Qty { double v = 0; bool len = false; };
+struct SumParser {
     std::string t;
-    for (char c : text) if (!std::isspace(static_cast<unsigned char>(c))) t += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (t.empty()) return std::nullopt;
     std::size_t i = 0;
-    const auto number = [&](double& out) {
+    double unit = 1;
+    bool percent = false;   // no units: plain numbers (and a trailing %)
+    bool bad = false;
+    bool more() const { return i < t.size(); }
+    char peek() const { return more() ? t[i] : '\0'; }
+    std::optional<double> digits() {
         const std::size_t a = i;
-        if (i < t.size() && (t[i] == '-' || t[i] == '+')) ++i;
-        bool digits = false;
-        while (i < t.size() && std::isdigit(static_cast<unsigned char>(t[i]))) { ++i; digits = true; }
-        if (i < t.size() && t[i] == '.') {
+        bool any = false;
+        while (more() && std::isdigit(static_cast<unsigned char>(t[i]))) { ++i; any = true; }
+        if (more() && t[i] == '.') {
             ++i;
-            while (i < t.size() && std::isdigit(static_cast<unsigned char>(t[i]))) { ++i; digits = true; }
+            while (more() && std::isdigit(static_cast<unsigned char>(t[i]))) { ++i; any = true; }
         }
-        if (!digits) { i = a; return false; }
-        out = std::stod(t.substr(a, i - a));
-        return true;
-    };
-    double v = 0;
-    const bool lead = number(v);
-    std::string rest = t.substr(i);
-    // Picas: "3p6", "3p", "p6".
-    if (!rest.empty() && rest[0] == 'p' && rest.rfind("pt", 0) != 0 && rest.rfind("pc", 0) != 0 && rest.rfind("pica", 0) != 0) {
-        ++i;
-        double pts = 0;
-        const bool tail = number(pts);
-        if (i != t.size() || (!lead && !tail)) return std::nullopt;
-        if (lead && v < 0) pts = -pts;
-        return (lead ? v : 0) * 12 + pts;
+        if (!any) { i = a; return std::nullopt; }
+        return std::stod(t.substr(a, i - a));
     }
-    if (!lead) return std::nullopt;
-    static const std::pair<const char*, double> units[] = {
-        {"", -1}, {"pt", 1}, {"pts", 1}, {"point", 1}, {"points", 1}, {"in", 72}, {"inch", 72}, {"inches", 72},
-        {"\"", 72}, {"mm", 72 / 25.4}, {"cm", 72 / 2.54}, {"pc", 12}, {"pica", 12}, {"picas", 12}};
-    for (const auto& [name, k] : units)
-        if (rest == name) return v * (k < 0 ? unit : k);
-    return std::nullopt;
+    // A number and its unit: "12", "12pt", "1in", "1\"", "10mm", "3p6", "p6", "6p".
+    std::optional<Qty> atom() {
+        auto v = digits();
+        if (percent) {
+            if (!v) return std::nullopt;
+            if (peek() == '%') ++i;
+            return Qty{*v, false};
+        }
+        // picas: "3p6", "3p", "p6" -- a 'p' not starting pt / pc / pica / points
+        const auto starts = [&](const char* w) { return t.compare(i, std::strlen(w), w) == 0; };
+        if (peek() == 'p' && !starts("pt") && !starts("pc") && !starts("pica") && !starts("point")) {
+            ++i;
+            const auto tail = digits();
+            if (!v && !tail) return std::nullopt;
+            return Qty{(v ? *v : 0) * 12 + (tail ? *tail : 0), true};
+        }
+        if (!v) return std::nullopt;
+        static const std::pair<const char*, double> units[] = {
+            {"points", 1}, {"point", 1}, {"pts", 1}, {"pt", 1}, {"inches", 72}, {"inch", 72}, {"in", 72}, {"\"", 72},
+            {"mm", 72 / 25.4}, {"cm", 72 / 2.54}, {"picas", 12}, {"pica", 12}, {"pc", 12}};
+        for (const auto& [name, k] : units)
+            if (starts(name)) { i += std::strlen(name); return Qty{*v * k, true}; }
+        return Qty{*v, false};
+    }
+    std::optional<Qty> factor() {
+        if (peek() == '-' || peek() == '+') {
+            const bool neg = t[i++] == '-';
+            auto q = factor();
+            if (q && neg) q->v = -q->v;
+            return q;
+        }
+        if (peek() == '(') {
+            ++i;
+            auto q = sum();
+            if (!q || peek() != ')') return std::nullopt;
+            ++i;
+            return q;
+        }
+        return atom();
+    }
+    std::optional<Qty> product() {
+        auto a = factor();
+        while (a && (peek() == '*' || peek() == 'x' || peek() == '/')) {
+            const char op = t[i++];
+            auto b = factor();
+            if (!b) return std::nullopt;
+            if (op == '/') {
+                if (std::abs(b->v) < 1e-12) return std::nullopt;   // nothing divides by zero
+                if (b->len && !a->len) return std::nullopt;        // a number over a length: not a length
+                a = Qty{a->v / b->v, a->len && !b->len};
+            } else {
+                if (a->len && b->len) return std::nullopt;         // a length times a length: an area
+                a = Qty{a->v * b->v, a->len || b->len};
+            }
+        }
+        return a;
+    }
+    // In a sum, a bare number beside a length is a length in `unit`.
+    std::optional<Qty> sum() {
+        auto a = product();
+        while (a && (peek() == '+' || peek() == '-')) {
+            const char op = t[i++];
+            auto b = product();
+            if (!b) return std::nullopt;
+            const double x = a->len || percent ? a->v : a->v * unit, y = b->len || percent ? b->v : b->v * unit;
+            a = Qty{op == '+' ? x + y : x - y, !percent};
+        }
+        return a;
+    }
+};
+
+std::optional<double> parse_sum(std::string_view text, double unit, std::optional<double> now, bool percent) {
+    SumParser p;
+    for (char c : text) if (!std::isspace(static_cast<unsigned char>(c))) p.t += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (p.t.empty()) return std::nullopt;
+    p.unit = unit;
+    p.percent = percent;
+    // "+6", "*2", "/3": on the value the field has ("-6" is minus six)
+    if (now && (p.t[0] == '+' || p.t[0] == '*' || p.t[0] == 'x' || p.t[0] == '/')) {
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%.6f%s", percent ? *now : *now, percent ? "" : "pt");
+        p.t = std::string(buf) + p.t;
+    }
+    auto q = p.sum();
+    if (!q || p.more()) return std::nullopt;
+    return q->len || percent ? q->v : q->v * unit;
+}
+}  // namespace
+
+std::optional<double> parse_length(std::string_view text, double unit, std::optional<double> now) {   // s349
+    return parse_sum(text, unit, now, false);
+}
+
+std::optional<double> parse_percent(std::string_view text, std::optional<double> now) {   // s349
+    const auto v = parse_sum(text, 1, now, true);
+    if (v && *v < 0) return std::nullopt;   // a percentage is never below nothing
+    return v;
 }
 
 std::string num_text(double v) {
@@ -1015,9 +1090,12 @@ std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int 
                                const Doc::Id& master) {
     std::vector<Doc::Id> made;
     if (count <= 0) return made;
-    j.run("Add " + plural(static_cast<std::size_t>(count), "page", "pages"), {}, [&] {
+    const Doc::Id first_prev = after.empty() && !d.pages().empty() ? d.pages().back() : after;
+    std::vector<Doc::Id> touched;   // s354: the frame the body's thread runs on from
+    if (const auto f = body_thread_from(d, first_prev); !f.empty()) touched.push_back(f);
+    j.run("Add " + plural(static_cast<std::size_t>(count), "page", "pages"), touched, [&] {
         const auto& s = d.settings();
-        Doc::Id prev = after.empty() && !d.pages().empty() ? d.pages().back() : after;
+        Doc::Id prev = first_prev;
         for (int i = 0; i < count; ++i) {
             const Doc::Id id = d.fresh_id("page");
             Page pg;
@@ -1030,7 +1108,9 @@ std::vector<Doc::Id> add_pages(DocJournal& j, Doc& d, const Doc::Id& after, int 
             made.push_back(id);
             prev = id;
         }
-        return made;
+        auto out = made;   // s354: the body's frames threaded on through them
+        for (auto& f : thread_new_pages(d, made)) out.push_back(f);
+        return out;
     });
     return made;
 }
@@ -1041,7 +1121,10 @@ std::vector<Doc::Id> insert_pages(DocJournal& j, Doc& d, const Doc::Id& before, 
     if (before.empty() || it == order.end()) return add_pages(j, d, "", count, master);
     std::vector<Doc::Id> made;
     if (count <= 0) return made;
-    j.run("Insert " + plural(static_cast<std::size_t>(count), "page", "pages"), {}, [&] {
+    std::vector<Doc::Id> touched;   // s354: the frame the body's thread runs on from
+    if (it != order.begin())
+        if (const auto f = body_thread_from(d, *(it - 1)); !f.empty()) touched.push_back(f);
+    j.run("Insert " + plural(static_cast<std::size_t>(count), "page", "pages"), touched, [&] {
         const auto& s = d.settings();
         const double hi = d.as<Page>(*it)->pos;
         const double lo = it == order.begin() ? hi - 1.0 : d.as<Page>(*(it - 1))->pos;
@@ -1056,7 +1139,9 @@ std::vector<Doc::Id> insert_pages(DocJournal& j, Doc& d, const Doc::Id& before, 
             d.put(id, pg);
             made.push_back(id);
         }
-        return made;
+        auto out = made;   // s354: the body's frames threaded on through them
+        for (auto& f : thread_new_pages(d, made)) out.push_back(f);
+        return out;
     });
     return made;
 }
@@ -3374,6 +3459,16 @@ bool set_language(DocJournal& j, Doc& d, const std::string& lang) {   // s307
     });
 }
 
+bool set_grid_view(DocJournal& j, Doc& d, int percent) {   // s353
+    percent = std::clamp(percent, 0, 1000);
+    if (percent == d.settings().grid_view) return false;
+    return j.run("Grid view threshold", {"doc"}, [&] {
+        Settings s = d.settings();
+        s.grid_view = percent;
+        d.put("doc", s);
+    });
+}
+
 bool replace_word(DocJournal& j, Doc& d, const Doc::Id& story, int para, int from, int to, const std::string& was,
                   const std::string& with) {   // s307
     const auto* st = d.as<Story>(story);
@@ -3509,6 +3604,62 @@ bool set_master_size(DocJournal& j, Doc& d, const Doc::Id& master, double w, dou
             d.put(ids[i], pg);
         }
     });
+}
+
+std::pair<double, double> book_page_size(const Doc& d) {   // s354
+    std::map<std::pair<long, long>, std::size_t> by;   // hundredths of a point
+    const auto key = [](double w, double h) { return std::pair<long, long>{std::lround(w * 100), std::lround(h * 100)}; };
+    for (const auto& p : d.pages())
+        if (const auto* m = d.as<Master>(d.as<Page>(p)->master)) ++by[key(m->w, m->h)];
+    if (by.empty())
+        for (const auto& mid : d.ids_of<Master>()) ++by[key(d.as<Master>(mid)->w, d.as<Master>(mid)->h)];
+    if (by.empty()) return {d.settings().trim_w, d.settings().trim_h};
+    auto best = by.begin();
+    for (auto it = by.begin(); it != by.end(); ++it) if (it->second > best->second) best = it;
+    return {best->first.first / 100.0, best->first.second / 100.0};
+}
+
+bool set_book_page_size(DocJournal& j, Doc& d, double w, double h) {   // s354
+    if (w < 36 || h < 36 || w > 5000 || h > 5000) return false;
+    const auto [ow, oh] = book_page_size(d);
+    if (std::abs(w - ow) < 1e-9 && std::abs(h - oh) < 1e-9) return false;
+    const auto at = [&](double x, double y) { return std::abs(x - ow) < 0.01 && std::abs(y - oh) < 0.01; };
+    std::vector<Doc::Id> ids{"doc"};
+    std::set<Doc::Id> masters;
+    for (const auto& mid : d.ids_of<Master>())
+        if (at(d.as<Master>(mid)->w, d.as<Master>(mid)->h)) { ids.push_back(mid); masters.insert(mid); }
+    for (const auto& p : d.pages())
+        if (const auto* pg = d.as<Page>(p); masters.count(pg->master) && at(pg->w, pg->h)) ids.push_back(p);
+    const double kx = w / ow;
+    return j.run("Page size " + inches(w) + " \u00d7 " + inches(h) + " in", ids, [&] {
+        Settings st = d.settings();
+        st.trim_w = w;
+        st.trim_h = h;
+        d.put("doc", st);
+        for (const auto& id : ids) {
+            if (const auto* m = d.as<Master>(id)) {
+                Master ms = *m;
+                ms.w = w;
+                ms.h = h;
+                for (auto& f : ms.folds) f *= kx;
+                d.put(id, ms);
+            } else if (const auto* p = d.as<Page>(id)) {
+                Page pg = *p;
+                pg.w = w;
+                pg.h = h;
+                for (auto& f : pg.folds) f *= kx;
+                d.put(id, pg);
+            }
+        }
+    });
+}
+
+const std::vector<SizePreset>& book_trims() {   // s354: the usual book sizes (points)
+    static const std::vector<SizePreset> t{
+        {"5 \u00d7 8 in", 360, 576, {}},      {"5.25 \u00d7 8 in", 378, 576, {}}, {"5.5 \u00d7 8.5 in", 396, 612, {}},
+        {"6 \u00d7 9 in", 432, 648, {}},      {"7 \u00d7 10 in", 504, 720, {}},   {"8.5 \u00d7 11 in (Letter)", 612, 792, {}},
+        {"A5 (148 \u00d7 210 mm)", 419.53, 595.28, {}}, {"A4 (210 \u00d7 297 mm)", 595.28, 841.89, {}}};
+    return t;
 }
 
 bool set_master_bleed(DocJournal& j, Doc& d, const Doc::Id& master, double bleed) {   // s147
@@ -8075,7 +8226,46 @@ Rect margin_rect(const Doc& d, const Doc::Id& id, Side side) {
 BaselineGrid baseline_grid(const Doc& d, const Doc::Id& id) {
     const auto* m = master_of(d, id);
     if (!m || m->grid < 1) return {};
-    return {margins_of(d, id)->top, m->grid};   // s062: from the page's own top margin
+    // s062: from the page's own top margin; s350: or the page's top, and its start below that
+    return {(m->grid_from_page ? 0.0 : margins_of(d, id)->top) + m->grid_start, m->grid};
+}
+
+const std::vector<GridColour>& grid_colours() {   // s353
+    static const std::vector<GridColour> all{
+        {"", "Light Blue", 0.35, 0.60, 0.95}, {"cyan", "Cyan", 0.00, 0.70, 0.85}, {"magenta", "Magenta", 0.85, 0.20, 0.70},
+        {"green", "Green", 0.20, 0.65, 0.30}, {"orange", "Orange", 0.95, 0.55, 0.10}, {"red", "Red", 0.85, 0.20, 0.20},
+        {"grey", "Grey", 0.55, 0.55, 0.55}};
+    return all;
+}
+
+const GridColour& grid_colour(const std::string& key) {
+    for (const auto& c : grid_colours()) if (c.key == key) return c;
+    return grid_colours().front();
+}
+
+Doc::Id master_id_of(const Doc& d, const Doc::Id& id) {   // s353
+    if (d.as<Master>(id)) return id;
+    if (const auto* p = d.as<Page>(id)) return d.as<Master>(p->master) ? p->master : Doc::Id{};
+    if (const auto* f = d.as<Frame>(id)) return f->owner == id ? Doc::Id{} : master_id_of(d, f->owner);
+    return {};
+}
+
+double body_leading(const Doc& d, const Doc::Id& story) {   // s353
+    const auto* st = d.as<Story>(story);
+    if (!st) return 0;
+    std::map<std::string, std::size_t> bytes;
+    for (const auto& p : st->paras) bytes[p.style] += p.text.size();
+    std::string best;
+    std::size_t most = 0;
+    for (const auto& [sid, n] : bytes) if (n > most) { most = n; best = sid; }
+    // the style's leading, else its base's
+    for (int hop = 0; hop < 16 && !best.empty(); ++hop) {
+        const auto* sty = d.as<Style>(best);
+        if (!sty) break;
+        if (sty->leading > 0) return sty->leading;
+        best = sty->based_on;
+    }
+    return 0;
 }
 
 std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& id) {

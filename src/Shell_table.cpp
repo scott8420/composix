@@ -1,3 +1,4 @@
+#include "views/Math.hpp"
 #include "Shell.hpp"
 
 #include "Log.hpp"
@@ -71,8 +72,11 @@ void Shell::on_insert_table() {  // handler
         box->append(*r);
     };
     auto rows = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(4, 1, 500, 1, 5), 1, 0);
+    views::allow_math(*rows);   // s349: math in the field
     auto cols = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(3, 1, 50, 1, 2), 1, 0);
+    views::allow_math(*cols);   // s349: math in the field
     auto heads = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(1, 0, 20, 1, 1), 1, 0);
+    views::allow_math(*heads);   // s349: math in the field
     rows->set_name("table.rows");
     cols->set_name("table.cols");
     heads->set_name("table.heads");
@@ -265,6 +269,7 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
         // the columns' widths over them (points)
         for (int c = 0; c < C; ++c) {
             auto sb = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->widths[static_cast<std::size_t>(c)], 12, 2000, 1, 9), 1, 1);
+            views::allow_math(*sb);   // s349: math in the field
             sb->set_name("table.width." + std::to_string(c));
             sb->set_tooltip_text("This column's width, points (the next column gives the difference)");
             sb->signal_value_changed().connect([work, sb, c, grid] {
@@ -293,6 +298,7 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
     hl->set_margin_start(12);
     bar->append(*hl);
     auto heads = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->header_rows, 0, 20, 1, 1), 1, 0);
+    views::allow_math(*heads);   // s349: math in the field
     heads->set_name("table.heads");
     heads->signal_value_changed().connect([keep, fill, work, heads] {
         keep();
@@ -304,6 +310,7 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
     fl2->set_margin_start(12);
     bar->append(*fl2);
     auto feet = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->footer_rows, 0, 20, 1, 1), 1, 0);
+    views::allow_math(*feet);   // s349: math in the field
     feet->set_name("table.feet");
     feet->set_tooltip_text("The table's last rows, set again at the foot of each column it breaks across");
     feet->signal_value_changed().connect([keep, fill, work, feet] {
@@ -316,6 +323,7 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
     gl->set_margin_start(12);
     bar->append(*gl);
     auto weight = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->rule_w, 0, 6, 0.25, 1), 0.25, 2);
+    views::allow_math(*weight);   // s349: math in the field
     weight->set_name("table.rule_w");
     weight->set_tooltip_text("The grid's lines, points (0: none)");
     weight->signal_value_changed().connect([work, weight] { work->rule_w = weight->get_value(); });
@@ -353,12 +361,14 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
         bd->set_selected(sw_index(work->band_fill));
         fb->append(*bd);
         auto bt = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->band_tint * 100, 5, 100, 5, 10), 5, 0);
+        views::allow_math(*bt);   // s349: math in the field
         bt->set_name("table.band_tint");
         bt->set_tooltip_text("The bands' tint, percent");
         fb->append(*bt);
         auto el = Gtk::make_managed<Gtk::Label>("% every");
         fb->append(*el);
         auto be = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->band_every, 1, 9, 1, 1), 1, 0);
+        views::allow_math(*be);   // s349: math in the field
         be->set_name("table.band_every");
         be->set_tooltip_text("Rows in a band (1: every other row)");
         fb->append(*be);
@@ -415,6 +425,7 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
         rl->set_margin_start(12);
         cb->append(*rl);
         auto rh = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(0, 0, 2000, 1, 12), 1, 1);
+        views::allow_math(*rh);   // s349: math in the field
         rh->set_name("table.row_h");
         rh->set_tooltip_text("The picked cell's row at least this tall, points (0: as its words need)");
         cb->append(*rh);
@@ -426,6 +437,7 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
         cf->set_tooltip_text("The picked cell's own fill (None: the header's or the rows')");
         cb->append(*cf);
         auto ct = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(100, 5, 100, 5, 10), 5, 0);
+        views::allow_math(*ct);   // s349: math in the field
         ct->set_name("table.cell_tint");
         ct->set_tooltip_text("The cell fill's tint, percent");
         cb->append(*ct);
@@ -482,6 +494,7 @@ void Shell::open_table_editor(const std::string& story, int para, int focus_row,
         sides->set_tooltip_text("Which of the picked cell's sides (an edge it shares is one line: the cell across it takes the same)");
         bb->append(*sides);
         auto bw = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(work->rule_w, 0, 12, 0.25, 1), 0.25, 2);
+        views::allow_math(*bw);   // s349: math in the field
         bw->set_name("table.border_w");
         bw->set_tooltip_text("The border's weight, points (0: none on those sides)");
         bb->append(*bw);

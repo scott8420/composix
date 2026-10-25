@@ -403,7 +403,7 @@ void part1() {
         check("shared: read-only stays read-only", get(two, "Folio")->edit.empty());
         const auto cross = core::shared_fields({o.find("page.6"), o.find("master.2")});
         check("shared: across segments only common labels survive",
-              cross.empty());   // s148: a master's "Size (in)" is its own row now -- nothing in common with a page's
+              std::all_of(cross.begin(), cross.end(), [](const core::Field& f) { return f.edit.rfind("mgrid", 0) == 0 || f.label == "Snaps"; }));   // s148: a master's "Size (in)" is its own row; s353: only the master's grid, shown on both
         check("shared: empty selection -> nothing", core::shared_fields({}).empty());
 
         check("title: one item", core::selection_title({fo}) == "Page 7");

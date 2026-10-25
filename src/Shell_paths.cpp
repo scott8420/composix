@@ -2,6 +2,7 @@
 // exclude the picked shapes); s215: Offset Path (a window: how far, which
 // corners, keep the original) and Outline Stroke (a line's stroke made a
 // filled shape). The work is core::doc (core/Pathfinder.hpp).
+#include "views/Math.hpp"
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "core/Pathfinder.hpp"
@@ -71,6 +72,7 @@ void Shell::on_offset_path() {  // handler
             return r;
         };
         auto dist = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(6, -500, 500, 0.5, 6), 1, 2);
+        views::allow_math(*dist);   // s349: math in the field
         dist->set_name("offset.distance");
         dist->set_tooltip_text("Points out from the outline (below 0: in)");
         auto joins = Gtk::make_managed<Gtk::DropDown>(Gtk::StringList::create({"Mitre", "Round", "Bevel"}));
@@ -142,11 +144,14 @@ void Shell::on_step_repeat() {  // handler
     const double across0 = m_settings.count("step.dx") ? std::atof(m_settings["step.dx"].c_str()) : 0.25 * 72;
     const double down0 = m_settings.count("step.dy") ? std::atof(m_settings["step.dy"].c_str()) : 0.25 * 72;
     auto count = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(count0, 1, 500, 1, 5), 1, 0);
+    views::allow_math(*count);   // s349: math in the field
     count->set_name("step.count");
     const int digits = U >= 72 ? 3 : U >= 12 ? 2 : 1;
     auto across = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(across0 / U, -5000 / U, 5000 / U, 1.0 / (U >= 72 ? 16 : 1), 1), 1, digits);
+    views::allow_math(*across, U);   // s349: math in the field
     across->set_name("step.across");
     auto down = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(down0 / U, -5000 / U, 5000 / U, 1.0 / (U >= 72 ? 16 : 1), 1), 1, digits);
+    views::allow_math(*down, U);   // s349: math in the field
     down->set_name("step.down");
     box->append(*row("Copies", *count));
     box->append(*row("Across (" + un + ")", *across));

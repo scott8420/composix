@@ -1,3 +1,4 @@
+#include "views/Math.hpp"
 #include "Shell.hpp"
 #include "Log.hpp"
 
@@ -75,6 +76,7 @@ void Shell::open_notes_panel() {  // helper
         };
         const auto spin = [](const char* name, double lo, double hi, double step, int digits) {
             auto s = Gtk::make_managed<Gtk::SpinButton>(Gtk::Adjustment::create(lo, lo, hi, step, step * 4, 0), step, digits);
+            views::allow_math(*s);   // s349: math in the field
             s->set_name(name);
             s->set_numeric(true);
             return s;

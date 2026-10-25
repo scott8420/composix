@@ -103,11 +103,14 @@ Gtk::Entry* Inspector::typed_entry(const std::string& name, const std::string& v
         if (m_painting) return;
         const std::string text = en->get_text();
         if (text == *shown || text.empty()) { en->remove_css_class("error"); return; }
-        const auto v = percent ? core::parse_percent(text) : core::parse_length(text, unit);
+        // s349: arithmetic -- "12+6", "1in - 6pt", "3p6*2"; a leading + * / works on what it showed
+        std::optional<double> now;
+        if (!shown->empty()) now = percent ? core::parse_percent(*shown) : core::parse_length(*shown, unit);
+        const auto v = percent ? core::parse_percent(text, now) : core::parse_length(text, unit, now);
         if (!v || *v < lo - 1e-9 || *v > hi + 1e-9) {
             en->add_css_class("error");
-            en->set_tooltip_text(percent ? "Type a percentage -- " + core::num_text(lo) + " to " + core::num_text(hi) + ", as 40 or 40%"
-                                         : std::string("Type a length -- 12, 12 pt, 1.5 in, 3p6, 10 mm"));
+            en->set_tooltip_text(percent ? "Type a percentage -- " + core::num_text(lo) + " to " + core::num_text(hi) + ", as 40, 40% or a sum (50+10, +5)"
+                                         : std::string("Type a length -- 12, 12 pt, 1.5 in, 3p6, 10 mm -- or a sum: 1in + 6pt, 3p6*2, +6, /2"));
             return;
         }
         en->remove_css_class("error");

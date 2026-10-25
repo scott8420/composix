@@ -1,3 +1,4 @@
+#include "views/Math.hpp"
 #include "Shell.hpp"
 #include "Log.hpp"
 #include "layout/ColorReport.hpp"
@@ -252,6 +253,7 @@ void Shell::open_swatch_editor(const std::string& id) {  // helper
             sc->set_hexpand(true);
             sc->set_size_request(200, -1);
             auto sp = Gtk::make_managed<Gtk::SpinButton>();
+            views::allow_math(*sp);   // s349: math in the field
             sp->set_name("swatch.value." + std::to_string(k));
             sp->set_range(0, 100);
             sp->set_increments(1, 10);

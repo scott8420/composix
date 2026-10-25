@@ -1321,6 +1321,19 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     if (b.pictures > info.placed)
         info.notes_said.push_back(std::to_string(b.pictures - info.placed) + (b.pictures - info.placed == 1 ? " picture" : " pictures") + " left out -- place them");
     if (b.contents) info.notes_said.push_back("its contents / index left out -- build one from the styles");
+    {   // s352: the body's page frames follow a body frame on their masters (kept to the margins)
+        std::vector<Doc::Id> made;
+        if (d.as<core::Story>("story.1")) (void)core::doc::body_frames_into(d, "story.1", made);
+    }
+    // s353 (G3): a baseline grid on every master at the body text's leading --
+    // there to see and to lock styles to (nothing snaps till a style says so).
+    if (const double lead = core::body_leading(d, "story.1"); lead >= 1)
+        for (const auto& mid : d.ids_of<core::Master>()) {
+            core::Master m = *d.as<core::Master>(mid);
+            if (m.grid >= 1) continue;
+            m.grid = std::round(lead * 100) / 100;
+            d.put(mid, m);
+        }
     report(1.0, "Done");
     return true;
 }

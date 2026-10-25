@@ -217,6 +217,7 @@ private:
     void refresh();                               // category: helper: re-project; every view repaints, keeping its place
     void show_pick(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper
     void show_pick_now(const views::Pick& p, const std::vector<std::string>& keep_tiles);  // category: helper: s068 -- show_pick, before the Up button
+    std::vector<std::string> grid_masters() const;   // category: helper: s353 -- the masters of what's inspected
     bool open_project(const std::string& dir);    // category: helper: load + reset the journal + views
     // s102: a progress dialog in front of long work (Shell_busy.cpp).
     using Report = std::function<void(double fraction, const std::string& line)>;

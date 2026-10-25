@@ -43,11 +43,28 @@ using LayoutPtr = std::unique_ptr<PangoLayout, LayoutDel>;
 // footnote marks know their numbers (counted through the story).
 thread_local const core::Story* tl_story = nullptr;
 thread_local const core::Doc* tl_doc = nullptr;   // s124: chapter numbering reads its starts
+// s348: each paragraph's span / split, read once a flow (every frame asked
+// for every paragraph after it -- a Style copied each time: frames x
+// paragraphs of them, a second on a 300-page novel).
+struct BandFlags {
+    const core::Story* st = nullptr;
+    const core::Doc* d = nullptr;
+    std::vector<signed char> span, split;   // split: its sub-columns (0 none)
+};
+thread_local BandFlags* tl_bands = nullptr;
 struct StoryScope {
     const core::Story* prev;
     const core::Doc* prev_d;
-    StoryScope(const core::Doc& d, const core::Story* s) : prev(tl_story), prev_d(tl_doc) { tl_story = s; tl_doc = &d; }
-    ~StoryScope() { tl_story = prev; tl_doc = prev_d; }
+    BandFlags* prev_bands;
+    BandFlags bands;
+    StoryScope(const core::Doc& d, const core::Story* s) : prev(tl_story), prev_d(tl_doc), prev_bands(tl_bands) {
+        tl_story = s;
+        tl_doc = &d;
+        bands.st = s;
+        bands.d = &d;
+        tl_bands = &bands;
+    }
+    ~StoryScope() { tl_story = prev; tl_doc = prev_d; tl_bands = prev_bands; }
 };
 int first_note_of(const core::Para& p) {
     if (tl_story && !tl_story->paras.empty() && &p >= tl_story->paras.data() &&
@@ -478,26 +495,51 @@ TableGeo table_geo(const core::Doc& d, const core::Para& tp, double avail) {
     return g;
 }
 
+// s348: every story's thread worked out in one pass over the frames, kept
+// for the document's revision (a page's markers resolved story by story,
+// page by page asked for it hundreds of times a change -- each a scan of
+// every frame, the head found in a scan of the thread for each frame).
 std::vector<std::string> thread_frames(const core::Doc& d, const std::string& story) {
-    std::vector<std::string> mine;
-    for (const auto& id : d.ids_of<core::Frame>()) {
-        const auto& f = *d.as<core::Frame>(id);
-        if (f.kind == core::FrameKind::Text && f.story == story) mine.push_back(id);
+    struct Threads {
+        std::uint64_t serial = 0, rev = ~0ull;
+        std::map<std::string, std::vector<std::string>> by_story;
+    };
+    thread_local Threads tl;
+    if (tl.serial != d.serial() || tl.rev != d.revision()) {   // (the Doc's own number: not its address -- s348's first try met a new Doc where an old one had been)
+        tl = Threads{d.serial(), d.revision(), {}};
+        std::map<std::string, std::vector<std::string>> mine;
+        std::set<std::string> pointed;
+        for (const auto& id : d.ids_of<core::Frame>()) {
+            const auto& f = *d.as<core::Frame>(id);
+            if (f.kind != core::FrameKind::Text || f.story.empty()) continue;
+            mine[f.story].push_back(id);
+            if (!f.next.empty()) pointed.insert(f.next);
+        }
+        for (const auto& [sid, frames] : mine) {
+            std::string head;
+            for (const auto& o : frames)
+                if (!pointed.count(o)) { head = o; break; }
+            // (a frame of another story pointing here doesn't make it a middle: check the pointer's story)
+            if (head.empty())
+                for (const auto& o : frames) {
+                    bool by_own = false;
+                    for (const auto& q : frames) by_own = by_own || d.as<core::Frame>(q)->next == o;
+                    if (!by_own) { head = o; break; }
+                }
+            std::vector<std::string> out;
+            std::set<std::string> seen;
+            for (std::string k = head; !k.empty() && out.size() <= frames.size();) {
+                const auto* f = d.as<core::Frame>(k);
+                if (!f || seen.count(k)) break;   // a broken or looping thread stops
+                out.push_back(k);
+                seen.insert(k);
+                k = f->next;
+            }
+            tl.by_story.emplace(sid, std::move(out));
+        }
     }
-    std::string head;
-    for (const auto& o : mine) {
-        bool pointed = false;
-        for (const auto& q : mine) pointed = pointed || d.as<core::Frame>(q)->next == o;
-        if (!pointed) { head = o; break; }
-    }
-    std::vector<std::string> out;
-    for (std::string k = head; !k.empty() && out.size() <= mine.size();) {
-        const auto* f = d.as<core::Frame>(k);
-        if (!f || std::find(out.begin(), out.end(), k) != out.end()) break;   // a broken or looping thread stops
-        out.push_back(k);
-        k = f->next;
-    }
-    return out;
+    const auto it = tl.by_story.find(story);
+    return it == tl.by_story.end() ? std::vector<std::string>{} : it->second;
 }
 
 namespace {
@@ -622,6 +664,29 @@ double baseline_in_box(const core::Style& style, double lead) {
     return off;
 }
 
+// s348 (Scott: "sluggish with 305 pages"): a line set alone took a layout of
+// the WHOLE rest of its paragraph -- every line of a hyphenated paragraph
+// shaped the rest again (quadratic in its length). Its first line needs only
+// a slice reaching past that line: Pango breaks greedily, so the text after
+// the break doesn't move it. A slice the line fills is doubled and set again.
+bool& slicing() { static bool on = true; return on; }
+LayoutPtr first_line_layout(const core::Doc& d, const core::Para& para, const core::Style& style, int pos, double w, double indent,
+                            int& took) {
+    const int len = static_cast<int>(para.text.size());
+    const int rest = len - pos;
+    const double size = style.size > 0 ? style.size : 11;
+    int n = slicing() ? std::max(64, static_cast<int>(w / (size * 0.22)) * 2) : rest;
+    for (;;) {
+        n = std::min(n, rest);
+        while (n < rest && n > 0 && (static_cast<unsigned char>(para.text[static_cast<std::size_t>(pos + n)]) & 0xC0) == 0x80) --n;   // a whole character
+        auto lay = make_layout(style, para.text.c_str() + pos, n, w, false, indent);
+        apply_runs(lay.get(), d, para, pos);
+        took = pango_layout_get_line_readonly(lay.get(), 0)->length;
+        if (n >= rest || took < n) return lay;
+        n *= 2;   // the line took the whole slice: it may reach further
+    }
+}
+
 bool touches(const std::vector<core::WrapRect>& wraps, double x0, double x1) {
     return std::any_of(wraps.begin(), wraps.end(), [&](const core::WrapRect& r) { return r.x1 > x0 && r.x0 < x1; });
 }
@@ -639,9 +704,8 @@ int lines_left(const core::Doc& d, const core::Para& para, const core::Style& st
     }
     int n = 0, run = 0;   // s065: hyphens in a row
     for (int pos = from; pos < len && n < 1000; ++n) {
-        auto lay = make_layout(style, para.text.c_str() + pos, len - pos, w, false);
-        apply_runs(lay.get(), d, para, pos);
-        int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
+        int took = 0;
+        auto lay = first_line_layout(d, para, style, pos, w, 0, took);   // s348: a slice, not the whole rest
         const bool may = style.hyph_limit <= 0 || run < style.hyph_limit;
         int cut = style.hyphenate && may ? hyphen_cut(d, para, style, pos, took, w, 0) : 0;
         if (cut > 0 && core::keep_together(para.text, nb, pos, cut) != cut) cut = 0;   // s075: not inside a no-break span
@@ -1395,10 +1459,8 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
                         const double x1 = sp.x1 - (sp.x1 >= cx + cw - 0.01 ? ind.right : 0);
                         const double w = std::max(1.0, x1 - x0);
                         const NoteFirst nf(next_num());   // s111
-                        auto lay = make_layout(style, para.text.c_str() + pos, len - pos, w, false,
-                                               pos == 0 ? std::max(0.0, ind.first) : 0);
-                        apply_runs(lay.get(), d, para, pos);
-                        int took = pango_layout_get_line_readonly(lay.get(), 0)->length;
+                        int took = 0;
+                        auto lay = first_line_layout(d, para, style, pos, w, pos == 0 ? std::max(0.0, ind.first) : 0, took);   // s348
                         const bool may = style.hyph_limit <= 0 || hy_run < style.hyph_limit;
                         int cut = style.hyphenate && may ? hyphen_cut(d, para, style, pos, took, w,
                                                                       pos == 0 ? std::max(0.0, ind.first) : 0) : 0;
@@ -1488,14 +1550,31 @@ bool fill_cols(const core::Doc& d, const core::Story& st, const core::Frame& fr,
 // filled, then again with the room the notes took kept in every column,
 // until it holds (a few times at most; the last keeps the most it needed).
 // s166: is paragraph p one that spans the columns?
+// s348: the flags of the story being flowed, worked out at the first ask.
+const BandFlags* band_flags(const core::Doc& d, const core::Story& st) {
+    if (!tl_bands || tl_bands->st != &st || tl_bands->d != &d) return nullptr;
+    if (tl_bands->span.size() != st.paras.size()) {
+        tl_bands->span.assign(st.paras.size(), 0);
+        tl_bands->split.assign(st.paras.size(), 0);
+        for (std::size_t p = 0; p < st.paras.size(); ++p) {
+            const auto sty = style_of(d, st.paras[p]);
+            tl_bands->span[p] = sty.span ? 1 : 0;
+            tl_bands->split[p] = static_cast<signed char>(sty.split >= 2 ? std::min(sty.split, 100) : 0);
+        }
+    }
+    return tl_bands;
+}
 bool spans(const core::Doc& d, const core::Story& st, int p) {
-    return p >= 0 && p < static_cast<int>(st.paras.size()) && style_of(d, st.paras[static_cast<std::size_t>(p)]).span;
+    if (p < 0 || p >= static_cast<int>(st.paras.size())) return false;
+    if (const auto* b = band_flags(d, st)) return b->span[static_cast<std::size_t>(p)] != 0;
+    return style_of(d, st.paras[static_cast<std::size_t>(p)]).span;
 }
 
 // s183 (G1): paragraph p's sub-columns when it splits (a one-column
 // frame's; 0 = not split).
 int splits(const core::Doc& d, const core::Story& st, const core::Frame& fr, int p) {
     if (core::column_count(fr) != 1 || p < 0 || p >= static_cast<int>(st.paras.size())) return 0;
+    if (const auto* b = band_flags(d, st)) return b->split[static_cast<std::size_t>(p)];   // s348
     const int k = style_of(d, st.paras[static_cast<std::size_t>(p)]).split;
     return k >= 2 ? k : 0;
 }
@@ -1746,10 +1825,11 @@ void vertical_justify(const core::Doc& d, const core::Story& st, const core::Fra
     if (!ft.notes.empty()) return;   // s109: the notes hold the foot
     if (std::any_of(ft.lines.begin(), ft.lines.end(), [](const Line& l) { return l.band > 0; })) return;   // s166: in bands
     if (!wraps.empty() || (fr.balance && core::column_count(fr) > 1)) return;
-    if (fr.rot == 0 && core::baseline_grid(d, fr.owner).step > 0)
-        for (const auto& l : ft.lines)
-            if (l.para < static_cast<int>(st.paras.size()) &&
-                style_of(d, st.paras[static_cast<std::size_t>(l.para)]).align_grid) return;
+    // s350 (Scott: headers / footers): a frame set Centre / Bottom / Justify
+    // has its say over the baseline grid -- its lines move off it (was: the
+    // grid won, and the frame's Vertical did nothing).
+    (void)d;
+    (void)st;
     const double bottom = fr.h - std::max(0.0, fr.inset.bottom);
     for (int col = 0; col < core::column_count(fr); ++col) {
         std::vector<Line*> ls;
@@ -1802,7 +1882,7 @@ struct Prev {   // s105
 // PLAIN (no other frame's notes reserved -- no story waits on another's).
 namespace {
 thread_local bool tl_foot_plain = false;
-struct FootCache { const core::Doc* d = nullptr; std::uint64_t rev = ~0ull; std::map<std::string, StoryFlow> flows; };
+struct FootCache { std::uint64_t serial = 0; std::uint64_t rev = ~0ull; std::map<std::string, StoryFlow> flows; };   // s348: by the Doc's serial, not its address
 thread_local FootCache tl_foot;
 
 bool notes_away(const core::Doc& d, const core::Frame& f) {
@@ -1822,7 +1902,7 @@ bool story_has_notes(const core::Doc& d, const std::string& story) {
 double away_height(const core::Doc& d, const std::string& fid) {
     const auto* f = d.as<core::Frame>(fid);
     if (!f) return 0;
-    if (tl_foot.d != &d || tl_foot.rev != d.revision()) { tl_foot = {}; tl_foot.d = &d; tl_foot.rev = d.revision(); }
+    if (tl_foot.serial != d.serial() || tl_foot.rev != d.revision()) { tl_foot = {}; tl_foot.serial = d.serial(); tl_foot.rev = d.revision(); }
     auto it = tl_foot.flows.find(f->story);
     if (it == tl_foot.flows.end()) {
         const bool was = tl_foot_plain;
@@ -3588,17 +3668,25 @@ RunningHeads running_heads(const core::Doc& d, FlowCache& flows) {   // s240
     return out;
 }
 
-Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page, const RunningHeads* heads) {
+Resolved resolve_story(const core::Doc& d, const std::string& story, const std::string& on_page, const RunningHeads* heads,
+                       const StoryFlow* plain_in, const Resolved* before) {
     Resolved r;
     const auto* st = d.as<core::Story>(story);
     if (!st || !core::has_markers(*st)) return r;
     r.any = true;
     r.text = *st;
-    // Where each marker is set (page frames): from the plain flow.
-    const StoryFlow plain = on_page.empty() ? flow_story(d, story) : StoryFlow{};
+    // Where each marker is set (page frames): from the plain flow -- the
+    // caller's (s348), else made at the first marker that asks.
+    std::optional<StoryFlow> made;
+    const auto plain_flow = [&]() -> const StoryFlow& {
+        if (plain_in) return *plain_in;
+        if (!made) made = on_page.empty() ? flow_story(d, story) : StoryFlow{};
+        return *made;
+    };
     std::map<std::string, StoryFlow> targets;   // s128: the stories references point into
-    if (on_page.empty()) targets.emplace(story, plain);
+    bool targets_set = false;
     const auto frame_of = [&](int para, int byte) -> std::string {
+        const StoryFlow& plain = plain_flow();
         for (const auto& ft : plain.frames)
             for (const auto& l : ft.lines)
                 if (l.para == para && byte >= l.start && byte < std::max(l.end, l.start + 1)) return ft.frame;
@@ -3621,6 +3709,7 @@ Resolved resolve_story(const core::Doc& d, const std::string& story, const std::
             if (k == 5) {   // s128: a cross-reference -- where its anchor is
                 const auto& refs = st->paras[static_cast<std::size_t>(p)].refs;
                 const int idx = core::marks_in(src, core::kMarkRef, 0, i);
+                if (!targets_set && on_page.empty()) { targets.emplace(story, plain_flow()); targets_set = true; }
                 v = idx < static_cast<int>(refs.size()) ? ref_value(d, refs[static_cast<std::size_t>(idx)], targets) : std::string("??");
                 r.refs.push_back({p, idx, static_cast<int>(out.size()), static_cast<int>(out.size() + v.size())});   // s131
             } else if (k == 6 || k == 7) {   // s134: an index entry -- nothing to see either
@@ -3647,7 +3736,12 @@ Resolved resolve_story(const core::Doc& d, const std::string& story, const std::
         std::erase_if(para.runs, [](const core::Run& x) { return x.end <= x.start; });
         para.text = std::move(out);
     }
-    r.flow = flow_text(d, story, r.text);
+    if (before && before->any) {   // s348: from the last resolve -- only what changed set again
+        const Prev prev{&before->text, &before->flow, 0};
+        r.flow = flow_impl(d, story, r.text, nullptr, nullptr, &prev);
+    } else {
+        r.flow = flow_text(d, story, r.text);
+    }
     return r;
 }
 
@@ -3859,16 +3953,101 @@ const std::vector<std::string>& font_families() {
     return list;
 }
 
+// s348: the key -- copies of the records it reads, and what it works out
+// from the rest (wraps, grids, margins), compared as values.
+StoryEnv story_env(const core::Doc& d, const std::string& story) {
+    StoryEnv k;
+    k.known = true;
+    const auto& recs = d.records();
+    const auto rec = [&](const std::string& id) {
+        if (const auto it = recs.find(id); it != recs.end()) k.records.emplace_back(id, it->second);
+        else k.records.emplace_back(id, core::Record{});
+    };
+    std::vector<std::string> owners;
+    for (const auto& fid : thread_frames(d, story)) {
+        const auto* f = d.as<core::Frame>(fid);
+        if (!f) continue;
+        rec(fid);
+        for (const auto& w : core::wrap_rects(d, fid)) k.numbers.insert(k.numbers.end(), {w.x0, w.y0, w.x1, w.y1, w.jump ? 1.0 : 0.0});
+        k.numbers.push_back(-1e300);   // (a frame's end)
+        if (std::find(owners.begin(), owners.end(), f->owner) == owners.end()) owners.push_back(f->owner);
+    }
+    for (const auto& o : owners) {   // (the page / master record itself: only what's worked out from it below)
+        const auto g = core::baseline_grid(d, o);
+        k.numbers.insert(k.numbers.end(), {g.start, g.step, static_cast<double>(d.side_of(o))});   // its side: a right-hand start (s252)
+        bool notes = false;
+        for (const auto& other : d.frames_on(o)) {
+            if (other != o) rec(other);   // its neighbours (a sidebar's foot)
+            if (const auto* of = d.as<core::Frame>(other); of && !notes)
+                if (const auto* os = d.as<core::Story>(of->story))
+                    for (const auto& p : os->paras) if (!p.notes.empty()) { notes = true; break; }
+        }
+        if (notes) {   // the margins decide a note's foot
+            const auto m = core::margin_rect(d, o);
+            k.numbers.insert(k.numbers.end(), {m.x, m.y, m.w, m.h});
+        }
+        k.numbers.push_back(-1e300);
+    }
+    return k;
+}
+
+// s348 (Scott: "very sluggish with 305 pages" setting margins and headers):
+// any change but text used to lay every story out again. Now a change to
+// frames, pages, masters, guides, swatches, table / cell styles keeps each
+// story whose surroundings (story_env) came out the same; a style's or the
+// settings' change (or a record of a kind not listed) still lays all out.
+bool FlowCache::check_by_env(const core::Doc& d, const std::vector<core::Doc::Id>& ids) {
+    static const std::set<std::string> local{"frame", "page", "master", "guide", "swatch", "story", "cellstyle", "tablestyle", "list"};
+    for (const auto& id : ids) {
+        const auto dot = id.find('.');
+        if (dot == std::string::npos || !local.count(id.substr(0, dot))) return false;   // a style, the settings, a layer ...: all
+    }
+    std::set<core::Doc::Id> edited;   // stories whose text changed
+    for (const auto& id : ids) if (id.rfind("story.", 0) == 0) edited.insert(id);
+    for (auto it = m_prev.begin(); it != m_prev.end();)   // a pending re-flow's basis: only among the same surroundings
+        if (!it->second.env.known || !(story_env(d, it->first) == it->second.env)) it = m_prev.erase(it); else ++it;
+    for (auto it = m_flows.begin(); it != m_flows.end();) {
+        const bool same_env = it->second.env.known && story_env(d, it->first) == it->second.env;
+        if (!same_env || !d.as<core::Story>(it->first)) { it = m_flows.erase(it); continue; }
+        if (edited.count(it->first)) {   // its own text: re-flowed from this flow (s105)
+            if (it->second.flow.provisional && it->second.basis && it->second.basis_text)
+                m_prev[it->first] = Entry{*it->second.basis, *it->second.basis_text, nullptr, nullptr, it->second.env};
+            else
+                m_prev[it->first] = std::move(it->second);
+            it = m_flows.erase(it);
+            continue;
+        }
+        ++it;
+    }
+    // s167: a story whose notes sit at a page's foot -- its neighbours there, whole
+    for (const auto& id : edited)
+        for (const auto& nb : foot_neighbours(d, id)) { m_flows.erase(nb); m_prev.erase(nb); }
+    // resolves: kept to re-flow from, for the stories still standing
+    for (auto& [key, v] : m_resolved) {
+        const auto story = key.substr(0, key.find('|'));
+        if (m_flows.count(story) || m_prev.count(story)) m_resolved_prev[key] = std::move(v);
+    }
+    return true;
+}
+
 void FlowCache::check(const core::Doc& d) {
     if (d.revision() == m_rev) return;
     // s105: when only stories' text changed since, the other stories' flows
     // still hold, and an edited one is re-flowed from its last flow.
     std::vector<core::Doc::Id> ids;
-    bool text_only = m_rev != ~0ull && d.changes_since(m_rev, ids);
+    const bool known = m_rev != ~0ull && d.changes_since(m_rev, ids);
+    bool text_only = known;
     for (std::size_t i = 0; text_only && i < ids.size(); ++i) text_only = d.as<core::Story>(ids[i]) != nullptr;
+    if (!text_only && known && check_by_env(d, ids)) {   // s348
+        m_resolved.clear();
+        m_heads.reset();
+        m_rev = d.revision();
+        return;
+    }
     if (!text_only) {
         m_flows.clear();
         m_prev.clear();
+        m_resolved_prev.clear();   // s348
     } else {
         // s167: a story whose notes sit at a page's foot -- the other stories on
         // those pages stop above them: flowed again, whole.
@@ -3877,6 +4056,9 @@ void FlowCache::check(const core::Doc& d) {
             for (const auto& nb : foot_neighbours(d, id))
                 if (std::find(ids.begin(), ids.end(), nb) == ids.end()) neighbours.push_back(nb);
         for (const auto& nb : neighbours) { m_flows.erase(nb); m_prev.erase(nb); }
+        // s348: every resolve kept to re-flow from (its text may change with
+        // any story's: references, running heads -- so all of them)
+        for (auto& [k, v] : m_resolved) m_resolved_prev[k] = std::move(v);
         for (const auto& id : ids)
             if (auto it = m_flows.find(id); it != m_flows.end()) {
                 // (an older prev of it is as good: either is a whole flow of its text.)
@@ -3906,7 +4088,14 @@ const Resolved& FlowCache::resolved(const core::Doc& d, const std::string& story
                     heads = m_heads.get();
                     break;
                 }
-        it = m_resolved.emplace(key, resolve_story(d, story, on_page, heads)).first;
+        // s348: the story's own flow from here (kept, re-flowed from edits) -- not made again;
+        // and an earlier resolve to re-flow from
+        const StoryFlow* plain = on_page.empty() && d.as<core::Story>(story) ? &get(d, story) : nullptr;
+        const Resolved* before = nullptr;
+        if (auto pv = m_resolved_prev.find(key); pv != m_resolved_prev.end()) before = &pv->second;
+        Resolved r = resolve_story(d, story, on_page, heads, plain, before);
+        if (before) m_resolved_prev.erase(key);
+        it = m_resolved.emplace(key, std::move(r)).first;
     }
     return it->second;
 }
@@ -3914,7 +4103,7 @@ const Resolved& FlowCache::resolved(const core::Doc& d, const std::string& story
 void FlowCache::put(const core::Doc& d, const std::string& story, StoryFlow f) {   // s102
     check(d);
     const auto* st = d.as<core::Story>(story);
-    m_flows[story] = Entry{std::move(f), st ? *st : core::Story{}};
+    m_flows[story] = Entry{std::move(f), st ? *st : core::Story{}, nullptr, nullptr, story_env(d, story)};   // s348: its key
     m_prev.erase(story);
 }
 
@@ -3935,7 +4124,7 @@ void FlowCache::complete(const core::Doc& d, const std::string& story, std::uint
                          core::Story text) {   // s106
     if (flow.provisional) return;
     if (rev == d.revision() && m_rev == rev) {
-        m_flows[story] = Entry{std::move(flow), std::move(text), nullptr, nullptr};
+        m_flows[story] = Entry{std::move(flow), std::move(text), nullptr, nullptr, story_env(d, story)};   // s348: its key
         m_prev.erase(story);
         m_resolved.clear();
         m_heads.reset();   // s240
@@ -3996,6 +4185,7 @@ const StoryFlow& FlowCache::get(const core::Doc& d, const std::string& story) {
     Entry e{{}, st ? *st : core::Story{}};
     if (auto pv = m_prev.find(story); pv != m_prev.end() && st) {
         e.flow = reflow_story(d, story, pv->second.text, pv->second.flow, m_budget);
+        e.env = pv->second.env;   // s348: the same surroundings (only its text changed)
         if (e.flow.provisional) {   // s106: keep what the whole is worked out from
             e.basis = std::make_shared<const StoryFlow>(std::move(pv->second.flow));
             e.basis_text = std::make_shared<const core::Story>(std::move(pv->second.text));
@@ -4006,8 +4196,11 @@ const StoryFlow& FlowCache::get(const core::Doc& d, const std::string& story) {
         e.flow = flow_story(d, story);
         m_how = How::Whole;
     }
+    if (!e.env.known) e.env = story_env(d, story);   // s348
     return m_flows.emplace(story, std::move(e)).first->second.flow;
 }
+
+void set_line_slicing(bool on) { slicing() = on; }   // s348
 
 std::vector<std::string> foot_neighbours(const core::Doc& d, const std::string& story) {   // s167
     return foot_neighbours_of(d, story);

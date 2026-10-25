@@ -32,6 +32,7 @@
 #include "core/Settings.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <cmath>
@@ -169,6 +170,9 @@ struct Settings {
     double      zero_x = 0, zero_y = 0;
     // s307: the language its words are checked in ("en_US"; "" = the app's).
     std::string language;
+    // s353 (G4): the zoom (percent) below which the baseline grid hides --
+    // InDesign's View Threshold; 0 = shown at any zoom it can be read.
+    int         grid_view = 0;
     bool operator==(const Settings&) const = default;
 };
 
@@ -209,6 +213,14 @@ struct Master {
     Margins             margins;         // s014
     double              gutter = 12;     // s014: between the page's columns
     double              grid = 0;        // s036: baseline grid increment (pt) from the top margin; 0 = none
+    // s350 (Scott: "how to set the baseline grid as far as where to start"):
+    // its first line `grid_start` points down from the top margin, or from
+    // the page's top (`grid_from_page`) -- InDesign's Start / Relative To.
+    double              grid_start = 0;
+    bool                grid_from_page = false;
+    // s353 (G4): the colour its grid is drawn in on screen ("" light blue;
+    // a name from grid_colours()) -- InDesign's per-master grid colour.
+    std::string         grid_color;
     // s147 (Scott: "each master should have all the settings"): its pages'
     // bleed and whether they face (a cover single, the body facing). Its
     // size is w / h above. A file from before: the document's, on loading.
@@ -337,6 +349,20 @@ struct Frame {
     std::string group;                   // s300: frames grouped share an id ("group.N"; "" none) -- picked and moved as one
     bool        locked = false;          // s301: not picked on the canvas, so not moved or changed by hand
     std::string layer;                   // s305: its layer's id ("" the bottom layer)
+    // s351 (Scott: "every text block is independent ... no relationship to
+    // the master pages"): a master's BODY frame (InDesign's primary text
+    // frame) -- a text frame on a master, one a side; and a page's text
+    // frame that FOLLOWS it -- its place, size, columns, inset and vertical
+    // set from its page's master's body frame (its side's, else Any's)
+    // whenever that changes, or the page changes master.
+    bool        body = false;
+    bool        follow_body = false;
+    // s352: a body frame that keeps to its master's margins (its side's):
+    // set the margins, it -- and so every page following it -- moves.
+    bool        fit_margins = false;
+    // the margins it was last fitted to (frame coordinates): a body frame
+    // moved by hand away from them stops keeping to them
+    double      fit_x = 0, fit_y = 0, fit_w = 0, fit_h = 0;
     bool operator==(const Frame&) const = default;
 };
 
@@ -842,6 +868,10 @@ public:
     // Bumped by every put / reset (s007): caches keyed on it (text flow) know
     // when to recompute.
     std::uint64_t revision() const { return m_rev; }
+    // s348: this document object's own number -- unique in the run, a copy
+    // gets a new one. With revision(): a key a cache can trust (a new Doc
+    // at a freed one's address can't pass for it).
+    std::uint64_t serial() const { return m_serial.v; }
     // s105: the ids written since revision `rev`, oldest first (repeats
     // kept) -- false when that's no longer known (long ago, or a reset).
     bool changes_since(std::uint64_t rev, std::vector<Id>& ids) const;
@@ -849,6 +879,13 @@ public:
 private:
     std::map<Id, Record>       m_recs;
     std::uint64_t              m_rev = 0;
+    struct Serial {
+        std::uint64_t v = next();
+        Serial() = default;
+        Serial(const Serial&) : v(next()) {}
+        Serial& operator=(const Serial&) { v = next(); return *this; }
+        static std::uint64_t next() { static std::atomic<std::uint64_t> n{1}; return n++; }
+    } m_serial;
     std::deque<std::pair<std::uint64_t, Id>> m_log;   // s105: (revision after, id), the last few thousand writes
     std::uint64_t              m_log_floor = 0;        // changes since a revision below this are not known
     std::map<std::string, int> m_next;   // fresh_id counters per prefix
@@ -886,6 +923,13 @@ std::string inches(double pt);                          // 432 -> "6", 423 -> "5
 // picas 6 points), "6p", "10 mm", "1.5cm". A bare number is in `unit`
 // points (1: points, 72: inches). Nothing (nullopt) if it isn't a length.
 std::optional<double> parse_length(std::string_view text, double unit = 1);
+// s349 (Scott: "we need to be able to do math in the number fields"): the
+// same, as arithmetic -- + - * / and ( ), each length in any unit ("1in +
+// 6pt", "3p6 * 2", "(210mm - 20mm) / 3"); a bare number added to a length
+// is in `unit`, one that multiplies or divides is a plain factor. `now`
+// (the field's value, points): a leading + * / works on it ("+6", "*2",
+// "/3"; "-6" stays minus six). nullopt: not a sum that makes a length.
+std::optional<double> parse_length(std::string_view text, double unit, std::optional<double> now);
 // s075: where a paragraph's words must stay on one line -- its runs in a
 // character style with No Break (or one it's based on), merged. Bytes.
 struct ByteSpan { int a = 0, b = 0; };
@@ -911,6 +955,8 @@ int keep_together(const std::string& text, const std::vector<ByteSpan>& spans, i
 // s071: a typed percentage: "40", "40%", "40 %", "12.5%". Nothing if it
 // isn't one.
 std::optional<double> parse_percent(std::string_view text);
+// s349: the same with arithmetic ("50 + 10", "75/2", "+10" on `now`).
+std::optional<double> parse_percent(std::string_view text, std::optional<double> now);
 // A number for a verb: 12 -> "12", 12.5 -> "12.5" (to 1/1000).
 std::string num_text(double v);
 std::string size_text(double w, double h, std::size_t folds, Units u = Units::Inches);   // "17.75 × 9 in (3-panel)"
@@ -1082,6 +1128,15 @@ bool set_trim(DocJournal& j, Doc& d, double w, double h);
 // if nothing changed or out of range.
 bool set_master_size(DocJournal& j, Doc& d, const Doc::Id& master, double w, double h);
 bool set_master_bleed(DocJournal& j, Doc& d, const Doc::Id& master, double bleed);
+// s354 (N2, Scott: "at a loss finding how to set an imported odt document
+// size"): the book's page size in one place. The size most of its pages'
+// masters share; setting it resizes every master at that size and their
+// pages at it, in one step (a master of its own size -- a cover -- keeps it).
+// The document's trim follows. Body frames kept to the margins refit.
+std::pair<double, double> book_page_size(const Doc& d);
+bool set_book_page_size(DocJournal& j, Doc& d, double w, double h);
+// s354: the book trims the Document's Page size offers.
+const std::vector<SizePreset>& book_trims();
 bool set_master_facing(DocJournal& j, Doc& d, const Doc::Id& master, bool facing);
 bool set_bleed(DocJournal& j, Doc& d, double bleed);
 bool set_facing(DocJournal& j, Doc& d, bool facing);
@@ -1680,6 +1735,35 @@ bool table_set_row_height(Table& t, int r, double h);
 // header row); else the bands' (a body row in a filled run). "" none;
 // `tint` set when one.
 std::string table_cell_fill(const Table& t, int r, int c, double* tint = nullptr);
+// s351: body frames. The body frame a page's text frames follow (its
+// master's, its side's, else one for Any; "" none). follow_body_frames: what
+// the following frames must become (for the journal's settle -- each step
+// ends with them in place). make_body_frames: for `story`, each (master,
+// side) its pages use -- a body frame on the master where the most of that
+// story's page frames sit (made, or set there), and those frames following
+// it; a frame placed otherwise (a chapter opener) left its own. One step;
+// how many frames now follow.
+Doc::Id body_frame_for(const Doc& d, const Doc::Id& page);
+std::vector<DocJournal::Settled> follow_body_frames(const Doc& d);
+int make_body_frames(DocJournal& j, Doc& d, const Doc::Id& story);
+// s352: the same, written straight into `d` (an import, a load -- no step):
+// the frames made into `made`. A body frame made where its frames sit on
+// the margins keeps to them (fit_margins).
+int body_frames_into(Doc& d, const Doc::Id& story, std::vector<Doc::Id>& made);
+// s354 (P2's rest): new pages in a book's body take a frame from their
+// body frame, threaded in -- InDesign's primary text flow. Each of `pages`
+// whose page before holds a story's frame following a body frame, and that
+// has a body frame itself, gets a follower, threaded after that frame (and
+// before what came next). Written straight into `d` (call inside a step);
+// the frames made (only those: a step's list is what it made).
+std::vector<Doc::Id> thread_new_pages(Doc& d, const std::vector<Doc::Id>& pages);
+// s354: the frame on `page` new pages after it would thread on from ("" none)
+// -- for the step's ids, declared before the pages are made.
+Doc::Id body_thread_from(const Doc& d, const Doc::Id& page);
+// A master text frame made (or no longer) its side's body frame -- another
+// body frame of that side on the master stops being one. One step.
+bool set_body_frame(DocJournal& j, Doc& d, const Doc::Id& frame, bool on);
+
 // s342 (TB2): table and cell styles. New ones (from a table / a cell when
 // given: its look taken), edited (every table / cell using one follows,
 // except a setting it has changed itself -- one that no longer matches the
@@ -1770,6 +1854,8 @@ std::pair<int, int> next_cell(const Table& t, int r, int c, int dir);
 int table_tab_row(DocJournal& j, Doc& d, const Doc::Id& story, int para);
 // s307: the document's language for spell check ("" the app's). One step.
 bool set_language(DocJournal& j, Doc& d, const std::string& lang);
+// s353 (G4): the zoom (percent) below which the baseline grid hides; 0 = any.
+bool set_grid_view(DocJournal& j, Doc& d, int percent);
 // s307: a misspelled word put right -- [from, to) of paragraph `para`, if it
 // still reads `was`, becomes `with`. One step ("Spelling").
 bool replace_word(DocJournal& j, Doc& d, const Doc::Id& story, int para, int from, int to, const std::string& was,
@@ -2233,6 +2319,17 @@ std::vector<ColumnSpan> page_columns(const Doc& d, const Doc::Id& page_or_master
 // lines at start + k * step (k >= 0). step 0 = none (no master, or none set).
 struct BaselineGrid { double start = 0, step = 0; };
 BaselineGrid baseline_grid(const Doc& d, const Doc::Id& page_or_master);
+// s353 (G4): the colours a master's grid can be drawn in, InDesign's guide
+// colours -- key ("" the default light blue), name, and rgb 0..1.
+struct GridColour { std::string key, label; double r, g, b; };
+const std::vector<GridColour>& grid_colours();
+const GridColour& grid_colour(const std::string& key);   // unknown: the default
+// s353 (G1): the master a page, a master or a frame (on either) takes its
+// settings from; "" none.
+Doc::Id master_id_of(const Doc& d, const Doc::Id& page_master_or_frame);
+// s353 (G3): the leading most of a story's words are set on (the paragraph
+// style its text mostly is); 0 when there's none to go by.
+double body_leading(const Doc& d, const Doc::Id& story);
 // The page's column count and gutter (1 / 12 with no master).
 std::pair<int, double> page_column_setup(const Doc& d, const Doc::Id& page_or_master);
 // s023: special characters in text, standing for what each page fills in.
@@ -2518,6 +2615,7 @@ std::string bytes_text(std::uintmax_t n);
 // then the date ("Oct 3, 2026"). Local time for the date.
 std::string ago_text(long long now, long long then);
 std::string to_json(const Doc& d);                       // the document.json text
+std::string record_json(const Doc& d, const Doc::Id& id);   // s348: one record as its JSON ("" none) -- a change key
 bool        from_json(Doc& d, const std::string& text, std::string* err = nullptr);
 
 }  // namespace composix::core

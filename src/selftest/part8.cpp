@@ -3185,9 +3185,16 @@ void part8() {
         L::OdtInfo info;
         const bool ok = book && L::import_odt(d, *book, &info, {}, &err);
         check("import masters: made", ok, err);
+        if (ok) {   // s353 (G3): a grid at the body's leading on every master
+            const double lead = core::body_leading(d, "story.1");
+            bool all = lead >= 1;
+            for (const auto& mid : d.ids_of<core::Master>()) all = all && std::abs(d.as<core::Master>(mid)->grid - std::round(lead * 100) / 100) < 1e-9;
+            check("import: every master gets a baseline grid at the body text's leading", all, std::to_string(lead));
+        }
         if (ok) {
             std::vector<const core::Frame*> on_master;
-            for (const auto& fid : d.frames_on("master.1")) on_master.push_back(d.as<core::Frame>(fid));
+            for (const auto& fid : d.frames_on("master.1"))
+                if (!d.as<core::Frame>(fid)->body) on_master.push_back(d.as<core::Frame>(fid));   // (s352: the body frame isn't a header / footer)
             const auto words = [&](const core::Frame* f) { return d.as<core::Story>(f->story)->paras.front().text; };
             int heads = 0, feet = 0;
             bool left_own = false, right_own = false, folio = false, sides = true;
@@ -3564,7 +3571,7 @@ void part8() {
             const core::Frame* head = nullptr;
             for (const auto& id : d.ids_of<core::Frame>()) {
                 const auto* f = d.as<core::Frame>(id);
-                if (f->owner != "master.1") continue;
+                if (f->owner != "master.1" || f->body) continue;   // (s352: not the body frame)
                 if (f->kind == core::FrameKind::Image) pic = f;
                 else if (f->kind == core::FrameKind::Text) head = f;
             }

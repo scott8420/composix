@@ -235,6 +235,7 @@ json to(const Record& r) {
             if (!v.author.empty()) j["author"] = v.author;   // s239
             if (v.reflow) j["reflow"] = true;                // s255
             if (v.reflow_trim) j["reflow_trim"] = true;      // s256
+            if (v.grid_view > 0) j["grid_view"] = v.grid_view;   // s353
             if (!v.language.empty()) j["language"] = v.language;   // s307
             if (!v.run_head.empty()) j["run_head"] = v.run_head;   // s240
             if (!v.run_sub.empty()) j["run_sub"] = v.run_sub;
@@ -266,6 +267,9 @@ json to(const Record& r) {
                  {"h", v.h}, {"folds", v.folds}, {"columns", v.columns}, {"based_on", v.based_on},
                  {"margins", {v.margins.top, v.margins.bottom, v.margins.inside, v.margins.outside}},
                  {"gutter", v.gutter}, {"grid", v.grid}, {"bleed", v.bleed}, {"facing", v.facing}};   // s147
+            if (v.grid_start != 0) j["grid_start"] = v.grid_start;   // s350
+            if (v.grid_from_page) j["grid_from_page"] = true;
+            if (!v.grid_color.empty()) j["grid_color"] = v.grid_color;   // s353
         } else if constexpr (std::is_same_v<T, Frame>) {
             j = {{"kind", "frame"}, {"owner", v.owner}, {"type", en(v.kind)}, {"x", v.x}, {"y", v.y},
                  {"w", v.w}, {"h", v.h}, {"rot", v.rot}, {"z", v.z}, {"story", v.story},
@@ -313,6 +317,9 @@ json to(const Record& r) {
             if (!v.group.empty()) j["group"] = v.group;               // s300
             if (v.locked) j["locked"] = true;                         // s301
             if (!v.layer.empty()) j["layer"] = v.layer;               // s305
+            if (v.body) j["body"] = true;                             // s351
+            if (v.follow_body) j["follow_body"] = true;
+            if (v.fit_margins) j["fit_margins"] = json::array({v.fit_x, v.fit_y, v.fit_w, v.fit_h});   // s352: the margins it was fitted to
             if (v.role) j["role"] = v.role;                            // s275
             if (!(v.inset == Sides{})) j["inset"] = {v.inset.top, v.inset.right, v.inset.bottom, v.inset.left};   // s040
             if (!(v.col_rule == ColumnRule{}))   // s055
@@ -543,6 +550,7 @@ std::optional<Record> from(const json& j) {
         v.author = val(j, "author", std::string{});   // s239
         v.reflow = val(j, "reflow", false);           // s255
         v.reflow_trim = val(j, "reflow_trim", false); // s256
+        v.grid_view = val(j, "grid_view", 0);          // s353
         v.language = val<std::string>(j, "language", "");   // s307
         v.run_head = val(j, "run_head", std::string{});   // s240
         v.run_sub = val(j, "run_sub", std::string{});
@@ -605,6 +613,9 @@ std::optional<Record> from(const json& j) {
         }
         v.gutter = val(j, "gutter", 12.0);
         v.grid = val(j, "grid", 0.0);   // s036
+        v.grid_start = val(j, "grid_start", 0.0);   // s350
+        v.grid_from_page = val(j, "grid_from_page", false);
+        v.grid_color = val(j, "grid_color", std::string{});   // s353
         // s147: its bleed and facing; a file from before has neither -- -1, the document's (from_json).
         v.bleed = j.contains("bleed") ? val(j, "bleed", v.bleed) : -1.0;
         v.facing = val(j, "facing", true);
@@ -646,6 +657,15 @@ std::optional<Record> from(const json& j) {
         v.group = val(j, "group", std::string{});      // s300
         v.locked = val(j, "locked", false);            // s301
         v.layer = val<std::string>(j, "layer", "");    // s305
+        v.body = val(j, "body", false);                // s351
+        v.follow_body = val(j, "follow_body", false);
+        if (j.contains("fit_margins") && j["fit_margins"].is_array() && j["fit_margins"].size() == 4) {   // s352
+            v.fit_margins = true;
+            v.fit_x = j["fit_margins"][0].get<double>();
+            v.fit_y = j["fit_margins"][1].get<double>();
+            v.fit_w = j["fit_margins"][2].get<double>();
+            v.fit_h = j["fit_margins"][3].get<double>();
+        }
         v.role = std::clamp(val(j, "role", 0), 0, 2);   // s275
         v.across = val(j, "across", false);   // s155
         v.shape = de(j, "shape", ShapeKind::Rect);   // s197
@@ -934,6 +954,12 @@ std::optional<Record> from(const json& j) {
 }
 
 }  // namespace
+
+std::string record_json(const Doc& d, const Doc::Id& id) {   // s348
+    const auto& recs = d.records();
+    const auto it = recs.find(id);
+    return it == recs.end() ? std::string{} : to(it->second).dump();
+}
 
 std::string to_json(const Doc& d) {
     json recs = json::array();

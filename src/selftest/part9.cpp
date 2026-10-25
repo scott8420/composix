@@ -1136,9 +1136,17 @@ void part9() {
                 int heads = 0, feet = 0, none = 0;
                 for (const auto& f : d.frames_on(by["Standard"])) {
                     const auto* fr = d.as<core::Frame>(f);
+                    if (fr->body) continue;   // (s352: the body frame -- neither)
                     (fr->role == 1 ? heads : fr->role == 2 ? feet : none)++;
                 }
                 check("imported: two headers, two footers on Standard (their roles)", heads == 2 && feet == 2 && none == 0);
+                // s352: the body's page frames follow a body frame on their master, kept to its margins
+                int bodies = 0, follows = 0, body_frames = 0;
+                for (const auto& f : d.frames_on(by["Standard"])) bodies += d.as<core::Frame>(f)->body && d.as<core::Frame>(f)->fit_margins;
+                for (const auto& f : d.ids_of<core::Frame>())
+                    if (d.as<core::Frame>(f)->story == "story.1") { ++body_frames; follows += d.as<core::Frame>(f)->follow_body; }
+                check("imported: body frames on Standard, the body's frames following them", bodies >= 1 && follows == body_frames && follows > 0,
+                      std::to_string(bodies) + " / " + std::to_string(follows) + " of " + std::to_string(body_frames));
             }
             check("Right Page's own margins: 2 in at the top", std::abs(d.as<core::Master>(by["Right Page"])->margins.top - 144) < 0.01);
             // The pages: the title FrontMatter, chapters on Right Page, the rest Standard; blanks blank.
@@ -3783,6 +3791,394 @@ void part9() {
         auto t2 = T();
         D::clear_overrides(d, t2);
         check("clear: the whole table back to its style", t2.rule_w == 3 && t2.rows[0].cells[1].valign == 1 && t2.rows[2].cells[1].valign == 1);
+    }
+    // -- s348: lines set alone from a slice -- the same lines, quicker ---------------------
+    {
+        std::cout << "--- s348 line slicing ---\n";
+        core::Doc d;
+        (void)L::load_big_book(d, {.pages = 20});
+        // every paragraph hyphenated (the line-by-line path), some long ones, a no-break span
+        for (const auto& id : d.ids_of<core::Style>()) {
+            core::Style s = *d.as<core::Style>(id);
+            if (s.kind == core::StyleKind::Paragraph) { s.hyphenate = true; d.put(id, s); }
+        }
+        L::set_line_slicing(false);
+        const auto whole = L::flow_story(d, "story.1");
+        L::set_line_slicing(true);
+        const auto sliced = L::flow_story(d, "story.1");
+        bool same = whole.frames.size() == sliced.frames.size() && whole.overset == sliced.overset;
+        int lines = 0, hy = 0;
+        for (std::size_t k = 0; same && k < whole.frames.size(); ++k) {
+            const auto& a = whole.frames[k].lines;
+            const auto& b = sliced.frames[k].lines;
+            same = a.size() == b.size();
+            for (std::size_t i = 0; same && i < a.size(); ++i) {
+                same = a[i].para == b[i].para && a[i].start == b[i].start && a[i].end == b[i].end && a[i].hyphen == b[i].hyphen &&
+                       std::abs(a[i].y - b[i].y) < 1e-9;
+                ++lines;
+                hy += a[i].hyphen;
+            }
+        }
+        check("slicing: every line the same as laid out from the whole rest", same && lines > 500 && hy > 0,
+              std::to_string(lines) + " lines, " + std::to_string(hy) + " hyphenated");
+    }
+    // -- s348: a change keeps the flows it can't touch -- and they equal a fresh flow ------
+    {
+        std::cout << "--- s348 flows kept by their surroundings ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        (void)L::load_big_book(d, {.pages = 20});
+        L::FlowCache fc;
+        const auto stories = d.ids_of<core::Story>();
+        auto all_get = [&] { for (const auto& s : stories) (void)fc.get(d, s); };
+        auto same_as_fresh = [&](std::string& why) {
+            for (const auto& s : stories) {
+                const auto& a = fc.get(d, s);
+                const auto b = L::flow_story(d, s);
+                bool ok = a.frames.size() == b.frames.size() && a.overset == b.overset;
+                for (std::size_t k = 0; ok && k < a.frames.size(); ++k) {
+                    ok = a.frames[k].frame == b.frames[k].frame && a.frames[k].lines.size() == b.frames[k].lines.size();
+                    for (std::size_t i = 0; ok && i < a.frames[k].lines.size(); ++i)
+                        ok = a.frames[k].lines[i].para == b.frames[k].lines[i].para && a.frames[k].lines[i].start == b.frames[k].lines[i].start &&
+                             a.frames[k].lines[i].end == b.frames[k].lines[i].end && std::abs(a.frames[k].lines[i].y - b.frames[k].lines[i].y) < 1e-9 &&
+                             std::abs(a.frames[k].lines[i].x - b.frames[k].lines[i].x) < 1e-9;
+                }
+                if (!ok) { why = s; return false; }
+            }
+            return true;
+        };
+        all_get();
+        const auto ms = d.ids_of<core::Master>();
+        // a master's margins (no grid, no footnotes): the body kept, not laid out again
+        D::edit_masters(j, d, {ms.front()}, "Top margin", [](core::Master& m) { m.margins.top += 9; });
+        (void)fc.get(d, "story.1");
+        check("kept: a master's margin -- the long story's flow kept", fc.last_how() == L::FlowCache::How::Kept);
+        std::string why;
+        check("kept: ... and it is what a fresh flow makes", same_as_fresh(why), why);
+        // its baseline grid: laid out again
+        D::edit_masters(j, d, ms, "Baseline grid", [](core::Master& m) { m.grid = 13; });
+        (void)fc.get(d, "story.1");
+        check("whole: a baseline grid -- laid out again", fc.last_how() == L::FlowCache::How::Whole);
+        check("whole: ... the same as fresh", same_as_fresh(why), why);
+        D::edit_masters(j, d, ms, "Baseline grid", [](core::Master& m) { m.grid = 0; });
+        all_get();
+        // a frame of the story moved / narrowed: laid out again, the same as fresh
+        const auto chain = L::thread_frames(d, "story.1");
+        D::edit_frames(j, d, {chain[3]}, "Narrow", [](core::Frame& f) { f.w -= 40; });
+        (void)fc.get(d, "story.1");
+        check("whole: a frame of its thread narrowed", fc.last_how() == L::FlowCache::How::Whole);
+        check("whole: ... the same as fresh", same_as_fresh(why), why);
+        // a frame with wrap dropped on one of its pages: laid out again
+        const auto page = d.as<core::Frame>(chain[5])->owner;
+        const auto pic = D::add_frame(j, d, page, core::FrameKind::Shape, {60, 120, 120, 90}, 1, 12, false, core::ShapeKind::Rect);
+        D::edit_frames(j, d, {pic}, "Wrap", [](core::Frame& f) { f.wrap = core::Wrap::Around; });
+        check("whole: a wrapping frame on its page -- the same as fresh", same_as_fresh(why), why);
+        // a swatch, a guide: nothing laid out
+        all_get();
+        if (!d.ids_of<core::Swatch>().empty()) {
+            const auto id = d.ids_of<core::Swatch>().front();
+            auto sw = *d.as<core::Swatch>(id);
+            sw.name += " 2";
+            D::edit_swatch(j, d, id, sw);
+            (void)fc.get(d, "story.1");
+            check("kept: a swatch renamed", fc.last_how() == L::FlowCache::How::Kept);
+        }
+        // a style: everything again
+        const auto sid = d.ids_of<core::Style>().front();
+        D::edit_styles(j, d, {sid}, "Size", [](core::Style& st) { st.size += 1; });
+        (void)fc.get(d, "story.1");
+        check("whole: a style changed -- all laid out again", fc.last_how() == L::FlowCache::How::Whole);
+        // undo it all, step by step: always the same as fresh
+        bool undo_ok = true;
+        while (j.can_undo() && undo_ok) { j.undo(); undo_ok = same_as_fresh(why); }
+        check("undo, step by step: every flow as fresh", undo_ok, why);
+    }
+    // -- s348 (Scott's Fedora): a cache keyed by a Doc's address met a new Doc there --------
+    {
+        std::cout << "--- s348 a new Doc where an old one was ---\n";
+        std::optional<core::Doc> slot;
+        const auto make = [&](const char* story) {
+            slot.emplace();
+            core::Doc::Loading load(*slot);
+            core::Frame f;
+            f.owner = "page.1";
+            f.kind = core::FrameKind::Text;
+            f.story = story;
+            slot->put("frame.1", f);
+        };
+        make("story.a");
+        const auto a = L::thread_frames(*slot, "story.a");
+        const auto rev = slot->revision();
+        make("story.b");   // the same storage, the same revision, the same count -- another document
+        check("new doc: the same address and revision", slot->revision() == rev);
+        const auto b = L::thread_frames(*slot, "story.b");
+        check("new doc: its own threads, not the old one's", a.size() == 1 && b.size() == 1 && L::thread_frames(*slot, "story.a").empty());
+        core::Doc c = *slot;
+        check("new doc: a copy is another document", c.serial() != slot->serial());
+    }
+    // -- s349: math in the number fields ---------------------------------------------
+    {
+        std::cout << "--- s349 math in fields ---\n";
+        const auto near = [](std::optional<double> v, double want) { return v && std::abs(*v - want) < 1e-6; };
+        check("math: plain lengths as before", near(core::parse_length("12", 1), 12) && near(core::parse_length("1in", 1), 72) &&
+                                               near(core::parse_length("3p6", 1), 42) && near(core::parse_length("-3p6", 1), -42) &&
+                                               near(core::parse_length("2", 72), 144) && near(core::parse_length("1\"", 1), 72));
+        check("math: a sum of units", near(core::parse_length("1in + 6pt", 1), 78) && near(core::parse_length("10mm+1cm", 1), 20 * 72 / 25.4));
+        check("math: a bare number beside a length is in the field's unit", near(core::parse_length("1in+1", 72), 144) &&
+                                                                            near(core::parse_length("6pt + 1", 72), 78));
+        check("math: times / divided -- a plain factor", near(core::parse_length("3p6*2", 1), 84) && near(core::parse_length("12pt/4", 1), 3) &&
+                                                         near(core::parse_length("2 x 6pt", 1), 12) && near(core::parse_length("6*2", 72), 864));
+        check("math: precedence, brackets", near(core::parse_length("1+2*3", 1), 7) && near(core::parse_length("(1+2)*3", 1), 9) &&
+                                            near(core::parse_length("(210mm - 20mm) / 2", 1), 95 * 72 / 25.4));
+        check("math: on the field's value -- +6, *2, /3; -6 stays minus six", near(core::parse_length("+6", 1, 12.0), 18) &&
+                                                                              near(core::parse_length("*2", 1, 12.0), 24) &&
+                                                                              near(core::parse_length("/3", 1, 12.0), 4) &&
+                                                                              near(core::parse_length("-6", 1, 12.0), -6) &&
+                                                                              near(core::parse_length("+1", 72, 72.0), 144));
+        check("math: not lengths", !core::parse_length("1in*1in", 1) && !core::parse_length("6/0", 1) && !core::parse_length("2/1in", 1) &&
+                                   !core::parse_length("(1+2", 1) && !core::parse_length("1++", 1) && !core::parse_length("abc", 1) &&
+                                   !core::parse_length("12 ft", 1));
+        check("math: percentages", near(core::parse_percent("50+10"), 60) && near(core::parse_percent("75/3%"), 25) &&
+                                   near(core::parse_percent("+10", 40.0), 50) && !core::parse_percent("50-60") && !core::parse_percent("40pt"));
+    }
+    // -- s350: the baseline grid's start; a frame's Vertical over the grid ----------------
+    {
+        std::cout << "--- s350 grid start, Vertical over the grid ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.pages()[3];
+        const auto mid = d.as<core::Page>(page)->master;
+        const double top = core::margin_rect(d, page).y;
+        D::edit_masters(j, d, {mid}, "Baseline grid", [](core::Master& m) { m.grid = 12; });
+        auto g = core::baseline_grid(d, page);
+        check("grid: from the top margin by default", std::abs(g.start - top) < 1e-9 && g.step == 12);
+        D::edit_masters(j, d, {mid}, "Grid start", [](core::Master& m) { m.grid_start = 6; });
+        g = core::baseline_grid(d, page);
+        check("grid: its start below the margin", std::abs(g.start - (top + 6)) < 1e-9);
+        D::edit_masters(j, d, {mid}, "Grid from", [](core::Master& m) { m.grid_from_page = true; m.grid_start = 30; });
+        g = core::baseline_grid(d, page);
+        check("grid: from the page's top", std::abs(g.start - 30) < 1e-9);
+        {
+            core::Doc e;
+            check("grid: saved", core::from_json(e, core::to_json(d)) && e.as<core::Master>(mid)->grid_start == 30 && e.as<core::Master>(mid)->grid_from_page);
+        }
+        // a small frame of grid-aligned words, set Centre: its lines move off the grid now
+        const auto fid = D::add_frame(j, d, page, core::FrameKind::Text, {100, 100, 200, 120});
+        const auto sid = d.as<core::Frame>(fid)->story;
+        D::edit_text(j, d, sid, {0, 0}, {0, 0}, "Running head");
+        const auto ps = d.as<core::Story>(sid)->paras[0].style;
+        if (!ps.empty()) D::edit_styles(j, d, {ps}, "Grid", [](core::Style& st) { st.align_grid = true; });
+        const auto top_y = L::flow_story(d, sid).frames[0].lines.at(0).y;
+        D::edit_frames(j, d, {fid}, "Vertical", [](core::Frame& f) { f.valign = core::VAlign::Center; });
+        const auto mid_y = L::flow_story(d, sid).frames[0].lines.at(0).y;
+        check("vertical: a grid-aligned line centred by its frame (was: the grid won)", mid_y > top_y + 20, std::to_string(top_y) + " -> " + std::to_string(mid_y));
+    }
+    // -- s351: a master's body frame, page frames following it ---------------------------
+    {
+        std::cout << "--- s351 body frames ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        j.set_settle([&d] { auto out = D::follow_body_frames(d); auto fit = L::fit_frames(d); out.insert(out.end(), fit.begin(), fit.end()); return out; });
+        (void)L::load_big_book(d, {.pages = 20});
+        const auto chain = L::thread_frames(d, "story.1");
+        // one frame set apart (a chapter opener, lower)
+        D::edit_frames(j, d, {chain[2]}, "Opener", [](core::Frame& f) { f.y += 72; f.h -= 72; });
+        const auto opener = *d.as<core::Frame>(chain[2]);
+        const auto before = core::to_json(d);
+        const int n = D::make_body_frames(j, d, "story.1");
+        int bodies = 0;
+        for (const auto& id : d.ids_of<core::Frame>()) bodies += d.as<core::Frame>(id)->body;
+        check("make: body frames on the masters, the frames placed alike following", n >= static_cast<int>(chain.size()) - 3 && bodies >= 1,
+              std::to_string(n) + " of " + std::to_string(chain.size()) + ", " + std::to_string(bodies) + " body");
+        check("make: the opener left its own", !d.as<core::Frame>(chain[2])->follow_body && *d.as<core::Frame>(chain[2]) == opener);
+        // the body frame narrowed: every follower narrows, the opener doesn't
+        const auto page5 = d.as<core::Frame>(chain[5])->owner;
+        const auto bid = D::body_frame_for(d, page5);
+        check("body frame for a page", !bid.empty() && d.as<core::Frame>(bid)->body);
+        const double w0 = d.as<core::Frame>(bid)->w;
+        D::edit_frames(j, d, {bid}, "Narrow", [](core::Frame& f) { f.w -= 30; f.columns = 2; });
+        bool all = true;
+        int followed = 0;
+        for (const auto& fid : L::thread_frames(d, "story.1")) {
+            const auto& f = *d.as<core::Frame>(fid);
+            if (!f.follow_body || D::body_frame_for(d, f.owner) != bid) continue;
+            ++followed;
+            all = all && std::abs(f.w - (w0 - 30)) < 1e-6 && f.columns == 2;
+        }
+        check("follow: the body frame narrowed, two columns -- its pages' frames with it, in the same step", all && followed > 3,
+              std::to_string(followed));
+        check("follow: the opener stays", d.as<core::Frame>(chain[2])->w == opener.w);
+        j.undo();
+        bool back = true;
+        for (const auto& fid : L::thread_frames(d, "story.1"))
+            if (d.as<core::Frame>(fid)->follow_body && D::body_frame_for(d, d.as<core::Frame>(fid)->owner) == bid) back = back && d.as<core::Frame>(fid)->columns == 1;
+        check("follow: undone in one", back);
+        {
+            core::Doc e;
+            check("body: saved", core::from_json(e, core::to_json(d)) && e.as<core::Frame>(bid)->body && e.as<core::Frame>(chain[5])->follow_body);
+        }
+        j.undo();
+        check("make: undone", core::to_json(d) == before);
+    }
+    // -- s352: body frames keep to the margins; an import makes them -------------------
+    {
+        std::cout << "--- s352 body frames and margins ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        j.set_settle([&d] { auto out = D::follow_body_frames(d); auto fit = L::fit_frames(d); out.insert(out.end(), fit.begin(), fit.end()); return out; });
+        (void)L::load_big_book(d, {.pages = 20});
+        D::make_body_frames(j, d, "story.1");
+        const auto chain = L::thread_frames(d, "story.1");
+        std::string fol;
+        for (const auto& f : chain) if (d.as<core::Frame>(f)->follow_body) { fol = f; break; }
+        const auto page = d.as<core::Frame>(fol)->owner;
+        const auto bid = D::body_frame_for(d, page);
+        const auto mid = d.as<core::Page>(page)->master;
+        check("margins: a body frame made on the margins keeps to them", d.as<core::Frame>(bid)->fit_margins);
+        const double y0 = d.as<core::Frame>(fol)->y;
+        D::edit_masters(j, d, {mid}, "Top margin", [](core::Master& m) { m.margins.top += 18; });
+        check("margins: the top margin down 18 -- the body frame and its pages' frames with it", std::abs(d.as<core::Frame>(fol)->y - (y0 + 18)) < 1e-6 &&
+                                                                                           std::abs(d.as<core::Frame>(bid)->y - (y0 + 18)) < 1e-6,
+              std::to_string(d.as<core::Frame>(fol)->y));
+        D::edit_frames(j, d, {bid}, "By hand", [](core::Frame& f) { f.h -= 40; });
+        check("margins: moved by hand -- it stops keeping to them", !d.as<core::Frame>(bid)->fit_margins);
+        const double h1 = d.as<core::Frame>(fol)->h;
+        D::edit_masters(j, d, {mid}, "Top margin", [](core::Master& m) { m.margins.top -= 18; });
+        check("margins: ... a later margin leaves it (and its pages) be", std::abs(d.as<core::Frame>(fol)->h - h1) < 1e-6);
+    }
+    // -- s353: the grid made findable -- its rows on pages and frames, colour, threshold --
+    {
+        std::cout << "--- s353 grid findable ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        core::load_sample(d);
+        const auto page = d.pages()[3];
+        const auto mid = d.as<core::Page>(page)->master;
+        std::string tf;
+        for (const auto& f : d.frames_on(page)) if (!d.as<core::Frame>(f)->story.empty()) { tf = f; break; }
+        check("grid: a page's and a frame's master found", core::master_id_of(d, page) == mid && core::master_id_of(d, mid) == mid &&
+                                                           (tf.empty() || core::master_id_of(d, tf) == mid) && core::master_id_of(d, "nope").empty());
+        const auto rows = [&](const std::string& id) {
+            const auto o = core::project(d, "");
+            std::vector<core::Field> out;
+            if (const auto* it = o.find(id)) for (const auto& f : it->fields) if (f.edit.rfind("mgrid", 0) == 0 || f.label == "Snaps") out.push_back(f);
+            return out;
+        };
+        auto pr = rows(page);
+        check("grid: a page shows its master's grid row (none yet: the step only)", pr.size() == 1 && pr[0].edit == "mgrid" && pr[0].group == "Baseline Grid");
+        D::edit_masters(j, d, {mid}, "Baseline grid", [](core::Master& m) { m.grid = 13; });
+        pr = rows(page);
+        bool colour = false, snaps = false;
+        for (const auto& f : pr) { colour = colour || (f.edit == "mgrid_color" && f.value == "Light Blue"); snaps = snaps || f.label == "Snaps"; }
+        check("grid: set -- start, from, colour and what snaps show on the page too", pr.size() == 5 && colour && snaps);
+        check("grid: the colours", core::grid_colour("magenta").label == "Magenta" && core::grid_colour("").label == "Light Blue" &&
+                                   core::grid_colour("plaid").label == "Light Blue" && core::grid_colours().size() >= 6);
+        D::edit_masters(j, d, {mid}, "Grid colour", [](core::Master& m) { m.grid_color = "green"; });
+        check("grid: its colour, on the page's rows", [&] { for (const auto& f : rows(page)) if (f.edit == "mgrid_color") return f.value == "Green"; return false; }());
+        check("grid: the view threshold", D::set_grid_view(j, d, 75) && d.settings().grid_view == 75 && !D::set_grid_view(j, d, 75));
+        {
+            core::Doc e;
+            check("grid: colour and threshold saved", core::from_json(e, core::to_json(d)) && e.as<core::Master>(mid)->grid_color == "green" &&
+                                                     e.settings().grid_view == 75);
+        }
+        j.undo();
+        check("grid: threshold undone", d.settings().grid_view == 0);
+        const double lead = core::body_leading(d, "story.1");
+        check("grid: the body's leading is its most-used style's", lead > 0, std::to_string(lead));
+        check("grid: no story, no leading", core::body_leading(d, "story.nope") == 0);
+    }
+    // -- s354: the page size in one place; a page added takes the body's frame ---------
+    {
+        std::cout << "--- s354 book page size, pages added threaded ---\n";
+        namespace D = core::doc;
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        j.set_settle([&d] { auto out = D::follow_body_frames(d); auto fit = L::fit_frames(d); out.insert(out.end(), fit.begin(), fit.end()); return out; });
+        (void)L::load_big_book(d, {.pages = 20});
+        const auto [w0, h0] = D::book_page_size(d);
+        check("size: the book's page size is its masters'", w0 >= 36 && h0 >= 36, std::to_string(w0) + " x " + std::to_string(h0));
+        // a cover master of its own size keeps it
+        const auto ms = d.ids_of<core::Master>();
+        std::string cover;
+        if (ms.size() > 1) {
+            cover = ms.back();
+            D::set_master_size(j, d, cover, w0 + 36, h0 + 36);
+        }
+        const auto before = core::to_json(d);
+        D::make_body_frames(j, d, "story.1");
+        check("size: set in one step", D::set_book_page_size(j, d, 396, 612) && !D::set_book_page_size(j, d, 396, 612));
+        bool all = true;
+        for (const auto& p : d.pages()) {
+            const auto* pg = d.as<core::Page>(p);
+            if (pg->master == cover) continue;
+            all = all && std::abs(pg->w - 396) < 1e-6 && std::abs(pg->h - 612) < 1e-6;
+        }
+        check("size: every page at the old size follows", all);
+        check("size: a master of its own size keeps it", cover.empty() || std::abs(d.as<core::Master>(cover)->w - (w0 + 36)) < 1e-6);
+        check("size: the trim follows", std::abs(d.settings().trim_w - 396) < 1e-6 && D::book_page_size(d).first == 396);
+        {   // the body frames kept to the margins refit
+            bool fits = true;
+            for (const auto& f : d.ids_of<core::Frame>()) {
+                const auto* x = d.as<core::Frame>(f);
+                if (!x->body || !x->fit_margins) continue;
+                const auto m = core::margin_rect(d, x->owner, x->side);
+                fits = fits && std::abs(x->w - m.w) < 0.01;
+            }
+            check("size: the body frames refit to the new margins", fits);
+        }
+        check("size: book trims offered", D::book_trims().size() >= 6 && D::book_trims()[3].w == 432);
+        j.undo();
+        check("size: undone", D::book_page_size(d).first == w0);
+        // a page added after one in the body's flow takes a frame, threaded in
+        const auto chain = L::thread_frames(d, "story.1");
+        std::string at;
+        for (const auto& f : chain) if (d.as<core::Frame>(f)->follow_body) { at = f; }
+        check("add page: a frame following the body to add after", !at.empty(), std::to_string(chain.size()) + " frames");
+        if (at.empty()) return;
+        const auto page = d.as<core::Frame>(at)->owner;
+        const auto after = d.as<core::Frame>(at)->next;
+        const auto snap = core::to_json(d);
+        const auto made = D::add_pages(j, d, page, 1, d.as<core::Page>(page)->master);
+        std::string nf;
+        for (const auto& f : d.frames_on(made.front())) if (d.as<core::Frame>(f)->owner == made.front()) nf = f;
+        check("add page: a frame from the body frame", !nf.empty() && d.as<core::Frame>(nf)->follow_body && d.as<core::Frame>(nf)->story == "story.1");
+        check("add page: threaded in", !nf.empty() && d.as<core::Frame>(at)->next == nf && d.as<core::Frame>(nf)->next == after);
+        check("add page: in the body frame's place", !nf.empty() && [&] {
+            const auto* b = d.as<core::Frame>(D::body_frame_for(d, made.front()));
+            const auto* x = d.as<core::Frame>(nf);
+            return b && std::abs(b->x - x->x) < 0.01 && std::abs(b->w - x->w) < 0.01; }());
+        check("add page: the story flows through it", L::thread_frames(d, "story.1").size() == chain.size() + 1);
+        j.undo();
+        {
+            const auto now = core::to_json(d);
+            std::string diff;
+            core::Doc was;
+            (void)core::from_json(was, snap);
+            for (const auto& [id, r] : d.records()) if (core::record_json(d, id) != core::record_json(was, id)) diff += id + " ";
+            for (const auto& [id, r] : was.records()) if (core::record_json(d, id).empty()) diff += "-" + id + " ";
+            check("add page: undone in one", now == snap, diff);
+        }
+        // a page added where no body frame is followed: just the page
+        core::Doc e;
+        core::DocJournal je{e};
+        e.set_door([&je] { return je.open(); });
+        core::load_sample(e);
+        const auto n0 = e.ids_of<core::Frame>().size();
+        D::add_pages(je, e, e.pages().back(), 1, e.as<core::Page>(e.pages().back())->master);
+        check("add page: no body frames, no frame made", e.ids_of<core::Frame>().size() == n0);
+        (void)before;
     }
 }
 }  // namespace cxtest

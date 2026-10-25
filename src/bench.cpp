@@ -97,8 +97,97 @@ void draw_one(const C::Doc& d, L::FlowCache& flows, const L::ImageSource& img, c
 
 }  // namespace
 
+// s348: a real project -- what a master edit costs on it (Scott's book).
+int bench_project(const std::string& dir) {
+    C::Doc d;
+    std::string err;
+    if (!C::load_project(d, dir, &err)) { std::printf("can't load %s: %s\n", dir.c_str(), err.c_str()); return 2; }
+    const auto stories = d.ids_of<C::Story>();
+    std::printf("composix_bench -- %s\n  %zu pages, %zu stories\n\n", dir.c_str(), d.pages().size(), stories.size());
+    L::FlowCache pf;
+    row("flow every story (cold)", ms_of([&] { for (const auto& s : stories) (void)pf.get(d, s); }), 1);
+    if (std::getenv("COMPOSIX_BENCH_KEYS")) {   // s348: keys only, over and over (to profile)
+        C::DocJournal jk{d};
+        for (int r = 0; r < 30; ++r) {
+            if (std::string(std::getenv("COMPOSIX_BENCH_KEYS")) == "margin")
+                C::doc::edit_masters(jk, d, {d.ids_of<C::Master>().front()}, "m", [](C::Master& m) { m.margins.top += 1; });
+            else
+                C::doc::edit_text(jk, d, stories.front(), {3, 2}, {3, 2}, "x");
+            const auto pages = d.pages();
+            row("keys", ms_of([&] { for (const auto& p : pages) (void)L::page_key(d, pf, p); }), 1);
+        }
+        return 0;
+    }
+    if (std::getenv("COMPOSIX_BENCH_BODY")) {   // s351: body frames made on a real book, then one narrowed
+        C::DocJournal jb{d};
+        jb.set_settle([&d] { auto out = C::doc::follow_body_frames(d); auto fit = L::fit_frames(d); out.insert(out.end(), fit.begin(), fit.end()); return out; });
+        std::string longest;
+        std::size_t most = 0;
+        for (const auto& s : stories) if (d.as<C::Story>(s)->paras.size() > most) { most = d.as<C::Story>(s)->paras.size(); longest = s; }
+        int n = 0;
+        row("make body frames", ms_of([&] { n = C::doc::make_body_frames(jb, d, longest); }), 1, std::to_string(n) + " frames follow");
+        int bodies = 0, alone = 0;
+        for (const auto& f : d.ids_of<C::Frame>()) {
+            const auto* x = d.as<C::Frame>(f);
+            bodies += x->body;
+            alone += x->story == longest && !x->follow_body;
+        }
+        std::printf("  %d body frames; %d of the story's frames left their own\n", bodies, alone);
+        for (const auto& s : stories) (void)pf.get(d, s);
+        std::string b;
+        for (const auto& f : d.ids_of<C::Frame>()) if (d.as<C::Frame>(f)->body) { b = f; break; }
+        row("a body frame narrowed (step + settle)", ms_of([&] { C::doc::edit_frames(jb, d, {b}, "w", [](C::Frame& f) { f.w -= 12; }); }), 1);
+        int whole = 0;
+        row("  reflow", ms_of([&] { for (const auto& s : stories) { (void)pf.get(d, s); whole += pf.last_how() == L::FlowCache::How::Whole; } }), 1,
+            std::to_string(whole) + " whole");
+        return 0;
+    }
+    if (std::getenv("COMPOSIX_BENCH_GRID")) {   // s353: Scott's crash -- body frames as the import makes them, a grid, the reflow
+        C::DocJournal jg{d};
+        jg.set_settle([&d] { auto out = C::doc::follow_body_frames(d); auto fit = L::fit_frames(d); out.insert(out.end(), fit.begin(), fit.end()); return out; });
+        if (d.as<C::Story>("story.1")) { std::vector<C::Doc::Id> made; C::doc::body_frames_into(d, "story.1", made); }
+        C::doc::edit_masters(jg, d, {d.ids_of<C::Master>().front()}, "step", [](C::Master& m) { m.grid = 13; });
+        for (int round = 0; round < 4; ++round) {
+            int added = 0;
+            for (const auto& s : d.ids_of<C::Story>())
+                if (L::reflows(d, s) && pf.get(d, s).overset) added += L::reflow_pages(jg, d, s);
+            std::printf("  round %d: %d page(s) added, %zu pages\n", round, added, d.pages().size());
+            for (const auto& p : d.pages()) (void)L::page_key(d, pf, p);
+            (void)C::project(d, "", nullptr, nullptr, nullptr);
+            (void)L::preflight_issues(d, pf, {});
+            if (!added) break;
+        }
+        return 0;
+    }
+    C::DocJournal j{d};
+    const auto ms = d.ids_of<C::Master>();
+    const auto try_edit = [&](const char* label, const std::function<void()>& edit) {
+        for (const auto& s : stories) (void)pf.get(d, s);
+        const double te = ms_of(edit);
+        int whole = 0;
+        const double tf = ms_of([&] {
+            for (const auto& s : stories) { (void)pf.get(d, s); whole += pf.last_how() == L::FlowCache::How::Whole; }
+        });
+        const auto pages = d.pages();
+        const double tk = ms_of([&] { for (const auto& p : pages) (void)L::page_key(d, pf, p); });
+        const double tp = ms_of([&] { (void)C::project(d, "", nullptr, nullptr, nullptr); });
+        const double tpre = ms_of([&] { (void)L::stale_lists(d, pf); (void)L::preflight_issues(d, pf, {}); });
+        std::printf("  %-28s edit %6.1f  reflow %7.1f (%d whole)  keys %6.1f  project %6.1f  preflight %6.1f  = %7.1f ms\n", label, te, tf, whole, tk,
+                    tp, tpre, te + tf + tk + tp + tpre);
+    };
+    try_edit("master top margin", [&] { C::doc::edit_masters(j, d, {ms.front()}, "Top margin", [](C::Master& m) { m.margins.top += 6; }); });
+    std::string hdr;
+    for (const auto& f : d.ids_of<C::Frame>()) if (d.as<C::Master>(d.as<C::Frame>(f)->owner)) { hdr = f; break; }
+    if (!hdr.empty())
+        try_edit("a master's header frame", [&] { C::doc::edit_frames(j, d, {hdr}, "Move", [](C::Frame& f) { f.y += 3; }); });
+    try_edit("a swatch", [&] { if (!d.ids_of<C::Swatch>().empty()) { const auto id = d.ids_of<C::Swatch>().front(); auto sw = *d.as<C::Swatch>(id); sw.name += "x"; C::doc::edit_swatch(j, d, id, sw); } });
+    try_edit("typing in the main story", [&] { C::doc::edit_text(j, d, stories.front(), {3, 2}, {3, 2}, "x"); });
+    return 0;
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IOLBF, 0);   // each row as it's timed
+    if (argc == 3 && std::string(argv[1]) == "--project") return bench_project(argv[2]);   // s348
     L::BigBookOpts o;
     o.picture_dir = (std::filesystem::temp_directory_path() / "composix-bench").string();
     bool pdf = false;
@@ -275,6 +364,28 @@ int main(int argc, char** argv) {
         std::vector<double> tp;
         for (int r = 0; r < 3; ++r) tp.push_back(ms_of([&] { (void)C::project(d, "", nullptr, nullptr, nullptr); }));
         row("  the projection (core::project)", median(tp), 3, "the navigator's / tiles' model");
+    }
+    {
+        // s348 (Scott: "sluggish with 305 pages ... setting margins"): a
+        // master's margin changed, then what the app pays before it answers.
+        L::FlowCache pf;
+        for (const auto& s : stories) (void)pf.get(d, s);
+        C::DocJournal j{d};
+        std::vector<std::string> ms = d.ids_of<C::Master>();
+        double te = 0, tf = 0, tk = 0, tpj = 0, tst = 0, tpre = 0;
+        te = ms_of([&] { C::doc::edit_masters(j, d, {ms.front()}, "Top margin", [](C::Master& m) { m.margins.top += 6; }); });
+        tf = ms_of([&] { for (const auto& s : stories) (void)pf.get(d, s); });
+        tk = ms_of([&] { for (const auto& p : pages) (void)L::page_key(d, pf, p); });
+        tpj = ms_of([&] { (void)C::project(d, "", nullptr, nullptr, nullptr); });
+        tst = ms_of([&] { (void)L::stale_lists(d, pf); });
+        tpre = ms_of([&] { (void)L::preflight_issues(d, pf, {}); });
+        row("master margin: the edit", te, 1, "journal + settle");
+        row("  reflow every story", tf, 1);
+        row("  page keys, every page", tk, 1, "the thumbnails' look");
+        row("  the projection", tpj, 1);
+        row("  stale contents check", tst, 1);
+        row("  preflight", tpre, 1);
+        j.undo();
     }
     {
         C::DocJournal j{d};

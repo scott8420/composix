@@ -362,6 +362,15 @@ void Shell::go_to_note(const std::string& id) {  // helper
     }, 50);
 }
 
+// s353 (G1): the grid's rows show on a master, its pages and their text
+// frames -- an edit there goes to the masters behind them, once each.
+std::vector<std::string> Shell::grid_masters() const {  // helper
+    std::vector<std::string> out;
+    for (const auto& id : m_inspected)
+        if (const auto m = core::master_id_of(m_doc, id); !m.empty() && std::find(out.begin(), out.end(), m) == out.end()) out.push_back(m);
+    return out;
+}
+
 bool Shell::open_project(const std::string& dir) {  // helper
     core::Doc fresh;
     std::string err;
