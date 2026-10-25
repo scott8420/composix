@@ -15,6 +15,7 @@
 // Outline's summaries -- and it writes ONLY through core::doc verbs.
 // Ideas from Curvz (viewport, handles, gesture shape), code rewritten: ARC s005.
 #include "core/Doc.hpp"
+#include "layout/Composition.hpp"
 #include "layout/Export.hpp"   // s309: TextMark
 #include "layout/Flow.hpp"
 #include "layout/ThumbStore.hpp"
@@ -104,6 +105,8 @@ public:
     bool show_grid() const { return m_show_grid; }
     void set_show_hidden(bool on) { m_show_hidden = on; queue_draw(); }   // s059: hidden characters
     // s309: misspelled words (a red wave) and links (a blue dotted line) marked in the words -- screen only.
+    void set_show_comp(bool on) { m_show_comp = on; m_comp.clear(); queue_draw(); }   // s357: widows, orphans, runts as bands
+    bool show_comp() const { return m_show_comp; }
     void set_marks(bool spelling, bool links) { m_mark_spell = spelling; m_mark_links = links; m_marks.clear(); queue_draw(); }
     void marks_changed() { m_marks.clear(); queue_draw(); }   // the dictionary / the user's words moved
     // s099: proof colours -- the pages drawn as this press profile will
@@ -378,6 +381,9 @@ private:
     bool              m_guides_locked = false;   // s153
     bool              m_show_hidden = false;   // s059
     bool              m_mark_spell = true, m_mark_links = true;   // s309
+    bool              m_show_comp = true;   // s357
+    std::map<std::string, std::vector<layout::CompProblem>> m_comp;   // s357: a story's, this revision
+    std::uint64_t     m_comp_rev = ~0ull;
     std::map<std::string, std::vector<layout::TextMark>> m_marks;   // s309: a frame's, until the document moves
     std::uint64_t     m_marks_rev = 0, m_marks_gen = 0;
     std::shared_ptr<const plate::Proof> m_proof;   // s099

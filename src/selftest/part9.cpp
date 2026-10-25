@@ -1,5 +1,6 @@
 // composix_selftest, part 9 (s256: part8 had grown to 3800 lines).
 #include "Selftest.hpp"
+#include "layout/Composition.hpp"
 #include "core/Spell.hpp"
 #include <filesystem>
 #include <fstream>
@@ -4299,6 +4300,46 @@ void part9() {
                                                     d.pages().size() == n0 + static_cast<std::size_t>(need));
         j.undo();
         check("undone in one", d.pages().size() == n0);
+    }
+    // -- s357: widows, orphans, runts found from a flow (set by hand: no fonts in it) --
+    {
+        std::cout << "--- s357 composition problems ---\n";
+        core::Doc d;
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        long_doc(d, j, 60);
+        const auto ch = L::thread_frames(d, "story.1");
+        check("two frames to set in", ch.size() >= 2);
+        core::Story st = *d.as<core::Story>("story.1");
+        const std::string sty = st.paras[0].style;
+        st.paras.clear();
+        st.paras.push_back({sty, "Alpha beta gamma delta epsilon zeta eta theta."});      // 0: two lines, one column
+        st.paras.push_back({sty, "Iota kappa lambda mu nu xi omicron pi rho sigma."});    // 1: first line alone at frame 0's foot
+        st.paras.push_back({sty, "Tau upsilon phi chi psi omega alpha beta gamma end"});  // 2: last line one word ("end")
+        st.paras.push_back({sty, "One two three four five six seven eight nine ten."});   // 3: last line alone, column 1's head
+        st.paras.push_back({sty, "Short."});                                                // 4: one line -- never
+        j.run("Type", {"story.1"}, [&] { d.put("story.1", st); });
+        L::StoryFlow f;
+        const auto line = [](int para, int a, int b, double y, int col = 0) { L::Line l; l.para = para; l.start = a; l.end = b; l.y = y; l.h = 12; l.col = col; return l; };
+        L::FrameText f0, f1;
+        f0.frame = ch[0];
+        f1.frame = ch[1];
+        f0.lines = {line(0, 0, 24, 0), line(0, 24, 46, 12), line(1, 0, 25, 24)};
+        f1.lines = {line(1, 25, 40, 0), line(1, 40, 49, 12), line(2, 0, 26, 24), line(2, 26, 47, 36), line(2, 47, 50, 48),
+                    line(3, 0, 17, 60), line(3, 17, 34, 72), line(3, 34, 50, 0, 1), line(4, 0, 6, 12, 1)};
+        f.frames = {f0, f1};
+        const auto ps = L::composition_problems(d, "story.1", f);
+        const auto has = [&](L::CompProblem::Kind k, int para, const std::string& fr) {
+            return std::any_of(ps.begin(), ps.end(), [&](const L::CompProblem& p) { return p.kind == k && p.para == para && p.frame == fr; });
+        };
+        std::string got;
+        for (const auto& p : ps) got += std::string(L::comp_kind_name(p.kind)) + " " + std::to_string(p.para) + "; ";
+        check("orphan: paragraph 1's first line at frame 0's foot", has(L::CompProblem::Orphan, 1, ch[0]), got);
+        check("runt: paragraph 2's last line a word", has(L::CompProblem::Runt, 2, ch[1]), got);
+        check("widow: paragraph 3's last line alone at column 1's head", has(L::CompProblem::Widow, 3, ch[1]), got);
+        check("nothing else (a whole paragraph, a one-line one)", ps.size() == 3, got);
+        const auto w = std::find_if(ps.begin(), ps.end(), [](const L::CompProblem& p) { return p.kind == L::CompProblem::Widow; });
+        check("the widow's box: its line (y, height, a width)", w != ps.end() && w->box.y == 0 && w->box.h == 12 && w->box.w > 0);
     }
 }
 }  // namespace cxtest

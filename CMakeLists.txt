@@ -158,6 +158,7 @@ add_subdirectory(libs/plate)
 pkg_check_modules(PANGOCAIRO REQUIRED pangocairo)
 add_library(composix_layout STATIC
     src/layout/Flow.cpp
+    src/layout/Composition.cpp  # s357: widows, orphans, runts
     # s013: PDF export (cairo's PDF surface; images handed in by the app).
     src/layout/Export.cpp
     # s015: print PDF through Plate (page boxes, CMYK colour, subset fonts).
@@ -280,7 +281,7 @@ target_link_directories(composix   PRIVATE ${GTKMM_LIBRARY_DIRS})
 target_compile_options(composix    PRIVATE ${GTKMM_CFLAGS_OTHER})
 # s192: the About window's version, and the session that built it (bump
 # COMPOSIX_BUILD with each session's ship, so the two machines can tell).
-set(COMPOSIX_BUILD "s356")
+set(COMPOSIX_BUILD "s357")
 # s194: on the About window's file alone -- on the whole target, each bump
 # rebuilt every app file and missed ccache.
 set_source_files_properties(src/AboutWindow.cpp PROPERTIES

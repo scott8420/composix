@@ -193,6 +193,15 @@ void Shell::bind_actions() {  // bindings: actions + recents group
                   "and choose Baseline grid -- your body text's leading is the usual one. Then set Align to grid in "
                   "the paragraph styles that should lock to it (the style's Flow).");
     }, true);
+    {   // s357 (WK1): widows, orphans, runts shown -- kept between runs
+        const bool on = core::setting_int(m_settings, "view.composition", 1, 0, 1) == 1;
+        m_canvas_view.canvas().set_show_comp(on);
+        toggle("toggle-composition", [this](bool v) {
+            m_settings["view.composition"] = v ? "1" : "0";
+            core::save_settings(m_settings_file, m_settings);
+            m_canvas_view.canvas().set_show_comp(v);
+        }, on);
+    }
     {   // s309: misspelled words and links marked in the words -- kept between runs
         const bool sp = core::setting_int(m_settings, "view.spelling", 1, 0, 1) == 1, ln = core::setting_int(m_settings, "view.links", 1, 0, 1) == 1;
         m_canvas_view.canvas().set_marks(sp, ln);

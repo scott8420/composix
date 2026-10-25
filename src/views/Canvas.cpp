@@ -866,6 +866,48 @@ void Canvas::draw_overlays(const Cairo::RefPtr<Cairo::Context>& cr) {
                 cr->restore();
             }
     }
+    if (m_show_comp) {   // s357 (WK1): widows, orphans, runts -- a tinted band on the line, its name beside it
+        if (m_comp_rev != m_doc.revision()) {
+            m_comp.clear();
+            m_comp_rev = m_doc.revision();
+        }
+        const double W = m_vp.widget_w(), H = m_vp.widget_h();
+        for (const auto& p : m_placed) {
+            if (p.master) continue;
+            for (const auto& fid : m_doc.frames_on(p.id)) {
+                const auto* f = m_doc.as<core::Frame>(fid);
+                if (!f || f->kind != core::FrameKind::Text || f->story.empty() || f->rot != 0 || f->shear != 0 || f->flip ||
+                    f->sx != 1 || f->sy != 1 || f->on_path || !core::on_panel(m_doc, p, fid) || !core::doc::frame_shown(m_doc, *f))
+                    continue;
+                const Rect fr = m_vp.to_screen(Rect{p.r.x + f->x, p.r.y + f->y, f->w, f->h});
+                if (fr.x > W || fr.y > H || fr.x + fr.w < 0 || fr.y + fr.h < 0) continue;
+                auto it = m_comp.find(f->story);
+                if (it == m_comp.end())
+                    it = m_comp.emplace(f->story, layout::composition_problems(m_doc, f->story, flows().get(m_doc, f->story))).first;
+                for (const auto& c : it->second) {
+                    if (c.frame != fid) continue;
+                    const Rect r = m_vp.to_screen(Rect{p.r.x + f->x + c.box.x, p.r.y + f->y + c.box.y, c.box.w, c.box.h});
+                    double rgb[3] = {0.9, 0.2, 0.55};                                  // widow: rose
+                    if (c.kind == layout::CompProblem::Orphan) { rgb[0] = 1.0; rgb[1] = 0.55; rgb[2] = 0.0; }   // orange
+                    if (c.kind == layout::CompProblem::Runt)   { rgb[0] = 0.9; rgb[1] = 0.75; rgb[2] = 0.0; }   // amber
+                    cr->save();
+                    cr->set_source_rgba(rgb[0], rgb[1], rgb[2], 0.22);
+                    cr->rectangle(r.x, r.y, r.w, r.h);
+                    cr->fill();
+                    cr->set_source_rgba(rgb[0], rgb[1], rgb[2], 0.9);   // its edge, at the left
+                    cr->rectangle(r.x - 3, r.y, 2, r.h);
+                    cr->fill();
+                    if (r.h >= 7) {   // its name, small, just past the line's end
+                        cr->select_font_face("Sans", Cairo::ToyFontFace::Slant::NORMAL, Cairo::ToyFontFace::Weight::BOLD);
+                        cr->set_font_size(9);
+                        cr->move_to(r.x + r.w + 4, r.y + r.h / 2 + 3);
+                        cr->show_text(layout::comp_kind_name(c.kind));
+                    }
+                    cr->restore();
+                }
+            }
+        }
+    }
     if (m_mark_spell || m_mark_links) {   // s309: misspelled words, links -- marked on screen
         if (m_marks_rev != m_doc.revision() || m_marks_gen != core::spell::generation()) {
             m_marks.clear();
