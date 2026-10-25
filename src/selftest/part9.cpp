@@ -4180,5 +4180,57 @@ void part9() {
         check("add page: no body frames, no frame made", e.ids_of<core::Frame>().size() == n0);
         (void)before;
     }
+    // -- s355: an import's empty end pages (Scott's Hollow Oak: 168 - 216 blank after THE END) --
+    {
+        std::cout << "--- s355 an import takes back the pages its text gave up ---\n";
+        const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+        const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"><style:paragraph-properties fo:line-height="14pt"/><style:text-properties fo:font-size="11pt"/></style:style>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="5.5in" fo:page-height="8.5in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.75in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"/>
+</office:master-styles></office:document-styles>)";
+        std::string paras;
+        for (int i = 0; i < 40; ++i)
+            paras += "<text:p text:style-name=\"Standard\">The oak stood hollow at the edge of the wood, and the children went to it every evening after supper.</text:p>";
+        paras += "<text:p text:style-name=\"Standard\">THE END</text:p>";
+        const std::string content = "<office:document-content" + ns + R"(><office:body><office:text>)" + paras +
+                                    "</office:text></office:body></office:document-content>";
+        const auto odt = core::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+        std::string err;
+        const auto book = core::odt::read(odt, &err);
+        core::Doc d;
+        const bool ok = book && L::import_odt(d, *book, nullptr, {}, &err);
+        check("import: reflow adds and removes pages", ok && d.settings().reflow && d.settings().reflow_trim, err);
+        core::DocJournal j{d};
+        d.set_door([&j] { return j.open(); });
+        j.set_settle([&d] { auto out = core::doc::follow_body_frames(d); auto fit = L::fit_frames(d); out.insert(out.end(), fit.begin(), fit.end()); return out; });
+        const auto n0 = d.pages().size();
+        // The text grows (as Scott's did with the grid double-spacing it), the reflow adds pages...
+        core::Story st = *d.as<core::Story>("story.1");
+        const auto was = st;
+        const auto end = st.paras.back();
+        st.paras.pop_back();
+        for (int k = 0; k < 4; ++k) for (std::size_t i = 0; i < was.paras.size() - 1; ++i) st.paras.push_back(was.paras[i]);
+        st.paras.push_back(end);
+        j.run("Type", {"story.1"}, [&] { d.put("story.1", st); });
+        for (int r = 0; r < 6 && L::flow_story(d, "story.1").overset; ++r) L::reflow_pages(j, d, "story.1");
+        const auto n1 = d.pages().size();
+        check("grown: pages added, not overset", ok && n1 > n0 + 2 && !L::flow_story(d, "story.1").overset,
+              std::to_string(n0) + " -> " + std::to_string(n1));
+        // ...then shrinks back: the pages after THE END are empty, and found
+        j.run("Delete", {"story.1"}, [&] { d.put("story.1", was); });
+        const auto empty = L::empty_reflow_pages(d, "story.1", L::flow_story(d, "story.1"));
+        check("shrunk: the empty end pages are found (body frames, a grid)", ok && !empty.empty() && empty.size() >= n1 - n0 - 1,
+              std::to_string(empty.size()) + " of " + std::to_string(n1 - n0));
+        const int took = L::trim_reflow_pages(j, d, "story.1");
+        const auto fl = L::flow_story(d, "story.1");
+        check("trim: taken in one step, the last page holds THE END", took == static_cast<int>(empty.size()) && !fl.overset &&
+                                                                         !fl.frames.empty() && !fl.frames.back().lines.empty(),
+              std::to_string(took) + " taken, " + std::to_string(d.pages().size()) + " pages");
+        j.undo();
+        check("trim: undone in one", d.pages().size() == n1);
+    }
 }
 }  // namespace cxtest

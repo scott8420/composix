@@ -615,6 +615,7 @@ bool import_odt(Doc& d, const odt::Book& b, OdtInfo* out, const OdtOptions& opt,
     {   // s255: as a word processor's -- the text adds pages as it runs on
         auto s = d.settings();
         s.reflow = true;
+        s.reflow_trim = true;   // s355: and takes back the pages it added when the text shrinks
         d.put("doc", s);
     }
     if (!b.author.empty()) {   // s239: its author, for a header's author field

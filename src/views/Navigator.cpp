@@ -14,12 +14,14 @@
 #include <gtkmm/overlay.h>
 #include <gtkmm/searchentry.h>
 #include <gtkmm/togglebutton.h>
+#include <gtkmm/tooltip.h>
 #include <gtkmm/widgetpaintable.h>
 #include <gdkmm/contentprovider.h>
 #include <gdkmm/drop.h>
 #include <glibmm/main.h>
 
 #include <algorithm>
+#include <set>
 #include <cctype>
 #include <cmath>
 #include <sstream>
@@ -373,7 +375,9 @@ void Navigator::build_pictures(Card& c, const std::vector<const core::Item*>& it
                 folios->append(*cell.under);
                 ids.push_back(row[k]);
             }
-            folios->set_tooltip_text(ids.size() > 1 ? "Click: the spread  \u00b7  drag: move it" : "Click: the page  \u00b7  drag: move it");
+            lazy_tip(*folios, [two = ids.size() > 1] {
+                return std::string(two ? "Click: the spread  \u00b7  drag: move it" : "Click: the page  \u00b7  drag: move it");
+            });
             {   // click: the spread picked (Ctrl: added to / taken from the pick)
                 auto click = Gtk::GestureClick::create();
                 click->set_button(GDK_BUTTON_PRIMARY);
@@ -477,6 +481,13 @@ Gtk::Box* Navigator::make_cell(Card& c, const core::Item& it, bool left, bool ri
         paint_page_exact(cr, *da, w, h, f->second.thumb);
     });
 
+    lazy_tip(*cell.col, [this, seg, id] {
+        const auto* cc = card(seg);
+        if (!cc) return std::string{};
+        const auto f = cc->cells.find(id);
+        return f != cc->cells.end() ? f->second.tip : std::string{};
+    });
+
     // A click picks it; Ctrl adds or takes away; Shift takes the run.
     auto click = Gtk::GestureClick::create();
     click->set_button(GDK_BUTTON_PRIMARY);
@@ -537,23 +548,33 @@ Gtk::Box* Navigator::make_cell(Card& c, const core::Item& it, bool left, bool ri
     return col;
 }
 
+// s355: a tooltip worked out when the pointer rests (GTK's query-tooltip) --
+// setting one on each of 300 page cells at every refresh was half of it.
+void Navigator::lazy_tip(Gtk::Widget& w, std::function<std::string()> text) {
+    w.set_has_tooltip(true);
+    w.signal_query_tooltip().connect([text](int, int, bool, const Glib::RefPtr<Gtk::Tooltip>& tip) {
+        const auto t = text();
+        if (t.empty()) return false;
+        tip->set_text(t);
+        return true;
+    }, false);
+}
+
 void Navigator::apply_cell(Cell& cell, const core::Item& it, bool page) {
     cell.thumb = it.thumb;
     cell.aspect = it.thumb.h_in > 0 ? it.thumb.w_in / it.thumb.h_in : 2.0 / 3.0;
     if (page) {
         const std::string folio = field(it, "Folio");
-        cell.under->set_text(folio);
+        if (cell.under->get_text().raw() != folio) cell.under->set_text(folio);
         const std::string pre = prefix_of(field(it, "Master"));
-        cell.badge->set_text(pre);
+        if (cell.badge->get_text().raw() != pre) cell.badge->set_text(pre);
         cell.badge->set_visible(!pre.empty());
-        cell.col->set_tooltip_text(it.title + (field(it, "Master").empty() ? "" : "  ·  " + field(it, "Master")) +
-                                   (it.badge.empty() ? "" : "  ·  " + it.badge));
+        cell.tip = it.title + (field(it, "Master").empty() ? "" : "  ·  " + field(it, "Master")) + (it.badge.empty() ? "" : "  ·  " + it.badge);
     } else {
-        cell.under->set_text(it.title);
+        if (cell.under->get_text().raw() != it.title) cell.under->set_text(it.title);
         cell.badge->set_visible(false);
         const std::string used = field(it, "Used by");
-        cell.col->set_tooltip_text(it.title + (used.empty() ? "" : "  ·  used by " + used) +
-                                   "\nDrag onto pages to apply it");
+        cell.tip = it.title + (used.empty() ? "" : "  ·  used by " + used) + "\nDrag onto pages to apply it";
     }
     if (cell.da) cell.da->queue_draw();
 }
@@ -1185,13 +1206,22 @@ void Navigator::set_order_keys(const std::string& csv) {
 
 // ── the document changed ─────────────────────────────────────────────────────
 void Navigator::refresh(const core::Outline* o) {
+    // s355 (SP1): a card whose items changed is built again on its own when
+    // it has a builder of its own (Pages, Masters -- a page added to a long
+    // book rebuilt every card); a list card's change still sets them all.
+    const auto own_builder = [](core::Segment s) {
+        return s == core::Segment::Pages || s == core::Segment::Masters || s == core::Segment::Colors || s == core::Segment::Assets;
+    };
     bool same = o && m_outline && !m_cardv.empty();
+    std::set<core::Segment> changed;
     if (same)
         for (const auto& c : m_cardv) {
             const auto items = o->in(c.segment);
-            if (items.size() != c.ids.size()) { same = false; break; }
-            for (std::size_t i = 0; i < items.size() && same; ++i) same = c.ids[i] == items[i]->id;
-            if (!same) break;
+            bool eq = items.size() == c.ids.size();
+            for (std::size_t i = 0; i < items.size() && eq; ++i) eq = c.ids[i] == items[i]->id;
+            if (eq) continue;
+            if (!own_builder(c.segment)) { same = false; break; }
+            changed.insert(c.segment);
         }
     if (!same) {
         set_outline(o);
@@ -1200,6 +1230,19 @@ void Navigator::refresh(const core::Outline* o) {
     m_outline = o;
     for (auto& c : m_cardv) {
         const auto items = o->in(c.segment);
+        if (changed.count(c.segment) && (c.segment == core::Segment::Pages || c.segment == core::Segment::Masters)) {
+            c.ids.clear();
+            for (const auto* it : items) c.ids.push_back(it->id);
+            c.count->set_text(std::to_string(items.size()));
+            m_quiet = true;
+            build_pictures(c, items);
+            m_quiet = false;
+            continue;
+        }
+        if (changed.count(c.segment)) {   // Colors / Assets: drawn again below, as every time
+            c.ids.clear();
+            for (const auto* it : items) c.ids.push_back(it->id);
+        }
         c.count->set_text(std::to_string(items.size()));
         if (c.segment == core::Segment::Colors) {   // s287: chips drawn again (a colour, a group, may have changed)
             build_chips(c, items);
@@ -1252,6 +1295,12 @@ void Navigator::refresh(const core::Outline* o) {
                 else                badge->remove_css_class("cx-warn");
             }
         }
+    }
+    if (!changed.empty()) {   // what was picked and is gone goes from the pick
+        std::vector<std::string> keep;
+        for (const auto& id : m_picked)
+            if (card_of(id)) keep.push_back(id);
+        m_picked = keep;
     }
     show_picks();
     if (!m_filter.empty()) apply_filter();   // s298

@@ -114,6 +114,7 @@ private:
         Gtk::Label*       badge = nullptr;   // master prefix (pages)
         core::Thumb       thumb;
         double            aspect = 2.0 / 3.0;
+        std::string       tip;   // s355: asked for on hover (set_tooltip_text on 300 cells each refresh cost half the refresh)
     };
     struct Card {
         core::Segment                 segment;
@@ -145,6 +146,7 @@ private:
     void        build_pictures(Card& c, const std::vector<const core::Item*>& items);
     Gtk::Box*   make_cell(Card& c, const core::Item& it, bool left, bool right);
     void        apply_cell(Cell& cell, const core::Item& it, bool page);
+    static void lazy_tip(Gtk::Widget& w, std::function<std::string()> text);   // s355: the tooltip made on hover
     void        size_cell(Cell& cell);
     void        show_open(Card& c);
     void        show_picks();             // rows, rings, headers -- no emit

@@ -10,6 +10,7 @@
 //   ./build/composix_bench --pages 200     # another length
 //   ./build/composix_bench --no-pictures   # missing links (placeholders)
 //   ./build/composix_bench --pdf           # also time a screen PDF export
+//   ./build/composix_bench --make-odt-book DIR   # s355: a 300-page ODT import, kept as a project
 //
 // Each timing is the median of a few runs (the count in brackets).
 #include "core/Doc.hpp"
@@ -17,6 +18,9 @@
 #include "layout/BigBook.hpp"
 #include "layout/Export.hpp"
 #include "layout/Flow.hpp"
+#include "layout/OdtImport.hpp"
+#include "core/Odt.hpp"
+#include "core/Zip.hpp"
 #include "layout/Preflight.hpp"
 #include "layout/ThumbStore.hpp"
 
@@ -185,8 +189,48 @@ int bench_project(const std::string& dir) {
     return 0;
 }
 
+// s355: a book as an ODT import makes it (Scott's Hollow Oak: ~300 pages,
+// chapters on right-hand pages, body frames, a grid), kept as a project --
+// to open in the app and see what the navigator costs on it.
+int make_odt_book(const std::string& dir) {
+    const std::string ns = R"( xmlns:office="o" xmlns:style="s" xmlns:text="t" xmlns:fo="f")";
+    const std::string styles = "<office:document-styles" + ns + R"(><office:styles>
+ <style:style style:name="Standard" style:family="paragraph"><style:paragraph-properties fo:line-height="13pt" fo:text-indent="0.25in"/><style:text-properties fo:font-size="11pt"/></style:style>
+ <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:master-page-name="Right_20_Page"><style:text-properties fo:font-size="18pt"/></style:style>
+</office:styles><office:automatic-styles>
+ <style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="5.5in" fo:page-height="8.5in" fo:margin-top="0.75in" fo:margin-bottom="0.75in" fo:margin-left="0.75in" fo:margin-right="0.6in"/></style:page-layout>
+</office:automatic-styles><office:master-styles>
+ <style:master-page style:name="Standard" style:page-layout-name="pm1"><style:footer><text:p><text:page-number/></text:p></style:footer></style:master-page>
+ <style:master-page style:name="Right_20_Page" style:display-name="Right Page" style:page-layout-name="pm1" style:next-style-name="Standard"><style:footer><text:p><text:page-number/></text:p></style:footer></style:master-page>
+</office:master-styles></office:document-styles>)";
+    std::string body;
+    const char* words = "The oak stood hollow at the edge of the wood, and the children went to it every evening after supper, "
+                        "listening for the sound that had come from it the night the storm broke over the valley. ";
+    for (int c = 1; c <= 34; ++c) {
+        body += "<text:h text:style-name=\"Heading_20_1\" text:outline-level=\"1\">Chapter " + std::to_string(c) + "</text:h>";
+        for (int p = 0; p < 40; ++p) body += std::string("<text:p text:style-name=\"Standard\">") + words + words + "</text:p>";
+    }
+    body += "<text:p text:style-name=\"Standard\">THE END</text:p>";
+    const std::string content = "<office:document-content" + ns + "><office:body><office:text>" + body + "</office:text></office:body></office:document-content>";
+    const auto odt = C::zip::make_stored({{"mimetype", "application/vnd.oasis.opendocument.text"}, {"content.xml", content}, {"styles.xml", styles}});
+    std::string err;
+    const auto book = C::odt::read(odt, &err);
+    C::Doc d;
+    L::OdtInfo info;
+    double ms = 0;
+    bool ok = false;
+    ms = ms_of([&] { ok = book && L::import_odt(d, *book, &info, {}, &err); });
+    if (!ok) { std::printf("import failed: %s\n", err.c_str()); return 2; }
+    std::printf("imported: %zu pages, %d paragraphs in %.0f ms; overset %d\n", d.pages().size(), info.paragraphs, ms,
+                static_cast<int>(L::flow_story(d, "story.1").overset));
+    if (!C::save_project(d, dir, &err)) { std::printf("not saved: %s\n", err.c_str()); return 2; }
+    std::printf("kept: %s\n", dir.c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IOLBF, 0);   // each row as it's timed
+    if (argc == 3 && std::string(argv[1]) == "--make-odt-book") return make_odt_book(argv[2]);   // s355
     if (argc == 3 && std::string(argv[1]) == "--project") return bench_project(argv[2]);   // s348
     L::BigBookOpts o;
     o.picture_dir = (std::filesystem::temp_directory_path() / "composix-bench").string();
